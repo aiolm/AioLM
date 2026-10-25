@@ -25,7 +25,8 @@ use std::{
 /// Version 4 distinguishes `--flag=VALUE` from a separate `KEY=VALUE` metavar.
 /// Version 5 fingerprints every declared artifact alias and its resolved target.
 /// Version 6 keeps wrapped descriptions separate from positional declarations.
-pub const PARSER_VERSION: u32 = 6;
+/// Version 7 distinguishes whole choice metavars from choice sets with prose tails.
+pub const PARSER_VERSION: u32 = 7;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 

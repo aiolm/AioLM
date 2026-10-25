@@ -147,7 +147,11 @@ fn parse_choices(metavar: &str) -> Option<Vec<serde_json::Value>> {
     let trimmed = metavar.trim();
     // Explicit `{a,b,c}` or `[a|b]` in the flag spec only; prose after two
     // spaces never becomes a constraint.
-    if let Some(inner) = trimmed.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+    if let Some(inner) = trimmed
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .filter(|inner| !inner.contains(['{', '}']))
+    {
         let values = inner
             .split(',')
             .map(|s| s.trim().trim_matches('"').trim_matches('\''))
@@ -183,13 +187,26 @@ fn arity_for_metavar(metavar: &str) -> Option<Arity> {
             max: Some(0),
         });
     }
-    let has_ellipsis = text.contains("...");
     let bracketed = text.starts_with('[') && text.ends_with(']');
     let inner = if bracketed {
         text[1..text.len().saturating_sub(1)].trim()
     } else {
         text
     };
+    // A complete choice set is one value, including choices containing spaces.
+    // A custom metavar may continue with prose or an open set of extension
+    // names; its words do not establish a tuple or a closed choice set.
+    if text.starts_with("[{") && !bracketed {
+        return None;
+    }
+    if inner.starts_with('{') {
+        parse_choices(inner)?;
+        return Some(Arity {
+            min: if bracketed { 0 } else { 1 },
+            max: Some(1),
+        });
+    }
+    let has_ellipsis = text.contains("...");
     // Fixed tuples like `X Y` or `HOST PORT` outside brackets.
     let plain_tokens = inner
         .split_whitespace()
@@ -1532,6 +1549,66 @@ mod tests {
         );
         // Repetition across occurrences still needs explicit metadata.
         assert_eq!(pair.repeatable.certainty, Certainty::Unknown);
+    }
+
+    #[test]
+    fn a_choice_metavar_with_a_prose_tail_does_not_verify_a_tuple_or_closed_choices() {
+        for spec in [
+            "{one,two} or name registered in --plugin",
+            "{one,two} or a custom name",
+            "{one,two} or {a plugin name}",
+            "[{one,two}] or a custom name",
+        ] {
+            let text =
+                format!("Options:\n  --parser {spec}\n  --plugin PATH         extension path\n");
+            let schema = parse(&text);
+            let parser = schema
+                .options
+                .iter()
+                .find(|option| option.key == "parser")
+                .unwrap();
+            assert_eq!(parser.arity.certainty, Certainty::Unknown, "{spec}");
+            assert_eq!(parser.choices.certainty, Certainty::Unknown, "{spec}");
+            assert_eq!(schema.raw_help[0].text, text);
+        }
+    }
+
+    #[test]
+    fn a_whole_choice_metavar_consumes_one_value_even_when_choice_names_contain_spaces() {
+        let schema = parse("Options:\n  --color {red green,deep blue}\n  --other={red green,deep blue}\n  --optional [{red green,deep blue}]\n  --pair HOST PORT       coordinates\n  --header KEY=VALUE     header\n");
+        for (key, min) in [("color", 1), ("other", 1), ("optional", 0)] {
+            let option = schema
+                .options
+                .iter()
+                .find(|option| option.key == key)
+                .unwrap();
+            assert_eq!(
+                option.arity.supported(),
+                Some(&Arity { min, max: Some(1) }),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            schema.options[0].choices.supported(),
+            Some(&vec![json!("red green"), json!("deep blue")])
+        );
+        assert_eq!(schema.options[0].spellings[0].style, ValueStyle::Separate);
+        assert_eq!(schema.options[1].spellings[0].style, ValueStyle::Equals);
+        assert_eq!(
+            schema.options[3].arity.supported(),
+            Some(&Arity {
+                min: 2,
+                max: Some(2)
+            })
+        );
+        assert_eq!(
+            schema.options[4].arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert_eq!(schema.options[4].spellings[0].style, ValueStyle::Separate);
     }
 
     #[test]
