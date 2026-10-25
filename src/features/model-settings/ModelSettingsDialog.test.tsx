@@ -1409,7 +1409,11 @@ describe('model settings editor', { timeout: 45000 }, () => {
     { draft: 'edited', confirmation: 'native composition', dirty: true, isComposing: true, keyCode: 13 },
     { draft: 'clean', confirmation: '229 fallback', dirty: false, isComposing: false, keyCode: 229 },
     { draft: 'edited', confirmation: '229 fallback', dirty: true, isComposing: false, keyCode: 229 },
-  ] as const)('keeps the $draft model preview during $confirmation Enter and loads only after confirmation', async ({ dirty, isComposing, keyCode }) => {
+    { draft: 'clean', confirmation: 'compositionend before Enter', dirty: false, isComposing: false, keyCode: 13, committed: true },
+    { draft: 'edited', confirmation: 'compositionend before Enter', dirty: true, isComposing: false, keyCode: 13, committed: true },
+  ] as const)('keeps the $draft model preview during $confirmation Enter and loads only after confirmation', async scenario => {
+    const { dirty, isComposing, keyCode } = scenario;
+    const committed = 'committed' in scenario;
     const nextPath = 'models/模型-한글-🦊.gguf';
     vi.spyOn(api, 'listModels').mockResolvedValue({ models: [
       { name: 'a.gguf', path: cfg.active_model, size_mb: 3000, is_vision: false },
@@ -1431,6 +1435,12 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const nextModel = screen.getByRole('button', { name: /^模型-한글-🦊\.gguf/ });
     const path = screen.getByRole('textbox', { name: 'Model path' });
     fireEvent.change(path, { target: { value: nextPath } });
+    if (committed) {
+      // Native WebKit can omit compositionstart and finish composition before Enter.
+      fireEvent.keyDown(path, { key: 'Unidentified', keyCode: 229 });
+      fireEvent.input(path, { target: { value: nextPath }, inputType: 'insertFromComposition', isComposing: true });
+      fireEvent.compositionEnd(path, { data: '한글' });
+    }
     let nativeDefaultAvailable = false;
     await act(async () => { nativeDefaultAvailable = fireEvent.keyDown(path, { key: 'Enter', keyCode, isComposing }); });
     const header = () => document.querySelector('.model-settings-header p[title]');
@@ -1446,8 +1456,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(getSaved()).toEqual(savedBefore);
     expect(initial).toEqual(initialBefore);
     expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
-    expect(nativeDefaultAvailable).toBe(true);
+    expect(nativeDefaultAvailable).toBe(!committed);
 
+    fireEvent.keyUp(path, { key: 'Enter', keyCode: 13 });
     await act(async () => {
       expect(fireEvent.keyDown(path, { key: 'Enter', keyCode: 13, isComposing: false })).toBe(false);
     });

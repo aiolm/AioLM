@@ -22,6 +22,7 @@ import RuntimeProfileValues from './RuntimeProfileValues';
 import { useProfileRuntimeSchema, type ProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
+import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
@@ -224,6 +225,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     if (action) closeAction();
     else closePreview();
   };
+  const nameImeHandlers = useImeEnterGuard<HTMLInputElement>(action?.name ?? '', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault(); submit();
+  });
 
   if (!active) return null;
 
@@ -251,10 +256,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>
         <label htmlFor={`${formId}-name`}>{copy.name}</label>
-        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} onKeyDown={event => {
-          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return;
-          event.preventDefault(); submit();
-        }} />
+        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} {...nameImeHandlers} />
         {action.kind === 'create' && <p className="settings-profile-hint">{copy.saveGlobalHint}</p>}
       </>
       <div className="settings-profile-buttons">

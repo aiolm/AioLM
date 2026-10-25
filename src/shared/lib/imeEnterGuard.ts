@@ -1,5 +1,5 @@
-/** Keeps an IME confirmation Enter separate from a later chat submission. */
-export function createChatImeGuard(initialValue = '') {
+/** Keeps an IME confirmation Enter separate from a later submit action. */
+export function createImeEnterGuard(initialValue = '') {
   let phase: 'idle' | 'composing' | 'committed' = 'idle';
   let previousValue = initialValue;
   let enterHandled = false;
@@ -34,7 +34,7 @@ export function createChatImeGuard(initialValue = '') {
       if (event.isComposing || event.keyCode === 229) {
         if (event.key === 'Enter') { phase = 'idle'; enterHandled = true; }
         else { phase = 'composing'; enterHandled = false; }
-        return { skipSend: true, preventDefault: false };
+        return { skipAction: true, preventDefault: false };
       }
       if (event.key === 'Enter' && (phase !== 'idle' || enterHandled)) {
         // Before commit, native default still needs to confirm marked text.
@@ -42,10 +42,10 @@ export function createChatImeGuard(initialValue = '') {
         const preventDefault = phase === 'committed' || enterHandled;
         phase = 'idle';
         enterHandled = true;
-        return { skipSend: true, preventDefault };
+        return { skipAction: true, preventDefault };
       }
       if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) reset();
-      return { skipSend: false, preventDefault: false };
+      return { skipAction: false, preventDefault: false };
     },
     keyUp(event: Pick<KeyboardEvent, 'key'>) {
       if (event.key === 'Enter') enterHandled = false;

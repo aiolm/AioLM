@@ -423,22 +423,32 @@ describe('settings profile workspace', () => {
     { action: 'rename', confirmation: 'native composition', isComposing: true, keyCode: 13 },
     { action: 'create', confirmation: '229 fallback', isComposing: false, keyCode: 229 },
     { action: 'rename', confirmation: '229 fallback', isComposing: false, keyCode: 229 },
-  ] as const)('keeps $action name editing open for $confirmation Enter, then submits the complete name once', async ({ action, isComposing, keyCode }) => {
+    { action: 'create', confirmation: 'compositionend before Enter', isComposing: false, keyCode: 13, committed: true },
+    { action: 'rename', confirmation: 'compositionend before Enter', isComposing: false, keyCode: 13, committed: true },
+  ] as const)('keeps $action name editing open for $confirmation Enter, then submits the complete name once', async scenario => {
+    const { action, isComposing, keyCode } = scenario;
+    const committed = 'committed' in scenario;
     const props = mount();
     const before = structuredClone({ items: props.items, settings: props.currentSettings, prompt: props.currentPrompt });
     if (action === 'create') openCreate();
     else fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
     const input = screen.getByLabelText('Profile name');
     const name = '한글 이름 日本語';
-    fireEvent.compositionStart(input);
-    fireEvent.change(input, { target: { value: name } });
+    if (committed) {
+      fireEvent.keyDown(input, { key: 'Unidentified', keyCode: 229 });
+      fireEvent.input(input, { target: { value: name }, inputType: 'insertFromComposition', isComposing: true });
+      fireEvent.compositionEnd(input, { data: '日本語' });
+    } else {
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: name } });
+    }
     const nativeDefaultAvailable = fireEvent.keyDown(input, { key: 'Enter', keyCode, isComposing });
     expect(props.onSaveAs).not.toHaveBeenCalled();
     expect(props.onRename).not.toHaveBeenCalled();
     expect(input).toBeVisible();
     expect(input).toHaveValue(name);
     expect(input).toHaveFocus();
-    expect(nativeDefaultAvailable).toBe(true);
+    expect(nativeDefaultAvailable).toBe(!committed);
     expect({ items: props.items, settings: props.currentSettings, prompt: props.currentPrompt }).toEqual(before);
 
     fireEvent.compositionEnd(input, { data: '日本語' });

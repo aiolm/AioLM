@@ -45,6 +45,7 @@ import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { isLifecycleCancellation } from '../../shared/lib/serverLifecycle';
 import SettingsFlowNav, { type SettingsStep } from './SettingsFlowNav';
+import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
 import { settingsFlowCopy } from './settingsFlowCopy';
 
 export interface ModelSettingsDialogProps {
@@ -209,6 +210,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const stateText = liveState && ['stopped', 'starting', 'stopping', 'running', 'failed', 'crashed'].includes(liveState) ? executionText[locale][liveState as 'running'] : liveState;
   const valuesDirty = cfg.active_model !== initial.current.active_model || !settingsEqual(settings, executionSettings(initial.current));
   const enteredPath = restoreDisplayPath(cfg.active_model, pathDraft.trim());
+  const pathImeHandlers = useImeEnterGuard<HTMLInputElement>(pathDraft, event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault(); chooseModel(enteredPath);
+  });
   const dirty = valuesDirty || invalid.size > 0 || profileDirty || profiles.working || enteredPath !== cfg.active_model;
   const liveMatches = running && !!liveConfig && cfg.active_model === liveConfig.active_model && settingsEqual(settings, executionSettings(liveConfig)) && profiles.systemPrompt === (liveApplication?.system_prompt ?? '');
   // Default protection is a property of the library, not of an individual row.
@@ -488,7 +493,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length || !!model.artifact?.incomplete || !!model.artifact?.missing.length}
                 onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format === 'unknown' ? unknownFormat[locale] : model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => Object.prototype.hasOwnProperty.call(modalityLabel[locale], name) ? modalityLabel[locale][name] : name).join(", ") : ""} · {model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small>{api.isExternalProvider(provider) && !api.modelLoadable(model, provider) && <small>{copy.unverifiedModel}</small>}</span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
-              <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return; event.preventDefault(); chooseModel(enteredPath); }} /><span id={`${id}-path-help`} className="app-section-hint">{api.isExternalProvider(provider) ? copy.externalModelPath : help.path}</span></label>
+              <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} {...pathImeHandlers} /><span id={`${id}-path-help`} className="app-section-hint">{api.isExternalProvider(provider) ? copy.externalModelPath : help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
             {!external && <div hidden={section !== 'runtime'} className="model-settings-fields">
