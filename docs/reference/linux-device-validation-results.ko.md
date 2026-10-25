@@ -1,6 +1,8 @@
 # Linux 기기 검증 결과
 
-이 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
+최신 추가 검증은 아래 [고정19 알림 연결 수정](#고정19-알림-연결-수정과-실제-재검증)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 즉시 연결 종료 결함은 해소됐으며, 배너의 사람 확인은 대기 중이다. 전체 집계는65 pass/1 fail/6 unrun/1 unsupported/1 blocked로 유지한다.
+
+고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
 ## Source와 환경
 
@@ -211,7 +213,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L03-D02 | clipboard·IME | pass | PASS: 실제clipboard·13물리한글첫Enter보존/별도EndEnterLoad·원래eventprefix/config/main/정상정리 유지. 같은IMEguard를18에서도carried근거로구분하며새18물리IME재실행이나다른OSpass는아님. |
 | L03-D03 | tray | pass | 고정12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
 | L03-D04 | 창·인스턴스 | unrun | UNRUN조건유지: 기존설치8minimize/두번째실행·360x520와HOST18nativeDPR2는각범위실제. 최신readonly18:38:46은물리2/활성logical·output1/scale2, 식별자 미보존·OS변경 없음. 두번째실제출력준비사용자응답대기; 다중활성화면이동성공아님. |
-| L03-D05 | 알림 | unrun | 실제 main13 desktop 수신자/own ID35/정상closure·Send1회 확인. 사용자는 배너/알림센터를 확인하지 못했다고 명시했으므로 사람 확인은 unrun 유지; 추가Send/권한·OS설정 변경 없음. |
+| L03-D05 | 알림 | unrun | 고정18에서 발신 연결의 즉시 소실→닫힘을 재현했다. 수정37c0343/고정19의 ordinary Send는 연결을 약130.558초 유지하고 정상Close 때 해제했다. 배너/알림센터의 사람 확인은 대기 중이며 실제 표시 pass는 남는다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 기존 네언어 종료/숨김·현재버전 안내 유지. 설치16 ordinary Notifications는 r1 ENKO/r3 JAZH 설명/category·좁은창키보드, ENstatus는 DOM한계 명시. updater 가능/불가의 실제조건부 조합은 여전히 남는다. |
 | L03-P01 | package 생성 | pass | 기본package18 139.034초/519privacyfake0/SDK3·6payload·독립archive8SHA고정. nlink1은archive8만/원래CargoGUI·CLI nlink2구분. Actual18fresh/F03/native동작/두Close·DPR2/빠른검색/인프라정리+최종ROCmCLI·userdatazero근거연결; 다른backend/GUI패키지실행확대아님. |
@@ -229,4 +231,25 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 
 현재65 pass/1 fail/6 unrun/1 unsupported/1 blocked다. F03은 원래 대표 UX 조항의 actual18/동일 로직의 IME13·Orca17 범위로 root가 pass 판정했다. 실제18 새 옵션/저장3·native 동작·두 Close/재열기·DPR2/빠른 검색·소유 private 인프라 정리는 위 범위로 완료했다. Core 원래 exit1/선택 등록의 scoped 감사, 과거 active-map false/저장21값 감사, RAPIDv1/v2·Reader watchdog 실패는 별개로 보존한다. F09 미디어 내용 품질 실패와 선택 원래 품질 대조·창/인스턴스·사람 알림·조건부 네 언어/updater 설치 판별/안내, 실제 새 버전 차단은 남는다. 읽기 전용 현재 화면 조회는 물리2개/활성1개·scale2만 확인했고 설정을 바꾸지 않았으므로 실제 다중 활성 화면 검사는 unrun이다. 최종18 ROCm CLI 재검증·정상 인프라 정리와 그 뒤878/1,560개 사용자 자료 최종 guard는 위 범위로 완료했다. 이는 남은 조건부 행의 pass를 뜻하지 않는다. 필수 fail/unrun/blocked가 남으므로 전체 목표를 complete로 표시하지 않는다.
 
-제품·검사·계약 변경은 작업별 commit으로 고정했다. 상세 Windows W/G 및 Mac M01–M04/MAC-R01–R13 대응은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md#2026-10-25-linux-수정의-수신과-재검증)를 따른다. Windows/Mac 실제 실행은 이번 Linux 결과로 pass 처리하지 않는다. Mac 실제 실행은 Linux goal의 완료 조건이 아니다. 제품 고정점은 위의18이며 결과와 OS 인계 문서를 이 검증 범위에 맞춰 갱신했다. 원격 push는 하지 않았다.
+제품·검사·계약 변경은 작업별 commit으로 고정했다. 상세 Windows W/G 및 Mac M01–M04/MAC-R01–R13 대응은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md#2026-10-25-linux-수정의-수신과-재검증)를 따른다. Windows/Mac 실제 실행은 이번 Linux 결과로 pass 처리하지 않는다. Mac 실제 실행은 Linux goal의 완료 조건이 아니다. 엔진·대표 UX의 고정점18과 추가 알림 수정 고정점19를 구분해 결과와 OS 인계 문서를 갱신했다. 원격 push는 하지 않았다.
+
+## 고정19 알림 연결 수정과 실제 재검증
+
+UTC2026-10-25T19:53:59.154607Z까지의 추가 근거다. 고정18의 ordinary Settings Send 한 번에서 OS 수락 뒤139,831ns에 앱의 발신 연결이 소실되고, 수락 뒤1,467,434ns에 같은 알림의 Shell Closed(reason2)가 관찰됐다. 명시적인 CloseNotification 호출은 없었다. 기존 plugin2.4.0이 반환 핸들을 버리고 notify-rust4.18.1의 새 zbus 연결도 해제하는 경로와, 설치 GNOME50.1이 앱으로 해석한 발신자의 소실 때 알림 source를 파괴하는 경로를 확인했다. 타임스탬프는 관찰기 수신 시각이며 Shell 내부 app association을 직접 계측한 결과는 아니다. 최초 attach의 자식 식별 실패와 관찰기의 잘못된 JS selector 실패는 원본으로 보존했고, 같은 세션의 엄격한 재확인과 별도 selector 수정 뒤 실제 Send는 한 번만 수행했다.
+
+제품 `37c0343fe90b16588b2319f3ace96e6df274bf02`는 Linux 알림 연결 하나를 앱 수명 동안 소유한다. 동시 제출은 큐에 쌓지 않고 거부하며 연결 획득·송신·응답의 전체 대기 한도는5초다. 시간 초과나 오류의 원격 수락 여부가 불확실하므로 자동 재전송하지 않고, 정상 연결은 유지한다. 닫힌 연결은 다음 명시적 제출에서만 교체한다. lockfile에 고정된 zbus5.19.0에 직접 의존할 뿐 crate/version과 async-io 실행 방식은 유지한다. 권한 호출과 Windows/Mac의 실제 전송은 공식 plugin을 사용한다. 네 언어의 일반 문구·카테고리 선택·브라우저 미지원·완료 작업의 오류 격리는 그대로다.
+
+검사는 전체 npm117.932초/220파일·2577개, type9.133초, lint5.305초, Rust all-targets/all-features175.225초, Clippy14.517초, fmt0.816초, `cargo check --no-default-features`20.012초, 기본 package193.946초, native CLI smoke0.258초를 통과했다. Rust에는 실제 격리 D-Bus에서 요청 종료 뒤 소유 유지/소유자 종료 때 해제, 닫힌 연결의 다음 요청 복구, 인증에 응답하지 않는 실제 Unix peer의 시간 한도, 일반 테스트 endpoint의 늦은 응답·중복 전송 없음·정상 연결 보존, 올바른 응답 타입/ID의5개 회귀가 포함된다. 첫 컴파일 실패와 테스트 endpoint의 Tokio timer 컨텍스트 실패를 보존하고 해당 테스트만 고친 뒤 전체 Rust를 다시 통과했다. 이 일반 endpoint는 OS 알림 daemon을 대체하지 않는다.
+
+고정19는 위 commit과 동일한9개 제품·검사 파일 바이트로 빌드했으며, 원래 build receipt의 HEAD+diff·당시 새 파일 해시와 commit의 바이트 대응을 보존했다. UTC19:50:04.163953Z 고정의 배포 SHA-256은 다음과 같다.
+
+| 파일 | SHA-256 |
+| --- | --- |
+| release GUI | `7568031880e19f047bd8137ce34e1af4c6cfb489ee8117e6799c2ed74e54bcc3` |
+| CLI | `16c218c91fab515076ec401522989d9a6561fe6984addc0dfbcbb22214d7d786` |
+| DEB | `986cd56508a5235ea9c70fc8e64d558b46edeea6e6ff019776228dc5a38f6f84` |
+| AppImage | `a47a06e87a03198ea764eeebe361253865b010bbeb8d0714e19eacd96344dbda` |
+
+519개 staging 파일의 개발 경로/가짜 fixture 검사, 여섯 payload, 세 SDK helper의 현재 전체 바이트 포함과 독립 archive8사본을 확인했다. GUI는 고정한 release 사본으로 실행했다. 실제 같은 데스크톱의 ordinary Settings Send 한 번에서 새 요청·수락 ID·relay의 원래 발신자/PID를 연결했고,28.224초 뒤에도 live bus PID 조회가 같은 앱을 가리켰다.30.401초 관찰 checkpoint에 즉시 소실/닫힘이 없었으며, 약130.558초 뒤 정상Close 때 발신자 소실과 같은 ID의 Closed2를 관찰했다. 관찰기133.517초와 별도 normalClose1.366초가 모두 exit0이고, 소유 GUI/WebKit3birth·관찰한 포트의 IPv4/IPv6가 종료됐다. 기존 driver는 빈 ready 상태로 남겼다. Source34/DB family·복사한 합성7파일·데스크톱 설정과 원래878/확장1560개 사용자 파일의 hash-only 검사는 변경·누락·오류0이었다.
+
+즉시 연결 종료 결함은 이 전후 결과로 해소됐지만 실제 배너/알림센터의 사람 확인은 대기 중이므로 D05는unrun이다. 원래18 RED와 중간fail 판정은 그대로 보존한다. 엔진·대표 UX·설치 VM·직접 IME·Reader의 근거는 각 절의18/16/13/17 범위로 유지하며 이 알림 재검증을 해당 전체 여정의19 재실행으로 계산하지 않는다. Windows W07/W08/G07과 Mac M01/M02/M04·MAC-R06/MAC-R11에서 새 제출 IPC·권한/오류·네 언어·실제 표시·정상 종료를 다시 확인한다. 전체 Linux 목표는 진행 중이며 원격 push는 하지 않았다.

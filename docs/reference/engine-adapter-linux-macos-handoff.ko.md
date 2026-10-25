@@ -27,6 +27,7 @@ Linux 검증은 [Linux 기기 결과](linux-device-validation-results.ko.md)에 
 
 | 수정 commit | 새 동작과 Windows 재검증 | Mac 연결 |
 | --- | --- | --- |
+| `37c0343` | Linux 알림은 앱 소유 연결 하나/전체5초/동시 제출 거부/자동 재전송 없음으로 즉시 소실을 막는다. 새 `send_desktop_notification` IPC가 Windows에서는 같은 공식 plugin builder로 전달된다. W07/W08/G07: 권한·오류/재시도·카테고리·네 언어·실제 표시/정상 종료를 재검증한다. Linux 고정19의 발신자 유지·정상Close는 확인했으며 사람 배너 확인은 대기 중이다. | M01/M02/M04, MAC-R06/MAC-R11의 실제 plugin 표시·권한/오류·정상 종료. Linux 성공을 Mac pass로 옮기지 않는다. |
 | `e454065` | 세션 summary URL에서 실제 port 표시. W03/W06: 모델·embedding·STT 세션 전환, 이름과 실제 URL/model/auth 보존. | M01/M02, R05/R06 |
 | `cf99641` | Responses/Anthropic SSE가 native usage를 요청·보존하고 없는 count는 명시 오류로 끝낸다. W04/W06/W07, G04/G05: 세 protocol의 같은 요청, JSON/SSE, auth/alias, 취소 lease, 후속 응답과 API/모델 독립 종료. | M02, R05/R06 |
 | `b9668ae` | 실패 probe 출력은 진단으로 남기고 장치/flag 근거로 쓰지 않는다. Indexed 장치 ID를 중복 없이 센다. W01/W04/W08: 성공·실패·복구와 실제 지원 GPU 장치 표시. | M01/M02, R12 |
@@ -263,3 +264,7 @@ Windows/Mac은 앞선 W/G·M/MAC-R 대응을 그대로 적용한다. 해당OS �
 ## Linux 알림 문구와 updater 오류/회복의 제한된 실제 범위
 
 설치16 VM의 ordinary Notifications는 r1 EN/KO와 r3 JA/ZH의360×520 설명/category·키보드 접근을 확인했으나 EN 상태의 별도 가시 PNG는 없다. r3의 wide 실제 Check2회 오류/재활성 Retry→정상Quit/같은profile 원래환경 재열기의0.3.1 동률회복·데이터/자원 보존은 실제 하위 경계만의 pass다. U02/U03 전체 classifier·설치/진행/installer·조건부 D07을 닫지 않는다. main13 own ID35의 native 수락/closure와 달리 사용자는 배너/알림센터를 확인하지 못했다고 명시했으므로 D05의 사람 확인은 unrun이며 추가Send/OS설정 변경은 없었다. UTC17:18:40의 기존 공식 latest API 재확인도 공개v0.3.1과source0.3.1 동률이므로 실제새버전업데이트는blocked다. 기존 Windows W07/W08/G07과 Mac M01/M02/M04와 MAC-R06/MAC-R11의 native 실패복구·작은창/접근성·알림/패키지 검사를 각 OS에서 실행한다. Linux의 proxy 자식만의 환경/키보드 경로나 직접 PCM control을 다른 OS의 알림·VoiceOver/Reader·업데이트 설치 pass로 옮기지 않는다.
+
+### 2026-10-25 고정19 알림 연결 후속
+
+Linux `37c0343fe90b16588b2319f3ace96e6df274bf02`의 동일 바이트 고정19는 ordinary Send의 발신 연결을 약130.558초 유지하고 정상Close 때 해제했다. 고정18의 수락 뒤 약1.47ms 닫힘과 구분하며, 실제 배너/알림센터 사람 확인은 대기 중이라 D05는unrun이다. 전체 자동 검사와 package/CLI·실제 알림 전후·정상 종료·사용자 자료 보존 및 정확한 배포 해시는 [고정19 결과](linux-device-validation-results.ko.md#고정19-알림-연결-수정과-실제-재검증)를 따른다. 기존 엔진·UX·설치/IME/Reader 근거의 source 범위를 유지한다. Windows/Mac은 새 제출 IPC의 공식 plugin 경로를 실제로 재검증해야 하며 Linux 전체 목표도 아직 진행 중이다. 원격 push는 하지 않았다.
