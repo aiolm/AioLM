@@ -30,9 +30,11 @@ export interface CustomSelectProps<T extends string | number = string> {
   ariaLabel?: string;
   ariaLabelledBy?: string;
   ariaDescribedBy?: string;
+  ariaInvalid?: React.AriaAttributes["aria-invalid"];
   "aria-label"?: string;
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
+  "aria-invalid"?: React.AriaAttributes["aria-invalid"];
   size?: "sm" | "md";
   portalContainer?: HTMLElement | null;
 }
@@ -66,9 +68,11 @@ export function CustomSelect<T extends string | number = string>({
   ariaLabel,
   ariaLabelledBy,
   ariaDescribedBy,
+  ariaInvalid,
   "aria-label": ariaLabelKebab,
   "aria-labelledby": ariaLabelledByKebab,
   "aria-describedby": ariaDescribedByKebab,
+  "aria-invalid": ariaInvalidKebab,
   size = "md",
   portalContainer,
 }: CustomSelectProps<T>) {
@@ -367,6 +371,7 @@ export function CustomSelect<T extends string | number = string>({
     'aria-controls': open && menuPosition ? listboxId : undefined,
     'aria-activedescendant': open && menuPosition && visibleOptions[highlightedIndex] ? `${listboxId}-option-${highlightedIndex}` : undefined,
     'aria-label': effectiveAriaLabel, 'aria-labelledby': effectiveAriaLabelledBy, 'aria-describedby': effectiveAriaDescribedBy,
+    'aria-invalid': ariaInvalid ?? ariaInvalidKebab,
     disabled,
   };
   const triggerClasses = `app-custom-select-trigger app-custom-select-trigger--${size} ${triggerClassName}`;

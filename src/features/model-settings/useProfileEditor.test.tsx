@@ -115,6 +115,19 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.library.revision).toBe(2);
   });
 
+  it('keeps runtime selection outside profile edits while detecting option and prompt changes', () => {
+    const profile = captureProfile(testConfig, 'Named settings', 'global', 'Current prompt');
+    const hook = editor([profile], false, structuredClone(testConfig), profile);
+    const runtime = { ...testConfig, active_backend: 'synthetic-backend', active_build: 'build-two' };
+    hook.rerender({ draft: runtime });
+    expect(hook.result.current.working).toBe(false);
+    hook.rerender({ draft: { ...runtime, temperature: 0.3 } });
+    expect(hook.result.current.working).toBe(true);
+    hook.rerender({ draft: runtime });
+    act(() => hook.result.current.setSystemPrompt('Updated prompt'));
+    expect(hook.result.current.working).toBe(true);
+  });
+
   it('clears editing when all values return to the saved profile', () => {
     const profile = captureProfile(testConfig, 'Named settings', 'model', 'Current prompt');
     const hook = editor([profile], false, structuredClone(testConfig), profile);

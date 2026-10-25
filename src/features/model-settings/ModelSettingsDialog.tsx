@@ -27,7 +27,7 @@ import SettingsProfileControl from './SettingsProfileControl';
 import SettingsChangeList, { changeCount } from './SettingsChangeList';
 import { useProfileEditor } from './useProfileEditor';
 import { appliedProfile, SettingsDeliveryError, type ProfileEditorResult, type ProfileCommitResult } from './profileEditor';
-import { ensureProfileLibrary, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
+import { ensureProfileLibrary, RUNTIME_SELECTION_KEYS, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
 import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
@@ -285,7 +285,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         setSettings(assigned); setBaseline(assigned); setPathDraft(normalizeDisplayPath(path)); setInvalid(new Set()); setProfileDirty(false); setEditorRevision(value => value + 1); setError('');
       } catch (cause) { setError(String(cause)); }
     };
-    if (!settingsEqual(settings, baseline) || invalid.size || profileDirty || profiles.working) setPending(() => load); else load();
+    // Loading a model keeps the chosen runtime. Only values the load can
+    // replace need a discard confirmation.
+    const modelBaseline = { ...baseline, ...Object.fromEntries(RUNTIME_SELECTION_KEYS.map(key => [key, settings[key]])) };
+    if (!settingsEqual(settings, modelBaseline) || invalid.size || profileDirty || profiles.working) setPending(() => load); else load();
   };
   const accept = ({ config, application }: ProfileCommitResult) => {
     saved.current = structuredClone(config); initial.current = structuredClone(config);
@@ -372,7 +375,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       ...(nextProvider === 'llama.cpp' ? {} : { mmproj: '', spec_draft_model: '' }) };
     const resolved = profiles.resetModel(next, sessionId);
     if (remembered) profiles.setSystemPrompt(remembered.prompt);
-    setSettings(executionSettings(remembered ? next : resolved));
+    const nextSettings = executionSettings(remembered ? next : resolved);
+    setSettings(nextSettings); setBaseline(nextSettings);
     setPathDraft(normalizeDisplayPath(next.active_model)); setInvalid(new Set()); setEditorRevision(value => value + 1);
   };
   // A probe of the previous runtime survives a backend switch until the new one

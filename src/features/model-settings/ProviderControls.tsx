@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
@@ -129,6 +129,12 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [catalogError, setCatalogError] = useState('');
   const [runtimeFlags, setRuntimeFlags] = useState<string[] | undefined>();
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
+  const issueId = useId();
+  const issueDescriptions = useMemo(() => {
+    const descriptions = new Map<string, string>();
+    issues.forEach((issue, index) => descriptions.set(issue.key, [descriptions.get(issue.key), `${issueId}-${index}`].filter(Boolean).join(' ')));
+    return descriptions;
+  }, [issues, issueId]);
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
   // Words a registered import ignored. Kept apart from `error`: revalidating
@@ -303,7 +309,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     </div>}
     {loadingSchema && <p role="status">{copy.loading}</p>}
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
-    {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
+    {issues.map((issue, index) => <div key={`${issue.key}:${index}`} id={`${issueId}-${index}`}><FeedbackBanner tone="error">{issue.message}</FeedbackBanner></div>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
     {formEffective && (editor === 'schema' || formEffective.schema.options.length > 0) && <div hidden={!effective} inert={!effective}>
       <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} showNoMatch={hasSchemaOptions} schema={formEffective.schema} values={values} scope={formEffective.scope} disabled={disabled || !effective}
@@ -311,7 +317,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
         filter={schemaFilter}
         inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
         hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
-        onInvalid={onInvalid}
+        onInvalid={onInvalid} validationDescriptions={issueDescriptions}
         confirmSyntaxFor={option => formEffective.help_keys.includes(option.key)}
         onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />
     </div>}

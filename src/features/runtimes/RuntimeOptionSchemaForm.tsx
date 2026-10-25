@@ -91,11 +91,12 @@ interface ValueInputProps {
   emptyMeans: 'inherit' | 'empty';
   copy: Copy;
   describedBy?: string;
+  validationDescription?: string;
   onValue: (value: unknown) => void;
   onInvalid: (invalid: boolean) => void;
 }
 
-function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy, describedBy, onValue, onInvalid }: ValueInputProps) {
+function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy, describedBy, validationDescription, onValue, onInvalid }: ValueInputProps) {
   const generated = useId();
   const id = inputId ?? generated;
   const ariaLabel = inputId ? undefined : label;
@@ -109,13 +110,16 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
   const sensitive = supported(option.sensitive) === true;
   const choices = supported(option.choices) ?? [];
   const markInvalid = (next: boolean) => { setInvalid(next); onInvalid(next); };
-  const describedByIds = [describedBy, invalid ? errorId : undefined].filter(Boolean).join(' ') || undefined;
+  const describedByIds = [describedBy, validationDescription, invalid ? errorId : undefined].filter(Boolean).join(' ') || undefined;
+  const ariaInvalid = invalid || !!validationDescription || undefined;
   if (choices.length > 0) {
     // Choices keep their documented JSON type by position, never via String().
     const index = choices.findIndex(choice => JSON.stringify(choice) === JSON.stringify(value));
     return (
       <CustomSelect
         ariaLabel={label}
+        ariaDescribedBy={describedByIds}
+        ariaInvalid={ariaInvalid}
         value={index < 0 ? '' : String(index)}
         disabled={disabled}
         options={[
@@ -130,6 +134,8 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
     return (
       <CustomSelect
         ariaLabel={label}
+        ariaDescribedBy={describedByIds}
+        ariaInvalid={ariaInvalid}
         value={value === true ? 'true' : value === false ? 'false' : ''}
         disabled={disabled}
         options={[{ value: '', label: copy.inherit }, { value: 'true', label: 'true' }, { value: 'false', label: 'false' }]}
@@ -156,17 +162,17 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
     <span className="schema-option__value">
       {kind === 'json' ? (
         hide ? (
-          <input id={id} className="app-input" type="password" value={draft} disabled={disabled} aria-label={ariaLabel} readOnly placeholder={copy.hidden} />
+          <input id={id} className="app-input" type="password" value={draft} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedByIds} aria-invalid={ariaInvalid} readOnly placeholder={copy.hidden} />
         ) : (
           <textarea id={id} name={label} className="app-textarea" value={draft} disabled={disabled} aria-label={ariaLabel}
-            aria-describedby={describedByIds} aria-invalid={invalid || undefined}
+            aria-describedby={describedByIds} aria-invalid={ariaInvalid}
             onChange={event => commit(event.target.value)} />
         )
       ) : (
         <input id={id} name={label} className="app-input" value={draft} disabled={disabled} aria-label={ariaLabel}
           type={hide ? 'password' : 'text'} inputMode={kind === 'integer' || kind === 'number' ? 'decimal' : 'text'}
           autoCorrect="off" autoCapitalize="off" spellCheck={false}
-          aria-describedby={describedByIds} aria-invalid={invalid || undefined}
+          aria-describedby={describedByIds} aria-invalid={ariaInvalid}
           onChange={event => commit(event.target.value)} />
       )}
       {sensitive && (
@@ -186,6 +192,8 @@ export interface SchemaOptionFieldProps {
   /** Label for "no saved value" (e.g. an automatic capability default). */
   inheritLabel?: string;
   hint?: string;
+  /** IDs of native validation messages for this option. */
+  validationDescription?: string;
   /** `origins[i]` is the saved occurrence a new row came from (null: new). */
   onStore: (next: unknown, origins?: Array<number | null>) => void;
   onInvalid?: (key: string, invalid: boolean) => void;
@@ -197,7 +205,7 @@ export interface SchemaOptionFieldProps {
 }
 
 /** One schema option: the same editor for catalog, manifest and help options. */
-export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, applicable = true, inheritLabel, hint, onStore, onInvalid, rowSpellings, onRowSpelling, onConfirmSyntax }: SchemaOptionFieldProps) {
+export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, applicable = true, inheritLabel, hint, validationDescription, onStore, onInvalid, rowSpellings, onRowSpelling, onConfirmSyntax }: SchemaOptionFieldProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const id = useId();
@@ -274,6 +282,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
         {header}
         <CustomSelect
           ariaLabel={name}
+          ariaDescribedBy={[option.help ? helpId : undefined, validationDescription].filter(Boolean).join(' ') || undefined}
+          ariaInvalid={!!validationDescription || undefined}
           value={value === true ? 'true' : value === false ? 'false' : ''}
           disabled={locked}
           options={[
@@ -300,7 +310,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
             <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>
           </span>
         ) : (
-          <SingleValue option={option} value={value} label={name} disabled={locked} copy={copy} describedBy={option.help ? helpId : undefined}
+          <SingleValue option={option} value={value} label={name} disabled={locked} copy={copy} describedBy={option.help ? helpId : undefined} validationDescription={validationDescription}
             inputId={`${id}-single`}
             onValue={next => onStore(next === undefined ? undefined : writeStored([[next]], current?.spelling ?? null))}
             onInvalid={invalid => report('single', invalid)} />
@@ -326,7 +336,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
           {row.map((cell, cellIndex) => (
             <span key={cellIndex} className="schema-option__cell">
               <ValueInput option={option} value={cell} label={`${name} ${copy.occurrence} ${rowIndex + 1} ${copy.value} ${cellIndex + 1}`}
-                disabled={locked} emptyMeans="empty" copy={copy}
+                disabled={locked} emptyMeans="empty" copy={copy} describedBy={option.help ? helpId : undefined} validationDescription={validationDescription}
                 onValue={next => store(rows.map((r, i) => (i === rowIndex ? r.map((c, j) => (j === cellIndex ? next : c)) : r)))}
                 onInvalid={invalid => report(`${rowIndex}:${cellIndex}`, invalid)} />
               {canRemoveValue(row) && (
@@ -366,15 +376,15 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   );
 });
 
-function SingleValue({ option, value, label, disabled, copy, describedBy, inputId, onValue, onInvalid }: {
-  option: OptionSchemaDefinition; value: unknown; label: string; disabled: boolean; copy: Copy; describedBy?: string;
+function SingleValue({ option, value, label, disabled, copy, describedBy, validationDescription, inputId, onValue, onInvalid }: {
+  option: OptionSchemaDefinition; value: unknown; label: string; disabled: boolean; copy: Copy; describedBy?: string; validationDescription?: string;
   inputId: string; onValue: (value: unknown) => void; onInvalid: (invalid: boolean) => void;
 }) {
   // The label element points at the first focusable control rendered below.
   return (
     <span className="schema-option__single">
       <ValueInput inputId={inputId} option={option} value={value} label={label} disabled={disabled} emptyMeans="inherit" copy={copy}
-        describedBy={describedBy} onValue={onValue} onInvalid={onInvalid} />
+        describedBy={describedBy} validationDescription={validationDescription} onValue={onValue} onInvalid={onInvalid} />
     </span>
   );
 }
@@ -596,6 +606,8 @@ export interface RuntimeOptionSchemaFormProps {
   inheritLabel?: (option: OptionSchemaDefinition) => string | undefined;
   hint?: (option: OptionSchemaDefinition) => string | undefined;
   onInvalid?: (key: string, invalid: boolean) => void;
+  /** Message IDs from a host that validates the complete configuration. */
+  validationDescriptions?: ReadonlyMap<string, string>;
   /** Saves confirmed syntax for a reviewed help option; omitted where none applies. */
   onConfirmSyntax?: (option: OptionSchemaDefinition, syntax: ConfirmedSyntax) => void;
   /** Options whose syntax may be confirmed (reviewed help options only). */
@@ -605,7 +617,7 @@ export interface RuntimeOptionSchemaFormProps {
 interface ImportRequestOwner { schema: OptionSchema; scopeKey: string; text: string }
 
 /** Generic runtime-scoped option renderer, validator and argv preview. */
-export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
+export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, inheritLabel, hint, onInvalid, validationDescriptions, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const formId = useId();
@@ -687,10 +699,16 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const reviewedImport = useMemo(() => imported ? maskImportReview(imported, schema, values) : null, [imported, schema, values]);
   const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schemaKeys.has(key)), [schemaKeys, values]);
 
+  const issueDescriptions = useMemo(() => {
+    const descriptions = new Map(validationDescriptions);
+    issues.forEach((issue, index) => descriptions.set(issue.key, [descriptions.get(issue.key), `${formId}-issue-${index}`].filter(Boolean).join(' ')));
+    return descriptions;
+  }, [validationDescriptions, issues, formId]);
+
   const fields = (showAll ? visible : visible.slice(0, limit)).map((option, index) => (
     <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
       <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} applicable={isApplicable(option, scope)}
-        inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
+        inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} validationDescription={issueDescriptions.get(option.key)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
         rowSpellings={rowSpellings.get(option.key)}
         onRowSpelling={order.ok ? (row, flag) => onChange(setOccurrenceSpelling(schema, values, option.key, row, flag)) : undefined}
         onConfirmSyntax={onConfirmSyntax && (!confirmSyntaxFor || confirmSyntaxFor(option)) ? syntax => onConfirmSyntax(option, syntax) : undefined} />
@@ -715,7 +733,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   return (
     <div className="model-settings-fields">
       {navigation}
-      {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
+      {issues.map((issue, index) => <div key={`${issue.key}:${index}`} id={`${formId}-issue-${index}`}><FeedbackBanner tone="error">{issue.message}</FeedbackBanner></div>)}
       {unknownKeys.map(key => (
         <FeedbackBanner key={key} tone="error">
           {key} {copy.unknownKey}

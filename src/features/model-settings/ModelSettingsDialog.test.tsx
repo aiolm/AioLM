@@ -1479,6 +1479,39 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(initial).toEqual(initialBefore);
     expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
   });
+  it.each(['runtime', 'engine'] as const)('loads a typed model path without treating %s selection as profile edits', async selection => {
+    const provider = 'custom.new-engine';
+    const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };
+    const profile = captureProfile(selected, 'Engine profile', 'global', '');
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'New engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] },
+      { id: 'custom.previous-engine', engine: 'Previous engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['build-one', 'build-two'].map(id => ({
+      id, provider, engine: 'New engine', server: 'openai-v1', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [],
+    })));
+    const initial = selection === 'engine' ? { ...selected, active_provider: 'custom.previous-engine' as api.ProviderId } : selected;
+    const { onApply, onClose, onProfileCommit } = mount({ initialSection: undefined, initialConfig: { ...initial, settings_profiles: { ...emptyProfileLibrary(), entries: [profile] } } });
+    if (selection === 'engine') fireEvent.click(await screen.findByRole('radio', { name: 'New engine' }));
+    await screen.findByRole('radio', { name: /^build-two/ });
+    fireEvent.click(screen.getByRole('radio', { name: /^build-two/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    // Runtime selection is not a profile-owned setting; it must not make the
+    // profile look edited or turn a local path load into a discard prompt.
+    expect(screen.getByRole('heading', { name: selection === 'engine' ? 'Default' : 'Engine profile' })).toBeVisible();
+    expect(screen.queryByText('Global profile · unsaved changes')).not.toBeInTheDocument();
+    const path = screen.getByRole('textbox', { name: 'Model path' });
+    fireEvent.change(path, { target: { value: 'models/next.gguf' } });
+    await act(async () => { fireEvent.keyDown(path, { key: 'Enter', keyCode: 13 }); });
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load into editor' })).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /^build-two/, hidden: true })).toBeChecked();
+    expect(path).toHaveValue('models/next.gguf');
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
 });
 
 const tensorLog = [

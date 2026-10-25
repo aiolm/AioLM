@@ -64,6 +64,61 @@ describe('generic runtime option renderer', () => {
     expect(current.options[0].kind.certainty).toBe('unknown');
   });
 
+  it('links native validation to the rejected value and clears it when the value is accepted', async () => {
+    const message = 'value is outside the documented numeric range';
+    const current = schema([textOption('threads'), textOption('workers')]);
+    vi.mocked(runtimeHelp.runtimeHelpResolve).mockRejectedValueOnce([{ key: 'threads', message }]);
+    const view = render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{ threads: '0' }} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    await screen.findByText(message);
+    expect(screen.getByLabelText(/^--threads/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/^--threads/)).toHaveAccessibleDescription(`threads help ${message}`);
+    expect(screen.getByLabelText(/^--workers/)).not.toHaveAttribute('aria-invalid');
+    view.rerender(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{ threads: '3' }} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/^--threads/)).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText(/^--threads/)).toHaveAccessibleDescription('threads help');
+  });
+
+  it('marks each rejected tuple value without clearing its own parse error when native issues clear', () => {
+    const pair = textOption('pair', { kind: known('integer'), arity: known({ min: 2, max: 2 }) });
+    const current = schema([pair, textOption('label')]);
+    const values = { pair: { occurrences: [[1, 2]] } };
+    const descriptions = new Map([['pair', 'native-range native-rule']]);
+    const renderForm = (native: boolean) => <I18nProvider initialLocale="en">
+      <p id="native-range">Outside range</p><p id="native-rule">Must be different</p>
+      <RuntimeOptionSchemaForm compact schema={current} values={values} scope={[]} onChange={() => undefined}
+        validationDescriptions={native ? descriptions : undefined} />
+    </I18nProvider>;
+    const view = render(renderForm(true));
+    const first = screen.getByLabelText('--pair Occurrence 1 Value 1');
+    const second = screen.getByLabelText('--pair Occurrence 1 Value 2');
+    for (const value of [first, second]) {
+      expect(value).toHaveAttribute('aria-invalid', 'true');
+      expect(value).toHaveAccessibleDescription('pair help Outside range Must be different');
+    }
+    expect(screen.getByLabelText(/^--label/)).not.toHaveAttribute('aria-invalid');
+    fireEvent.change(first, { target: { value: 'unfinished-number' } });
+    view.rerender(renderForm(false));
+    expect(first).toHaveAttribute('aria-invalid', 'true');
+    expect(first).not.toHaveAccessibleDescription(expect.stringContaining('Outside range'));
+    expect(second).not.toHaveAttribute('aria-invalid');
+    expect(second).toHaveAccessibleDescription('pair help');
+  });
+
+  it('connects host validation messages to choice and switch comboboxes', () => {
+    const mode = textOption('mode', { choices: known(['fast', 'exact']) });
+    const enabled = textOption('enabled', { kind: known('boolean'), arity: known({ min: 0, max: 0 }) });
+    render(<I18nProvider initialLocale="en"><p id="native-rule">Values conflict</p>
+      <RuntimeOptionSchemaForm compact schema={schema([mode, enabled])} values={{ mode: 'fast', enabled: true }} scope={[]}
+        validationDescriptions={new Map([['mode', 'native-rule'], ['enabled', 'native-rule']])} onChange={() => undefined} />
+    </I18nProvider>);
+    for (const flag of ['--mode', '--enabled']) {
+      const input = screen.getByRole('combobox', { name: flag });
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+      expect(input).toHaveAccessibleDescription(expect.stringContaining('Values conflict'));
+    }
+  });
+
   it('masks sensitive values in the argv preview', async () => {
     const current = schema([
       textOption('token', { sensitive: { value: true, certainty: 'verified', source: { kind: 'adapter', id: 't', revision: 'r' } } }),

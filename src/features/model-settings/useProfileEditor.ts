@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
 import { providerOf } from '../../shared/api/providers';
-import { defaultSettingsProfileEntry, deleteSettingsProfile, materializeProfileApplication, profileDeletionIds, profileTargetKey, setDefaultSettingsProfile, settingsEqual, type ProfileApplication, type SettingsProfile } from '../../shared/config/settingsProfiles';
+import { defaultSettingsProfileEntry, deleteSettingsProfile, materializeProfileApplication, profileDeletionIds, profileTargetKey, profileSettingsSnapshot, setDefaultSettingsProfile, settingsEqual, type ProfileApplication, type SettingsProfile } from '../../shared/config/settingsProfiles';
 import { applyDefaultProfile, resolveProfileApplication, resolveProfileApplicationOrDefault, resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { executionConfig } from '../../shared/config/executionSettings';
 import { profileLibrary, type ProfileEditorResult } from './profileEditor';
@@ -16,7 +16,8 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
   const original = useRef(resolved.application);
   const savedSettings = useRef(cfg);
   const [systemPrompt, setPrompt] = useState(resolved.application.system_prompt);
-  const working = !settingsEqual(cfg, savedSettings.current) || systemPrompt !== original.current.system_prompt;
+  // Profiles own option values; selecting another runtime does not edit them.
+  const working = !settingsEqual(profileSettingsSnapshot(cfg), profileSettingsSnapshot(savedSettings.current)) || systemPrompt !== original.current.system_prompt;
   const selected = library.entries.find(entry => entry.id === original.current.profile_id && (entry.provider ?? 'llama.cpp') === providerOf(cfg)) ?? defaultSettingsProfileEntry(library, providerOf(cfg));
   const available = library.entries.filter(entry => (entry.provider ?? 'llama.cpp') === providerOf(cfg));
   const setSystemPrompt = setPrompt;

@@ -24,6 +24,25 @@ function overrideResizeObserver(value: unknown) {
 }
 
 describe("CustomSelect", () => {
+  it.each([false, true])('exposes invalid state and linked feedback on the actual combobox (editable: %s)', editable => {
+    const content = (invalid?: boolean) => <>
+      <p id="value-help">Choose a runtime value</p><p id="value-error">The saved value is unavailable</p>
+      <CustomSelect ariaLabel="Runtime value" value="light" options={OPTIONS} onChange={vi.fn()}
+        onInputChange={editable ? vi.fn() : undefined} ariaInvalid={invalid}
+        ariaDescribedBy={invalid ? 'value-help value-error' : 'value-help'} />
+    </>;
+    const view = render(content(true));
+    const control = screen.getByRole('combobox', { name: 'Runtime value' });
+    expect(control.tagName).toBe(editable ? 'INPUT' : 'BUTTON');
+    expect(control).toHaveAttribute('aria-invalid', 'true');
+    expect(control).toHaveAccessibleDescription('Choose a runtime value The saved value is unavailable');
+    view.rerender(content(false));
+    expect(control).toHaveAttribute('aria-invalid', 'false');
+    expect(control).toHaveAccessibleDescription('Choose a runtime value');
+    view.rerender(content());
+    expect(control).not.toHaveAttribute('aria-invalid');
+  });
+
   it('keeps editable values outside the suggestions and uses the common listbox for choices', () => {
     const onChange = vi.fn();
     function Editable() {

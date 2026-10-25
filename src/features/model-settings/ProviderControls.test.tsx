@@ -122,6 +122,37 @@ describe('runtime-specific option controls', () => {
     expect(reset).toBeDisabled(); fireEvent.click(reset);
     expect(onChange).not.toHaveBeenCalled();
   });
+  it('marks the field the native validation rejects and connects its message', async () => {
+    const provider = 'custom.threads';
+    const message = 'value is outside the documented numeric range';
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [
+      schemaOption({ key: 'threads', flag: '--threads', group: 'other', target: 'launch', kind: { type: 'integer', min: 1, max: 32 } }),
+      schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } }),
+    ]));
+    // The range is enforced by the native validation, not by the field parser.
+    vi.mocked(api.providerOptionIssues).mockImplementation(async cfg =>
+      cfg.provider_options?.[provider]?.threads === 0 ? [{ key: 'threads', code: 'invalid', message }] : []);
+    const onInvalid = vi.fn();
+    function Draft() {
+      const [cfg, setCfg] = useState<api.AppConfig>({ ...testConfig, active_provider: provider, active_runtime: 'build', provider_options: { [provider]: { workers: 2 } } });
+      return <ProviderOptions collapseTools cfg={cfg} disabled={false} onChange={patch => setCfg(current => ({ ...current, ...patch }))} onInvalid={onInvalid} />;
+    }
+    render(<I18nProvider initialLocale="en"><Draft /></I18nProvider>);
+    const threads = await screen.findByLabelText(/^--threads/);
+    fireEvent.change(threads, { target: { value: '0' } });
+    await screen.findByText(message);
+    await waitFor(() => expect(screen.getByLabelText(/^--threads/)).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByLabelText(/^--threads/)).toHaveAccessibleDescription(expect.stringContaining(message));
+    expect(screen.getByLabelText(/^--workers/)).not.toHaveAttribute('aria-invalid');
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
+    fireEvent.change(screen.getByLabelText(/^--threads/), { target: { value: '3' } });
+    await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/^--threads/)).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText(/^--threads/)).not.toHaveAccessibleDescription(expect.stringContaining(message));
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
+  });
   it('retains an unrecognized saved order record and asks for review before resetting', async () => {
     const provider = 'custom.defaults';
     vi.mocked(api.providerCatalog).mockResolvedValue([]);
