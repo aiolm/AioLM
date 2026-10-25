@@ -1,5 +1,6 @@
 //! Backend modules, public client APIs and desktop application startup.
 pub mod app_update;
+mod attachment_drop;
 pub mod backends;
 mod benchmark;
 pub mod branding;
@@ -149,6 +150,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     let app = builder
         .manage(AppState::default())
+        .on_webview_event(attachment_drop::on_webview_event)
         .invoke_handler(tauri::generate_handler![
             commands::providers::provider_catalog,
             commands::providers::runtime_adapter_register,
@@ -233,6 +235,8 @@ pub fn run() {
             commands::mcp::mcp_call_tool,
             commands::mcp::mcp_cancel_tool_call,
             commands::documents::pick_attachment,
+            commands::documents::claim_attachment_drop,
+            commands::documents::discard_attachment_drop,
             commands::documents::pick_document,
             commands::projects::project_export_json,
             commands::projects::project_import_json,

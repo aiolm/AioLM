@@ -38,6 +38,7 @@ pub(crate) struct AppState {
     pub(crate) api_key: Arc<str>,
     pub(crate) selected_image: Mutex<Option<PathBuf>>,
     pub(crate) selected_document: Mutex<Option<PathBuf>>,
+    pub(crate) attachment_drops: Mutex<crate::attachment_drop::AttachmentDrops>,
     pub(crate) exiting: Arc<AtomicBool>,
     /// Set once the normal `RunEvent::Exit` path begins. The update installer
     /// path also sets `exiting` to block new starts before its pre-launch
@@ -71,6 +72,7 @@ impl Default for AppState {
             api_key: new_api_key(),
             selected_image: Mutex::new(None),
             selected_document: Mutex::new(None),
+            attachment_drops: Mutex::new(crate::attachment_drop::AttachmentDrops::default()),
             exiting: Arc::new(AtomicBool::new(false)),
             normal_exit: Mutex::new(false),
             sessions: Arc::new(session::SessionManager::new()),

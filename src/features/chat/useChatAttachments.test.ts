@@ -4,7 +4,8 @@ import * as api from '../../shared/api/index';
 import type { ImageAttachment } from './chatTypes';
 import { useChatAttachments } from './useChatAttachments';
 
-vi.mock('../../shared/api/index', () => ({ pickAttachment: vi.fn(), readDocumentText: vi.fn(), importMedia: vi.fn() }));
+vi.mock('../../shared/api/index', () => ({ pickAttachment: vi.fn(), readDocumentText: vi.fn(), importMedia: vi.fn(),
+  claimAttachmentDrop: vi.fn(), discardAttachmentDrop: vi.fn(async () => undefined) }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -18,9 +19,106 @@ function setup() {
   return { ...renderHook(() => useChatAttachments({ visionReady: true, setError })), setError };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => vi.resetAllMocks());
 
 describe('composer attachment ownership', () => {
+  it('claims mixed native files in order only after each preceding import commits', async () => {
+    const first = deferred<string>();
+    vi.mocked(api.claimAttachmentDrop).mockResolvedValueOnce('/synthetic/한글 문서.md')
+      .mockResolvedValueOnce('/synthetic/diagram.png').mockResolvedValueOnce('/synthetic/last.md');
+    vi.mocked(api.readDocumentText).mockReturnValueOnce(first.promise).mockResolvedValueOnce('Last document');
+    vi.mocked(api.importMedia).mockResolvedValue({ name: 'diagram.png', ref: 'synthetic-image', dataUrl: '', kind: 'image' });
+    const { result } = setup();
+    act(() => result.current.addDroppedAttachments('native-batch', 3));
+    await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledOnce());
+    expect(api.claimAttachmentDrop).toHaveBeenCalledTimes(1);
+    await act(async () => { first.resolve('Unicode document'); });
+    await waitFor(() => expect(result.current.documents).toHaveLength(2));
+    expect(result.current.documents.map(item => item.name)).toEqual(['한글 문서.md', 'last.md']);
+    expect(result.current.attachments[0].ref).toBe('synthetic-image');
+    expect(api.claimAttachmentDrop).toHaveBeenCalledTimes(3);
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('native-batch');
+    expect(api.pickAttachment).not.toHaveBeenCalled();
+    expect(result.current.attachmentStatus).toBe('ready');
+  });
+
+  it('keeps four committed documents and discards the remaining native batch at capacity', async () => {
+    vi.mocked(api.claimAttachmentDrop).mockImplementation(async () => `/synthetic/file-${vi.mocked(api.claimAttachmentDrop).mock.calls.length}.md`);
+    vi.mocked(api.readDocumentText).mockResolvedValue('Document');
+    const { result, setError } = setup();
+    act(() => result.current.addDroppedAttachments('six-documents', 6));
+    await waitFor(() => expect(result.current.attachmentStatus).toBe('failed'));
+    expect(result.current.documents).toHaveLength(4);
+    expect(api.claimAttachmentDrop).toHaveBeenCalledTimes(5);
+    expect(api.readDocumentText).toHaveBeenCalledTimes(4);
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('six-documents');
+    expect(setError).toHaveBeenLastCalledWith(expect.stringContaining('up to 4 documents'));
+  });
+
+  it('stops a native batch when a project binding fills the last document slot during its read', async () => {
+    const read = deferred<string>();
+    vi.mocked(api.claimAttachmentDrop).mockResolvedValue('/synthetic/new.md');
+    vi.mocked(api.readDocumentText).mockReturnValue(read.promise);
+    const { result } = setup();
+    act(() => result.current.addDroppedAttachments('project-race', 2));
+    await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledOnce());
+    const project = Array.from({ length: 4 }, (_, i) => ({ name: `bound-${i}`, path: `/synthetic/bound-${i}.md`, text: 'Bound' }));
+    await act(async () => { result.current.setDocuments(project); read.resolve('New'); });
+    await waitFor(() => expect(api.discardAttachmentDrop).toHaveBeenCalledWith('project-race'));
+    expect(result.current.documents).toEqual(project);
+    expect(result.current.attachmentStatus).toBe('failed');
+    expect(api.claimAttachmentDrop).toHaveBeenCalledOnce();
+  });
+
+  it('refuses unsupported dropped media before import and preserves existing documents', async () => {
+    vi.mocked(api.claimAttachmentDrop).mockResolvedValue('/synthetic/picture.png');
+    const setError = vi.fn();
+    const { result } = renderHook(() => useChatAttachments({ visionReady: false, setError }));
+    const document = { name: 'kept', path: '/synthetic/kept.md', text: 'Existing context' };
+    act(() => { result.current.setDocuments([document]); });
+    act(() => result.current.addDroppedAttachments('unsupported', 2));
+    await waitFor(() => expect(result.current.attachmentStatus).toBe('failed'));
+    expect(api.importMedia).not.toHaveBeenCalled();
+    expect(api.claimAttachmentDrop).toHaveBeenCalledOnce();
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('unsupported');
+    expect(result.current.documents).toEqual([document]);
+    expect(setError).toHaveBeenLastCalledWith(expect.stringContaining('does not support image'));
+  });
+
+  it('discards only the new batch while a native import owns the reader', async () => {
+    const read = deferred<string>();
+    vi.mocked(api.claimAttachmentDrop).mockResolvedValue('/synthetic/first.md');
+    vi.mocked(api.readDocumentText).mockReturnValue(read.promise);
+    const { result } = setup();
+    act(() => result.current.addDroppedAttachments('first', 1));
+    await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledOnce());
+    await act(async () => { result.current.addDroppedAttachments('second', 1); await result.current.addAttachment(); });
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('second');
+    expect(api.discardAttachmentDrop).not.toHaveBeenCalledWith('first');
+    expect(api.pickAttachment).not.toHaveBeenCalled();
+    await act(async () => { read.resolve('First'); });
+    await waitFor(() => expect(result.current.documents).toHaveLength(1));
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('first');
+  });
+
+  it.each(['reset', 'unmount'] as const)('revokes a dropped batch on %s and ignores its late read', async action => {
+    const read = deferred<string>();
+    vi.mocked(api.claimAttachmentDrop).mockResolvedValue('/synthetic/old.md');
+    vi.mocked(api.readDocumentText).mockReturnValue(read.promise);
+    const { result, unmount, setError } = setup();
+    act(() => result.current.addDroppedAttachments('old-conversation', 2));
+    await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledOnce());
+    act(() => { if (action === 'unmount') unmount(); else result.current.clearComposerAttachments(); });
+    expect(api.discardAttachmentDrop).toHaveBeenCalledWith('old-conversation');
+    await act(async () => { read.resolve('Stale document'); });
+    expect(api.claimAttachmentDrop).toHaveBeenCalledOnce();
+    expect(setError).not.toHaveBeenCalled();
+    if (action === 'reset') {
+      expect(result.current.documents).toEqual([]);
+      expect(result.current.attachmentStatus).toBe('idle');
+    }
+  });
+
   it.each(['document', 'media'] as const)('reports capacity when a delayed %s import loses its slot to another update', async kind => {
     const text = deferred<string>();
     const media = deferred<ImageAttachment>();

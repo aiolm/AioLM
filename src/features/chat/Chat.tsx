@@ -9,6 +9,7 @@ import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useChatThreads } from "./useChatThreads";
 import { useChatAttachments } from "./useChatAttachments";
+import { useNativeAttachmentDrop } from './useNativeAttachmentDrop';
 import { useChatMcpTools } from "./useChatMcpTools";
 import { useChatSend } from "./useChatSend";
 import ChatThreadSidebar from "./ChatThreadSidebar";
@@ -62,6 +63,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const [videoFrames, setVideoFrames] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerDropRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
   const scrollViewportRef = useRef<{ width: number; height: number } | null>(null);
 
@@ -112,7 +114,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const mediaOptions = { audioSessionId: speechSessions.some(session => session.id === audioSessionId) ? audioSessionId : undefined, videoFrames };
   const mediaCopy = mediaPreparationCopy[locale];
 
-  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
+  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, addDroppedAttachments, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
     audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: videoFrames && visionReady,
     setError: (message) => setError(message) });
   const { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools();
@@ -216,6 +218,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const canSend = serverOn && chatSupported && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
   const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
+  useNativeAttachmentDrop({ targetRef: composerDropRef, active,
+    enabled: !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
+      && !(documents.length >= 4 && attachments.length >= 4),
+    onDrop: addDroppedAttachments, setError });
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -419,6 +425,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             {projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
           </PanelFeedback>
           <ChatComposer
+            dropTargetRef={composerDropRef}
             locale={locale}
             contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, chatUnavailable].filter(Boolean).join(' ') || null}
             contextSources={contextSources}

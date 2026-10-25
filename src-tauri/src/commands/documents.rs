@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::fs;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{Manager, State};
 use zip::ZipArchive;
 
 const MAX_DOCUMENT_BYTES: u64 = 8 * 1024 * 1024;
@@ -82,16 +82,33 @@ fn document_extension(path: &Path) -> bool {
         .is_some_and(|value| DOCUMENT_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str()))
 }
 
-fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+enum AttachmentSelection {
+    Media,
+    Document,
+}
+
+fn resolve_attachment_selection(path: &Path) -> Result<(PathBuf, AttachmentSelection), String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("cannot select attachment: {error}"))?;
     let selection = if crate::media::mime(&canonical).is_some() {
-        &state.selected_image
+        AttachmentSelection::Media
     } else if document_extension(&canonical) {
-        &state.selected_document
+        AttachmentSelection::Document
     } else {
         return Err("unsupported attachment type; choose an image or document".into());
+    };
+    Ok((canonical, selection))
+}
+
+fn grant_canonical_attachment(
+    state: &AppState,
+    canonical: PathBuf,
+    selection: AttachmentSelection,
+) -> Result<String, String> {
+    let selection = match selection {
+        AttachmentSelection::Media => &state.selected_image,
+        AttachmentSelection::Document => &state.selected_document,
     };
     let mut selected = selection
         .lock()
@@ -100,16 +117,14 @@ fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, St
     Ok(canonical.to_string_lossy().into_owned())
 }
 
+fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+    let (canonical, selection) = resolve_attachment_selection(path)?;
+    grant_canonical_attachment(state, canonical, selection)
+}
+
 #[tauri::command]
 pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    *state
-        .selected_image
-        .lock()
-        .map_err(|_| "image selection state was poisoned".to_string())? = None;
-    *state
-        .selected_document
-        .lock()
-        .map_err(|_| "document selection state was poisoned".to_string())? = None;
+    clear_attachment_selection(&state)?;
     let path = tokio::task::spawn_blocking(|| {
         let extensions: Vec<&str> = crate::media::EXTENSIONS
             .iter()
@@ -127,6 +142,92 @@ pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option
     .map_err(|error| format!("attachment picker task failed: {error}"))?;
     path.map(|path| grant_selected_attachment(&state, &path))
         .transpose()
+}
+
+fn clear_attachment_selection(state: &AppState) -> Result<(), String> {
+    *state
+        .selected_image
+        .lock()
+        .map_err(|_| "image selection state was poisoned".to_string())? = None;
+    *state
+        .selected_document
+        .lock()
+        .map_err(|_| "document selection state was poisoned".to_string())? = None;
+    Ok(())
+}
+
+#[cfg(test)]
+fn claim_dropped_attachment(
+    state: &AppState,
+    window: &str,
+    id: &str,
+    now: std::time::Instant,
+) -> Result<Option<String>, String> {
+    claim_dropped_attachment_with(state, window, id, || now, resolve_attachment_selection)
+}
+
+fn claim_dropped_attachment_with(
+    state: &AppState,
+    window: &str,
+    id: &str,
+    clock: impl Fn() -> std::time::Instant,
+    resolve: impl FnOnce(&Path) -> Result<(PathBuf, AttachmentSelection), String>,
+) -> Result<Option<String>, String> {
+    let claim = state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?
+        .claim(window, id, clock())?;
+    // Filesystem resolution runs without holding the selection store lock.
+    let resolved = resolve(claim.path());
+    let mut drops = state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?;
+    drops.complete(window, &claim, clock())?;
+    // Publication is linearized with discard. Invalid/cancelled tickets never
+    // clear grants; genuine live failures behave like a failed native picker.
+    clear_attachment_selection(state)?;
+    let result = resolved.and_then(|(canonical, selection)| {
+        grant_canonical_attachment(state, canonical, selection).map(Some)
+    });
+    drop(drops);
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn claim_attachment_drop(
+    webview: tauri::Webview,
+    id: String,
+) -> Result<Option<String>, String> {
+    crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
+    let app = webview.app_handle().clone();
+    // Canonicalization belongs on a worker, never the GUI Drop callback.
+    tokio::task::spawn_blocking(move || {
+        claim_dropped_attachment_with(
+            &app.state::<AppState>(),
+            "main",
+            &id,
+            std::time::Instant::now,
+            resolve_attachment_selection,
+        )
+    })
+    .await
+    .map_err(|error| format!("attachment drop selection task failed: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) fn discard_attachment_drop(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
+    state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?
+        .discard("main", &id, std::time::Instant::now())
 }
 
 fn xml_text(value: &str) -> String {
@@ -529,6 +630,203 @@ mod tests {
             .expect("document selection state")
             .is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_drop_claims_and_discards_preserve_existing_reader_grants() {
+        let root = std::env::temp_dir().join(format!("aiolm-drop-grants-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let document = root.join("selected.txt");
+        let image = root.join("selected.png");
+        let dropped = root.join("합성 문서.txt");
+        for path in [&document, &image, &dropped] {
+            fs::write(path, b"synthetic selection").unwrap();
+        }
+        let state = AppState::default();
+        grant_selected_attachment(&state, &document).unwrap();
+        grant_selected_attachment(&state, &image).unwrap();
+        let now = std::time::Instant::now();
+        let id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&dropped), now)
+            .unwrap();
+        assert!(claim_dropped_attachment(&state, "main", "forged", now).is_err());
+        assert!(
+            claim_dropped_attachment(&state, "main", &uuid::Uuid::new_v4().to_string(), now)
+                .is_err()
+        );
+        assert!(claim_dropped_attachment(&state, "other", &id, now).is_err());
+        assert!(state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("other", &id, now)
+            .is_err());
+        state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("main", &uuid::Uuid::new_v4().to_string(), now)
+            .unwrap();
+        let later = now + std::time::Duration::from_secs(120);
+        assert!(claim_dropped_attachment(&state, "main", &id, later).is_err());
+        {
+            let selected = state.selected_document.lock().unwrap();
+            assert!(ensure_selected_document_path(selected.as_deref(), &document).is_ok());
+            assert!(ensure_selected_document_path(selected.as_deref(), &dropped).is_err());
+        }
+        assert!(ensure_selected_image_path(
+            state.selected_image.lock().unwrap().as_deref(),
+            &image
+        )
+        .is_ok());
+
+        let next = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&dropped), later)
+            .unwrap();
+        assert_eq!(
+            claim_dropped_attachment(&state, "main", &next, later)
+                .unwrap()
+                .unwrap(),
+            dropped.canonicalize().unwrap().to_string_lossy()
+        );
+        assert!(claim_dropped_attachment(&state, "main", &next, later).is_err());
+        state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("main", &next, later)
+            .unwrap();
+        assert!(ensure_selected_document_path(
+            state.selected_document.lock().unwrap().as_deref(),
+            &dropped
+        )
+        .is_ok());
+        assert!(state.selected_image.lock().unwrap().is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn genuine_unsupported_drop_consumes_selection_and_clears_stale_grants() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-drop-failure-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let document = root.join("selected.txt");
+        let image = root.join("selected.png");
+        let unsupported = root.join("program.exe");
+        for path in [&document, &image, &unsupported] {
+            fs::write(path, b"synthetic selection").unwrap();
+        }
+        let state = AppState::default();
+        grant_selected_attachment(&state, &document).unwrap();
+        grant_selected_attachment(&state, &image).unwrap();
+        let now = std::time::Instant::now();
+        let id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", &[unsupported], now)
+            .unwrap();
+        assert!(claim_dropped_attachment(&state, "main", &id, now)
+            .unwrap_err()
+            .contains("unsupported attachment type"));
+        assert!(state.selected_document.lock().unwrap().is_none());
+        assert!(state.selected_image.lock().unwrap().is_none());
+        assert!(claim_dropped_attachment(&state, "main", &id, now).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn cancelled_drop_keeps_newer_reader_grant(expired: bool) {
+        let root = std::env::temp_dir().join(format!("aiolm-drop-cancel-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("old.txt");
+        let new = root.join("new.txt");
+        fs::write(&old, b"old selection").unwrap();
+        fs::write(&new, b"new selection").unwrap();
+        let state = std::sync::Arc::new(AppState::default());
+        let now = std::time::Instant::now();
+        let old_id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", &[old], now)
+            .unwrap();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let old_state = state.clone();
+        let old_token = old_id.clone();
+        let publication_time = if expired {
+            now + std::time::Duration::from_secs(120)
+        } else {
+            now
+        };
+        let clock_calls = std::sync::atomic::AtomicUsize::new(0);
+        let worker = std::thread::spawn(move || {
+            claim_dropped_attachment_with(
+                &old_state,
+                "main",
+                &old_token,
+                || {
+                    if clock_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        now
+                    } else {
+                        publication_time
+                    }
+                },
+                |path| {
+                    entered.send(()).unwrap();
+                    resume.recv().unwrap();
+                    resolve_attachment_selection(path)
+                },
+            )
+        });
+        waiting
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        if !expired {
+            state
+                .attachment_drops
+                .lock()
+                .unwrap()
+                .discard("main", &old_id, now)
+                .unwrap();
+        }
+        let new_id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&new), publication_time)
+            .unwrap();
+        claim_dropped_attachment(&state, "main", &new_id, publication_time).unwrap();
+        release.send(()).unwrap();
+        let old_result = worker.join().unwrap();
+        let new_grant_preserved =
+            ensure_selected_document_path(state.selected_document.lock().unwrap().as_deref(), &new)
+                .is_ok();
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            new_grant_preserved,
+            "new selection was overwritten: expired={expired}"
+        );
+        assert!(
+            old_result.is_err(),
+            "cancelled/expired claim published: expired={expired}"
+        );
+    }
+
+    #[test]
+    fn discarded_drop_cannot_publish_over_a_newer_reader_grant() {
+        cancelled_drop_keeps_newer_reader_grant(false);
+    }
+
+    #[test]
+    fn expired_drop_cannot_publish_over_a_newer_reader_grant() {
+        cancelled_drop_keeps_newer_reader_grant(true);
     }
 
     #[test]

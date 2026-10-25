@@ -3,7 +3,7 @@ import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { ChatSkill } from "../../shared/api/personalization";
 import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
@@ -15,6 +15,7 @@ import { createChatImeGuard } from './chatImeGuard';
 import { chatReplyStateCopy } from './chatRetryCopy';
 
 interface ChatComposerProps {
+  dropTargetRef?: Ref<HTMLDivElement>;
   locale?: Locale;
   contextWarning: string | null;
   contextSources: string[];
@@ -60,6 +61,7 @@ interface ChatComposerProps {
 }
 
 export default function ChatComposer({
+  dropTargetRef,
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, toolCallInProgress, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, enterToSend = true, phase, onAddAttachment, onStop,
@@ -126,7 +128,7 @@ export default function ChatComposer({
           {contextWarning && <FeedbackBanner tone="warning" aria-label={ct("contextWarningLabel")}>{contextWarning}</FeedbackBanner>}
       </PanelFeedback>
       {contextSources.length > 0 && <FeedbackBanner tone="info" className="mb-2"><span className="font-medium">{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</FeedbackBanner>}
-      <div className="chat-composer-actions">
+      <div className="chat-composer-actions" ref={dropTargetRef}>
       {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingAttachments")}>
       <div className="chat-attachment-status-slot">
         {attachmentStatus !== "idle" && <div className="text-xs ui-color-faint"  role="status" aria-live="polite">{attachmentStatus === "reading" ? ct("attachmentReading") : attachmentStatus === "ready" ? ct("attachmentReady") : ct("attachmentFailed")}</div>}

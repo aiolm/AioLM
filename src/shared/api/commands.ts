@@ -37,6 +37,19 @@ export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: str
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
 export const hfDownloadSnapshot = (repoId: string, modelsDir: string) => invoke<import('./providers').ModelArtifact>('hf_download_snapshot', { repoId, modelsDir });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
+export interface AttachmentDropNotice {
+  id: string | null;
+  count: number;
+  position: { x: number; y: number };
+  error?: string;
+}
+/** Claims only paths captured by a genuine native drop; callers cannot supply paths. */
+export const claimAttachmentDrop = (id: string) => invoke<string | null>('claim_attachment_drop', { id });
+export const discardAttachmentDrop = (id: string) => invoke<void>('discard_attachment_drop', { id });
+export async function onAttachmentDrop(callback: (notice: AttachmentDropNotice) => void): Promise<UnlistenFn> {
+  if (!isNativeRuntimeAvailable()) return () => undefined;
+  return listen<AttachmentDropNotice>('aiolm://attachments-dropped', event => callback(event.payload));
+}
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
 export const importMedia = (path: string) => invoke<ImageAttachment>('import_media', { path });
