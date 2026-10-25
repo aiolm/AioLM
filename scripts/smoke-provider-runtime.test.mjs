@@ -16,6 +16,7 @@ import {
   assertModelsAlias,
   assertStreamEvents,
   assertUsagePresent,
+  cancelChatStreamAndRecover,
   createIsolatedHome,
   inspectModelInput,
   newChecks,
@@ -131,6 +132,141 @@ test('registered adapter reasoning cancellation closes the actual HTTP stream an
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('provider acceptance cancels fast open output before natural completion and recovers with usage', { timeout: 3000 }, async () => {
+  let naturalEnd = false, prematureClose = false, requests = 0;
+  let resolveClosed;
+  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const payloads = [];
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      payloads.push(JSON.parse(body));
+      requests += 1;
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+      if (requests === 1) {
+        response.write(adapterFrame({ content: '1' }));
+        const fallback = setTimeout(() => { naturalEnd = true; response.end('data: [DONE]\n\n'); }, 100);
+        response.on('close', () => {
+          clearTimeout(fallback); prematureClose = !response.writableFinished; resolveClosed();
+        });
+      } else {
+        response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'OK' } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`);
+      }
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await cancelChatStreamAndRecover(`http://127.0.0.1:${server.address().port}`, { max_tokens: 32 }, 1000);
+    await closed;
+    assert.equal(result.cancelled, true);
+    assert.equal(result.sawData, true);
+    assert.equal(result.completedEarly, false);
+    assert.equal(prematureClose, true);
+    assert.equal(naturalEnd, false);
+    assert.deepEqual(result.after.usage, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+    assert.ok(payloads.every(payload => payload.stream_options.include_usage === true));
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+async function withProviderCancellationServer(reply, check) {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on('end', () => { requests += 1; reply(response, requests); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await check(`http://127.0.0.1:${server.address().port}`, () => requests);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+function providerRecovery(response) {
+  response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+  response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'OK' } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`);
+}
+
+async function cancellationWithinBound(operation) {
+  let timer;
+  try {
+    return await Promise.race([operation, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('cancellation did not settle within the test bound')), 500);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+for (const field of ['reasoning_content', 'reasoning']) {
+  test(`provider acceptance cancels on ${field} and closes the actual stream`, async () => {
+    let prematureClose = false, naturalEnd = false;
+    await withProviderCancellationServer((response, count) => {
+      if (count !== 1) { providerRecovery(response); return; }
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+      response.write(adapterFrame({ role: 'assistant' }) + adapterFrame({ [field]: 'planning' }));
+      const fallback = setTimeout(() => { naturalEnd = true; response.end('data: [DONE]\n\n'); }, 100);
+      response.on('close', () => { clearTimeout(fallback); prematureClose = !response.writableFinished; });
+    }, async url => {
+      const result = await cancelChatStreamAndRecover(url, { max_tokens: 32 }, 1000);
+      assert.equal(result.cancelled, true);
+      assert.equal(prematureClose, true);
+      assert.equal(naturalEnd, false);
+      assert.equal(result.after.usage.total_tokens, 2);
+    });
+  });
+}
+
+for (const [kind, frame, error] of [
+  ['finish reason with content', adapterFrame({ content: '5' }, 'stop'), /before cancellation/],
+  ['DONE in the same body chunk', adapterFrame({ content: '5' }) + 'data: [DONE]\n\n', /before cancellation/],
+  ['role-only output', adapterFrame({ role: 'assistant' }) + 'data: [DONE]\n\n', /before cancellation/],
+  ['empty output', '', /before cancellation/],
+  ['malformed output', 'data: broken-json\n\n', /invalid SSE/],
+]) {
+  test(`provider acceptance rejects ${kind} as cancellation evidence`, async () => {
+    await withProviderCancellationServer((response, count) => {
+      if (count !== 1) { providerRecovery(response); return; }
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+      response.end(frame);
+    }, async (url, requests) => {
+      await assert.rejects(cancelChatStreamAndRecover(url, {}, 1000), error);
+      assert.equal(requests(), 1, 'failed cancellation must not be disguised by a successful follow-up');
+    });
+  });
+}
+
+test('provider acceptance preserves a stream read error before generation output', async () => {
+  await withProviderCancellationServer((response, count) => {
+    if (count !== 1) { providerRecovery(response); return; }
+    response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+    response.write(adapterFrame({ role: 'assistant' }));
+    const failure = setTimeout(() => response.destroy(new Error('synthetic early stream failure')), 10);
+    response.on('close', () => clearTimeout(failure));
+  }, async (url, requests) => {
+    await assert.rejects(cancelChatStreamAndRecover(url, {}, 1000), /aborted|socket|reset|terminated/i);
+    assert.equal(requests(), 1);
+  });
+});
+
+for (const stage of ['headers', 'generation output', 'recovery headers']) {
+  test(`provider acceptance bounds the whole cancellation while waiting for ${stage}`, async () => {
+    await withProviderCancellationServer((response, count) => {
+      if (stage === 'headers' || (stage === 'recovery headers' && count > 1)) return;
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+      response.write(adapterFrame(stage === 'generation output' ? { role: 'assistant' } : { content: '1' }));
+    }, async (url, requests) => {
+      await assert.rejects(cancellationWithinBound(cancelChatStreamAndRecover(url, {}, 40)), /stream.*timed? ?out/);
+      assert.equal(requests(), stage === 'recovery headers' ? 2 : 1);
+    });
+  });
+}
 
 test("chat acceptance uses fresh connections across same-port server replacement", async () => {
   const connections = [];
@@ -660,6 +796,10 @@ function assertChecksShape(result) {
     assert.ok(check, `missing check ${name}`);
     assert.ok(STATUSES.includes(check.status), `check ${name} has unknown status ${check.status}`);
   }
+  for (const status of STATUSES) {
+    const actual = Object.values(result.checks).filter(check => check.status === status).length;
+    assert.equal(result.summary[status], actual, `published ${status} count must include the final cleanup result`);
+  }
 }
 
 test("live path with fakes: successful stop, mid-body cancel and redacted shareable JSON", async () => {
@@ -710,6 +850,7 @@ test("failure cleanup retention: a stop failure keeps the isolated home and fail
     assert.equal(result.summary.outcome, "fail");
     assert.equal(result.checks.stop.status, "fail");
     assert.equal(result.checks.cleanup.status, "fail");
+    assertChecksShape(result);
     assert.match(result.checks.cleanup.detail, /retained/);
     const retained = errors.find((line) => line.includes("retaining isolated home for manual stop:"));
     assert.ok(retained, "retained home must be logged on console only");

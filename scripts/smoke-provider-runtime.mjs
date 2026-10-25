@@ -50,6 +50,8 @@
  import { spawnSync } from "node:child_process";
  import { createServer, request as httpRequest } from "node:http";
  import { Readable } from "node:stream";
+ import { performance } from "node:perf_hooks";
+ import { readRuntimeAdapterStream } from "./runtime-adapter-stream.mjs";
  import {
    existsSync,
    mkdtempSync,
@@ -523,6 +525,9 @@ export function sanitizeResultForFile(result) {
        }
      }
      return { ok: true, status: response.status, body: null, events, usage, rawBytes: text.length };
+   } catch (error) {
+     if (controller.signal.aborted) throw new Error("stream timeout", { cause: error });
+     throw error;
    } finally {
      clearTimeout(timer);
    }
@@ -533,51 +538,47 @@ export function sanitizeResultForFile(result) {
  // resolve before the body completes and prove nothing. Returns the refusal
  // when the server rejects chat outright, so non-chat tasks can record unrun
  // instead of inventing a cancel verdict.
- export async function cancelChatStreamAndRecover(url, payload, timeoutMs, cancelAfterMs = 500) {
-   const response = await fetchAcceptance(url, {
-     method: "POST",
-     headers: { "content-type": "application/json" },
-     body: JSON.stringify({ ...payload, stream: true, stream_options: { include_usage: true } }),
-   });
-   if (!response.ok) {
-     const text = await response.text();
-     let body = null;
-     try {
-       body = JSON.parse(text);
-     } catch {
-       body = { _raw: text.slice(0, 1000) };
-     }
-     return { cancelled: false, refused: { status: response.status, body }, after: null };
-   }
-   const reader = response.body.getReader();
-   let timerFired = false;
+ export async function cancelChatStreamAndRecover(url, payload, timeoutMs) {
+   const controller = new AbortController();
+   const deadline = performance.now() + timeoutMs;
+   let timedOut = false;
    const timer = setTimeout(() => {
-     timerFired = true;
-     try {
-       reader.cancel(new Error("harness cancel"));
-     } catch {
-       // The reader already settled; the outcome below tells the story.
-     }
-   }, cancelAfterMs);
-   let sawData = false;
-   let completedEarly = false;
+     timedOut = true;
+     controller.abort(new Error("stream cancellation timed out"));
+   }, timeoutMs);
    try {
-     for (;;) {
-       const next = await reader.read();
-       if (next.done) {
-         completedEarly = !timerFired;
-         break;
+     const response = await fetchAcceptance(url, {
+       method: "POST",
+       headers: { "content-type": "application/json" },
+       body: JSON.stringify({ ...payload, stream: true, stream_options: { include_usage: true } }),
+       signal: controller.signal,
+     });
+     if (!response.ok) {
+       const text = await response.text();
+       let body = null;
+       try {
+         body = JSON.parse(text);
+       } catch {
+         body = { _raw: text.slice(0, 1000) };
        }
-       sawData = true;
+       return { cancelled: false, refused: { status: response.status, body }, after: null };
      }
-   } catch {
-     // A read error after the cancel timer fired is the expected abort.
+     // Cancel on actual content/reasoning while its stream is still open.
+     // The shared parser refuses terminal, malformed and role-only output.
+     const cancelled = await readRuntimeAdapterStream(response, { controller, cancel: true });
+     clearTimeout(timer);
+     const remaining = deadline - performance.now();
+     if (remaining <= 0) throw new Error("stream cancellation timed out");
+     const after = await readChatStream(url, { ...payload, max_tokens: 8 }, remaining);
+     return { cancelled: cancelled.streamAbortedAfterOutput, sawData: cancelled.streamAbortedAfterOutput,
+       completedEarly: false, refused: null, after };
+   } catch (error) {
+     if (timedOut) throw new Error("stream cancellation timed out", { cause: error });
+     throw error;
    } finally {
      clearTimeout(timer);
+     controller.abort();
    }
-   const cancelled = timerFired && !completedEarly;
-   const after = await readChatStream(url, { ...payload, max_tokens: 8 }, timeoutMs);
-   return { cancelled, sawData, completedEarly, refused: null, after };
  }
 
  // A 0.1s silent 8kHz mono WAV for transcription probes. Real voices need a
@@ -767,7 +768,6 @@ export function sanitizeResultForFile(result) {
        `${base}/v1/chat/completions`,
        { model: aliases[0], messages: [{ role: "user", content: "hi" }], max_tokens: 64 },
        5000,
-       100,
      );
      assert.ok(!cancel.refused, "synthetic chat must accept the cancel probe");
      assert.ok(cancel.cancelled, "synthetic cancel must abort the open stream body");
@@ -1175,7 +1175,7 @@ export function sanitizeResultForFile(result) {
            model: servedAlias,
            messages: [{ role: "user", content: args.prompt }],
            max_tokens: Math.max(args.maxTokens, 64),
-         }, args.timeoutMs, 500);
+         }, args.timeoutMs);
          if (cancel.refused) {
            if (chatRefusalIsUnsupported && [400, 404, 422].includes(cancel.refused.status)) {
              setCheck(checks, "cancel", "unrun", `chat refused for this task (${cancel.refused.status}); cancellation not demonstrated`, { status: cancel.refused.status });
@@ -1184,9 +1184,7 @@ export function sanitizeResultForFile(result) {
              throw new Error(`cancel probe refused with ${cancel.refused.status}`);
            }
          } else if (!cancel.cancelled) {
-           const reason = cancel.completedEarly
-             ? "stream completed before the cancel window; rerun with larger --max-tokens to demonstrate cancellation"
-             : "cancel did not abort the open stream body";
+           const reason = "cancel did not abort an open stream after generation output";
            setCheck(checks, "cancel", "fail", reason, { sawData: cancel.sawData, completedEarly: cancel.completedEarly });
            throw new Error(reason);
          } else {
@@ -1536,10 +1534,8 @@ export function sanitizeResultForFile(result) {
      } catch (cleanupError) {
        setCheck(result.checks, "cleanup", "fail", cleanupError.message, {});
      }
-     if (!result.summary) result.summary = summarize(result.checks);
-     else if (liveStarted && result.summary.outcome !== "fail" && Object.values(result.checks).some((check) => check.status === "fail")) {
-       result.summary = summarize(result.checks);
-     }
+     // Cleanup can change a check after the main result was prepared.
+     result.summary = summarize(result.checks);
      if (args.out) {
        try {
          mkdirSync(dirname(resolve(args.out)), { recursive: true });
