@@ -68,6 +68,15 @@ export function parseDeviceLines(output: string): string[] {
   return output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && line.length <= 256).slice(0, 100);
 }
 
+/** Count the indexed entries in llama.cpp's device list, retaining raw probe output separately. */
+export function countRuntimeDeviceEntries(lines: readonly string[]): number {
+  const ids = lines.flatMap(line => {
+    const id = line.trim().match(/^([A-Za-z][A-Za-z0-9_-]*\d+):\s+\S/)?.[1];
+    return id ? [id] : [];
+  });
+  return new Set(ids).size;
+}
+
 export function capabilityLabel(state: CapabilityState): string {
   switch (state) {
     case "available": return "Available";

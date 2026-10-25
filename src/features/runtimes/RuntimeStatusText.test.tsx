@@ -6,6 +6,20 @@ import PullRequestProvenance from './RuntimePullRequestProvenance';
 import type { PullRequestPreview, RuntimeCapabilities } from '../../shared/api/types';
 
 describe('runtime status explanations', () => {
+  it.each([
+    { devices: ['Available devices:', 'ROCm0: Synthetic GPU A', 'ROCm1: Synthetic GPU B'], count: 2 },
+    { devices: ['Available devices:', '(none)'], count: 0 },
+    { devices: ['initializing backend', 'NextBackend2: Synthetic accelerator', 'NextBackend2: repeated entry'], count: 1 },
+  ])('counts enumerated devices without counting banners or duplicate IDs: $count', ({ devices, count }) => {
+    const capabilities: RuntimeCapabilities = { backend: 'rocm', build: 'synthetic-build', executable: 'synthetic-server',
+      state: 'available', version: '', flags: [], devices, diagnostics: [] };
+    render(<I18nProvider initialLocale="en"><RuntimeCapabilitiesCard t={(key, vars) => translate('en', key, vars)}
+      capabilities={capabilities} serverRunning={false} probeTarget={null} /></I18nProvider>);
+    expect(screen.getByText(`${count} visible`)).toBeVisible();
+    expect(screen.getByTitle(devices.join(' · '))).toBeVisible();
+    expect(capabilities.devices).toEqual(devices);
+  });
+
   it('translates a failed executable check without removing its diagnostic or enabling a locked probe', () => {
     const capabilities: RuntimeCapabilities = { backend: 'cpu', build: 'synthetic-build', executable: 'synthetic-server',
       state: 'failed preflight', version: '', flags: [], devices: [], diagnostics: ['Synthetic binary fingerprint changed'] };

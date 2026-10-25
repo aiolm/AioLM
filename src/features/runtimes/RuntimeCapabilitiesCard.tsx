@@ -2,7 +2,7 @@ import StatusBadge from "../../shared/ui/StatusBadge";
 import DeepVerificationControls, { type DeepVerificationState } from './DeepVerificationControls';
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
-import { formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
+import { countRuntimeDeviceEntries, formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import type { Locale } from '../../shared/i18n/i18n';
 import { capabilityStateText } from '../../shared/i18n/statusDisplayCopy';
 import { useRuntimeVersionLabel } from "../../shared/runtime/installedRuntimes";
@@ -41,7 +41,7 @@ export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityStateText(capabilities.state, locale)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {probedVersion}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 text-xs tabular-nums ui-color-ink" >{probedVersion}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 max-h-20 overflow-auto app-text-wrap font-mono text-xs ui-color-faint" >{displayFlags || t("ui.none")}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
+          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: countRuntimeDeviceEntries(capabilities.devices) })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeBench")}</div><div className="mt-1"><StatusBadge label={capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")} tone={capabilities.bench_available ? "success" : "warning"} /></div><div className="mt-1 text-xs ui-color-faint" >llama-bench --help</div></div>
         </div>
       )}

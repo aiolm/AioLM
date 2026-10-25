@@ -2622,14 +2622,7 @@ async fn run_probe_with_cancel_and_environment(
                 String::from_utf8_lossy(&stdout),
                 String::from_utf8_lossy(&stderr)
             );
-            let detail: String = text
-                .chars()
-                .rev()
-                .take(MAX_BUILD_DETAIL_CHARS)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
+            let detail = tail_chars(&text, MAX_BUILD_DETAIL_CHARS);
             return ProbeCommand {
                 success: false,
                 text,
@@ -2653,11 +2646,19 @@ async fn run_probe_with_cancel_and_environment(
         combined.push('\n');
         combined.push_str(stderr_text.trim());
     }
+    let diagnostic = (!status.success()).then(|| {
+        let mut diagnostic = format!("runtime probe exited with {status}: {}", args.join(" "));
+        let detail = tail_chars(combined.trim(), MAX_BUILD_DETAIL_CHARS);
+        if !detail.is_empty() {
+            diagnostic.push('\n');
+            diagnostic.push_str(&detail);
+        }
+        diagnostic
+    });
     ProbeCommand {
         success: status.success(),
         text: combined,
-        diagnostic: (!status.success())
-            .then(|| format!("runtime probe exited with {status}: {}", args.join(" "))),
+        diagnostic,
     }
 }
 
@@ -2843,6 +2844,22 @@ async fn probe_with_cancel(
     if cancelled() {
         return Err("server start cancelled".into());
     }
+    Ok(capabilities_from_probes(
+        resolved_backend,
+        resolved_build,
+        &binary,
+        dependency_error,
+        [version, help, devices, bench],
+    ))
+}
+
+fn capabilities_from_probes(
+    backend: String,
+    build: String,
+    binary: &Path,
+    dependency_error: Option<String>,
+    [version, help, devices, bench]: [ProbeCommand; 4],
+) -> RuntimeCapabilities {
     let mut diagnostics = Vec::new();
     if let Some(error) = dependency_error.as_ref() {
         diagnostics.push(error.clone());
@@ -2862,23 +2879,30 @@ async fn probe_with_cancel(
             bench.success,
         )
     };
-    Ok(RuntimeCapabilities {
-        backend: resolved_backend,
-        build: resolved_build,
+    // Failed commands can print plausible flags or device names while reporting
+    // initialization errors. Keep that output in diagnostics, not capabilities.
+    let help_text = if help.success { &help.text } else { "" };
+    RuntimeCapabilities {
+        backend,
+        build,
         executable: binary.to_string_lossy().into_owned(),
         state: state.into(),
-        version: version.text.chars().take(4096).collect(),
-        flags: probe_flags(&help.text),
-        server_help: if help.success {
-            help.text.clone()
+        version: if version.success {
+            version.text.chars().take(4096).collect()
         } else {
             String::new()
         },
-        supports_dflash: help_supports_dflash(&help.text),
-        devices: probe_devices(&devices.text),
+        flags: probe_flags(help_text),
+        server_help: help_text.to_owned(),
+        supports_dflash: help_supports_dflash(help_text),
+        devices: if devices.success {
+            probe_devices(&devices.text)
+        } else {
+            Vec::new()
+        },
         diagnostics,
         bench_available: bench.success,
-    })
+    }
 }
 
 fn help_supports_dflash(help: &str) -> bool {
@@ -8241,6 +8265,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn failed_probe_output_is_diagnostic_and_never_a_reported_capability() {
+        let reports = [
+            "version: 0.1.0 (build 123, commit abcdef)",
+            "--model FILE --spec-type {none,draft-dflash}",
+            "Vulkan0: Synthetic GPU",
+            "llama-bench --help",
+        ];
+        for failed in 0..4 {
+            let probes = std::array::from_fn(|index| ProbeCommand {
+                success: index != failed,
+                text: reports[index].into(),
+                diagnostic: (index == failed).then(|| "synthetic loader failure".into()),
+            });
+            let capabilities = capabilities_from_probes(
+                "cpu".into(),
+                "b123".into(),
+                Path::new("synthetic-runtime"),
+                None,
+                probes,
+            );
+            assert_eq!(capabilities.state, "failed preflight");
+            assert_eq!(capabilities.version.is_empty(), failed == 0);
+            assert_eq!(capabilities.flags.is_empty(), failed == 1);
+            assert_eq!(capabilities.server_help.is_empty(), failed == 1);
+            assert_eq!(capabilities.supports_dflash, failed != 1);
+            assert_eq!(capabilities.devices.is_empty(), failed == 2);
+            assert_eq!(capabilities.bench_available, failed != 3);
+            assert_eq!(capabilities.diagnostics, ["synthetic loader failure"]);
+        }
+    }
+
     #[tokio::test]
     async fn a_drained_stream_never_closes_the_pipe_early() {
         // The regression: capping with a take() adapter returned as soon as
@@ -10103,6 +10159,25 @@ mod tests {
             .diagnostic
             .unwrap()
             .contains("synthetic backend initialization"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_probe_retains_a_bounded_initialization_diagnostic() {
+        let binary = which::which("node").expect("Node test fixture");
+        let script = format!(
+            "process.stdout.write('λ'.repeat({})); process.stderr.write('missing synthetic libbackend.so\\n'); process.exitCode = 127;",
+            MAX_BUILD_DETAIL_CHARS * 2,
+        );
+        let result = run_probe_with(&binary, &["-e", &script], Duration::from_secs(3)).await;
+        assert!(!result.success);
+        assert!(result.text.contains("missing synthetic libbackend.so"));
+        let diagnostic = result.diagnostic.expect("failed probe diagnostic");
+        let (status, detail) = diagnostic.split_once('\n').expect("probe output detail");
+        assert!(status.starts_with("runtime probe exited with "));
+        assert!(detail.ends_with("missing synthetic libbackend.so"));
+        assert!(detail.contains('λ'));
+        assert!(!detail.contains('�'));
+        assert!(detail.chars().count() <= MAX_BUILD_DETAIL_CHARS);
     }
 
     #[cfg(target_os = "macos")]
