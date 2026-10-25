@@ -736,9 +736,18 @@ describe('session polling', () => {
     const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
     mocks.native = true;
     let idle = 0;
-    mocks.sessionList.mockImplementation(async () => [{ ...running(cfg, 'work'), idle_seconds: ++idle, active_requests: idle % 2 }]);
-    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    const nextStatus = () => ({ ...running(cfg, 'work'), idle_seconds: ++idle, active_requests: idle % 2 });
+    let finishInitial!: (value: SessionStatus[]) => void;
+    const firstResult = new Promise<SessionStatus[]>(resolve => { finishInitial = resolve; });
+    mocks.sessionList.mockImplementation(async () => [nextStatus()]).mockReturnValueOnce(firstResult);
+    const initialDialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await initialPoll();
+    expect(initialDialog.liveState).toBe('stopped');
+    await act(async () => { finishInitial([nextStatus()]); });
+    await waitFor(() => expect(mocks.dialog?.liveState).toBe('running'));
+    // The first render can precede the initial IPC result. Measure usage-only
+    // polls from the delivered props, not that immutable first-render snapshot.
+    const dialog = mocks.dialog!;
     const renders = mocks.renders;
     const props = mocks.dialog;
     await pollSessions();
