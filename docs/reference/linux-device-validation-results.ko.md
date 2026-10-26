@@ -337,3 +337,10 @@ native/FDO 두 관찰기의 전체 실행은31.021초였고 모두 exit0으로 �
 원래 SmolVLM GGUF revision `b9e4379657e1450d04d02eec8e345667265b0a00`의 헤더를 읽어 채팅 템플릿과 Idefics3 projector(image512/patch16/merge4·mean/std0.5)를 확인했다. 템플릿은 이번에 고정한 HF base snapshot `7e3e67edbbed1bf9888184d9df282b700a323964`와 같았다. 이 base snapshot을 원래 GGUF 변환 당시 revision으로 추정하지 않는다. 원래 VM 직접 응답의 `b11868-78a8ae14b` fingerprint가 가리키는 [런타임 source](https://github.com/ggml-org/llama.cpp/blob/78a8ae14be559b45f5f13ddee82c188b683d5d8d/src/llama-chat.cpp)는 이 형식을 SmolVLM으로 구분하며 ChatML과 혼동하지 않는다. 기본 Jinja 경로는 모델 템플릿을 사용한다. 실제 원래 실행이 선택한 렌더링 결과를 새로 관측한 것은 아니며 앱에 ChatML override나 모델 전용 분기를 추가할 근거가 아니다.
 
 원래 projector에는 `clip.vision.preproc_image_size`가 없다. 같은 upstream revision의 [projector loader](https://github.com/ggml-org/llama.cpp/blob/78a8ae14be559b45f5f13ddee82c188b683d5d8d/tools/mtmd/clip.cpp)와 [전처리 source](https://github.com/ggml-org/llama.cpp/blob/78a8ae14be559b45f5f13ddee82c188b683d5d8d/tools/mtmd/mtmd-image.cpp)는 이 항목을 선택적으로 읽고, 오래된 GGUF에 대한 호환 전처리 경로를 둔다. 반면 고정한 현재 HF base processor는 longest_edge2048을 명시한다. 이 메타데이터/기본 정책 차이는 native 전처리의 조사 가설이며 실제 원래 tensor·적용 branch나 오답 원인의 증명은 아니다. 기존 실행의 image-token override·렌더링·전처리 관측을 확보해야 하며 source 기본값만으로 실제 argv를 재구성하지 않는다. 새 inference·모델/입력/한도 변경은 수행하지 않았고 F09와 전체66/1/5/1/1 판정은 유지했다. 해상도/한도 변경 대조가 필요하더라도 원래 실패와 별도의 품질 실험으로 기록한다.
+
+
+## F09 기존 VM의 읽기 전용 기록 확인
+
+UTC2026-10-26T10:37:35Z, 원래 테스트 VM의 QEMU 실행 인자·전용 디스크/seed·소켓·허용 환경과 패키지 ELF 바이트를 현재 자원에 연결하고 고정 SSH 호스트 키로 읽기 전용 조회를 실행했다. 앱·엔진·모델·GUI·서비스를 시작하지 않았다. 보호한31파일과 DB 파일 묶음3개, 원래 모델/projector·PNG/영상·동일 CPU 실행 파일의 해시가 일치했다. 허용한 합성 프로필의 저장 설정 세 개에는 명시적인 image-token 또는 Jinja/template override가 없었지만 후속 시점의 설정이므로 원래 F09 실행 인자로 대체하지 않는다.
+
+조회와 기존 raw 대조로 원래 전체 argv·렌더링한 프롬프트·실제 전처리 tensor/branch를 복구하지는 못했다. 수신 source와 현재의 서버 출력 처리 파일 세 개는 같으며 GUI 진단 출력은 제한된 메모리 tail 경로다. 원래 upstream의 해당 전처리 크기/prompt-token 로그는 주석 처리돼 있어 verbosity만 높인 추가 요청이 누락된 관측을 제공한다고 보장할 수 없다. 따라서 이 조회를 새 품질 추론이나 원인 확정으로 세지 않는다. 임의의 로그 루트·사용자 이력·비밀 값은 수집하지 않았고 F09와66/1/5/1/1 판정은 유지했다. 원본 근거 SHA-256은 `a6e44e4129e2489643c2e187a14f6be48b564f4721ee3df47dc33adc87fb433e`다.

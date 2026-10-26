@@ -65,7 +65,7 @@
 - `tmp/linux-acceptance/source19-manual-notification-observation/`: 단일 Send ID50·양성279/음성280표본·사용자 확인·D05 판정 원본. 관찰기는 종료됐다.
 - `tmp/linux-acceptance/source19-manual-notification-final-guard/run/result.json`: 새 표시 검사 종료 뒤 원본 자료·현재 UI4/preferences·배포 파일 최종 보존 검사.
 - `tmp/linux-acceptance/source19-resumed-completion-audit-v1/`: 최신 공식 release 조회·원래 미디어 바이트 감사·재개 시 요건별 완료 감사.
-- `tmp/linux-acceptance/source19-media-contract-audit-v1/`: 원래 GGUF 헤더·고정 upstream/base source 대조와 전처리 가설. 실제 native 전처리/렌더링을 새로 실행한 근거가 아니다.
+- `tmp/linux-acceptance/source19-media-contract-audit-v1/`: 원래 GGUF 헤더·고정 upstream/base source 대조와 전처리 가설. 실제 native 전처리/렌더링을 새로 실행한 근거가 아니다. 실제 VM 읽기 전용 조회·보존 검사는 `root-VM-readonly-outcome.json`(SHA-256 `a6e44e4129e2489643c2e187a14f6be48b564f4721ee3df47dc33adc87fb433e`)에 있다. 세 후속 저장 설정은 확인했으나 원래 F09의 전체 argv/렌더링/tensor 경로를 복구한 결과는 아니다.
 
 새 PC/clone에는 이 원본과 모델/VM/산출물이 없을 수 있다. 원본이 없으면 부재를 명시하고 필요한 검증 환경과 합성 자료를 새로 준비한다. 공개 결과 문서만으로 기존 로컬 자원의 현재 생존·데이터 무변경을 주장하지 않는다. 원본 사용자 설정/대화/키를 fixture나 배포물로 복사하지 않는다.
 
