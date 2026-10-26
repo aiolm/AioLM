@@ -4,6 +4,7 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import { JsonOptionNumberError, parseJsonOption } from '../../shared/runtime/jsonOptionNumbers';
 
 type Copy = (typeof runtimeOptionsCopy)['en'];
 
@@ -33,7 +34,7 @@ function display(value: unknown): string {
 }
 
 /** Parses typed text by the option's documented kind; unknown kinds stay text. */
-function parseValue(option: OptionSchemaDefinition, text: string): { ok: true; value: unknown } | { ok: false } {
+function parseValue(option: OptionSchemaDefinition, text: string): { ok: true; value: unknown } | { ok: false; jsonNumber?: boolean } {
   const kind = kindOf(option);
   if (kind === 'integer') {
     const value = Number(text);
@@ -45,9 +46,9 @@ function parseValue(option: OptionSchemaDefinition, text: string): { ok: true; v
   }
   if (kind === 'json') {
     try {
-      return { ok: true, value: JSON.parse(text) as unknown };
-    } catch {
-      return { ok: false };
+      return { ok: true, value: parseJsonOption(text) };
+    } catch (cause) {
+      return { ok: false, jsonNumber: cause instanceof JsonOptionNumberError };
     }
   }
   return { ok: true, value: text };
@@ -101,15 +102,16 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
   const id = inputId ?? generated;
   const ariaLabel = inputId ? undefined : label;
   const errorId = `${id}-error`;
-  const text = display(value);
+  const text = kindOf(option) === 'json' && value !== undefined ? JSON.stringify(value) : display(value);
   const [draft, setDraft] = useState(text);
   const [invalid, setInvalid] = useState(false);
+  const [jsonNumberError, setJsonNumberError] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  useEffect(() => { setDraft(text); setInvalid(false); }, [text]);
+  useEffect(() => { setDraft(text); setInvalid(false); setJsonNumberError(false); }, [text]);
   const kind = kindOf(option);
   const sensitive = supported(option.sensitive) === true;
   const choices = supported(option.choices) ?? [];
-  const markInvalid = (next: boolean) => { setInvalid(next); onInvalid(next); };
+  const markInvalid = (next: boolean, jsonNumber = false) => { setInvalid(next); setJsonNumberError(jsonNumber); onInvalid(next); };
   const describedByIds = [describedBy, validationDescription, invalid ? errorId : undefined].filter(Boolean).join(' ') || undefined;
   const ariaInvalid = invalid || !!validationDescription || undefined;
   if (choices.length > 0) {
@@ -153,7 +155,7 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
       return;
     }
     const parsed = parseValue(option, next);
-    if (!parsed.ok) { markInvalid(true); return; }
+    if (!parsed.ok) { markInvalid(true, parsed.jsonNumber); return; }
     markInvalid(false);
     onValue(parsed.value);
   };
@@ -179,7 +181,7 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
         <button type="button" className="app-button app-button--secondary" aria-pressed={revealed} disabled={disabled}
           onClick={() => setRevealed(current => !current)}>{revealed ? copy.hide : copy.show}</button>
       )}
-      {invalid && <span id={errorId} role="alert">{copy.invalid}</span>}
+      {invalid && <span id={errorId} role="alert">{jsonNumberError ? copy.jsonNumberRange : copy.invalid}</span>}
     </span>
   );
 }
@@ -780,7 +782,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
             <button type="button" className="app-button app-button--secondary" disabled={disabled}
               onClick={() => {
                 if (!acceptedImport || !ownsImport(acceptedImport.request)) return;
-                try { onChange(applyPlan(schema, values, acceptedImport.result)); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof Error ? cause.message : String(cause) }); }
+                try { onChange(applyPlan(schema, values, acceptedImport.result)); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof JsonOptionNumberError ? copy.jsonNumberRange : cause instanceof Error ? cause.message : String(cause) }); }
               }}>{copy.apply}</button>
           )}
         </div>

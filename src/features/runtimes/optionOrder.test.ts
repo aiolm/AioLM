@@ -211,6 +211,25 @@ describe('imported integer values at the JavaScript boundary', () => {
   });
 });
 
+describe('imported JSON option numbers', () => {
+  it.each(['9007199254740993', '-9007199254740993', '1e400'])('refuses transported JSON %s before merging any option', number => {
+    const current: OptionSchema = { ...schema, options: [option('alpha'), option('payload', { kind: known('json') })] };
+    const saved = { alpha: 'original', payload: { seed: 17 }, [ORDER_KEY]: { version: 1, occurrences: [{ key: 'alpha' }] } };
+    const imported = JSON.parse(`{"plan":[{"key":"alpha","values":["new"]},{"key":"payload","values":[{"nested":[${number}]}]}]}`);
+    const before = structuredClone({ saved, imported });
+    expect(() => applyPlan(current, saved, imported)).toThrow('JSON contains a number outside the editor range');
+    expect({ saved, imported }).toEqual(before);
+  });
+
+  it('keeps valid imported JSON types and does not reinterpret text options', () => {
+    const current: OptionSchema = { ...schema, options: [option('alpha'), option('payload', { kind: known('json') })] };
+    expect(applyPlan(current, {}, { plan: [
+      { key: 'alpha', values: ['9007199254740993'] },
+      { key: 'payload', values: [{ numbers: [9007199254740991, -9007199254740991, 0.5], text: '1e400' }] },
+    ] })).toMatchObject({ alpha: '9007199254740993', payload: { numbers: [9007199254740991, -9007199254740991, 0.5], text: '1e400' } });
+  });
+});
+
 describe('expanded saved occurrences', () => {
   it('keeps complete mixed plans, aliases and moved output while preserving saved input', () => {
     const values = {

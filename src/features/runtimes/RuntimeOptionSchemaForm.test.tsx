@@ -5,6 +5,7 @@ import RuntimeOptionSchemaForm, { maskImportReview, maskPreview } from './Runtim
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import type { OptionSchema } from '../../shared/api/runtimeHelp';
+import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => {
   const actual = await origin<typeof import('../../shared/api/runtimeHelp')>();
@@ -219,6 +220,37 @@ describe('generic runtime option renderer', () => {
   });
 });
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const, source: { kind: 'adapter', id: 't', revision: 'r' } });
+
+describe('JSON option numeric limits', () => {
+  it('renders saved JSON strings with quotes so their type survives an edit', () => {
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([textOption('payload', { kind: known('json') })])}
+      values={{ payload: '9007199254740993' }} scope={[]} onChange={vi.fn()} /></I18nProvider>);
+    expect(screen.getByLabelText(/^--payload/)).toHaveValue('"9007199254740993"');
+  });
+
+  it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps the rejected draft and last saved value, with an accessible error in %s', locale => {
+    const onChange = vi.fn();
+    const onInvalid = vi.fn();
+    const values = { payload: { seed: 17 } };
+    render(<I18nProvider initialLocale={locale}><RuntimeOptionSchemaForm schema={schema([textOption('payload', { kind: known('json') })])}
+      values={values} scope={[]} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
+    const field = screen.getByLabelText(/^--payload/);
+    const draft = '{"nested":[{"seed":9007199254740993}]}';
+    fireEvent.change(field, { target: { value: draft } });
+    expect(field).toHaveValue(draft);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(expect.stringContaining(runtimeOptionsCopy[locale].jsonNumberRange));
+    expect(screen.getByRole('alert')).not.toHaveTextContent(draft);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:payload', true);
+    expect(values).toEqual({ payload: { seed: 17 } });
+    fireEvent.change(field, { target: { value: '{"seed":9007199254740991,"ratio":0.5,"label":"9007199254740993"}' } });
+    expect(onChange).toHaveBeenLastCalledWith({ payload: { seed: 9007199254740991, ratio: 0.5, label: '9007199254740993' } });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:payload', false);
+  });
+});
 
 describe('editing keeps every saved occurrence, alias and explicit value', () => {
   it('bounds the initial controls for a large installed help and can find its last option without dropping saved values', async () => {

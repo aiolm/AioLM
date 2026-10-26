@@ -8,6 +8,7 @@ import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerTelemetryCopy } from './providerTelemetry';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ORDER_KEY } from '../runtimes/optionOrder';
+import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -789,6 +790,39 @@ describe('registered engine options from accepted help (G04)', () => {
 });
 
 describe('catalog command import before runtime selection', () => {
+  it('keeps JSON drafts and rejects rounded catalog imports without replacing model or saved values', async () => {
+    const option: api.ProviderOption = { key: 'payload', flag: '--payload', target: 'launch', group: 'runtime', kind: { type: 'json' } };
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const imported = vi.spyOn(api, 'providerImportCommand').mockResolvedValue({ options: JSON.parse('{"payload":{"seed":9007199254740993}}'), model: '/synthetic/replacement.model', issues: [], managed: [], unrecognized: [] });
+    const onChange = vi.fn(); const onInvalid = vi.fn();
+    const cfg = { ...testConfig, active_provider: 'vllm' as const, active_runtime: '', provider_options: { vllm: { payload: '9007199254740993' } } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
+    const field = await screen.findByLabelText(/^--payload/);
+    expect(field).toHaveValue('"9007199254740993"');
+    const draft = '{"seed":9007199254740993}';
+    fireEvent.change(field, { target: { value: draft } });
+    expect(field).toHaveValue(draft);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(runtimeOptionsCopy.en.jsonNumberRange);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onInvalid).toHaveBeenCalledWith('provider:payload', true);
+    fireEvent.change(field, { target: { value: '{"seed":17,"ratio":0.5}' } });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { vllm: { payload: { seed: 17, ratio: 0.5 } } } });
+    onChange.mockClear();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--payload synthetic-json' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(imported).toHaveBeenCalled());
+    expect(await screen.findByText(runtimeOptionsCopy.en.jsonNumberRange)).toBeVisible();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(cfg.provider_options.vllm.payload).toBe('9007199254740993');
+    imported.mockRestore();
+  });
+
   it('applies recognized options and displays managed-argument issues without replacing the selected model', async () => {
     const option: api.ProviderOption = { key: 'max_model_len', flag: '--max-model-len', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 65536 } };
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vLLM', server: 'vllm serve', options: [option], availability: { supported: true, detail: '' } }]);

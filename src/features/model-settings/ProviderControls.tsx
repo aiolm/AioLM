@@ -4,6 +4,7 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { commandImportCopy } from '../../shared/i18n/commandImportCopy';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import { assertJsonOptionNumbers, JsonOptionNumberError, parseJsonOption } from '../../shared/runtime/jsonOptionNumbers';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
@@ -259,7 +260,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax, effective.entry).then(result => {
         if (!current()) return;
         let next: Record<string, unknown>;
-        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : String(cause)); return; }
+        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); return; }
         const review = maskImportReview(result, effective.schema, values, liveEntrySecrets(), effective.entry);
         setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
@@ -269,8 +270,11 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     void api.providerImportCommand(provider, paste, importSyntax).then(result => {
       if (!current()) return;
       if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
+      for (const option of schema) {
+        if (option.kind.type === 'json') assertJsonOptionNumbers(result.options[option.key]);
+      }
       setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
-    }).catch(cause => { if (current()) setError(String(cause)); });
+    }).catch(cause => { if (current()) setError(cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); });
   };
   // Confirmations are runtime metadata pinned to the accepted help, saved
   // immediately and apart from the profile's values.
@@ -378,31 +382,33 @@ function OptionTools({ collapsed, label, children }: { collapsed: boolean; label
 
 function OptionField({ option, value, disabled, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
-  const text = value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  const text = value === undefined ? '' : option.kind.type === 'json' || typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
   const [draft, setDraft] = useState(text);
   const [invalid, setInvalid] = useState(false);
+  const [jsonNumberError, setJsonNumberError] = useState(false);
   const errorId = useId();
-  useEffect(() => { setDraft(text); setInvalid(false); onInvalid(`provider:${option.key}`, false);
+  useEffect(() => { setDraft(text); setInvalid(false); setJsonNumberError(false); onInvalid(`provider:${option.key}`, false);
     return () => onInvalid(`provider:${option.key}`, false);
   }, [text, option.key, onInvalid]);
   const edit = (text: string) => {
     setDraft(text);
+    setJsonNumberError(false);
     if (!text.trim()) { setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(undefined); return; }
     try {
       let parsed: unknown = text;
-      if (option.kind.type === 'json') parsed = JSON.parse(text);
+      if (option.kind.type === 'json') parsed = parseJsonOption(text);
       if (['integer', 'number'].includes(option.kind.type)) {
         parsed = Number(text);
         if (!Number.isFinite(parsed) || option.kind.type === 'integer' && !Number.isSafeInteger(parsed) || option.kind.min !== undefined && Number(parsed) < option.kind.min || option.kind.max !== undefined && Number(parsed) > option.kind.max) throw new Error('range');
       }
       setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
-    } catch { setInvalid(true); onInvalid(`provider:${option.key}`, true); }
+    } catch (cause) { setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
   return <label>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small>
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
     {['flag', 'toggle', 'choice'].includes(option.kind.type) ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
       options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea className="app-textarea" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
       : <input className="app-input" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
-    {invalid && <span id={errorId} role="alert">{copy.invalid}</span>}
+    {invalid && <span id={errorId} role="alert">{jsonNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : copy.invalid}</span>}
   </label>;
 }

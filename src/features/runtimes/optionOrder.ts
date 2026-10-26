@@ -1,5 +1,6 @@
 import type { OptionSchema, OptionSchemaDefinition, PlannedOccurrence } from '../../shared/api/runtimeHelp';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import { assertJsonOptionNumbers } from '../../shared/runtime/jsonOptionNumbers';
 
 /** Saved key of the command-line order record (see `runtime_ordered.rs`).
  * Grouped values stay the authority for values; the record decides the
@@ -272,6 +273,9 @@ export function applyPlan(schema: OptionSchema, values: Record<string, unknown>,
   // Check before merging any occurrence: IPC numbers may already have lost
   // integer digits, while the original pasted command is still reviewable.
   for (const item of imported.plan) {
+    if (supportedValue(options.get(item.key)?.kind) === 'json') {
+      for (const value of item.values) assertJsonOptionNumbers(value);
+    }
     if (supportedValue(options.get(item.key)?.kind) === 'integer'
       && item.values.some(value => typeof value === 'number' && !Number.isSafeInteger(value))) {
       throw new ImportedIntegerPrecisionError();
