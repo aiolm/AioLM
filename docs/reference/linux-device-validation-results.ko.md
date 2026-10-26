@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 추가 검증은 아래 [고정19 새 엔진 전체 여정과 최종 보존 검사](#고정19-새-엔진-전체-여정과-최종-보존-검사), [고정19 알림 연결 수정](#고정19-알림-연결-수정과-실제-재검증), [최소화 상태의 실제 채팅 완료](#고정19-최소화-상태의-실제-채팅-완료), [OS 접근성 표시 관찰](#고정19-os-접근성-표시-관찰), [실제 알림 서비스 부재와 앱 회복](#고정19-실제-알림-서비스-부재와-앱-회복)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 연결 수명 결함 해소·백그라운드 제출·실제 전송 실패 뒤 앱 동작 유지를 확인했다. 정확한 테스트 문구의 Shell 객체 생성도 확인했으나 실제 표시는 입증하지 못했다. 전체 집계는65 pass/1 fail/6 unrun/1 unsupported/1 blocked로 유지한다.
+최신 추가 검증은 [고정19 실제 OS 알림 표시](#고정19-실제-os-알림-표시)와 [새 엔진 전체 여정·최종 보존 검사](#고정19-새-엔진-전체-여정과-최종-보존-검사)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 실제 표시의 양성 OS 표본279개와 제목·본문을 보았다는 사용자 확인, 실제 전송 실패 뒤 앱 동작 유지를 확인해 D05를pass로 갱신했다. 전체 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 검증 전체는 진행 중이다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -148,7 +148,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 
 ## 74개 세부 항목
 
-현재 65 pass / 1 fail / 1 unsupported / 6 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
+현재 66 pass / 1 fail / 1 unsupported / 5 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
 
 | ID | 항목 | 판정 | 실행 근거 또는 남은 범위 |
 | --- | --- | --- | --- |
@@ -212,8 +212,8 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L03-D01 | 파일·폴더 선택 | pass | 고정12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
 | L03-D02 | clipboard·IME | pass | PASS: 실제clipboard·13물리한글첫Enter보존/별도EndEnterLoad·원래eventprefix/config/main/정상정리 유지. 같은IMEguard를18에서도carried근거로구분하며새18물리IME재실행이나다른OSpass는아님. |
 | L03-D03 | tray | pass | 고정12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
-| L03-D04 | 창·인스턴스 | unrun | 기존설치8의 최소화/두번째실행·360×520와HOST18 nativeDPR2, 별도19의 최소화/복원은 각 범위의 실제 근거다. 최신 읽기 전용23:22 조회는 물리2/활성logical·output1/scale2이며 식별자 미보존·OS변경 없음. 다중 활성 화면 이동 검사는 남는다. |
-| L03-D05 | 알림 | unrun | 수정37c0343/고정19에서 연결 수명 결함 해소·백그라운드 제출과 실제 ServiceUnknown 뒤 오류 안내/버튼 재활성화/화면 이동·상태 보존을 확인했다. Shell 객체의 초기5표본과 별도 연속277표본(검출 후27.632초)은 SHOWING=false/유효하지 않은 좌표였다. 실제 OS 표시 확인은 남는다. |
+| L03-D04 | 창·인스턴스 | unrun | 기존 최소화/두번째 실행·작은 창/nativeDPR2 근거를 유지한다. 최신 UTC2026-10-26T09:36 조회도 물리2/활성logical·output1/scale2이고 사용자가 두 번째 출력 활성화 불가를 확인했다. 다중 활성 화면 이동 검사는 남는다. |
+| L03-D05 | 알림 | pass | 고정19의 단일 일반 Send/수락 ID50에서 정확한 알림 컨테이너·제목·본문의279표본이 SHOWING/VISIBLE/정상 SCREEN 좌표를 보였고 사용자가 제목·본문 표시를 확인했다. 실제 ServiceUnknown 뒤 앱 회복·정상 Close·원본 자료 보존도 확인했다. 과거 ID45/48의 false 표본은 유지한다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 기존 네언어 종료/숨김·현재버전 안내 유지. 설치16 ordinary Notifications는 r1 ENKO/r3 JAZH 설명/category·좁은창키보드, ENstatus는 DOM한계 명시. updater 가능/불가의 실제조건부 조합은 여전히 남는다. |
 | L03-P01 | package 생성 | pass | 기본package18 139.034초/519privacyfake0/SDK3·6payload·독립archive8SHA고정. nlink1은archive8만/원래CargoGUI·CLI nlink2구분. Actual18fresh/F03/native동작/두Close·DPR2/빠른검색/인프라정리+최종ROCmCLI·userdatazero근거연결; 다른backend/GUI패키지실행확대아님. |
@@ -229,7 +229,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 
 ## 남은 검증과 OS 인계
 
-현재65 pass/1 fail/6 unrun/1 unsupported/1 blocked다. F03은 원래 대표 UX 조항의 actual18/동일 로직의 IME13·Orca17 범위로 root가 pass 판정했다. 실제18 새 옵션/저장3·native 동작·두 Close/재열기·DPR2/빠른 검색·소유 private 인프라 정리는 위 범위로 완료했다. Core 원래 exit1/선택 등록의 scoped 감사, 과거 active-map false/저장21값 감사, RAPIDv1/v2·Reader watchdog 실패는 별개로 보존한다. F09 미디어 내용 품질 실패와 선택 원래 품질 대조·창/인스턴스·사람 알림·조건부 네 언어/updater 설치 판별/안내, 실제 새 버전 차단은 남는다. 읽기 전용 현재 화면 조회는 물리2개/활성1개·scale2만 확인했고 설정을 바꾸지 않았으므로 실제 다중 활성 화면 검사는 unrun이다. 최종18 ROCm CLI 재검증·정상 인프라 정리와 그 뒤878/1,560개 사용자 자료 최종 guard는 위 범위로 완료했다. 이는 남은 조건부 행의 pass를 뜻하지 않는다. 필수 fail/unrun/blocked가 남으므로 전체 목표를 complete로 표시하지 않는다.
+현재66 pass/1 fail/5 unrun/1 unsupported/1 blocked다. D05는 아래 새 실제 표시와 기존 실패 복구 근거로pass다. F03은 원래 대표 UX 조항의 actual18/동일 로직의 IME13·Orca17 범위로 root가 pass 판정했다. 실제18 새 옵션/저장3·native 동작·두 Close/재열기·DPR2/빠른 검색·소유 private 인프라 정리는 위 범위로 완료했다. Core 원래 exit1/선택 등록의 scoped 감사, 과거 active-map false/저장21값 감사, RAPIDv1/v2·Reader watchdog 실패는 별개로 보존한다. F09 미디어 내용 품질 실패와 선택 원래 품질 대조·창/인스턴스·조건부 네 언어/updater 설치 판별/안내, 실제 새 버전 차단은 남는다. 읽기 전용 현재 화면 조회는 물리2개/활성1개·scale2만 확인했고 설정을 바꾸지 않았으므로 실제 다중 활성 화면 검사는 unrun이다. 최종18 ROCm CLI 재검증·정상 인프라 정리와 그 뒤878/1,560개 사용자 자료 최종 guard는 위 범위로 완료했다. 이는 남은 조건부 행의 pass를 뜻하지 않는다. 필수 fail/unrun/blocked가 남으므로 전체 목표를 complete로 표시하지 않는다.
 
 제품·검사·계약 변경은 작업별 commit으로 고정했다. 상세 Windows W/G 및 Mac M01–M04/MAC-R01–R13 대응은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md#2026-10-25-linux-수정의-수신과-재검증)를 따른다. Windows/Mac 실제 실행은 이번 Linux 결과로 pass 처리하지 않는다. Mac 실제 실행은 Linux goal의 완료 조건이 아니다. 엔진·대표 UX의 고정점18과 추가 알림 수정 고정점19를 구분해 결과와 OS 인계 문서를 갱신했다. 원격 push는 하지 않았다.
 
@@ -317,4 +317,16 @@ native 관찰기와 전송 관찰기는 모두 exit0으로 끝났고 자체 구�
 
 ## 검증 재개 안내
 
-2026-10-26 현재 작업 브랜치를 원격 게시하고 남은 검증의 재개 조건을 정리했다. 위 각 실행 당시의 “push하지 않았다”는 기록은 해당 시점의 사실이다. [최신 재개 인계](linux-validation-resume.ko.md)에 정확한 남은 항목·로컬 전용 근거·다음 실행 조건을 정리했다. 전체65 pass/1 fail/6 unrun/1 unsupported/1 blocked이며 검증 전체 완료를 선언하지 않는다.
+2026-10-26 현재 작업 브랜치를 원격 게시하고 남은 검증의 재개 조건을 정리했다. 위 각 실행 당시의 “push하지 않았다”는 기록은 해당 시점의 사실이다. [최신 재개 인계](linux-validation-resume.ko.md)에 정확한 남은 항목·로컬 전용 근거·다음 실행 조건을 정리했다. 전체66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 검증 전체 완료를 선언하지 않는다.
+
+## 고정19 실제 OS 알림 표시
+
+UTC2026-10-26T09:53:14Z까지 관측을 완료한 검증이다. 같은 고정19 release GUI의 새 임시 사용자 환경에서 일반 Settings Send를 한 번 실행했다. 원래 합성7파일만 복사했고 사용자 설정·대화·키·WebKit 저장소는 복사하지 않았다. 최초 attach의 미확인 자식 거부는 exit1로 남겼으며 같은 앱/세션에서 소유권·WebKit 바이트·환경·source 보존을 엄격히 재확인한 뒤 진행했다. 새 앱이나 완화된 허용 목록으로 실패를 덮지 않았고 초기 자식 거부의 정확한 원인은 확정하지 않았다.
+
+실제 앱 발신자·relay·수락 ID50을 확인했다. 같은30초 관찰 창에서 정확한 일반 제목/본문이 일치하는 두 NOTIFICATION 경로의559표본을 얻었다. 한 경로의280표본은 SHOWING=false/유효하지 않은 좌표로 남았다. 별도 표시 경로의279표본은27.865323152초 동안 컨테이너·제목·본문 모두 SHOWING=true/VISIBLE=true, DEFUNCT=false와 유효한 SCREEN 좌표를 보였다. 첫 컨테이너는(733,36,513,100), 제목은(746,83,481,18), 본문은(746,105,245,18)이었다. 해당 양성 표본의 질의 오류는 없었다. 알림 역할이나 수락 ID만으로 표시를 판정하지 않고 정확한 문구·시각·양성 발신자와 OS의 실제 표시 상태를 연결했다. AT-SPI 자체는 FDO ID를 제공하지 않으며 배너/알림센터 구분이나 사람의 인지 확인을 AT-SPI 역할만으로 추정하지 않는다. 이후 사용자는 요청한 알림센터 확인에서 제목과 본문이 보였다고 답했다. 이 응답 시각을30초 내 실제 관찰 시각으로 추정하지 않으며, OS 양성 표본과 사용자 확인을 별도로 기록한다. 과거 ID45/48의 미표시 근거도 그대로 유지한다.
+
+native/FDO 두 관찰기의 전체 실행은31.021초였고 모두 exit0으로 끝나 구독·연결을 해제했다. native 후보 탐색 중 알 수 없는 후보에 대한 Error 한 건은 원본에 남았고 내용을 저장하지 않았다. 양성 대상 표본·정리 실패와 구분하며 “모든 질의에 오류 없음”으로 표현하지 않는다. FDO는 정확히 한 번의 Notify·relay·수락만 기록했으며 관찰 중 발신자 소실·Close·자동 재전송은 없었다. 접근성 flags는 전후 모두 원래 false/false였고 OS 설정 변경이나 자동 키 입력은 수행하지 않았다. native7파일·네 채팅 저장값·preferences·모델/API 정지 상태·원래 source34/DB는 전후가 같았다.
+
+앱은 UTC09:56:28Z에1.377초/exit0으로 정상 Close됐다. 소유 GUI/WebKit3birth·관찰한 포트의 IPv4/IPv6와 세션이 종료됐고 기존 driver는 빈 ready 상태로 유지됐다. 최종 검사에서 양성 식별 GUI/WebKit/관찰기4birth와 포트가 사라졌고 관찰기·송신자의 실제 Popen wait0도 확인했다. 원본878/1,560개 파일의 hash-only 대조는 변경·누락·오류0이었다. 원래 source34/DB와 복사한 native7파일, 현재 네 UI 값/preferences의 정상 Close 뒤 DB-family 사본 대조, 기존 desktop/IBus/접근성 설정, archive8/payload6/SDK3 바이트도 일치했다. 최종 근거 SHA-256은 `70a165eea787da34eb1d17350cc72ca1626d3982999ceadf8b3ba38e3decc6b1`이다. 기존37c0343의 실제 ServiceUnknown 뒤 오류 안내/버튼 회복·화면 이동·상태 보존 검사와 합쳐 원래 D05를pass로 판정한다. 전체66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 미디어 내용 실패·다중 활성 화면·조건부 업데이트 범위는 남는다. 제품 코드·배포 해시는 변경하지 않았다.
+
+재개 시 UTC2026-10-26T09:34:52Z의 공식 latest API를 새로 조회했으나 HTTP200/v0.3.1·10개 asset으로 현재 소스와 같았다. 실제 새 버전과 그때의 설치 가능/불가·진행 분기 조건은 여전히 없다. 원래 미디어 입력의 파일 감사에서도 GUI 캡처 요청과 직접 재생 본문, PNG·영상의 JPEG frame 바이트, 원래 모델/projector 전체 SHA가 같았고 두 이미지의 내용도 실제 빨간 사각형·파란 원이었다. 새로운 추론은 수행하지 않았으며 기존 내용 오답을 전송 결함으로 바꾸거나 F09를pass로 올리지 않았다.

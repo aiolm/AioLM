@@ -285,3 +285,10 @@ Linux `37c0343fe90b16588b2319f3ace96e6df274bf02`의 동일 바이트 고정19는
 [고정19 새 엔진 전체 여정과 최종 보존 검사](linux-device-validation-results.ko.md#고정19-새-엔진-전체-여정과-최종-보존-검사)를 추가했다. Production 고정 뒤 생성한 새 합성 엔진/실제 개인 CPU 옵션을 앱 재빌드나 전용 GUI 없이 탐색·검증·저장·실제 argv로 사용했다. 첫/재시작 산술5와32+2의 네 경로 usage 일치, 실제 내용 Stop/같은 PID·동일 본문 Retry·Unload/새 PID, 로드된 정상 Quit→별도 재열기/저장3·자동 시작 없음→최종 정상 Close를 확인했다. 실행기 원래 exit1과 도달 범위별 후속 실행/파일 감사는 구분해 보존했다. CLI의 temperature 생략/산술32·취소1024 조건을 GUI32/T0로 바꾸지 않는다.
 
 최종 사용자878/1,560파일·desktop 설정·원래 source34/DB와 현재 프로필/이력 보존, 양성 식별9birth/네 포트 종료·기존 driver 유지, archive8/payload6/SDK3 바이트 일치를 확인했다. 새 접두사의 제품/소스 부재 검사는 이번 문서 공개 전에 끝냈다. 전체65 pass/1 fail/6 unrun/1 unsupported/1 blocked이며 미디어 내용·OS 알림 실제 표시·다중 활성 화면/새 release 조건은 여전히 남는다. 다른 OS의 새 엔진 GUI/실제 표시나 Linux의 모든 backend·설치/물리 IME를 재실행했다고 확대하지 않는다. 제품 `37c0343`과 배포 해시는 같고 원격 push는 하지 않았다.
+
+
+### 2026-10-26 고정19 실제 OS 알림 표시 완료
+
+[실제 OS 알림 표시](linux-device-validation-results.ko.md#고정19-실제-os-알림-표시)를 추가해 Linux D05를pass로 갱신했다. 같은 제품 `37c0343`/고정19에서 일반 Send 한 번의 정확한 컨테이너·제목·본문279표본이27.865초 동안 SHOWING/VISIBLE·유효 SCREEN 좌표를 보였고, 사용자도 제목·본문이 보였다고 확인했다. 별도280개 false 표본과 과거 ID45/48의 미표시 근거·알 수 없는 후보 질의 오류 한 건은 원본으로 보존한다. AT-SPI 역할만으로 배너/알림센터 종류나 사람의 관찰 시각을 추정하지 않는다.
+
+관찰기/송신자 정상 종료·앱 정상 Close와 원본878/1,560파일·source34/DB·합성7파일·현재 UI4/preferences·desktop 설정·archive8/payload6/SDK3 보존을 확인했다. 기존 실제 ServiceUnknown 뒤 앱 동작 유지 검사와 합쳐 원래 D05를 충족한다. 전체66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 미디어 내용·다중 활성 화면·조건부 업데이트는 남는다. Windows/Mac의 실제 표시·실패 복구는 기존 W07/W08/G07·M01/M02/M04·MAC-R06/MAC-R11에서 별도로 재검증한다.
