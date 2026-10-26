@@ -278,3 +278,10 @@ Linux `37c0343fe90b16588b2319f3ace96e6df274bf02`의 동일 바이트 고정19는
 고정19의 [Linux MLX 미지원 안내와 저장값 보존](linux-device-validation-results.ko.md#고정19-linux-mlx-미지원-안내와-저장값-보존)도 실제 GUI에서 확인했다. MLX 선택 후 runtime/Continue 차단과 관리 화면의 Apple Silicon macOS 안내·설치/등록 비활성화를 확인했고 실행하지 않았다. 일반 복귀/Close 뒤 native11파일·전체 설정/프로필/적용 설정/선택·채팅4값/preferences가 정확히 보존됐다. 기준선의 MLX 값은 빈 Default 프로필/적용 없음/옵션 bank 키 없음이며 임의 값을 심은 검사가 아니다. N08은 관리형 어댑터의 Linux unsupported를 유지하고 실제 Mac 실행은 M02의 별도 검증으로 남긴다.
 
 이후 [OS 알림 객체의 연속 표시 관찰](linux-device-validation-results.ko.md#고정19-os-알림-객체의-연속-표시-관찰)로 초기5표본의0.451초 측정 공백을 보완했다. 같은30초 관찰 틀에서 일반 Send 한 번/수락 ID48 뒤 정확한 객체를 검출하고27.632초의277표본을 얻었으나 모두 SHOWING=false/유효하지 않은 좌표였다. 두 관찰기 exit0·구독/연결 정리·접근성 flags/geometry 및 native16파일/전체 설정/채팅4값/preferences/같은 로드 엔진·원본 Source34/DB 보존을 확인했다. 실제 OS 표시는 여전히 미확인으로 D05는unrun이며, 표본 구간을 전체30초로 확대하거나 다른 OS의 표시 성공으로 옮기지 않는다.
+
+
+### 2026-10-26 고정19 새 엔진 여정과 최종 보존
+
+[고정19 새 엔진 전체 여정과 최종 보존 검사](linux-device-validation-results.ko.md#고정19-새-엔진-전체-여정과-최종-보존-검사)를 추가했다. Production 고정 뒤 생성한 새 합성 엔진/실제 개인 CPU 옵션을 앱 재빌드나 전용 GUI 없이 탐색·검증·저장·실제 argv로 사용했다. 첫/재시작 산술5와32+2의 네 경로 usage 일치, 실제 내용 Stop/같은 PID·동일 본문 Retry·Unload/새 PID, 로드된 정상 Quit→별도 재열기/저장3·자동 시작 없음→최종 정상 Close를 확인했다. 실행기 원래 exit1과 도달 범위별 후속 실행/파일 감사는 구분해 보존했다. CLI의 temperature 생략/산술32·취소1024 조건을 GUI32/T0로 바꾸지 않는다.
+
+최종 사용자878/1,560파일·desktop 설정·원래 source34/DB와 현재 프로필/이력 보존, 양성 식별9birth/네 포트 종료·기존 driver 유지, archive8/payload6/SDK3 바이트 일치를 확인했다. 새 접두사의 제품/소스 부재 검사는 이번 문서 공개 전에 끝냈다. 전체65 pass/1 fail/6 unrun/1 unsupported/1 blocked이며 미디어 내용·OS 알림 실제 표시·다중 활성 화면/새 release 조건은 여전히 남는다. 다른 OS의 새 엔진 GUI/실제 표시나 Linux의 모든 backend·설치/물리 IME를 재실행했다고 확대하지 않는다. 제품 `37c0343`과 배포 해시는 같고 원격 push는 하지 않았다.
