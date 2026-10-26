@@ -50,13 +50,13 @@
 
 먼저 위 계약과 원본 근거를 대조해 요건별 완료 감사를 끝내고, 실행 가능한 독립 항목부터 수행한다. 알림 D05는 완료됐으며 이전 ID45/48/50의 앱과 관찰기는 모두 종료됐다. 새 결함이나 변경 범위가 없다면 같은 표시 검사를 반복하지 않는다. 같은 실패 입력을 의미 없이 반복하거나 제품 결함 근거 없이 설정/모델/timeout을 바꾸지 않는다.
 
-고정20 JSON 경계·저장/재열기·실제 합성 argv/응답 검사는 끝났고 전용 앱/엔진은 종료됐다. 단순 반복할 필요는 없다. 큰 정수 무손실 GUI/IPC 지원은 아직 구현하지 않았으며, JSON 수를 문자열로 바꿔 엔진 입력을 보정하지 않는다. 재열기의 help stale 관측은 원인이 확정되지 않았으므로 launcher 차이만으로 제품 결함이나 원인을 단정하지 않는다.
+고정20 JSON 경계·저장/재열기·실제 합성 argv/응답 검사는 끝났고 전용 앱/엔진은 종료됐다. 단순 반복할 필요는 없다. 큰 정수 무손실 GUI/IPC 지원은 아직 구현하지 않았으며, JSON 수를 문자열로 바꿔 엔진 입력을 보정하지 않는다. 재열기의 help stale 관측은 [identity 기록 대조](linux-device-validation-results.ko.md#고정20-도움말-identity-기록-대조)에서 `XDG_RUNTIME_DIR`의 변화로 두 원본 fingerprint를 정확히 재현했다. 실제 자식 환경이 달라진 정상 무효화였으며 작업 폴더 자체는 같았다. 이 관측 때문에 같은 GUI 여정을 반복하거나 환경 비교를 완화할 필요는 없다.
 
 ## 같은 PC에만 남아 있는 원본 근거
 
 `tmp/`와 빌드·모델·개인 사용자 자료는 Git에 올리지 않는다. 다음은 저장소 루트 기준 로컬 경로다.
 
-- `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다.
+- `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
 - `tmp/linux-acceptance/progress.md`: 누적 실행 기록. 마지막 checkpoint-v2는 종료 전 상태이므로 최신 기록/아래 final guard를 우선한다.
 - `tmp/linux-acceptance/source19-fresh-engines-context/root-status-checkpoint-v3.json`: 최종 Close 기록. 이후 최종 guard와 문서 commit은 progress에 추가돼 있다.
 - `tmp/linux-acceptance/source19-core-finalization/root-core-accepted.json`: 원본 실패를 보존한 실제 핵심 여정의 연결 근거와13개 raw pin.

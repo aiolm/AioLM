@@ -361,7 +361,7 @@ KST2026-10-27/UTC2026-10-26의 추가 검증이다. 제품 commit `5602e96ce14be
 
 네 고정 사본은 독립 파일이다. 실제 DEB/AppImage 추출물과 release의 여섯 GUI/CLI payload를 확인했고 포함된544개 일반 파일의 UTF-8/UTF-16LE 개인 경로·계정 값 검사는0건이었다. 검사한 배포물에는 테스트 실행 파일·모델·사용자 설정 파일이 없었다. 빌드는 원래 `8fb6385`와 당시 수정 파일로 실행했으며, 문서를 제외한893개 source 입력의 해시가 최종 제품 commit과 같음을 별도 대조했다. 원래 freeze receipt의 HEAD나 source 기록을 새 commit으로 덮어쓰지 않았다.
 
-고정 뒤 처음 만든 새 합성 엔진을 빈 임시 HOME/XDG/AIOLM_HOME의 실제 production GUI에서 등록하고 실제 도움말을 탐색·수락했다. 큰 양의 정수, 중첩 음의 정수, 중첩 `1e400` 입력 세 건에서 초안·오류 설명/ARIA·두 저장 버튼 차단과 전체 native 설정 파일 무변경을 확인했다. 안전한 양·음의 경계값과 소수·큰 숫자 문자열을 정상 확인 창을 거쳐 저장했다. JSON 문자열 `"9007199254740993"`은 정상 Close 뒤 별도 새 GUI 프로세스에서 같은 데이터로 재열어도 따옴표와 native 문자열 타입을 유지했다. 원래 앱을 닫은 뒤 CLI로 테스트용 포트만 변경했으며 JSON 값과 프로필 라이브러리는 같았다. 재열기에서 도움말 stale 안내를 관측해 정상 재탐색·수락했고, 정확한 stale 원인은 확정하지 않았다.
+고정 뒤 처음 만든 새 합성 엔진을 빈 임시 HOME/XDG/AIOLM_HOME의 실제 production GUI에서 등록하고 실제 도움말을 탐색·수락했다. 큰 양의 정수, 중첩 음의 정수, 중첩 `1e400` 입력 세 건에서 초안·오류 설명/ARIA·두 저장 버튼 차단과 전체 native 설정 파일 무변경을 확인했다. 안전한 양·음의 경계값과 소수·큰 숫자 문자열을 정상 확인 창을 거쳐 저장했다. JSON 문자열 `"9007199254740993"`은 정상 Close 뒤 별도 새 GUI 프로세스에서 같은 데이터로 재열어도 따옴표와 native 문자열 타입을 유지했다. 원래 앱을 닫은 뒤 CLI로 테스트용 포트만 변경했으며 JSON 값과 프로필 라이브러리는 같았다. 재열기에서 도움말 stale 안내를 관측해 정상 재탐색·수락했다. 당시 미확정으로 남긴 원인은 아래 [도움말 identity 기록 대조](#고정20-도움말-identity-기록-대조)에서 자식 환경 변화에 따른 무효화로 확인했다.
 
 Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원문 검토로 남았다. 이를 새 GUI 오류가 없다는 제품 실패로 세지 않는다. JSON 지수 표기 `9007199254740993e0`는 새 GUI 검사에서 범위 오류를 표시하고 붙여넣은 원문·기존 문자열 값·native 설정을 보존했다. 정상 POSIX 가져오기는 오류를 해제해 같은 안전한 값들을 저장했다. 이후 일반 Start의 실제 소유 자식 프로세스·전체 argv·loopback listener를 양성 식별하고 health HTTP200을 확인한 뒤 일반 Chat Send를 한 번 실행했다. 실제 argv와 엔진이 파싱한 JSON, GUI의 명시적 SYNTHETIC 응답에 ±9007199254740991·0.5·큰 숫자 문자열이 그대로 있었다. 이 엔진은 합성 echo이며 모델 추론/속도/다른 backend의 성공으로 확대하지 않는다.
 
@@ -370,3 +370,12 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 초기 두 실행기의 실패(지원하지 않는 driver 옵션/automation opt-in 누락), 닫힌 disclosure·잘못된 selector·가려진 버튼·저장 확인 창을 누르기 전의 대기, 잘못된 native 가져오기 기대 등은 원본으로 보존하고 제품 결함/실패와 구분했다. 관찰 보정은 `root-observation-corrections.json`에 있다. 원본 폴더는 `tmp/linux-acceptance/resume-20261026T151655Z/`이며 연결 근거 `root-validation-outcome.json`의 SHA-256은 `10633772e7a73b50e28395c6dd63173cfdac69bddf4196991c3837ba8bda71ef`, 최종 guard는 `b4ff3e67f993bb24f250f158f6a3cb9e012b13b8a4c146ea5161f588dcb9f94f`다.
 
 최신 공식 release 조회 UTC15:16:55는 HTTP200/v0.3.1·10개 asset으로 현재 버전과 같았고, 읽기 전용 화면 조회 UTC15:23:21도 물리2/활성logical·output1/scale2였다. 원래 F09 품질 실패·실제 두 활성 화면·조건부 updater 범위와 선택 Windows 원본 대조는 남는다. 이 추가 개선으로74개 전체의 새 source 완료나 Windows/Mac 실제 pass를 만들지 않는다.
+
+
+## 고정20 도움말 identity 기록 대조
+
+재열기 때의 stale 관측을 원본 두 help snapshot·실행기 환경 기록과 현재 source의 identity 규칙으로 대조했다. 최초 fingerprint `c2242f7a71a474d0dae4d0877a447d660452d6ec87c18dc21f00c1f0c631ca1e`와 재탐색 fingerprint `f10af58de4dcb4debb09996fe34174777f7e87e3590031adddf3b086c390eccd`를 각각 정확히 재현했다. 실행 파일/선언 artifact의 바이트, argv·metadata·범위/locale/encoding·parser·OS/arch와 작업 폴더는 같았고, identity의 유일한 차이는 `environment.XDG_RUNTIME_DIR`였다. 두 전용 실행기가 이 값을 서로 다른 임시 runtime 폴더로 지정했다.
+
+현재 Linux 자식 환경 allowlist는 `XDG_RUNTIME_DIR`를 전달하고 help fingerprint는 실제 전달 환경을 포함한다. 이 값 하나를 양방향으로 교체한 계산은 각각 다른 원본 fingerprint와 일치했고, 작업 폴더만 바꾼 대조는 어느 원본과도 일치하지 않았다. 따라서 이번 기록의 stale은 실제 자식 환경 변화에 따른 정상 무효화로 설명된다. 이는 source/보관 기록의 계산 대조이며 새 GUI/help/추론 실행이나 모든 재열기 조건의 검증을 뜻하지 않는다. 원래의 미확정 관측과 실패 기록은 보존한다. 제품 코드·74개 판정은 바꾸지 않았다.
+
+근거는 `tmp/linux-acceptance/resume-20261026T151655Z/help-stale-audit-v1/`의 `summary.json`, 비공개 identity 입력, source pin과 `root-causal-acceptance.json`이다. 최종 근거 SHA-256은 `b1cffd3d6f30b39e041c2b1e35965543bcaca047a0b81f7a00fbe815a0d1ab88`이다.
