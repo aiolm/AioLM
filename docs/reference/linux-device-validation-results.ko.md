@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 제품 수정은 `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`의 [고정20 JSON 옵션 숫자 경계와 타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존)이다. 전체 npm 검사와 새 production 빌드·실제 WebKitGTK JSON 입력/가져오기·native 저장·별도 재열기·합성 엔진 argv/응답·정상 Close를 확인했다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked로 유지한다. 각 행의 원래 source·입력·기기 근거를 새 제품의 전체 재실행으로 확대하지 않으며 검증 전체는 미완료다.
+최신 제품 수정은 `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`의 [고정20 JSON 옵션 숫자 경계와 타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존)이다. 전체 npm 검사와 새 production 빌드·실제 WebKitGTK JSON 입력/가져오기·native 저장·별도 재열기·합성 엔진 argv/응답·정상 Close를 확인했다. 이후 같은 고정 빌드에서 [새 개인 CPU 엔진의 실제 GUI·CLI 회귀](#고정20-새-개인-cpu-엔진의-실제-gui와-cli)도 확인했다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked로 유지한다. 각 행의 원래 source·입력·기기 근거를 새 제품의 전체 재실행으로 확대하지 않으며 검증 전체는 미완료다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -379,3 +379,17 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 현재 Linux 자식 환경 allowlist는 `XDG_RUNTIME_DIR`를 전달하고 help fingerprint는 실제 전달 환경을 포함한다. 이 값 하나를 양방향으로 교체한 계산은 각각 다른 원본 fingerprint와 일치했고, 작업 폴더만 바꾼 대조는 어느 원본과도 일치하지 않았다. 따라서 이번 기록의 stale은 실제 자식 환경 변화에 따른 정상 무효화로 설명된다. 이는 source/보관 기록의 계산 대조이며 새 GUI/help/추론 실행이나 모든 재열기 조건의 검증을 뜻하지 않는다. 원래의 미확정 관측과 실패 기록은 보존한다. 제품 코드·74개 판정은 바꾸지 않았다.
 
 근거는 `tmp/linux-acceptance/resume-20261026T151655Z/help-stale-audit-v1/`의 `summary.json`, 비공개 identity 입력, source pin과 `root-causal-acceptance.json`이다. 최종 근거 SHA-256은 `b1cffd3d6f30b39e041c2b1e35965543bcaca047a0b81f7a00fbe815a0d1ab88`이다.
+
+## 고정20 새 개인 CPU 엔진의 실제 GUI와 CLI
+
+공통 옵션 폼 변경 뒤 L01-H01/L02-N07의 실제 개인 엔진 여정을 같은 고정20에서 추가 실행했다. 제품 재빌드 없이 고정 뒤 새 `--pe2ce1eb-threads`를 생성했고, 두 고정 실행 파일과893개 source 입력의 UTF-8/UTF-16LE 검사에서 이름이 없음을 확인했다. upstream `3f03b17724ad8b69040825f45c43c59b092a0244`의 독립 checkout에 기존과 같은12줄 CPU thread 옵션 패치를 적용했다. 새 native 서버 SHA-256은 `14c87041cb3da2b66abbd654ba85c01530ce7990a3e1ba479d654ff056346526`이다. 기존 개인 빌드·고정19 runtime·모델·license는 보존했다. Qwen 모델의 revision은 `9217f5db79a29953eb74d5343926648285ec7e67`, 파일 SHA-256은 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다.
+
+빈 HOME/XDG/AIOLM_HOME과 전용 D-Bus/Xvfb의 실제 WebKitGTK GUI에서 manifest를 일반 등록·probe하고 runtime→Default profile→옵션 순서로 진행했다. 실제 help261개에서 새 옵션을 발견·수락했고 범위1–32와 source의 단일 값/반복 정책을 확인했다. 0 입력의 invalid 안내 뒤3으로 복구하고 정상 Save 확인 창으로 저장했다. 설정 파일에는 새 옵션3·max_tokens32·temperature0이 숫자로 남았다. 실제 앱 소유 thread의 자식 서버·실행 파일 해시·전체 argv에서 새 flag3과 CPU 실행을 확인했고, 소유 FD의 loopback listener와 health HTTP200을 확인한 뒤 일반 Chat Send를 실행했다. GUI 산술 답변은5, 표시 usage는 입력33/출력2였다. 합성 echo와 구분되는 실제 모델 추론이다.
+
+같은32/T0의 별도 숫자 나열 요청에서 실제 내용 수신 뒤 Stop을 눌러 부분 응답 보존을 확인했다. 같은 native birth에서 일반 Retry를 눌렀고32-token 한도에 도달한 부분 결과·안내를 확인했다. 전체 숫자 나열의 품질 pass로 세지 않으며 HTTP 본문의 바이트 동일성을 새로 캡처한 검사라고 하지 않는다. 일반 Unload 뒤 native birth·포트가 사라졌고 저장 옵션3으로 새 PID를 시작했다. model loaded 표본 뒤 정상 Close하고 같은 데이터로 별도 GUI를 열어 자동 시작 없음·네 메시지 이력·옵션3·32/T0 보존을 확인했다. 이번 재열기는 같은 자식 환경을 유지했고 도움말 일치 안내도 그대로였다. 최종 정상 Close 뒤 두 GUI의 알려진12개 birth와 네 포트의 IPv4/IPv6 폐쇄, 전체 native 설정 파일 동일성을 확인했다.
+
+같은 고정 CLI와 새 명시 thread3 manifest의 실제 A01–A09는3.830초/exit0이었다. 산술 답변5·usage42+2, 내용 생성 뒤 취소·서버 유지·재시작·제거/재등록·정상 정리와 외부 파일 보존을 확인했다. 기존 CLI harness는 산술32·별도 취소1024를 사용하고 HTTP temperature를 지정하지 않는다. 이를 GUI의32/T0 요청이나 같은 HTTP 본문으로 합치지 않는다.
+
+잘못된 selector·저장 전 모델 변경 확인 창·가려진 모델 버튼의 초기 조작 오류는 원본에 보존했다. 초기 자식 조회는 main thread만 읽었으므로 엔진 부재 근거가 아니며, 실제 argv 검사는 소유 앱의 모든 thread 자식으로 보정했다. 최종 검사는 새 네 배포물·893개 source 입력과 기존 개인 엔진 자료가 같음을 확인했다. 실제 사용자 자료를 복사하지 않았고 원본878/1,560파일을 새로 해시 대조한 결과로 확대하지 않는다. 물리 다중 화면·IME·알림·다른 backend는 이 private GUI 회귀의 범위가 아니다.
+
+원본은 `tmp/linux-acceptance/personal-engine-source20/`와 `tmp/linux-acceptance/resume-20261026T151655Z/`의 `gui-personal20/`, `gui-personal20-reopen/`, `personal20-cli/`에 있다. 최종 연결/보존 근거 `personal20-final-guard.json`의 SHA-256은 `133eb099a65bcb798a4be22255995a89e5e14e5d15909bc3cf68feda2afcd614`다. 제품 코드는 그대로이며 기존74개 상태와 외부 조건이 필요한 잔여 범위를 유지한다.

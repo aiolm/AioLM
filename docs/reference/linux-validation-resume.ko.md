@@ -14,7 +14,7 @@
 먼저 현재 Git 상태/이력과 `AGENTS.md`, 존재한다면 `tmp/AGENTS.local.md`를 읽는다. 이어서 다음을 읽는다.
 
 1. [Linux 실행 계약 전체](linux-device-handoff.ko.md)
-2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 마지막 고정19 절
+2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 고정20의 JSON·개인 엔진 회귀 절
 3. [Windows/Mac 후속 인계](engine-adapter-linux-macos-handoff.ko.md)
 4. `runtime-adapter-handoff.ko.md`, `pluggable-inference-runtimes.ko.md`, `inference-runtimes.md`, `provider-native-acceptance.md`, `cross-platform-validation.md`, `efficiency-review.ko.md`
 5. `docs/guides/development.ko.md`, `docs/guides/install.ko.md`, `package.json`, `src-tauri/Cargo.toml`
@@ -26,6 +26,8 @@
 전체74개는 **66 pass / 1 fail / 5 unrun / 1 unsupported / 1 blocked**다. 통과 항목도 각 source·입력·기기·조건의 근거 범위를 유지한다. 과거 Windows/Mac이나 다른 고정점의 결과를 현재 Linux 전체 실행으로 확대하지 않는다.
 
 최신 고정20은 JSON 옵션의 숫자 손실·문자열 표시 수정이다. 전체 npm(Vitest221파일/2595검사)·최종 typecheck/lint·DEB/AppImage 빌드·새 release CLI smoke와 실제 GUI 등록/help·JSON 거부/저장·정상 Close/별도 재열기·native 가져오기·실제 합성 argv/응답·정리를 확인했다. [고정20의 정확한 범위와 배포 해시](linux-device-validation-results.ko.md#고정20-json-옵션-숫자-경계와-타입-보존)를 먼저 읽는다. 원래 build의 HEAD+수정 입력 기록은 유지했고893개 source 해시로 제품 commit과 연결했다.
+
+같은 고정20 뒤 만든 [새 개인 CPU 엔진의 실제 GUI·CLI](linux-device-validation-results.ko.md#고정20-새-개인-cpu-엔진의-실제-gui와-cli)도 추가 확인했다. 일반 등록/help261·새 옵션3 저장·실제 argv/health·답변5/usage33+2·내용 Stop/같은 PID Retry·새 PID 시작·로드 상태 정상 Close·별도 재열기의3/32/T0·네 메시지 이력/자동 시작 없음·최종 Close를 확인했다. 같은 CLI의 A01–A09도3.830초/exit0이다. GUI의32/T0와 기존 CLI harness의 산술32/취소1024·temperature 미지정은 구분한다. 최종12birth/네 포트 종료·전체 전용 설정 보존·제품/기존 개인 엔진 바이트 일치를 확인했고 모든 새 실행은 종료됐다. 이 범위로 고정19의 다른 backend·설치·IME·알림을 재실행했다고 하지 않는다.
 
 기존 고정19의 전체 npm(220파일/2577검사)·typecheck·lint·Rust all-targets/all-features·Clippy·fmt·no-default check·production package·native CLI smoke 기록은 각 범위로 유지한다. Rust 코드는 이번에 바뀌지 않았고 Rust 전체 검사를 새로 실행했다고 표시하지 않는다. 고정19의 실제 엔진/IME/설치/알림 결과를 고정20에서 모두 다시 실행한 것으로 옮기지 않는다.
 
@@ -57,6 +59,7 @@
 `tmp/`와 빌드·모델·개인 사용자 자료는 Git에 올리지 않는다. 다음은 저장소 루트 기준 로컬 경로다.
 
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
+- `tmp/linux-acceptance/personal-engine-source20/`: 고정20 뒤 생성한 개인 CPU 옵션·독립 upstream checkout/패치·native build·manifest/provenance. 실제 GUI 두 실행과 CLI 결과는 위 재개 폴더의 `gui-personal20/`, `gui-personal20-reopen/`, `personal20-cli/`에 있으며 `personal20-final-guard.json`(SHA-256 `133eb099a65bcb798a4be22255995a89e5e14e5d15909bc3cf68feda2afcd614`)이 실제 파일/보존/정리 근거를 연결한다.
 - `tmp/linux-acceptance/progress.md`: 누적 실행 기록. 마지막 checkpoint-v2는 종료 전 상태이므로 최신 기록/아래 final guard를 우선한다.
 - `tmp/linux-acceptance/source19-fresh-engines-context/root-status-checkpoint-v3.json`: 최종 Close 기록. 이후 최종 guard와 문서 commit은 progress에 추가돼 있다.
 - `tmp/linux-acceptance/source19-core-finalization/root-core-accepted.json`: 원본 실패를 보존한 실제 핵심 여정의 연결 근거와13개 raw pin.
