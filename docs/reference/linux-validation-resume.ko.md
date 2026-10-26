@@ -37,7 +37,7 @@
 
 | ID | 상태 | 정확한 남은 범위/재개 조건 |
 | --- | --- | --- |
-| L02-F09 | fail | 원래 Smol 이미지/영상 질문의 내용 정확도가 native 직접 대조에서도 실패했다. 원래 입력·모델/projector revision·한도를 유지해 원인을 조사한다. 전송/파서 결함과 모델 출력 품질을 구분하고 모델 교체·정답 보정·token 증가로 통과시키지 않는다. |
+| L02-F09 | fail | 원래 Smol 내용 정확도가 native 직접 대조에서도 실패했다. 원래 입력·모델/projector·32/T0를 유지한다. 템플릿은 고정 HF base와 같고 런타임도 SmolVLM으로 구분한다. 오래된 projector의 전처리 크기 항목 누락은 native 호환 경로 가설이며 실제 원래 branch/렌더링 관측이 필요하다. 모델·입력·한도 변경이나 앱 전용 분기로 통과시키지 않는다. |
 | L03-D04 | unrun | 실제 다중 활성 화면 간 이동 검증. 최신 UTC2026-10-26T09:36 조회도 물리2개/활성 logical·output1개/scale2였고 사용자가 두 번째 출력 활성화 불가를 확인했다. 기존 최소화·두 번째 실행·작은 창·DPR2 근거는 유지한다. 실제 두 출력 활성화와 관련 사용자 조작을 확인해야 하며 설정 변경 권한을 추정하지 않는다. |
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
@@ -65,6 +65,7 @@
 - `tmp/linux-acceptance/source19-manual-notification-observation/`: 단일 Send ID50·양성279/음성280표본·사용자 확인·D05 판정 원본. 관찰기는 종료됐다.
 - `tmp/linux-acceptance/source19-manual-notification-final-guard/run/result.json`: 새 표시 검사 종료 뒤 원본 자료·현재 UI4/preferences·배포 파일 최종 보존 검사.
 - `tmp/linux-acceptance/source19-resumed-completion-audit-v1/`: 최신 공식 release 조회·원래 미디어 바이트 감사·재개 시 요건별 완료 감사.
+- `tmp/linux-acceptance/source19-media-contract-audit-v1/`: 원래 GGUF 헤더·고정 upstream/base source 대조와 전처리 가설. 실제 native 전처리/렌더링을 새로 실행한 근거가 아니다.
 
 새 PC/clone에는 이 원본과 모델/VM/산출물이 없을 수 있다. 원본이 없으면 부재를 명시하고 필요한 검증 환경과 합성 자료를 새로 준비한다. 공개 결과 문서만으로 기존 로컬 자원의 현재 생존·데이터 무변경을 주장하지 않는다. 원본 사용자 설정/대화/키를 fixture나 배포물로 복사하지 않는다.
 
