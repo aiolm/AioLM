@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 추가 검증은 [고정19 실제 OS 알림 표시](#고정19-실제-os-알림-표시)와 [새 엔진 전체 여정·최종 보존 검사](#고정19-새-엔진-전체-여정과-최종-보존-검사)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 실제 표시의 양성 OS 표본279개와 제목·본문을 보았다는 사용자 확인, 실제 전송 실패 뒤 앱 동작 유지를 확인해 D05를pass로 갱신했다. 전체 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 검증 전체는 진행 중이다.
+최신 제품 수정은 `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`의 [고정20 JSON 옵션 숫자 경계와 타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존)이다. 전체 npm 검사와 새 production 빌드·실제 WebKitGTK JSON 입력/가져오기·native 저장·별도 재열기·합성 엔진 argv/응답·정상 Close를 확인했다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked로 유지한다. 각 행의 원래 source·입력·기기 근거를 새 제품의 전체 재실행으로 확대하지 않으며 검증 전체는 미완료다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -344,3 +344,29 @@ native/FDO 두 관찰기의 전체 실행은31.021초였고 모두 exit0으로 �
 UTC2026-10-26T10:37:35Z, 원래 테스트 VM의 QEMU 실행 인자·전용 디스크/seed·소켓·허용 환경과 패키지 ELF 바이트를 현재 자원에 연결하고 고정 SSH 호스트 키로 읽기 전용 조회를 실행했다. 앱·엔진·모델·GUI·서비스를 시작하지 않았다. 보호한31파일과 DB 파일 묶음3개, 원래 모델/projector·PNG/영상·동일 CPU 실행 파일의 해시가 일치했다. 허용한 합성 프로필의 저장 설정 세 개에는 명시적인 image-token 또는 Jinja/template override가 없었지만 후속 시점의 설정이므로 원래 F09 실행 인자로 대체하지 않는다.
 
 조회와 기존 raw 대조로 원래 전체 argv·렌더링한 프롬프트·실제 전처리 tensor/branch를 복구하지는 못했다. 수신 source와 현재의 서버 출력 처리 파일 세 개는 같으며 GUI 진단 출력은 제한된 메모리 tail 경로다. 원래 upstream의 해당 전처리 크기/prompt-token 로그는 주석 처리돼 있어 verbosity만 높인 추가 요청이 누락된 관측을 제공한다고 보장할 수 없다. 따라서 이 조회를 새 품질 추론이나 원인 확정으로 세지 않는다. 임의의 로그 루트·사용자 이력·비밀 값은 수집하지 않았고 F09와66/1/5/1/1 판정은 유지했다. 원본 근거 SHA-256은 `a6e44e4129e2489643c2e187a14f6be48b564f4721ee3df47dc33adc87fb433e`다.
+
+
+## 고정20 JSON 옵션 숫자 경계와 타입 보존
+
+KST2026-10-27/UTC2026-10-26의 추가 검증이다. 제품 commit `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`는 JSON 옵션의 큰 정수가 조용히 바뀌는 입력 경로와 JSON 문자열의 따옴표 표시를 수정한다. 수정 전 렌더된 공통 폼에 `{"seed":9007199254740993}`을 입력하면 변경 콜백이 `9007199254740992`를 전달했다. 두 폼의 저장 JSON 문자열도 따옴표 없이 표시되는 실패를 별도로 재현했다. JSON 수는 유한해야 하며 정수는 ±9007199254740991 범위로 제한하고, 거부 시 원래 초안과 저장값을 보존한다. 선언된 Text/Number의 기존 정책·엔진 중립 흐름·저장 schema·의존성은 유지한다. 임의의 i64/u64·모든 소수를 손실 없이 표현하는 새 GUI/IPC 설계는 잔여 범위다.
+
+전체 `npm test`는 exit0이며 Vitest221파일/2,595검사(coverage 단계100.76초)가 통과했다. 최종 `npm run typecheck`8.192초·`npm run lint`4.202초·`npm run package:tauri`184.316초와 새 release CLI의 `scripts/smoke-native-cli.mjs <고정 CLI>`도 exit0이다. Lint에는 기존 세 경고가 있었고 오류는 없었다. 네 언어 오류·ARIA 연결·초안/이전 값·깊은 JSON·가져오기 병합의 원자성과 문자열 표기를 자동 검사했다. Rust source는 변경하지 않았으며 고정19의 Rust 전체 검사 결과를 이번 실행으로 바꾸지 않는다.
+
+| 고정20 배포물 | SHA-256 |
+| --- | --- |
+| GUI | `56dfa6c4d1c1474a94811c20bd2e32b7a0b33645e073621ebe1be23220372c15` |
+| CLI | `e26d4a58e8530ec7318ff97c0541a49797425bd40995c45593411ea709112ffa` |
+| DEB | `c8dbbe96b2d2ef7748ebd61f8787c2ec8e5f611f910ec65dfedd1e4bb7f61c23` |
+| AppImage | `58c269997208dcd9d5c6e0973b0b6927a979de0dff59fa8d14b2ad43af4f521f` |
+
+네 고정 사본은 독립 파일이다. 실제 DEB/AppImage 추출물과 release의 여섯 GUI/CLI payload를 확인했고 포함된544개 일반 파일의 UTF-8/UTF-16LE 개인 경로·계정 값 검사는0건이었다. 검사한 배포물에는 테스트 실행 파일·모델·사용자 설정 파일이 없었다. 빌드는 원래 `8fb6385`와 당시 수정 파일로 실행했으며, 문서를 제외한893개 source 입력의 해시가 최종 제품 commit과 같음을 별도 대조했다. 원래 freeze receipt의 HEAD나 source 기록을 새 commit으로 덮어쓰지 않았다.
+
+고정 뒤 처음 만든 새 합성 엔진을 빈 임시 HOME/XDG/AIOLM_HOME의 실제 production GUI에서 등록하고 실제 도움말을 탐색·수락했다. 큰 양의 정수, 중첩 음의 정수, 중첩 `1e400` 입력 세 건에서 초안·오류 설명/ARIA·두 저장 버튼 차단과 전체 native 설정 파일 무변경을 확인했다. 안전한 양·음의 경계값과 소수·큰 숫자 문자열을 정상 확인 창을 거쳐 저장했다. JSON 문자열 `"9007199254740993"`은 정상 Close 뒤 별도 새 GUI 프로세스에서 같은 데이터로 재열어도 따옴표와 native 문자열 타입을 유지했다. 원래 앱을 닫은 뒤 CLI로 테스트용 포트만 변경했으며 JSON 값과 프로필 라이브러리는 같았다. 재열기에서 도움말 stale 안내를 관측해 정상 재탐색·수락했고, 정확한 stale 원인은 확정하지 않았다.
+
+Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원문 검토로 남았다. 이를 새 GUI 오류가 없다는 제품 실패로 세지 않는다. JSON 지수 표기 `9007199254740993e0`는 새 GUI 검사에서 범위 오류를 표시하고 붙여넣은 원문·기존 문자열 값·native 설정을 보존했다. 정상 POSIX 가져오기는 오류를 해제해 같은 안전한 값들을 저장했다. 이후 일반 Start의 실제 소유 자식 프로세스·전체 argv·loopback listener를 양성 식별하고 health HTTP200을 확인한 뒤 일반 Chat Send를 한 번 실행했다. 실제 argv와 엔진이 파싱한 JSON, GUI의 명시적 SYNTHETIC 응답에 ±9007199254740991·0.5·큰 숫자 문자열이 그대로 있었다. 이 엔진은 합성 echo이며 모델 추론/속도/다른 backend의 성공으로 확대하지 않는다.
+
+일반 Unload 뒤 엔진 birth와 포트가 사라졌고 이후 정상 Close가 완료됐다. Unload 직후 마지막 UI 표본은 unloading이었으므로 이를 별도 stopped 표본으로 바꾸지 않는다. 최종 여섯 양성 식별 GUI/WebKit/엔진/driver/Xvfb birth와 세 포트의 IPv4/IPv6 폐쇄, 전체 native 설정·프로필 라이브러리 보존, 새 네 배포물·원래 고정19 네 archive·합성 fixture 바이트 일치를 확인했다. 이번에는 원본 사용자878/1,560파일을 새로 해시 대조했다고 주장하지 않으며 실제 사용자 설정/대화/키를 복사하지 않은 전용 자식 환경을 사용했다.
+
+초기 두 실행기의 실패(지원하지 않는 driver 옵션/automation opt-in 누락), 닫힌 disclosure·잘못된 selector·가려진 버튼·저장 확인 창을 누르기 전의 대기, 잘못된 native 가져오기 기대 등은 원본으로 보존하고 제품 결함/실패와 구분했다. 관찰 보정은 `root-observation-corrections.json`에 있다. 원본 폴더는 `tmp/linux-acceptance/resume-20261026T151655Z/`이며 연결 근거 `root-validation-outcome.json`의 SHA-256은 `10633772e7a73b50e28395c6dd63173cfdac69bddf4196991c3837ba8bda71ef`, 최종 guard는 `b4ff3e67f993bb24f250f158f6a3cb9e012b13b8a4c146ea5161f588dcb9f94f`다.
+
+최신 공식 release 조회 UTC15:16:55는 HTTP200/v0.3.1·10개 asset으로 현재 버전과 같았고, 읽기 전용 화면 조회 UTC15:23:21도 물리2/활성logical·output1/scale2였다. 원래 F09 품질 실패·실제 두 활성 화면·조건부 updater 범위와 선택 Windows 원본 대조는 남는다. 이 추가 개선으로74개 전체의 새 source 완료나 Windows/Mac 실제 pass를 만들지 않는다.

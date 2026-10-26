@@ -292,3 +292,10 @@ Linux `37c0343fe90b16588b2319f3ace96e6df274bf02`의 동일 바이트 고정19는
 [실제 OS 알림 표시](linux-device-validation-results.ko.md#고정19-실제-os-알림-표시)를 추가해 Linux D05를pass로 갱신했다. 같은 제품 `37c0343`/고정19에서 일반 Send 한 번의 정확한 컨테이너·제목·본문279표본이27.865초 동안 SHOWING/VISIBLE·유효 SCREEN 좌표를 보였고, 사용자도 제목·본문이 보였다고 확인했다. 별도280개 false 표본과 과거 ID45/48의 미표시 근거·알 수 없는 후보 질의 오류 한 건은 원본으로 보존한다. AT-SPI 역할만으로 배너/알림센터 종류나 사람의 관찰 시각을 추정하지 않는다.
 
 관찰기/송신자 정상 종료·앱 정상 Close와 원본878/1,560파일·source34/DB·합성7파일·현재 UI4/preferences·desktop 설정·archive8/payload6/SDK3 보존을 확인했다. 기존 실제 ServiceUnknown 뒤 앱 동작 유지 검사와 합쳐 원래 D05를 충족한다. 전체66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 미디어 내용·다중 활성 화면·조건부 업데이트는 남는다. Windows/Mac의 실제 표시·실패 복구는 기존 W07/W08/G07·M01/M02/M04·MAC-R06/MAC-R11에서 별도로 재검증한다.
+
+
+### 2026-10-27 JSON 옵션 경계와 문자열 표시 후속
+
+Linux 제품 `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`는 공통/카탈로그 JSON 입력과 가져온 값 병합에서 안전 범위를 벗어난 정수·비유한수를 거부하고, JSON 문자열의 따옴표와 타입을 편집기에 보존한다. 초안/이전 값·native 설정·프로필을 유지하고 네 언어 오류를 ARIA 설명에 연결했다. 엔진 분기·저장 schema·의존성 변경은 없다. [고정20 실제 결과와 범위](linux-device-validation-results.ko.md#고정20-json-옵션-숫자-경계와-타입-보존)를 따른다.
+
+Windows W02/W03/W06/W08·G04–G07과 Mac M01/M02/M04·MAC-R06/MAC-R11에서 두 옵션 폼의 큰 양·음 정수/중첩 비유한수 초안 유지·오류/저장 차단·정상 값 복구, 정수 리터럴 원문 검토와 지수 표기 JSON 가져오기, JSON 문자열 Save→정상 Close→재열기, 실제 argv/엔진 파싱·오류 설명/키보드/작은 창을 다시 확인한다. Linux의 자동2595검사와 전용 WebKitGTK 합성 GUI 결과를 다른 OS pass나 실제 모델 추론으로 옮기지 않는다. 기존64비트 정수/모든 소수의 무손실 전달 설계와 원래 품질 실패는 남는다.
