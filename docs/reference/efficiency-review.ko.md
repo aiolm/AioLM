@@ -1450,3 +1450,9 @@ index는 schema 본문을 복사하지 않는 기존 `BTreeMap`의 참조들이�
 배열50,000단계의100,001자 JSON은 실제 WebKitGTK에서 파싱되지만 직렬화 시 `RangeError`가 났다. 기존 production 옵션 입력칸에 같은 값을 일반 붙여넣기로 넣자 앱 전체가 오류 화면으로 바뀌었고, 두 제어형 옵션 폼 검사도 같은 예외로 실패했다. 공통 JSON 입력 파서가 숫자 검사 뒤 현재 JavaScript 엔진의 직렬화 가능 여부를 확인한 다음 값을 전달하도록 수정했다. 사용할 수 없는 값은 기존 입력 오류 경로에 남겨 초안·이전 값·오류 설명과 수정 후 복구를 보존한다. 고정 중첩 한도·새 의존성·엔진 분기·API/저장 schema는 추가하지 않으며 native 검증도 유지한다. 유효 입력에 직렬화 확인이 한 번 추가되는 정확성 수정이며 성능 개선으로 표현하지 않는다.
 
 전체 npm의221파일/2,597검사와 최종 관련100검사·typecheck·lint·DEB/AppImage 빌드·고정 CLI smoke가 통과했다. 중간 검사에서 새 테스트의 타입 이름을 바로잡았으며 수정 전후 JavaScript 출력 동일성과 이후 관련 검사를 별도로 확인했다. 새 production GUI에서 같은 붙여넣기의 화면·100,001자 초안·설정 파일 보존과 저장 차단, 정상 JSON의 저장·실제 합성 argv/응답·재열기를 확인했다. 고정 뒤 만든 개인 CPU 엔진의 실제 GUI 추론·취소/Retry·재시작·정상 종료/재열기와 CLI A01–A09도 별도로 통과했다. 자세한 실패·source·배포 해시와 보존 범위는 [Linux 결과](linux-device-validation-results.ko.md)에 기록한다. 이 수정으로 원래 미디어 품질 실패나 외부 조건이 필요한 검증을 통과로 바꾸지 않는다.
+
+### 2026-10-27 Linux에서 두 번째 실행의 창 복원
+
+실제 두 물리 출력이 활성화된 Wayland/XWayland 환경에서 두 번째 화면의 AioLM을 최소화한 뒤 같은 production 실행 파일을 다시 실행하면 새 프로세스는 종료됐지만 기존 창은 최소화 상태에 남았다. 새 격리 홈/DBus의 기존 앱 소유자를 확인한 직접 callback도 같은 결과였다. Linux 복원은 GTK 주 스레드에서 `present_with_time`으로 표시·최소화 복원·활성화를 요청하도록 수정했다. 분리된 show/unminimize/focus 요청 사이에서 아직 최소화된 상태를 보는 경로를 피한다. 이미 Tauri가 사용하는 잠긴 GTK 의존성을 명시했으며 새 패키지 버전·설정·저장 schema·WebView 권한은 추가하지 않는다. 다른 OS의 복원 경로는 기존 호출을 유지한다.
+
+새 production 빌드에서 실제 두 출력 간 이동·360×520 작은 창·최대화·배율2와, 최소화 확인 후 두 번째 실행의 같은 창/포커스 복원을 확인했다. 원래 화면 구성과 저장된 monitor 설정 파일은 복구·보존했다. 추출된 AppImage의 실제 AppRun에서도 같은 창 복원을 확인했다. 전체 npm2597검사·typecheck/lint·Rust fmt/Clippy/all-target/all-feature test·실제 Python opt-in 검사·DEB/AppImage 빌드·CLI smoke를 통과했다. 시스템 Python의 ensurepip 부재로 실패한 첫 Rust 실행은 남기고, 기존 검증용 Python3.12를 PATH에 지정해 원래 전체 명령을 다시 통과시켰다. 고정 뒤 만든 새 개인 CPU 엔진의 실제 GUI/CLI 여정과 정상 종료·재열기도 확인했다. 수치 성능 개선이나 다른 OS의 실제 성공으로 확대하지 않는다.

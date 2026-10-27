@@ -25,9 +25,25 @@ const QUIT_LABEL: &str = "Quit AioLM";
 /// hidden window can be in: hidden, minimized, and merely behind other windows.
 pub(crate) fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        #[cfg(target_os = "linux")]
+        {
+            // GTK handles showing, deiconifying and activating as one request.
+            // Separate queued requests can discard focus while the window's
+            // minimized state is still being updated by the window manager.
+            let restore = window.clone();
+            let _ = window.run_on_main_thread(move || {
+                use gtk::prelude::GtkWindowExt;
+                if let Ok(native) = restore.gtk_window() {
+                    native.present_with_time(gtk::current_event_time());
+                }
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
     }
 }
 

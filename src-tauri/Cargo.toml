@@ -153,6 +153,7 @@ tauri-plugin-wdio-webdriver = { version = "=1.4.0", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"
+gtk = "0.18"
 # Retain the Linux notification sender using the already locked async backend.
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 # Share the desktop plugins' async-io backend. Enabling zbus/tokio globally
