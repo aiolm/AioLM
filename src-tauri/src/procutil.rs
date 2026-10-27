@@ -830,14 +830,16 @@ mod tests {
             capture_stdout(&mut command, std::time::Duration::from_millis(100)).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
-        let mut command = std_command("powershell");
-        command.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Console]::Out.Write(('x' * 300000))",
-        ]);
-        let output = capture_stdout(&mut command, std::time::Duration::from_secs(10)).unwrap();
+        // Exercise pipe draining without including cold PowerShell startup in
+        // the helper's deadline. Keep the output larger than the retained cap.
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm output {}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&fixture, vec![b'x'; 300000]).unwrap();
+        let mut command = std_command("cmd");
+        command.args(["/d", "/c", "type"]).arg(&fixture);
+        let output = capture_stdout(&mut command, std::time::Duration::from_secs(10));
+        std::fs::remove_file(&fixture).unwrap();
+        let output = output.unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout.len(), 256 * 1024);
         assert!(output.stdout.iter().all(|byte| *byte == b'x'));
