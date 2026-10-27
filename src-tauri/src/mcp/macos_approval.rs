@@ -171,13 +171,21 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let mut command = crate::procutil::tokio_command("node");
             command.args(["-e", &format!("require('node:net').connect({port}, '127.0.0.1'); setInterval(() => {{}}, 1000);")]);
+            // Poll the approval while waiting for readiness, so cold Node
+            // startup does not consume the cancellation/deadline under test.
+            let mut approval = Box::pin(answer(command));
+            let (mut socket, _) = timeout(Duration::from_secs(10), async {
+                tokio::select! {
+                    socket = listener.accept() => socket,
+                    result = &mut approval => panic!("approval fixture exited before readiness: {result:?}"),
+                }
+            })
+            .await
+            .expect("approval fixture must start")
+            .unwrap();
             let task = OwnedTask::from(tokio::spawn(async move {
-                timeout(Duration::from_secs(2), answer(command)).await
+                timeout(Duration::from_secs(2), approval).await
             }));
-            let (mut socket, _) = timeout(Duration::from_secs(10), listener.accept())
-                .await
-                .expect("approval fixture must start")
-                .unwrap();
             if timed_out {
                 assert!(task.await.unwrap().is_err());
             } else {
