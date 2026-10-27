@@ -51,7 +51,7 @@
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
 | L03-U03 | unrun | 실제 설치 가능/불가 classifier·진행·installer·release 이동. 기존 Check 오류/버튼 회복·동률 재열기는 부분 검증이다. |
-| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 최신 공식 latest 조회(UTC2026-10-27T02:19:50Z)는 v0.3.1/실제 asset10개로 현재와 같았다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
+| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 공식 latest와 공개 release16개 목록을 함께 조회한 UTC2026-10-27T03:10:59Z에도 v0.3.1/실제 asset10개가 최신이었다. 동률에서는 설치 판별을 단락 평가해 실행하지 않으므로 U02/U03/D07의 나머지 조건도 열리지 않는다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
 | L02-N09 | unrun/선택 | 원래 Windows 품질 입력/산출물이 없어 동등 대조 불가. 다른 Linux 입력으로 대신하지 않는다. |
 | L02-N08 | unsupported | 관리형 MLX/vllm-metal의 macOS/Apple Silicon 계약에 따른 Linux 미지원. 실제 Linux 선택/관리 안내와 저장값 보존은 확인했다. 하드웨어가 없다는 이유의 임의 unsupported 판정이 아니다. |
 
@@ -66,6 +66,7 @@
 - `tmp/linux-acceptance/linux-window-restore-source22/`: 창 복원 수정/전체 검사·독립 패키지·새 개인 엔진 실제 GUI/CLI와 종료/재열기. `source22-final-guard.json`(SHA-256 `ec6f5d4595225afced9819c52922bd9fc1da2f3232267ba46ca3968bfeacaa65`)의39핀과 `source22-commit-join.json`을 함께 읽는다. 실제 화면 before/after는 `two-display-preflight-v1/`, `two-display-source22/`, 추출 AppRun은 `appimage-window-source22/`이며 원래 화면은 복구됐고 모든 검증 앱은 종료됐다.
 - `tmp/linux-acceptance/f09-vision-tensor-control-v1/`: 동일 projector198개 tensor·native 픽셀의 층별/최종 투영 대조, 기준 특징 대체의 동일 오답과 실제 prefill93개 ID 일치. `final-guard-v2.json`(SHA-256 `336c40c16e46fccccee2b0bcdf2c7597da06ed13d7b3c8bcc6689a1bacb7a2d0`)의50핀을 읽는다. 두 진단 서버와 기준 계산은 종료됐다. 첫 출력 buffer/float32 집계의 범위도 원본으로 구분한다.
 - `tmp/linux-acceptance/f09-language-reference-v1/`: 독립 tokenizer/텍스트 수치·정상 RGB/Pillow 대조·세 설정 HTTP 대조·공식13보기 기준·공개471개 원본과 GGUF의 정확한 변환 재구성·텍스트 양자화 제어·공식 전체 multimodal 모델의 같은 오답. `final-guard.json`(SHA-256 `d5822d58b815c2c818a85551c28281956b31ea1967a0149d47a3451098b7ed33`)의173핀과 원본 실패를 함께 읽는다. 새 계산·서버는 모두 종료됐다. 가중치·원래 기준·품질 판정과 진단용 입력/구현의 범위를 구분하며 모델 자료를 Git/배포물에 포함하지 않는다.
+- `tmp/linux-acceptance/residual-acceptance-audit-v1/`: 캐시 재사용을 요청하지 않은 최신 공식 release/전체 공개16개 목록·서버 Date와 source의 실제 updater 분기 조건 대조. 완료한 동률 확인이 설치 판별/진행/설치 여정을 대신하지 않는 근거다.
 - `tmp/linux-acceptance/f09-singleview-control-v1/`: 원래 raw 요청/모델/한도를 유지한 native before/after와 longest-size 진단의5회 실제 추론·관측/정리, 합성 pixel-shuffle 대조. 내용 실패를 보존한다.
 - `tmp/linux-acceptance/resume-20261027-review/`: 고정21의 실제/렌더된 입력 실패·최소 수정 검사·freeze·패키지/25개 내부 symlink 검사·합성/개인 GUI 네 실행·재열기·정리 근거. `baseline-causal-reproduction.json`, `source21-final-guard.json`(SHA-256 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`), `source21-commit-join.json`을 함께 읽는다. 원래 자동화 오류/exit1·타입 검사 오류와 보정 전 receipt도 그대로 있다. 새 개인 엔진 build/manifest/provenance는 `tmp/linux-acceptance/personal-engine-source21/`이다.
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.

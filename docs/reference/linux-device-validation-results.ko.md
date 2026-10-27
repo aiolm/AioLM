@@ -148,7 +148,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 
 ## 74개 세부 항목
 
-현재 66 pass / 1 fail / 1 unsupported / 5 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
+현재 67 pass / 1 fail / 1 unsupported / 4 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
 
 | ID | 항목 | 판정 | 실행 근거 또는 남은 범위 |
 | --- | --- | --- | --- |
@@ -506,3 +506,9 @@ python3 -B scripts/provider-compatibility/prepare_llama_source.py \
 마지막 별도 대조는 공개 BF16 가중치471개 전체를 float32로 공식 [Transformers5.17.0 Idefics3 모델](https://github.com/huggingface/transformers/blob/v5.17.0/src/transformers/models/idefics3/modeling_idefics3.py)에 엄격히 로드했다. 구현 SHA-256 `f165b1025b243f5273bb64499f81197df48725e42ed3e1a55872f8eba5fcd1ce`는 설치 source와 바이트가 같다. 독립13개 픽셀 보기와 같은 공식888개 ID를 전체 multimodal 경로에 직접 주고 CPU4/eager·32/T0에서 다시 `[216,33,49279]`/`1`을 얻었다. 전체 명령298.109초/exit0이다. 설정 초기화의 pad_token_id 경고는 원본 로그에 남겼으며 실제888개 입력에는 padding이 없고 attention mask는 전부1이다. 원래 GGUF 가중치의 기준 vision 대비 전체479,232개 특징 상대 L2는 `9.197037023985514e-7`, 공개 텍스트 가중치만 교체한 앞 대조 대비 logits 상대 L2는 `1.5291290408195779e-6`이었다. 같은 원래 입력 구성의 오답이 공식 전체 모델에서도 재현됐다는 근거이며, 모델의 모든 입력에 대한 능력 판정은 아니다. F09의 내용 실패와 전체67/1/4/1/1은 유지한다. 조사한 구성의 모델 출력 품질과 제품 전송 결함을 구분하고, 같은 제어를 근거 없이 반복하거나 답을 강제하는 보정으로 통과시키지 않는다.
 
 새 원본은 `tmp/linux-acceptance/f09-language-reference-v1/`이며 `final-guard.json`의173개 raw pin/SHA-256 `d5822d58b815c2c818a85551c28281956b31ea1967a0149d47a3451098b7ed33`으로 연결한다. 독립 계산8개 명령과 세 HTTP 설정 대조는 종료됐고 앞선39/9/50핀·원래 모델/PNG/raw 요청·고정22의 배포물4개·고정23의 개발 도구2개가 같다. 원래 harness 오류/exit1도 보존했다. 이번은 임시 진단·문서 후속이며 전체 자동 검사나 새 GUI/패키지 실행을 추가 주장하지 않는다. UTC2026-10-27T02:19:50Z 공식 latest는 여전히v0.3.1/실제 asset10개로 현재와 같았다. 새 실제 release를 요구하는 updater 조건부 검증의 판정도 그대로다.
+
+## 잔여 업데이트 조건 재확인
+
+UTC2026-10-27T03:10:59Z에 cache 재사용을 요청하지 않는 조회로 공식 latest와 공개 release 목록을 함께 확인했다. HTTP200/서버 Date가 조회 시점과 같았으며 latest는v0.3.1/asset10개, 공개 목록16개에도 더 새 버전은 없었다. latest 원문 SHA-256은 `05c837e1ad76186a075fa80d1fd23c59e17797f2a709ec3186527a2e0e3405a1`, 목록은 `1ae09d449f2e21d1a904e8e8341b576fd7c6be29fd2746272ea0585f6234f8c3`이다. 원본은 `tmp/linux-acceptance/residual-acceptance-audit-v1/`에 있다.
+
+현재 [updater check 구현](../../src-tauri/src/app_update.rs)은 `latest.newer && installable(installed_kind().await.ok(), …)`를 단락 평가한다. 동률 확인에서는 실제 설치 판별 함수가 호출되지 않으므로 현재 버전 확인을 반복해도 U02의 설치 가능·불가나 U03의 설치/진행 안내·D07의 네 언어 조건부 안내를 검증할 수 없다. 실제 더 새 신뢰 release가 이 분기와 U04 다운로드·검증·설치 여정의 재개 조건이다. 이 source 확인으로 미실행 분기를 통과 처리하지 않았으며 기존 모델 품질 실패도 유지한다. 세부 표의 집계 설명 한 줄은 실제74개 행과 일치하는67 pass/4 unrun으로 바로잡았다.
