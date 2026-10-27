@@ -47,11 +47,11 @@
 
 | ID | 상태 | 정확한 남은 범위/재개 조건 |
 | --- | --- | --- |
-| L02-F09 | fail | 원래 모델/projector/PNG·raw 요청·32/T0를 유지한다. single-view 보정 뒤 원래198개 projector tensor/동일 native 픽셀의 기준 구현 대조와 최종 특징 대체도 같은 오답이었다. 실제 prefill93개(이미지64/텍스트29) ID는 같은 native vocabulary에서 공식 템플릿/처리기 예상과 같고 질문의 색·도형 문구가 남았다. 독립 tokenizer·GGUF text 가중치 배열/디코더 수치는 아직 확인하지 못했다. 해당 경로를 고정한 독립 대조가 다음 실행이다. |
+| L02-F09 | fail | 원래 모델/projector/PNG·raw 요청·32/T0를 유지한다. 독립 tokenizer의 전체49,280개 어휘/원래93개 ID가 같고, 원래 GGUF의 독립·native 디코더가 EOS까지 같은 오답이었다. 공식13보기/888토큰에서도 원래 GGUF·공개 텍스트 가중치·공개471개 전체 모델 모두 같은 `1`을 냈다. 공개 원본에서 선언된 dtype/고정 Q8 변환으로471개 tensor를 정확히 재구성했다. [수치·전처리·설정 대조 전체](linux-device-validation-results.ko.md#f09-독립-tokenizer텍스트-디코더픽셀-대조)를 읽고 완료한 제어를 반복하지 않는다. 이 입력 구성의 품질 잔여를 보존하며 실제 수정 근거를 확보하면 원래 기준을 재검증한다. |
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
 | L03-U03 | unrun | 실제 설치 가능/불가 classifier·진행·installer·release 이동. 기존 Check 오류/버튼 회복·동률 재열기는 부분 검증이다. |
-| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 최신 공식 latest 조회(UTC2026-10-26T23:34:51Z)는 v0.3.1로 현재와 같았다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
+| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 최신 공식 latest 조회(UTC2026-10-27T02:19:50Z)는 v0.3.1/실제 asset10개로 현재와 같았다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
 | L02-N09 | unrun/선택 | 원래 Windows 품질 입력/산출물이 없어 동등 대조 불가. 다른 Linux 입력으로 대신하지 않는다. |
 | L02-N08 | unsupported | 관리형 MLX/vllm-metal의 macOS/Apple Silicon 계약에 따른 Linux 미지원. 실제 Linux 선택/관리 안내와 저장값 보존은 확인했다. 하드웨어가 없다는 이유의 임의 unsupported 판정이 아니다. |
 
@@ -65,6 +65,7 @@
 
 - `tmp/linux-acceptance/linux-window-restore-source22/`: 창 복원 수정/전체 검사·독립 패키지·새 개인 엔진 실제 GUI/CLI와 종료/재열기. `source22-final-guard.json`(SHA-256 `ec6f5d4595225afced9819c52922bd9fc1da2f3232267ba46ca3968bfeacaa65`)의39핀과 `source22-commit-join.json`을 함께 읽는다. 실제 화면 before/after는 `two-display-preflight-v1/`, `two-display-source22/`, 추출 AppRun은 `appimage-window-source22/`이며 원래 화면은 복구됐고 모든 검증 앱은 종료됐다.
 - `tmp/linux-acceptance/f09-vision-tensor-control-v1/`: 동일 projector198개 tensor·native 픽셀의 층별/최종 투영 대조, 기준 특징 대체의 동일 오답과 실제 prefill93개 ID 일치. `final-guard-v2.json`(SHA-256 `336c40c16e46fccccee2b0bcdf2c7597da06ed13d7b3c8bcc6689a1bacb7a2d0`)의50핀을 읽는다. 두 진단 서버와 기준 계산은 종료됐다. 첫 출력 buffer/float32 집계의 범위도 원본으로 구분한다.
+- `tmp/linux-acceptance/f09-language-reference-v1/`: 독립 tokenizer/텍스트 수치·정상 RGB/Pillow 대조·세 설정 HTTP 대조·공식13보기 기준·공개471개 원본과 GGUF의 정확한 변환 재구성·텍스트 양자화 제어·공식 전체 multimodal 모델의 같은 오답. `final-guard.json`(SHA-256 `d5822d58b815c2c818a85551c28281956b31ea1967a0149d47a3451098b7ed33`)의173핀과 원본 실패를 함께 읽는다. 새 계산·서버는 모두 종료됐다. 가중치·원래 기준·품질 판정과 진단용 입력/구현의 범위를 구분하며 모델 자료를 Git/배포물에 포함하지 않는다.
 - `tmp/linux-acceptance/f09-singleview-control-v1/`: 원래 raw 요청/모델/한도를 유지한 native before/after와 longest-size 진단의5회 실제 추론·관측/정리, 합성 pixel-shuffle 대조. 내용 실패를 보존한다.
 - `tmp/linux-acceptance/resume-20261027-review/`: 고정21의 실제/렌더된 입력 실패·최소 수정 검사·freeze·패키지/25개 내부 symlink 검사·합성/개인 GUI 네 실행·재열기·정리 근거. `baseline-causal-reproduction.json`, `source21-final-guard.json`(SHA-256 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`), `source21-commit-join.json`을 함께 읽는다. 원래 자동화 오류/exit1·타입 검사 오류와 보정 전 receipt도 그대로 있다. 새 개인 엔진 build/manifest/provenance는 `tmp/linux-acceptance/personal-engine-source21/`이다.
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
