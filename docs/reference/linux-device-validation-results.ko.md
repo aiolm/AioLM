@@ -512,3 +512,13 @@ python3 -B scripts/provider-compatibility/prepare_llama_source.py \
 UTC2026-10-27T03:10:59Z에 cache 재사용을 요청하지 않는 조회로 공식 latest와 공개 release 목록을 함께 확인했다. HTTP200/서버 Date가 조회 시점과 같았으며 latest는v0.3.1/asset10개, 공개 목록16개에도 더 새 버전은 없었다. latest 원문 SHA-256은 `05c837e1ad76186a075fa80d1fd23c59e17797f2a709ec3186527a2e0e3405a1`, 목록은 `1ae09d449f2e21d1a904e8e8341b576fd7c6be29fd2746272ea0585f6234f8c3`이다. 원본은 `tmp/linux-acceptance/residual-acceptance-audit-v1/`에 있다.
 
 현재 [updater check 구현](../../src-tauri/src/app_update.rs)은 `latest.newer && installable(installed_kind().await.ok(), …)`를 단락 평가한다. 동률 확인에서는 실제 설치 판별 함수가 호출되지 않으므로 현재 버전 확인을 반복해도 U02의 설치 가능·불가나 U03의 설치/진행 안내·D07의 네 언어 조건부 안내를 검증할 수 없다. 실제 더 새 신뢰 release가 이 분기와 U04 다운로드·검증·설치 여정의 재개 조건이다. 이 source 확인으로 미실행 분기를 통과 처리하지 않았으며 기존 모델 품질 실패도 유지한다. 세부 표의 집계 설명 한 줄은 실제74개 행과 일치하는67 pass/4 unrun으로 바로잡았다.
+
+## F09 종횡비 보존 전처리 대조
+
+추가 관측에서 원래560×340 PNG의 두 색상 영역 bounding box는 각각171×171이었으나, native single-view 정규화 픽셀에서는156×257이었다. 공식13보기의 전체 보기에서도156×256/156×257이었다. 이 비율 변화가 도형 오답에 영향을 주는지 별도 대조했다. 원본 PNG·가중치·질문·순서를 보존하고 Pillow Lanczos로512×311에 맞춘 뒤 중앙 흰 여백으로512×512 입력을 구성했다. 기대 도형명·색이나 설명 문구를 입력에 추가하지 않았다. 두 영역은156×156으로 유지됐다. 이는 선언한 실험용 전처리이며 모델의 공식 processor 정책이나 제품 기본값으로 채택한 결과는 아니다.
+
+같은 원래 projector/CPU vision으로 만든64×576 특징만 실제93토큰 입력의 이미지 위치23–86번에 넣고 나머지 텍스트 embedding을 그대로 보존했다. 특징의 상대 L2 변화는0.33795587220037937, 첫49,280개 logits의 상대 L2 변화는0.08681417357001507이었다. 실제 계산 입력과 점수는 달라졌지만32/T0의 생성은 EOS까지 같은 `[37087,6935,284,23924,49279]`/`Rectangle and Circle`이었다. 두 직접 계산 명령은 exit0이며 새 HTTP·GUI 실행은 아니다. 종횡비 보존만으로 내용 누락이 해결되지 않는다는 한정된 결과다. 원래 F09 실패와 전체67/1/4/1/1을 유지한다.
+
+진단 helper를 source에서 다시 빌드했을 때 기존 vision helper와 실행 파일 SHA가 달라 첫 엄격한 동일성 assertion이 실패했다. 그 원인을 확정하거나 실행 파일이 같다고 주장하지 않았다. 검토한 source에서 새로 만든 helper의 별도 실행은 exit0이며 이 대조에 사용한36,864개 특징 전체와 바이트가 같았다. Language helper는 앞선 고정 실행 파일 해시와 같았다. 첫 실패/exit1과 별도 특징 재구성 근거를 모두 보존한다.
+
+원본은 `tmp/linux-acceptance/f09-aspect-control-v1/`이며 `final-guard.json`의26개 raw pin/SHA-256 `093ecabc24ba56cfdfc8baa90922bd41f79c00c9ac751c29c03f32d25825192e`로 연결한다. 앞선173핀·원래 모델/PNG/raw 요청·고정22 배포물4개와 고정23 개발 도구는 같으며 새 전체 자동 검사·패키징·사용자 자료 전체 검사를 주장하지 않는다. UTC2026-10-27T04:44:27Z 공식 latest 재확인도v0.3.1/asset10개로 현재 버전과 같았다.
