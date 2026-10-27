@@ -8,9 +8,9 @@ export default defineConfig({
     "process.env.NODE_ENV": JSON.stringify("test"),
   },
   test: {
-    // Bound simultaneous DOM environments so large UI tests keep their normal
-    // time budget on many-core hosts, without exceeding smaller CPU allocations.
-    maxWorkers: Math.min(4, availableParallelism()),
+    // Leave capacity for the Vite coordinator and DOM updates so worker
+    // processes do not starve ordinary async waits on small CI runners.
+    maxWorkers: Math.min(4, Math.max(1, Math.floor(availableParallelism() / 2))),
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
