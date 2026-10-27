@@ -7,14 +7,14 @@
 - 원격: `https://github.com/aiolm/AioLM.git`
 - 작업 브랜치: `codex/linux-runtime-adapter-validation`
 - 고정19 엔진 여정 결과 문서 commit: `5c414854904e78fc7a7b69d06f20e554eff5ed48` (이 인계 문서 commit의 조상)
-- 최신 제품 코드 commit: `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`
+- 최신 제품 코드 commit: `43830d37dd839029192feb2e2c5a47061442947a`
 - 원래 수신 commit: `3e2c67d4d6dd2742ee8f9997797d31f244f234de`
 - 필수 원래 인계 조상: `df3264bad99deb0144b947f96300e8625f7a2da5`
 
 먼저 현재 Git 상태/이력과 `AGENTS.md`, 존재한다면 `tmp/AGENTS.local.md`를 읽는다. 이어서 다음을 읽는다.
 
 1. [Linux 실행 계약 전체](linux-device-handoff.ko.md)
-2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 고정21의 JSON 오류 화면 방지·실제 엔진 회귀 절
+2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 고정22의 Linux 창 복원·다중 화면·새 실제 엔진 회귀와 F09 전처리 대조 절
 3. [Windows/Mac 후속 인계](engine-adapter-linux-macos-handoff.ko.md)
 4. `runtime-adapter-handoff.ko.md`, `pluggable-inference-runtimes.ko.md`, `inference-runtimes.md`, `provider-native-acceptance.md`, `cross-platform-validation.md`, `efficiency-review.ko.md`
 5. `docs/guides/development.ko.md`, `docs/guides/install.ko.md`, `package.json`, `src-tauri/Cargo.toml`
@@ -23,9 +23,11 @@
 
 ## 확정된 현재 상태
 
-전체74개는 **66 pass / 1 fail / 5 unrun / 1 unsupported / 1 blocked**다. 통과 항목도 각 source·입력·기기·조건의 근거 범위를 유지한다. 과거 Windows/Mac이나 다른 고정점의 결과를 현재 Linux 전체 실행으로 확대하지 않는다.
+전체74개는 **67 pass / 1 fail / 4 unrun / 1 unsupported / 1 blocked**다. 통과 항목도 각 source·입력·기기·조건의 근거 범위를 유지한다. 과거 Windows/Mac이나 다른 고정점의 결과를 현재 Linux 전체 실행으로 확대하지 않는다.
 
-최신 고정21은 깊은 JSON 붙여넣기로 앱 전체가 오류 화면으로 바뀌는 문제의 수정이다. 실제 고정20 실패와 두 제어형 폼의 예외를 재현했다. 숫자 검사 뒤 현재 엔진의 직렬화 가능 여부를 확인하고 사용할 수 없는 초안을 기존 입력 오류 경로에 남긴다. 전체 npm221파일/2597검사·최종 관련100검사/typecheck/lint·DEB/AppImage 빌드·고정 CLI smoke를 통과했다. 중간 테스트 타입 이름 수정 전후 생성 JS가 같은 근거도 보존했다. [고정21의 실제 결과와 배포 해시](linux-device-validation-results.ko.md#고정21-깊은-json-입력의-오류-화면-방지)를 먼저 읽는다. 실제 새 GUI의 같은100,001자 붙여넣기에서 화면·초안·native 설정 보존/Save 차단과 정상 JSON18 복구·저장·argv/합성 응답·정상 Close/별도 재열기를 확인했다. 고정 뒤 만든 새 개인 CPU 옵션의 실제 GUI 추론·내용 Stop/같은 PID Retry·새 PID 재시작/health·로드 상태 Close·별도 재열기의3/32/T0·이력/자동 시작 없음과 CLI A01–A09도 끝냈다. 알려진23개 생성 식별과7개 포트는 종료됐고 원본 receipt를 유지한893개 source blob이 제품 commit과 같다.
+최신 고정22는 Linux에서 최소화된 기존 창이 두 번째 실행으로 복원되지 않는 실제 결함을 수정했다. 두 물리 출력 활성화·화면 이동·작은 창/최대화·DPR2·같은 창/포커스 복원과 원래 화면 설정 복구를 확인해 D04를pass로 갱신했다. 추출 AppImage AppRun의 실제 복원도 통과했다. 전체 자동 검사·새 패키지·고정 뒤 생성한 개인 CPU 엔진의 실제 GUI/CLI·정상 종료/재열기와 native6파일 보존은 [고정22의 정확한 범위](linux-device-validation-results.ko.md#고정22-linux-창-복원과-다중-화면)를 따른다. 원래 실패/부분 스크립트와 환경 오류를 최종 성공으로 덮어쓰지 않았다.
+
+고정21은 깊은 JSON 붙여넣기로 앱 전체가 오류 화면으로 바뀌는 문제의 수정이다. 실제 고정20 실패와 두 제어형 폼의 예외를 재현했다. 숫자 검사 뒤 현재 엔진의 직렬화 가능 여부를 확인하고 사용할 수 없는 초안을 기존 입력 오류 경로에 남긴다. 전체 npm221파일/2597검사·최종 관련100검사/typecheck/lint·DEB/AppImage 빌드·고정 CLI smoke를 통과했다. 중간 테스트 타입 이름 수정 전후 생성 JS가 같은 근거도 보존했다. [고정21의 실제 결과와 배포 해시](linux-device-validation-results.ko.md#고정21-깊은-json-입력의-오류-화면-방지)를 먼저 읽는다. 실제 새 GUI의 같은100,001자 붙여넣기에서 화면·초안·native 설정 보존/Save 차단과 정상 JSON18 복구·저장·argv/합성 응답·정상 Close/별도 재열기를 확인했다. 고정 뒤 만든 새 개인 CPU 옵션의 실제 GUI 추론·내용 Stop/같은 PID Retry·새 PID 재시작/health·로드 상태 Close·별도 재열기의3/32/T0·이력/자동 시작 없음과 CLI A01–A09도 끝냈다. 알려진23개 생성 식별과7개 포트는 종료됐고 원본 receipt를 유지한893개 source blob이 제품 commit과 같다.
 
 고정20의 JSON 숫자 손실·문자열 표시 수정도 원래 범위로 유지한다. 전체 npm(Vitest221파일/2595검사)·최종 typecheck/lint·DEB/AppImage 빌드·새 release CLI smoke와 실제 GUI 등록/help·JSON 거부/저장·정상 Close/별도 재열기·native 가져오기·실제 합성 argv/응답·정리를 확인했다. [고정20의 정확한 범위와 배포 해시](linux-device-validation-results.ko.md#고정20-json-옵션-숫자-경계와-타입-보존)를 따른다.
 
@@ -43,8 +45,7 @@
 
 | ID | 상태 | 정확한 남은 범위/재개 조건 |
 | --- | --- | --- |
-| L02-F09 | fail | 원래 Smol 내용 정확도가 native 직접 대조에서도 실패했다. 원래 입력·모델/projector·32/T0를 유지한다. 템플릿은 고정 HF base와 같고 런타임도 SmolVLM으로 구분한다. 오래된 projector의 전처리 크기 항목 누락은 native 호환 경로 가설이며 실제 원래 branch/렌더링 관측이 필요하다. 모델·입력·한도 변경이나 앱 전용 분기로 통과시키지 않는다. |
-| L03-D04 | unrun | 실제 다중 활성 화면 간 이동 검증. 최신 UTC2026-10-26T23:34:51 조회도 물리2개/활성 logical·output1개/scale2였다. 이전에는 사용자가 두 번째 출력 활성화 불가를 확인했고 재개 후 가능 여부를 다시 물었으나 새 답변은 아직 없다. 기존 최소화·두 번째 실행·작은 창·DPR2 근거는 유지한다. 실제 두 출력 활성화와 관련 사용자 조작을 확인해야 하며 설정 변경 권한을 추정하지 않는다. |
+| L02-F09 | fail | 원래 모델/projector/PNG·요청 raw bytes·32/T0의 별도 native78 제어에서 duplicate tile+overview를 실제 관측했다. single-view 보정으로 응답은 달라졌으나 색/도형을 모두 맞히지 못했다. longest2048 단독 대조도 실패했고 square pixel shuffle 대조는 차이0이었다. 원래 전체 argv/실제 tensor는 복구하지 못했다. 모델·입력·한도 변경이나 앱 전용 정답 보정으로 통과시키지 않는다. |
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
 | L03-U03 | unrun | 실제 설치 가능/불가 classifier·진행·installer·release 이동. 기존 Check 오류/버튼 회복·동률 재열기는 부분 검증이다. |
@@ -52,7 +53,7 @@
 | L02-N09 | unrun/선택 | 원래 Windows 품질 입력/산출물이 없어 동등 대조 불가. 다른 Linux 입력으로 대신하지 않는다. |
 | L02-N08 | unsupported | 관리형 MLX/vllm-metal의 macOS/Apple Silicon 계약에 따른 Linux 미지원. 실제 Linux 선택/관리 안내와 저장값 보존은 확인했다. 하드웨어가 없다는 이유의 임의 unsupported 판정이 아니다. |
 
-먼저 위 계약과 원본 근거를 대조해 요건별 완료 감사를 끝내고, 실행 가능한 독립 항목부터 수행한다. 알림 D05는 완료됐으며 이전 ID45/48/50의 앱과 관찰기는 모두 종료됐다. 새 결함이나 변경 범위가 없다면 같은 표시 검사를 반복하지 않는다. 같은 실패 입력을 의미 없이 반복하거나 제품 결함 근거 없이 설정/모델/timeout을 바꾸지 않는다.
+먼저 위 계약과 원본 근거를 대조해 요건별 완료 감사를 끝내고, 실행 가능한 독립 항목부터 수행한다. 창/인스턴스 D04와 알림 D05는 완료됐으며 이전 ID45/48/50의 앱과 관찰기는 모두 종료됐다. 새 결함이나 변경 범위가 없다면 같은 표시 검사를 반복하지 않는다. 같은 실패 입력을 의미 없이 반복하거나 제품 결함 근거 없이 설정/모델/timeout을 바꾸지 않는다.
 
 고정20 JSON 경계·저장/재열기·실제 합성 argv/응답 검사는 끝났고 전용 앱/엔진은 종료됐다. 단순 반복할 필요는 없다. 큰 정수 무손실 GUI/IPC 지원은 아직 구현하지 않았으며, JSON 수를 문자열로 바꿔 엔진 입력을 보정하지 않는다. 재열기의 help stale 관측은 [identity 기록 대조](linux-device-validation-results.ko.md#고정20-도움말-identity-기록-대조)에서 `XDG_RUNTIME_DIR`의 변화로 두 원본 fingerprint를 정확히 재현했다. 실제 자식 환경이 달라진 정상 무효화였으며 작업 폴더 자체는 같았다. 이 관측 때문에 같은 GUI 여정을 반복하거나 환경 비교를 완화할 필요는 없다.
 
@@ -60,6 +61,8 @@
 
 `tmp/`와 빌드·모델·개인 사용자 자료는 Git에 올리지 않는다. 다음은 저장소 루트 기준 로컬 경로다.
 
+- `tmp/linux-acceptance/linux-window-restore-source22/`: 창 복원 수정/전체 검사·독립 패키지·새 개인 엔진 실제 GUI/CLI와 종료/재열기. `source22-final-guard.json`(SHA-256 `ec6f5d4595225afced9819c52922bd9fc1da2f3232267ba46ca3968bfeacaa65`)의39핀과 `source22-commit-join.json`을 함께 읽는다. 실제 화면 before/after는 `two-display-preflight-v1/`, `two-display-source22/`, 추출 AppRun은 `appimage-window-source22/`이며 원래 화면은 복구됐고 모든 검증 앱은 종료됐다.
+- `tmp/linux-acceptance/f09-singleview-control-v1/`: 원래 raw 요청/모델/한도를 유지한 native before/after와 longest-size 진단의5회 실제 추론·관측/정리, 합성 pixel-shuffle 대조. 내용 실패를 보존한다.
 - `tmp/linux-acceptance/resume-20261027-review/`: 고정21의 실제/렌더된 입력 실패·최소 수정 검사·freeze·패키지/25개 내부 symlink 검사·합성/개인 GUI 네 실행·재열기·정리 근거. `baseline-causal-reproduction.json`, `source21-final-guard.json`(SHA-256 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`), `source21-commit-join.json`을 함께 읽는다. 원래 자동화 오류/exit1·타입 검사 오류와 보정 전 receipt도 그대로 있다. 새 개인 엔진 build/manifest/provenance는 `tmp/linux-acceptance/personal-engine-source21/`이다.
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
 - `tmp/linux-acceptance/personal-engine-source20/`: 고정20 뒤 생성한 개인 CPU 옵션·독립 upstream checkout/패치·native build·manifest/provenance. 실제 GUI 두 실행과 CLI 결과는 위 재개 폴더의 `gui-personal20/`, `gui-personal20-reopen/`, `personal20-cli/`에 있으며 `personal20-final-guard.json`(SHA-256 `133eb099a65bcb798a4be22255995a89e5e14e5d15909bc3cf68feda2afcd614`)이 실제 파일/보존/정리 근거를 연결한다.

@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 제품 수정은 `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`의 [고정21 깊은 JSON 입력의 오류 화면 방지](#고정21-깊은-json-입력의-오류-화면-방지)다. 실제 production 화면의 실패를 재현하고 최소 수정 뒤 자동 검사·새 패키지·같은 붙여넣기의 초안/설정 보존·정상 복구와 저장/argv/응답·재열기를 확인했다. 새 개인 CPU 엔진의 실제 GUI·CLI 여정도 같은 고정 빌드에서 통과했다. [고정20의 숫자/타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존) 등 과거 검증은 각 source 범위로 유지한다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 전체 검증은 미완료다.
+최신 제품 수정은 `43830d37dd839029192feb2e2c5a47061442947a`의 [고정22 Linux 창 복원과 다중 화면](#고정22-linux-창-복원과-다중-화면)이다. 실제 두 물리 출력에서 재현한 두 번째 실행의 최소화 창 복원 실패를 수정하고 새 패키지·실제 재검증·원래 화면 설정 복구를 확인했다. [고정21 JSON 초안 보호](#고정21-깊은-json-입력의-오류-화면-방지) 등 과거 결과는 각 source 범위로 유지한다. 기존74개 집계는67 pass/1 fail/4 unrun/1 unsupported/1 blocked이며 전체 검증은 미완료다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -212,7 +212,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L03-D01 | 파일·폴더 선택 | pass | 고정12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
 | L03-D02 | clipboard·IME | pass | PASS: 실제clipboard·13물리한글첫Enter보존/별도EndEnterLoad·원래eventprefix/config/main/정상정리 유지. 같은IMEguard를18에서도carried근거로구분하며새18물리IME재실행이나다른OSpass는아님. |
 | L03-D03 | tray | pass | 고정12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
-| L03-D04 | 창·인스턴스 | unrun | 기존 최소화/두번째 실행·작은 창/nativeDPR2 근거를 유지한다. 최신 UTC2026-10-26T09:36 조회도 물리2/활성logical·output1/scale2이고 사용자가 두 번째 출력 활성화 불가를 확인했다. 다중 활성 화면 이동 검사는 남는다. |
+| L03-D04 | 창·인스턴스 | pass | 고정22에서 실제 두 물리 출력 활성화·양쪽 창 이동·360×520/최대화·배율2와 최소화 후 두 번째 실행의 기존 창/포커스 복원을 확인했다. GTK 표시 수정 뒤 추출 AppImage AppRun도 복원 통과. 원래 화면 구성/저장 파일과 종료·정리를 보존했다. 원래 실패와 부분 실행은 아래 범위로 유지한다. |
 | L03-D05 | 알림 | pass | 고정19의 단일 일반 Send/수락 ID50에서 정확한 알림 컨테이너·제목·본문의279표본이 SHOWING/VISIBLE/정상 SCREEN 좌표를 보였고 사용자가 제목·본문 표시를 확인했다. 실제 ServiceUnknown 뒤 앱 회복·정상 Close·원본 자료 보존도 확인했다. 과거 ID45/48의 false 표본은 유지한다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 기존 네언어 종료/숨김·현재버전 안내 유지. 설치16 ordinary Notifications는 r1 ENKO/r3 JAZH 설명/category·좁은창키보드, ENstatus는 DOM한계 명시. updater 가능/불가의 실제조건부 조합은 여전히 남는다. |
@@ -229,7 +229,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 
 ## 남은 검증과 OS 인계
 
-현재66 pass/1 fail/5 unrun/1 unsupported/1 blocked다. D05는 아래 새 실제 표시와 기존 실패 복구 근거로pass다. F03은 원래 대표 UX 조항의 actual18/동일 로직의 IME13·Orca17 범위로 root가 pass 판정했다. 실제18 새 옵션/저장3·native 동작·두 Close/재열기·DPR2/빠른 검색·소유 private 인프라 정리는 위 범위로 완료했다. Core 원래 exit1/선택 등록의 scoped 감사, 과거 active-map false/저장21값 감사, RAPIDv1/v2·Reader watchdog 실패는 별개로 보존한다. F09 미디어 내용 품질 실패와 선택 원래 품질 대조·창/인스턴스·조건부 네 언어/updater 설치 판별/안내, 실제 새 버전 차단은 남는다. 읽기 전용 현재 화면 조회는 물리2개/활성1개·scale2만 확인했고 설정을 바꾸지 않았으므로 실제 다중 활성 화면 검사는 unrun이다. 최종18 ROCm CLI 재검증·정상 인프라 정리와 그 뒤878/1,560개 사용자 자료 최종 guard는 위 범위로 완료했다. 이는 남은 조건부 행의 pass를 뜻하지 않는다. 필수 fail/unrun/blocked가 남으므로 전체 목표를 complete로 표시하지 않는다.
+현재67 pass/1 fail/4 unrun/1 unsupported/1 blocked다. D04는 고정22의 실제 두 출력·GTK 복원 수정/재검증으로pass이며 D05는 새 실제 표시와 기존 실패 복구 근거로pass다. F03은 원래 대표 UX 조항의 actual18/동일 로직의 IME13·Orca17 범위로 root가 pass 판정했다. 실제18 새 옵션/저장3·native 동작·두 Close/재열기·DPR2/빠른 검색·소유 private 인프라 정리는 위 범위로 완료했다. Core 원래 exit1/선택 등록의 scoped 감사, 과거 active-map false/저장21값 감사, RAPIDv1/v2·Reader watchdog 실패는 별개로 보존한다. F09 미디어 내용 품질 실패와 선택 원래 품질 대조·조건부 네 언어/updater 설치 판별/안내, 실제 새 버전 차단은 남는다. 과거의 물리2/활성1 읽기 전용 관측은 그대로 보존하고, 새 실제 다중 활성 화면 검사는 아래 고정22 결과로 판정한다. 최종18 ROCm CLI 재검증·정상 인프라 정리와 그 뒤878/1,560개 사용자 자료 최종 guard는 위 범위로 완료했다. 이는 남은 조건부 행의 pass를 뜻하지 않는다. 필수 fail/unrun/blocked가 남으므로 전체 목표를 complete로 표시하지 않는다.
 
 제품·검사·계약 변경은 작업별 commit으로 고정했다. 상세 Windows W/G 및 Mac M01–M04/MAC-R01–R13 대응은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md#2026-10-25-linux-수정의-수신과-재검증)를 따른다. Windows/Mac 실제 실행은 이번 Linux 결과로 pass 처리하지 않는다. Mac 실제 실행은 Linux goal의 완료 조건이 아니다. 엔진·대표 UX의 고정점18과 추가 알림 수정 고정점19를 구분해 결과와 OS 인계 문서를 갱신했다. 원격 push는 하지 않았다.
 
@@ -410,7 +410,7 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 | DEB | `a33483baa97b0348d895f31115461000e56cc91b0965f37b6c14a2f02544341c` |
 | AppImage | `0c52e78590e2748cd61ac97ca8afd17c2cea561a47070baf4433ab99f58e048a` |
 
-네 독립 archive와 실제 DEB/AppImage 추출물을 검사했다. Release/DEB/AppImage의 여섯 실행 파일과 포함된521개 일반 파일의 UTF-8/UTF-16LE 개인 경로·계정 값 검사는0건이었다. 별도25개 symlink는 모두 패키지 내부의 일반 파일을 가리켰다. 가짜 서버·모델·사용자 설정·Xauthority 파일은 없었고 세 GUI payload에 내장된 SDK helper 세 파일의 바이트도 확인했다.
+네 독립 archive와 실제 DEB/AppImage 추출물을 검사했다. Release/DEB/AppImage의 여섯 실행 파일과 배포물519개/추출 로그2개를 포함한521개 일반 파일의 UTF-8/UTF-16LE 개인 경로·계정 값 검사는0건이었다. 별도25개 symlink는 모두 패키지 내부의 일반 파일을 가리켰다. 가짜 서버·모델·사용자 설정·Xauthority 파일은 없었고 세 GUI payload에 내장된 SDK helper 세 파일의 바이트도 확인했다.
 
 고정 뒤 만든 합성 엔진 `jc5d5b66c`를 빈 HOME/XDG/AIOLM_HOME과 전용 D-Bus/Xvfb의 실제 GUI에서 등록·probe·help 수락했다. 정상 JSON을 저장한 뒤 같은100,001자를 일반 붙여넣기로 넣어 화면 유지·원문 전체 보존·연결된 입력 오류·두 Save 차단·전체 native 설정 파일 무변경을 확인했다. 정상 JSON으로 바꾸면 오류가 해제됐고 확인 창을 거쳐 저장한 `{"seed":18}`이 실제 소유 엔진 argv와 명시적 SYNTHETIC 응답에 그대로 남았다. Health HTTP200 뒤 일반 Chat Send를 실행했다. 일반 Unload/Close 후 별도 GUI로 재열어 JSON18·이력·자동 시작 없음과 native 설정 파일 동일성을 확인하고 다시 정상 Close했다. 합성 응답은 추론이 아니다.
 
@@ -419,3 +419,39 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 네 GUI 실행의 알려진23개 GUI/WebKit/엔진/driver/Xvfb 생성 식별과 일곱 포트의 IPv4/IPv6 폐쇄, 전용 clipboard 자식의 정상 종료를 확인했다. 기존 개인 엔진19/20·새21 native 파일과 Qwen 모델, 고정20 archive 네 개와 개인 엔진 원본 근거도 같았다. 원래 사용자878/1,560파일의 새 해시 검사나 물리 화면·IME·알림·다른 backend 재실행은 주장하지 않는다.
 
 초기 스크립트 구문/selector·닫힌 disclosure/가려진 입력·검증 중 Save 시도와 자동화 검색 문자열 불일치는 원본에 보존했다. 불일치 원인을 제품 결함으로 단정하지 않고 이후 값을 검증한 전용 clipboard 입력으로 여정을 이어갔다. 원래 스크립트 전체 exit1을 pass로 바꾸지 않으며 실제 확인한 단계별 결과로 판정한다. 원본은 `tmp/linux-acceptance/resume-20261027-review/`와 `tmp/linux-acceptance/personal-engine-source21/`다. `source21-final-guard.json`은48개 raw pin과 정리/보존을 연결하며 SHA-256은 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`다. `source21-commit-join.json`이893개 source blob을 제품 commit에 연결한다. 이 개선으로 원래 F09 실패나 다중 화면/조건부 updater 잔여를 통과로 바꾸지 않는다.
+
+
+## 고정22 Linux 창 복원과 다중 화면
+
+제품 `43830d37dd839029192feb2e2c5a47061442947a`는 Linux의 두 번째 실행/트레이 복원을 GTK 주 스레드의 `present_with_time` 요청으로 묶는다. 기존 show/unminimize/focus 분리 호출은 최소화 상태 갱신 전에 focus 요청을 버릴 수 있었다. 이미 잠긴 GTK0.18을 Linux 직접 의존성으로 명시했으며 새 dependency 버전·WebView 권한·설정/저장 schema는 추가하지 않는다. 다른 OS 경로는 기존 호출을 유지한다.
+
+실제 Wayland 세션의 XWayland production 고정21에서 두 물리 출력을 활성화하고 두 번째 화면의 창을 최소화한 뒤 같은 실행 파일을 다시 실행했다. 새 프로세스 exit0에도 기존 창은 최소화 상태에 남았다. 별도 빈 HOME/XDG/AIOLM_HOME·전용 DBus에서 기존 앱의 버스 소유 PID를 확인한 직접 callback도 같은 상태였다. 사용자 주 계정의 앱·설정·이력을 테스트 홈으로 복사하지 않았다.
+
+고정22는 OS의 verify 방식으로 주 화면의 mode/scale/위치를 보존한 두 번째 출력 구성을 먼저 검증하고, 독립 복구 관찰기를 준비한 뒤 temporary 방식으로만 적용했다. 실제 두 출력/배율2에서 창을 두 번째 화면으로 이동해 native current-monitor 위치와 viewport를 확인했다. 360×520의 가로 overflow 없음과 native 최대화 상태/큰 viewport, 최소화 확인 후 실제 두 번째 실행 exit0·같은 기존 PID/단일 창·최소화 해제/포커스 복원을 확인했다. 두 검사 실행 뒤 원래 활성1 구성과 저장된 monitor 설정 파일의 전체 해시가 같았고 persistent 방식은 사용하지 않았다. 이어 추출된 AppImage의 실제 AppRun/포함 GUI도 현재 주 화면에서 최소화→두 번째 실행→기존 창/포커스 복원→정상 Close를 통과했다. 이는 새 FUSE mount나 DEB 설치/업그레이드 검사가 아니다.
+
+원래 고정21 전체 스크립트 exit1은 남아 있다. 고정22의 첫 전체 스크립트도 최대화 복원 직후 최소화 관측에서 exit1이었으며, 실제 두 출력/작은 창/최대화 성공 단계와 화면 복구만 그 범위로 인정한다. 같은 생성 식별의 안정된900×700 창에서 별도로 이어서 최소화와 두 번째 실행의 복원을 통과했으며 첫 스크립트 전체를 exit0으로 바꾸지 않았다. 최초 verify 후 상태 바이트 비교 실패와 최종 guard의 상대 raw 경로 해석 오류도 보존하고, 별도 후속 실행에서 검증했다.
+
+전체 npm은221파일/2597검사·117.630초, typecheck8.527초, lint4.896초/기존 경고3개로 exit0이다. Rust fmt0.808초·Clippy13.822초와 `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`149.180초가 exit0이다. 첫 Rust 실행의 offline venv 실패는 시스템 Python3.14의 ensurepip/pip 부재를 별도 임시 venv로 재현했다. 기존 검증용 Python3.12를 PATH에 지정해 같은 테스트를 개별 확인하고 원래 전체 명령을 다시 통과시켰으며 검사 skip이나 제품 코드 변경으로 숨기지 않았다. 실제 Python interpreter/positional metadata opt-in 두 명령도 exit0이다. `npm run package:tauri`141.268초와 명시한 새 CLI의 smoke도 exit0이다.
+
+| 고정22 배포물 | SHA-256 |
+| --- | --- |
+| GUI | `4ec6a1cd1689ef427ddd5ae4dcf45f9b46c7582788eb0fdbc20b089f158e015d` |
+| CLI | `cf26adc9f52f7ee6161649b336fc1023f2b61630fe053dfd63b1b3d4690ed95d` |
+| DEB | `914467f6b69a72f39cf3c2fe62f46616a781eb5e4776891c1491392d6512ff8e` |
+| AppImage | `a0c2c7357fe6b43267f49f97caf41f3c198c1df7c4576024088bc9abe13f7cc0` |
+
+네 파일은 독립 사본이다. 실제 추출한 배포물519개 regular 파일의 UTF-8/UTF-16LE 개인 경로·계정 검사0건, unwanted fixture/model/config/Xauthority0건이며25개 symlink가 모두 패키지 내부 일반 파일을 가리킨다. 여섯 GUI/CLI payload 해시와 세 GUI에 포함된 SDK source 세 개를 확인했다. 고정21과 실제 배포 파일 목록은 같으며 고정21의521개 스캔에는 추출 로그2개가 포함됐다는 계수 범위를 명확히 했다.
+
+고정 뒤 생성한 `--pe55c684-threads`는 새 GUI/CLI와893개 source 입력에 없음을 먼저 확인했다. 실제 upstream `3f03b17724ad8b69040825f45c43c59b092a0244`의 동일12줄 CPU 옵션 보정과 원래 Qwen revision/hash로 만든 새 엔진이다. 서버 SHA-256은 `6d913e5fd69d91b84f95a15a3c22a11054369f3e1560b7469b9ff188a95582ce`다. 빈 전용 홈의 실제 GUI 등록/help261·Once only 확인·0 거부→3/32/T0 저장·native argv3/health200·답변5/usage33+2·내용 Stop/같은 PID Retry·Unload/새 PID/health·로드 상태 정상 Close를 통과했다. 별도 재열기도3/32/T0·네 메시지·help 일치/자동 시작 없음·native6파일 바이트 보존과 정상 Close를 확인했다. 같은 CLI의 A01–A09는3.870초/exit0이며 기존 CLI harness의 산술32/취소1024·temperature 미지정 범위는 GUI32/T0와 구분한다.
+
+생성 식별24개와7개 IPv4/IPv6 포트는 종료됐고 clipboard 자식13개는 모두 wait0이다. CLI 소유 PID3개도 없음을 확인했다. 이전 고정21 raw48핀/배포물과 고정19–22의 개인 native runtime 및 원래 Qwen 모델을 보존했다. 원래 사용자 자료878/1560개 전체를 이번에 새로 해시했다는 주장은 하지 않는다. 원본은 `tmp/linux-acceptance/linux-window-restore-source22/`, `two-display-preflight-v1/`, `two-display-source22/`, `appimage-window-source22/`에 있다. `source22-final-guard.json`은39개 raw pin을 연결하며 SHA-256은 `ec6f5d4595225afced9819c52922bd9fc1da2f3232267ba46ca3968bfeacaa65`다. `source22-commit-join.json`은893개 고정 source blob이 제품 commit과 같음을 확인한다. D04를pass로 갱신하되 F09·조건부 updater·선택 Windows 원본 대조는 남긴다.
+
+## F09 동일 native revision의 전처리 원인 대조
+
+별도 native 제어에서 원래 upstream 전체 revision `78a8ae14be559b45f5f13ddee82c188b683d5d8d`를 고정해 CPU before/after를 빌드했다. archive SHA-256은 `1b7430a305cff97c514dcef80c963bd362d877b8fef4450ba8ef7f116cc45cc6`이다. 원래 모델/projector/PNG·text-first 질문·system·요청 raw bytes(SHA-256 `9836647a9c7a7a0abdf1f6bfa64967e174e55f9f8c2f371206e105eec70d16d4`)와32/T0를 그대로 전송했다. 양쪽은 같은 CPU/context4096/thread4/GPU0 조건이며 원래 누락된 전체 argv를 복구한 실행으로 취급하지 않는다.
+
+직접 stderr 관측은 원래 호환 경로가560×340/image512/longest0에서 grid1×1의 tile1+overview1을 만드는 것을 확인했다. 응답은 `Two rectangles`/PP160·TG3였다. 기존 감사된 single-view 보정만 적용하면 grid0×0/tile0/overview1과 공식 standalone marker가 되고 `Rectangle and Circle`/PP93·TG5로 달라졌다. 최초 로그 방식의 관측 부재를 그대로 남긴 뒤 직접 stderr 방식의 별도 before/after에서도 같은 응답을 재현했다. 중복 view가 응답에 미치는 영향은 확인했지만 색/정사각형을 모두 답하지 않아 F09는fail이다.
+
+누락된 longest-edge에 고정 base processor의2048을 넣는 별도 진단 대조도 수행했다. 같은 raw 요청에서4×3/tile12+overview1·PP888/TG3과 응답 `1`로 실패해 해당 항목 하나의 복구만으로 해결된다는 가설을 반박했다. 이 값을 제품 기본값이나 배포 projector에 하드코딩하지 않았다. [고정 Transformers 구현](https://github.com/huggingface/transformers/blob/a22a4378d97d06b7a1d9abad6e0086d30fdea199/src/transformers/models/idefics3/modeling_idefics3.py)의 pixel shuffle과 실제 같은 native GGML 함수도 합성32×32×768/scale4의786,432개 원소를 대조해 차이0이었다. 이는 특징 배열 가설의 제한된 대조이며 실제 이미지 tensor 전체나 내용 정확도 통과를 뜻하지 않는다.
+
+서로 다른 실제 추론은2+2+1의5회이며 모두 own PID/birth·listener·health/model ID를 확인한 뒤 요청하고 wait0/생성 식별 종료/포트 폐쇄와 입력·모델 해시 보존을 확인했다. 최초 Torch import의 사설 ROCm/MPI 환경 누락은 보존하고 기존 검증용 라이브러리 환경에서 배열 대조를 수행했으며 시스템 설치나 GPU 추론으로 세지 않는다. 원본은 `tmp/linux-acceptance/f09-singleview-control-v1/`이며 앱 전송 결함이나 내용 품질 수정으로 과장하지 않는다.

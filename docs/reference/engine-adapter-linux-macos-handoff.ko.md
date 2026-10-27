@@ -305,3 +305,10 @@ Windows W02/W03/W06/W08·G04–G07과 Mac M01/M02/M04·MAC-R06/MAC-R11에서 두
 Linux 제품 `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`는 파싱되지만 현재 JavaScript 엔진이 직렬화할 수 없는 JSON이 편집 상태에 들어가 화면 전체를 오류로 바꾸는 문제를 수정한다. 고정 중첩 한도를 추가하지 않고 기존 입력 오류·초안·이전 값과 정상 입력 복구를 유지한다. [고정21 실제 결과](linux-device-validation-results.ko.md#고정21-깊은-json-입력의-오류-화면-방지)는 같은100,001자 붙여넣기·새 합성 argv/응답·재열기와 새 개인 CPU GUI/CLI의 정확한 범위를 기록한다.
 
 위 Windows/Mac 재실행 연결에 두 제어형 폼의 직렬화 불가 JSON 붙여넣기→화면/초안/저장값 보존·오류 연결/Save 차단→정상 JSON 저장/실행/재열기를 추가한다. 엔진별 직렬화 한도가 같다고 가정하지 말고 기존 문법/숫자 검증도 유지한다. Linux의2597개 npm 검사와 실제 WebKitGTK 결과를 해당 OS의 실제 pass로 옮기지 않는다.
+
+
+### 2026-10-27 Linux 창 복원과 실제 두 출력
+
+Linux 제품 `43830d37dd839029192feb2e2c5a47061442947a`는 두 번째 실행/트레이의 기존 창 복원을 GTK 주 스레드의 표시 요청으로 묶는다. Linux 직접 GTK 의존성은 이미 잠긴 버전을 사용하며 Windows/Mac 분기의 기존 show/unminimize/focus 호출은 유지한다. [고정22 결과](linux-device-validation-results.ko.md#고정22-linux-창-복원과-다중-화면)는 실제 두 물리 출력·창 이동/배율2·작은 창/최대화·최소화 후 두 번째 실행의 같은 창/포커스 복원·원래 화면 설정 복구와 AppRun 실행을 기록한다. D04는pass로 바뀌었고 전체67/1/4/1/1은 미완료다.
+
+Windows/Mac은 해당 OS의 기존 트레이 숨김/최소화/두 번째 실행·다중 화면·정상 Quit/데이터 보존 절차를 계속 따른다. 이번 Linux native 분기 수정의 결과를 다른 OS pass로 옮기지 않는다. F09의 별도 native78 before/after는 같은 원래 모델·raw 요청·32/T0에서 중복 view의 영향을 확인했으나 색/도형 실패를 해결하지 못했다. longest2048 대조의 실패와 합성 square pixel-shuffle 차이0도 각각의 범위로 보존하며 원래 다른 OS 입력/지침의 성공과 합치지 않는다.
