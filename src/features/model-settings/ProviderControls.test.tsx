@@ -790,6 +790,32 @@ describe('registered engine options from accepted help (G04)', () => {
 });
 
 describe('catalog command import before runtime selection', () => {
+  it('keeps an unserializable JSON draft recoverable without changing the catalog settings', async () => {
+    const option: api.ProviderOption = { key: 'payload', flag: '--payload', target: 'launch', group: 'runtime', kind: { type: 'json' } };
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    let changes = 0;
+    function Editor() {
+      const [cfg, setCfg] = useState<api.AppConfig>({ ...testConfig, active_provider: 'vllm', active_runtime: '', provider_options: { vllm: { payload: { seed: 17 } } } });
+      return <ProviderOptions cfg={cfg} disabled={false} onInvalid={vi.fn()} onChange={next => {
+        changes++;
+        setCfg(current => ({ ...current, ...next }));
+      }} />;
+    }
+    render(<I18nProvider initialLocale="en"><Editor /></I18nProvider>);
+    const field = await screen.findByLabelText(/^--payload/);
+    const draft = '['.repeat(50000) + '0' + ']'.repeat(50000);
+    expect(() => fireEvent.change(field, { target: { value: draft } })).not.toThrow();
+    expect(field).toHaveValue(draft);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toBeVisible();
+    expect(changes).toBe(0);
+    fireEvent.change(field, { target: { value: '{"seed":18}' } });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(changes).toBe(1);
+  });
+
   it('keeps JSON drafts and rejects rounded catalog imports without replacing model or saved values', async () => {
     const option: api.ProviderOption = { key: 'payload', flag: '--payload', target: 'launch', group: 'runtime', kind: { type: 'json' } };
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);

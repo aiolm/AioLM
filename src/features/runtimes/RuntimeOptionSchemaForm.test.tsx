@@ -222,6 +222,29 @@ describe('generic runtime option renderer', () => {
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const, source: { kind: 'adapter', id: 't', revision: 'r' } });
 
 describe('JSON option numeric limits', () => {
+  it('keeps deeply nested JSON that cannot be serialized as an invalid draft instead of breaking the editor', () => {
+    const current = schema([textOption('payload', { kind: known('json') })]);
+    const draft = '['.repeat(50000) + '0' + ']'.repeat(50000);
+    let changes = 0;
+    function Editor() {
+      const [values, setValues] = useState<Record<string, unknown>>({ payload: { seed: 17 } });
+      return <RuntimeOptionSchemaForm schema={current} values={values} scope={[]} onChange={next => {
+        changes++;
+        setValues(next);
+      }} />;
+    }
+    render(<I18nProvider initialLocale="en"><Editor /></I18nProvider>);
+    const field = screen.getByLabelText(/^--payload/);
+    expect(() => fireEvent.change(field, { target: { value: draft } })).not.toThrow();
+    expect(field).toHaveValue(draft);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(expect.stringContaining(runtimeOptionsCopy.en.invalid));
+    expect(changes).toBe(0);
+    fireEvent.change(field, { target: { value: '{"seed":18}' } });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(changes).toBe(1);
+  });
+
   it('renders saved JSON strings with quotes so their type survives an edit', () => {
     render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([textOption('payload', { kind: known('json') })])}
       values={{ payload: '9007199254740993' }} scope={[]} onChange={vi.fn()} /></I18nProvider>);

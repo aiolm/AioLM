@@ -21,5 +21,8 @@ export function assertJsonOptionNumbers(value: unknown): void {
 export function parseJsonOption(text: string): unknown {
   const value: unknown = JSON.parse(text);
   assertJsonOptionNumbers(value);
+  // Parsing can accept more nesting than the editor or native IPC can encode.
+  // Reject it before committing a value that would throw during rendering.
+  JSON.stringify(value);
   return value;
 }
