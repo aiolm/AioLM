@@ -1,2 +1,2 @@
-# This byte-exact help fixture includes the engine's final blank line.
-src-tauri/tests/runtime_binding_arity_help.txt whitespace=-blank-at-eof
+# Keep the emitted LF help bytes, including the final blank line, on every platform.
+src-tauri/tests/runtime_binding_arity_help.txt text eol=lf whitespace=-blank-at-eof
