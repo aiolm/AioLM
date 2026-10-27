@@ -7,14 +7,14 @@
 - 원격: `https://github.com/aiolm/AioLM.git`
 - 작업 브랜치: `codex/linux-runtime-adapter-validation`
 - 고정19 엔진 여정 결과 문서 commit: `5c414854904e78fc7a7b69d06f20e554eff5ed48` (이 인계 문서 commit의 조상)
-- 최신 제품 코드 commit: `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`
+- 최신 제품 코드 commit: `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`
 - 원래 수신 commit: `3e2c67d4d6dd2742ee8f9997797d31f244f234de`
 - 필수 원래 인계 조상: `df3264bad99deb0144b947f96300e8625f7a2da5`
 
 먼저 현재 Git 상태/이력과 `AGENTS.md`, 존재한다면 `tmp/AGENTS.local.md`를 읽는다. 이어서 다음을 읽는다.
 
 1. [Linux 실행 계약 전체](linux-device-handoff.ko.md)
-2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 고정20의 JSON·개인 엔진 회귀 절
+2. [74개 판정과 실제 결과 전체](linux-device-validation-results.ko.md), 특히 고정21의 JSON 오류 화면 방지·실제 엔진 회귀 절
 3. [Windows/Mac 후속 인계](engine-adapter-linux-macos-handoff.ko.md)
 4. `runtime-adapter-handoff.ko.md`, `pluggable-inference-runtimes.ko.md`, `inference-runtimes.md`, `provider-native-acceptance.md`, `cross-platform-validation.md`, `efficiency-review.ko.md`
 5. `docs/guides/development.ko.md`, `docs/guides/install.ko.md`, `package.json`, `src-tauri/Cargo.toml`
@@ -25,7 +25,9 @@
 
 전체74개는 **66 pass / 1 fail / 5 unrun / 1 unsupported / 1 blocked**다. 통과 항목도 각 source·입력·기기·조건의 근거 범위를 유지한다. 과거 Windows/Mac이나 다른 고정점의 결과를 현재 Linux 전체 실행으로 확대하지 않는다.
 
-최신 고정20은 JSON 옵션의 숫자 손실·문자열 표시 수정이다. 전체 npm(Vitest221파일/2595검사)·최종 typecheck/lint·DEB/AppImage 빌드·새 release CLI smoke와 실제 GUI 등록/help·JSON 거부/저장·정상 Close/별도 재열기·native 가져오기·실제 합성 argv/응답·정리를 확인했다. [고정20의 정확한 범위와 배포 해시](linux-device-validation-results.ko.md#고정20-json-옵션-숫자-경계와-타입-보존)를 먼저 읽는다. 원래 build의 HEAD+수정 입력 기록은 유지했고893개 source 해시로 제품 commit과 연결했다.
+최신 고정21은 깊은 JSON 붙여넣기로 앱 전체가 오류 화면으로 바뀌는 문제의 수정이다. 실제 고정20 실패와 두 제어형 폼의 예외를 재현했다. 숫자 검사 뒤 현재 엔진의 직렬화 가능 여부를 확인하고 사용할 수 없는 초안을 기존 입력 오류 경로에 남긴다. 전체 npm221파일/2597검사·최종 관련100검사/typecheck/lint·DEB/AppImage 빌드·고정 CLI smoke를 통과했다. 중간 테스트 타입 이름 수정 전후 생성 JS가 같은 근거도 보존했다. [고정21의 실제 결과와 배포 해시](linux-device-validation-results.ko.md#고정21-깊은-json-입력의-오류-화면-방지)를 먼저 읽는다. 실제 새 GUI의 같은100,001자 붙여넣기에서 화면·초안·native 설정 보존/Save 차단과 정상 JSON18 복구·저장·argv/합성 응답·정상 Close/별도 재열기를 확인했다. 고정 뒤 만든 새 개인 CPU 옵션의 실제 GUI 추론·내용 Stop/같은 PID Retry·새 PID 재시작/health·로드 상태 Close·별도 재열기의3/32/T0·이력/자동 시작 없음과 CLI A01–A09도 끝냈다. 알려진23개 생성 식별과7개 포트는 종료됐고 원본 receipt를 유지한893개 source blob이 제품 commit과 같다.
+
+고정20의 JSON 숫자 손실·문자열 표시 수정도 원래 범위로 유지한다. 전체 npm(Vitest221파일/2595검사)·최종 typecheck/lint·DEB/AppImage 빌드·새 release CLI smoke와 실제 GUI 등록/help·JSON 거부/저장·정상 Close/별도 재열기·native 가져오기·실제 합성 argv/응답·정리를 확인했다. [고정20의 정확한 범위와 배포 해시](linux-device-validation-results.ko.md#고정20-json-옵션-숫자-경계와-타입-보존)를 따른다.
 
 같은 고정20 뒤 만든 [새 개인 CPU 엔진의 실제 GUI·CLI](linux-device-validation-results.ko.md#고정20-새-개인-cpu-엔진의-실제-gui와-cli)도 추가 확인했다. 일반 등록/help261·새 옵션3 저장·실제 argv/health·답변5/usage33+2·내용 Stop/같은 PID Retry·새 PID 시작·로드 상태 정상 Close·별도 재열기의3/32/T0·네 메시지 이력/자동 시작 없음·최종 Close를 확인했다. 같은 CLI의 A01–A09도3.830초/exit0이다. GUI의32/T0와 기존 CLI harness의 산술32/취소1024·temperature 미지정은 구분한다. 최종12birth/네 포트 종료·전체 전용 설정 보존·제품/기존 개인 엔진 바이트 일치를 확인했고 모든 새 실행은 종료됐다. 이 범위로 고정19의 다른 backend·설치·IME·알림을 재실행했다고 하지 않는다.
 
@@ -42,11 +44,11 @@
 | ID | 상태 | 정확한 남은 범위/재개 조건 |
 | --- | --- | --- |
 | L02-F09 | fail | 원래 Smol 내용 정확도가 native 직접 대조에서도 실패했다. 원래 입력·모델/projector·32/T0를 유지한다. 템플릿은 고정 HF base와 같고 런타임도 SmolVLM으로 구분한다. 오래된 projector의 전처리 크기 항목 누락은 native 호환 경로 가설이며 실제 원래 branch/렌더링 관측이 필요하다. 모델·입력·한도 변경이나 앱 전용 분기로 통과시키지 않는다. |
-| L03-D04 | unrun | 실제 다중 활성 화면 간 이동 검증. 최신 UTC2026-10-26T15:23:21 조회도 물리2개/활성 logical·output1개/scale2였다. 이전에는 사용자가 두 번째 출력 활성화 불가를 확인했고 재개 후 가능 여부를 다시 물었으나 새 답변은 아직 없다. 기존 최소화·두 번째 실행·작은 창·DPR2 근거는 유지한다. 실제 두 출력 활성화와 관련 사용자 조작을 확인해야 하며 설정 변경 권한을 추정하지 않는다. |
+| L03-D04 | unrun | 실제 다중 활성 화면 간 이동 검증. 최신 UTC2026-10-26T23:34:51 조회도 물리2개/활성 logical·output1개/scale2였다. 이전에는 사용자가 두 번째 출력 활성화 불가를 확인했고 재개 후 가능 여부를 다시 물었으나 새 답변은 아직 없다. 기존 최소화·두 번째 실행·작은 창·DPR2 근거는 유지한다. 실제 두 출력 활성화와 관련 사용자 조작을 확인해야 하며 설정 변경 권한을 추정하지 않는다. |
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
 | L03-U03 | unrun | 실제 설치 가능/불가 classifier·진행·installer·release 이동. 기존 Check 오류/버튼 회복·동률 재열기는 부분 검증이다. |
-| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 최신 공식 latest 조회(UTC2026-10-26T15:16:55Z)는 v0.3.1로 현재와 같았다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
+| L03-U04 | blocked | 실제 더 새 공개 release로 통제된 계정/VM에서 업데이트. 최신 공식 latest 조회(UTC2026-10-26T23:34:51Z)는 v0.3.1로 현재와 같았다. 재개 시 공식 release를 다시 확인한다. 버전 조작이나 가짜 release로 대체하지 않는다. |
 | L02-N09 | unrun/선택 | 원래 Windows 품질 입력/산출물이 없어 동등 대조 불가. 다른 Linux 입력으로 대신하지 않는다. |
 | L02-N08 | unsupported | 관리형 MLX/vllm-metal의 macOS/Apple Silicon 계약에 따른 Linux 미지원. 실제 Linux 선택/관리 안내와 저장값 보존은 확인했다. 하드웨어가 없다는 이유의 임의 unsupported 판정이 아니다. |
 
@@ -58,6 +60,7 @@
 
 `tmp/`와 빌드·모델·개인 사용자 자료는 Git에 올리지 않는다. 다음은 저장소 루트 기준 로컬 경로다.
 
+- `tmp/linux-acceptance/resume-20261027-review/`: 고정21의 실제/렌더된 입력 실패·최소 수정 검사·freeze·패키지/25개 내부 symlink 검사·합성/개인 GUI 네 실행·재열기·정리 근거. `baseline-causal-reproduction.json`, `source21-final-guard.json`(SHA-256 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`), `source21-commit-join.json`을 함께 읽는다. 원래 자동화 오류/exit1·타입 검사 오류와 보정 전 receipt도 그대로 있다. 새 개인 엔진 build/manifest/provenance는 `tmp/linux-acceptance/personal-engine-source21/`이다.
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
 - `tmp/linux-acceptance/personal-engine-source20/`: 고정20 뒤 생성한 개인 CPU 옵션·독립 upstream checkout/패치·native build·manifest/provenance. 실제 GUI 두 실행과 CLI 결과는 위 재개 폴더의 `gui-personal20/`, `gui-personal20-reopen/`, `personal20-cli/`에 있으며 `personal20-final-guard.json`(SHA-256 `133eb099a65bcb798a4be22255995a89e5e14e5d15909bc3cf68feda2afcd614`)이 실제 파일/보존/정리 근거를 연결한다.
 - `tmp/linux-acceptance/progress.md`: 누적 실행 기록. 마지막 checkpoint-v2는 종료 전 상태이므로 최신 기록/아래 final guard를 우선한다.

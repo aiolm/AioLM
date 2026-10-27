@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 제품 수정은 `5602e96ce14be5846eae5be2b4e0ed4cff8d888e`의 [고정20 JSON 옵션 숫자 경계와 타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존)이다. 전체 npm 검사와 새 production 빌드·실제 WebKitGTK JSON 입력/가져오기·native 저장·별도 재열기·합성 엔진 argv/응답·정상 Close를 확인했다. 이후 같은 고정 빌드에서 [새 개인 CPU 엔진의 실제 GUI·CLI 회귀](#고정20-새-개인-cpu-엔진의-실제-gui와-cli)도 확인했다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked로 유지한다. 각 행의 원래 source·입력·기기 근거를 새 제품의 전체 재실행으로 확대하지 않으며 검증 전체는 미완료다.
+최신 제품 수정은 `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`의 [고정21 깊은 JSON 입력의 오류 화면 방지](#고정21-깊은-json-입력의-오류-화면-방지)다. 실제 production 화면의 실패를 재현하고 최소 수정 뒤 자동 검사·새 패키지·같은 붙여넣기의 초안/설정 보존·정상 복구와 저장/argv/응답·재열기를 확인했다. 새 개인 CPU 엔진의 실제 GUI·CLI 여정도 같은 고정 빌드에서 통과했다. [고정20의 숫자/타입 보존](#고정20-json-옵션-숫자-경계와-타입-보존) 등 과거 검증은 각 source 범위로 유지한다. 기존74개 집계는66 pass/1 fail/5 unrun/1 unsupported/1 blocked이며 전체 검증은 미완료다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -393,3 +393,29 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 잘못된 selector·저장 전 모델 변경 확인 창·가려진 모델 버튼의 초기 조작 오류는 원본에 보존했다. 초기 자식 조회는 main thread만 읽었으므로 엔진 부재 근거가 아니며, 실제 argv 검사는 소유 앱의 모든 thread 자식으로 보정했다. 최종 검사는 새 네 배포물·893개 source 입력과 기존 개인 엔진 자료가 같음을 확인했다. 실제 사용자 자료를 복사하지 않았고 원본878/1,560파일을 새로 해시 대조한 결과로 확대하지 않는다. 물리 다중 화면·IME·알림·다른 backend는 이 private GUI 회귀의 범위가 아니다.
 
 원본은 `tmp/linux-acceptance/personal-engine-source20/`와 `tmp/linux-acceptance/resume-20261026T151655Z/`의 `gui-personal20/`, `gui-personal20-reopen/`, `personal20-cli/`에 있다. 최종 연결/보존 근거 `personal20-final-guard.json`의 SHA-256은 `133eb099a65bcb798a4be22255995a89e5e14e5d15909bc3cf68feda2afcd614`다. 제품 코드는 그대로이며 기존74개 상태와 외부 조건이 필요한 잔여 범위를 유지한다.
+
+
+## 고정21 깊은 JSON 입력의 오류 화면 방지
+
+제품 commit은 `d4b4550ca765ba18dad40244b07b415e7b4d1bfe`다. 고정20의 production WebKitGTK에서 배열50,000단계/100,001자 JSON을 전용 Xvfb의 GTK clipboard와 일반 Ctrl+V로 붙여넣자 입력칸이 사라지고 “Could not display AioLM” 오류 화면이 나타났다. 해당 JSON은 실제 엔진에서 파싱되지만 직렬화 시 `RangeError`가 났다. 두 제어형 옵션 폼의 검사도 같은 입력으로 실패했다. 프로세스 자체의 비정상 종료나 저장 설정 손상으로 확대하지 않으며, 원래 앱은 정상 Close했고 설정 파일은 그대로였다.
+
+공통 파서가 숫자 검사 뒤 현재 JavaScript 엔진에서 값을 다시 직렬화할 수 있는지 확인하고 나서 편집 상태에 전달하도록 수정했다. 거부된 초안은 기존 입력 오류와 ARIA 설명에 남으며 정상 입력으로 바로 복구한다. 고정 중첩 한도·새 의존성·엔진 분기·API/저장 schema는 추가하지 않았고 native 검증은 유지한다. 추가 직렬화 한 번은 정확성 검사 비용이며 성능 개선으로 표현하지 않는다.
+
+전체 `npm test`는110.411초/exit0, Vitest221파일/2,597검사였다. 이후 새 테스트의 타입 이름 오류를 바로잡았고 수정 전후 생성 JavaScript가 같음을 확인했다. 최종 관련100검사·typecheck8.222초·lint4.197초·`npm run package:tauri`144.686초와 새 고정 CLI smoke도 통과했다. 기존 lint 경고3개는 남는다. Rust source는 같으며 이전 고정19의 전체 Rust 검사를 이번에 다시 실행한 것으로 표시하지 않는다. 원래 build의98db9c3+수정 기록을 유지하고893개 source blob을 최종 제품 commit과 직접 대조했다. 원래 freeze receipt를 바꾸지 않았다.
+
+| 고정21 배포물 | SHA-256 |
+| --- | --- |
+| GUI | `198374f909450f3ea6cbc8ed9f54aedbd0eff3888fc6792a8f9e4fdfdf662d2c` |
+| CLI | `5674a02583eff52e1b2adab420d3d91ad30e06ea7c511390a8cf70cf3d5646d2` |
+| DEB | `a33483baa97b0348d895f31115461000e56cc91b0965f37b6c14a2f02544341c` |
+| AppImage | `0c52e78590e2748cd61ac97ca8afd17c2cea561a47070baf4433ab99f58e048a` |
+
+네 독립 archive와 실제 DEB/AppImage 추출물을 검사했다. Release/DEB/AppImage의 여섯 실행 파일과 포함된521개 일반 파일의 UTF-8/UTF-16LE 개인 경로·계정 값 검사는0건이었다. 별도25개 symlink는 모두 패키지 내부의 일반 파일을 가리켰다. 가짜 서버·모델·사용자 설정·Xauthority 파일은 없었고 세 GUI payload에 내장된 SDK helper 세 파일의 바이트도 확인했다.
+
+고정 뒤 만든 합성 엔진 `jc5d5b66c`를 빈 HOME/XDG/AIOLM_HOME과 전용 D-Bus/Xvfb의 실제 GUI에서 등록·probe·help 수락했다. 정상 JSON을 저장한 뒤 같은100,001자를 일반 붙여넣기로 넣어 화면 유지·원문 전체 보존·연결된 입력 오류·두 Save 차단·전체 native 설정 파일 무변경을 확인했다. 정상 JSON으로 바꾸면 오류가 해제됐고 확인 창을 거쳐 저장한 `{"seed":18}`이 실제 소유 엔진 argv와 명시적 SYNTHETIC 응답에 그대로 남았다. Health HTTP200 뒤 일반 Chat Send를 실행했다. 일반 Unload/Close 후 별도 GUI로 재열어 JSON18·이력·자동 시작 없음과 native 설정 파일 동일성을 확인하고 다시 정상 Close했다. 합성 응답은 추론이 아니다.
+
+같은 고정 뒤 만든 개인 CPU 옵션 `--pe180293-threads`도 앱 재빌드 없이 실제 GUI에서 help261개·문서화1–32·0 거부/3 복구·프로필 저장·argv3·health200·답변5/표시 usage33+2를 확인했다. GUI의32/T0는 유지했다. 실제 내용이 나온 뒤 Stop/부분 응답 보존·같은 native PID/생성 시각의 Retry·Unload 후 새 PID/health200·로드 상태 정상 Close를 확인했다. 별도 재열기에서 옵션3·32/T0·네 메시지 이력·자동 시작 없음·도움말 일치와 설정 파일 동일성을 확인하고 최종 Close했다. 새 서버 SHA-256은 `f0af00d946f665f6bab8c186f84c5ca860a09746e4dd3dec20c43d76043862ba`이며 upstream과 Qwen revision/모델 바이트는 고정20 개인 엔진과 같다. CLI A01–A09도3.811초/exit0이었다. 기존 CLI의 산술32·취소1024·temperature 미지정 조건은 GUI32/T0와 구분한다. Retry의32-token 부분 나열을 전체 내용 품질 pass로 세지 않는다.
+
+네 GUI 실행의 알려진23개 GUI/WebKit/엔진/driver/Xvfb 생성 식별과 일곱 포트의 IPv4/IPv6 폐쇄, 전용 clipboard 자식의 정상 종료를 확인했다. 기존 개인 엔진19/20·새21 native 파일과 Qwen 모델, 고정20 archive 네 개와 개인 엔진 원본 근거도 같았다. 원래 사용자878/1,560파일의 새 해시 검사나 물리 화면·IME·알림·다른 backend 재실행은 주장하지 않는다.
+
+초기 스크립트 구문/selector·닫힌 disclosure/가려진 입력·검증 중 Save 시도와 자동화 검색 문자열 불일치는 원본에 보존했다. 불일치 원인을 제품 결함으로 단정하지 않고 이후 값을 검증한 전용 clipboard 입력으로 여정을 이어갔다. 원래 스크립트 전체 exit1을 pass로 바꾸지 않으며 실제 확인한 단계별 결과로 판정한다. 원본은 `tmp/linux-acceptance/resume-20261027-review/`와 `tmp/linux-acceptance/personal-engine-source21/`다. `source21-final-guard.json`은48개 raw pin과 정리/보존을 연결하며 SHA-256은 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`다. `source21-commit-join.json`이893개 source blob을 제품 commit에 연결한다. 이 개선으로 원래 F09 실패나 다중 화면/조건부 updater 잔여를 통과로 바꾸지 않는다.
