@@ -7,7 +7,7 @@
 - 원격: `https://github.com/aiolm/AioLM.git`
 - 작업 브랜치: `codex/linux-runtime-adapter-validation`
 - 고정19 엔진 여정 결과 문서 commit: `5c414854904e78fc7a7b69d06f20e554eff5ed48` (이 인계 문서 commit의 조상)
-- 최신 제품 코드 commit: `43830d37dd839029192feb2e2c5a47061442947a`
+- 최신 데스크톱 제품 코드 commit: `43830d37dd839029192feb2e2c5a47061442947a`
 - 원래 수신 commit: `3e2c67d4d6dd2742ee8f9997797d31f244f234de`
 - 필수 원래 인계 조상: `df3264bad99deb0144b947f96300e8625f7a2da5`
 
@@ -40,6 +40,8 @@
 새 엔진 여정 종료 뒤 UTC2026-10-26T00:06:25Z 검사에서 양성 식별9birth·네 포트 종료, 원래 driver의 빈 ready 상태, source34/DB·현재 native18파일·프로필/이력·네 UI 값 보존을 확인했다. 사용자878/1,560개 파일의 hash-only 대조는 변경·누락·오류0이었다. 기존 IBus/접근성/desktop 설정도 같았고 archive8/payload6/SDK3 바이트를 다시 확인했다. 새 접두사 부재 검사는 문서에 해당 이름을 공개하기 전에 끝냈다. 현재 문서에 이름이 있으므로 이 사전 공개 전용 검사를 그대로 재실행해서는 안 된다.
 
 추가로 [고정19 실제 OS 알림 표시](linux-device-validation-results.ko.md#고정19-실제-os-알림-표시)에서 단일 Send의279개 양성 표시 표본과 제목·본문을 보았다는 사용자 확인, 정상 종료·자료 보존까지 확인해 D05를pass로 갱신했다. 최종 보존 근거는 `tmp/linux-acceptance/source19-manual-notification-final-guard/run/result.json`(SHA-256 `70a165eea787da34eb1d17350cc72ca1626d3982999ceadf8b3ba38e3decc6b1`)이며, 과거 ID45/48의 미표시 표본은 유지한다. 최신 원본 사용자 자료 guard는 이 추가 실행의 종료 뒤 결과를 우선한다.
+
+추가로 [b11868 single-view 소스 준비 도구](linux-device-validation-results.ko.md#b11868-single-view-소스-준비-도구)는 감사한 전체 revision을 명시하는 `--revision`을 지원한다. 기본 b11460·해시/출력 경계·audit schema는 유지한다. Python17검사와 실제 원본 준비/CPU 빌드·같은 raw 요청의 응답/usage·정리를 확인했다. 이 개발 도구 후속은 데스크톱 고정22를 재빌드하거나 F09의 내용 실패를 통과로 바꾼 결과가 아니다. 원본은 `tmp/linux-acceptance/native-singleview-source23/`에 있다.
 
 ## 남은 항목과 다음 실행
 

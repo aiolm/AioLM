@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 제품 수정은 `43830d37dd839029192feb2e2c5a47061442947a`의 [고정22 Linux 창 복원과 다중 화면](#고정22-linux-창-복원과-다중-화면)이다. 실제 두 물리 출력에서 재현한 두 번째 실행의 최소화 창 복원 실패를 수정하고 새 패키지·실제 재검증·원래 화면 설정 복구를 확인했다. [고정21 JSON 초안 보호](#고정21-깊은-json-입력의-오류-화면-방지) 등 과거 결과는 각 source 범위로 유지한다. 기존74개 집계는67 pass/1 fail/4 unrun/1 unsupported/1 blocked이며 전체 검증은 미완료다.
+최신 데스크톱 제품 수정은 `43830d37dd839029192feb2e2c5a47061442947a`의 [고정22 Linux 창 복원과 다중 화면](#고정22-linux-창-복원과-다중-화면)이다. 실제 두 물리 출력에서 재현한 두 번째 실행의 최소화 창 복원 실패를 수정하고 새 패키지·실제 재검증·원래 화면 설정 복구를 확인했다. [고정21 JSON 초안 보호](#고정21-깊은-json-입력의-오류-화면-방지) 등 과거 결과는 각 source 범위로 유지한다. 기존74개 집계는67 pass/1 fail/4 unrun/1 unsupported/1 blocked이며 전체 검증은 미완료다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -455,3 +455,21 @@ Native 가져오기에서 정수 리터럴은 기존 Rust 경계에 따라 원�
 누락된 longest-edge에 고정 base processor의2048을 넣는 별도 진단 대조도 수행했다. 같은 raw 요청에서4×3/tile12+overview1·PP888/TG3과 응답 `1`로 실패해 해당 항목 하나의 복구만으로 해결된다는 가설을 반박했다. 이 값을 제품 기본값이나 배포 projector에 하드코딩하지 않았다. [고정 Transformers 구현](https://github.com/huggingface/transformers/blob/a22a4378d97d06b7a1d9abad6e0086d30fdea199/src/transformers/models/idefics3/modeling_idefics3.py)의 pixel shuffle과 실제 같은 native GGML 함수도 합성32×32×768/scale4의786,432개 원소를 대조해 차이0이었다. 이는 특징 배열 가설의 제한된 대조이며 실제 이미지 tensor 전체나 내용 정확도 통과를 뜻하지 않는다.
 
 서로 다른 실제 추론은2+2+1의5회이며 모두 own PID/birth·listener·health/model ID를 확인한 뒤 요청하고 wait0/생성 식별 종료/포트 폐쇄와 입력·모델 해시 보존을 확인했다. 최초 Torch import의 사설 ROCm/MPI 환경 누락은 보존하고 기존 검증용 라이브러리 환경에서 배열 대조를 수행했으며 시스템 설치나 GPU 추론으로 세지 않는다. 원본은 `tmp/linux-acceptance/f09-singleview-control-v1/`이며 앱 전송 결함이나 내용 품질 수정으로 과장하지 않는다.
+
+
+## b11868 single-view 소스 준비 도구
+
+기존 `scripts/provider-compatibility/prepare_llama_source.py`의 Idefics3 보정을 실제 실패 런타임인 b11868/revision `78a8ae14be559b45f5f13ddee82c188b683d5d8d`에서도 명시적으로 선택할 수 있게 했다. 기본 b11460/revision `78651c410dd8d97e3e22e533e0e7117889e3863a`와 audit schema1은 유지한다. 각 전체 revision의 archive 및 두 원본 소스 해시를 고정하고 감사하지 않은 revision·변조 archive·기존 출력 재사용을 거부한다. 내려받기·설치·현재 runtime 선택은 수행하지 않는다.
+
+Python3.12에서 원본 archive를 별도로 받은 뒤 새 출력 경로를 지정한다. b11868의 archive SHA-256은 위 native 대조와 같은 `1b7430a305cff97c514dcef80c963bd362d877b8fef4450ba8ef7f116cc45cc6`이다.
+
+```sh
+python3 -B scripts/provider-compatibility/prepare_llama_source.py \
+  --archive /path/to/llama.cpp-78a8ae14be559b45f5f13ddee82c188b683d5d8d.tar.gz \
+  --output-directory /path/to/new-source-output \
+  --revision 78a8ae14be559b45f5f13ddee82c188b683d5d8d
+```
+
+실제 원본3904개 regular 파일을 대조해 두 C++ 파일만 바뀌고 LICENSE·나머지 파일·archive가 같은 것을 확인했다. 추가 파일은 상대 파일 이름과 수정 전후 해시를 담은 `aiolm-source-compatibility.json` 하나다. Python 호환성 전체17검사는 두 revision의 거부/보존·기본값 호환·기존 출력 거부를 포함해 exit0이다. 같은 도구가 실제 준비한 소스로 Linux CPU 서버를 새로 빌드했다. GNU15.2/static CPU/ngl0·local marker `78a8ae14b-aiolm.single1`이며 서버 SHA-256은 `21c96b92c2f8fca092b059471b2f49cc22d5dc43cd42a02b6f47099a7d520b6f`다.
+
+그 실행 파일에 원래 raw 요청·weights/projector/PNG·32/T0를 그대로 보낸 추가1회는 HTTP200·`Rectangle and Circle`/PP93·TG5로 앞의 single-view 제어와 같았다. 준비/빌드와 직접 native 응답·usage·소유 listener/health/model ID·정상 wait0/포트 폐쇄·입력/모델 해시는 확인했으나 색/정사각형은 여전히 누락해 F09는fail이다. 앞 절의5회와 이번 추가1회를 구분한다. 보정을 현재 GUI의 runtime으로 자동 설치하거나 내용 정답을 보정하지 않았다. 다른 OS·GPU·portable bundle·새 GUI 여정 통과를 주장하지 않는다. 데스크톱 Rust/프런트엔드 코드와 고정22 배포물은 그대로이며 이번 개발 도구 변경 때문에 전체 자동 검사·패키징을 새로 실행했다고 표현하지 않는다. 원본은 `tmp/linux-acceptance/native-singleview-source23/`에 있다.

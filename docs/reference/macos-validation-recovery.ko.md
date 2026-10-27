@@ -91,9 +91,9 @@ media13은 앞의 `encoded-left`와 함께 `--gemma3n-audio-dither`를 선택할
 
 ## llama.cpp의 Idefics3 단일 이미지
 
-`prepare_llama_source.py`는 Python3.12에서 명시한 원본 archive를 읽고 새 디렉터리에만 소스를 준비한다. 대상은 llama.cpp b11460의 전체 commit `78651c410dd8d97e3e22e533e0e7117889e3863a`다. [고정 소스 archive](https://codeload.github.com/ggml-org/llama.cpp/tar.gz/78651c410dd8d97e3e22e533e0e7117889e3863a)의 관찰한 SHA-256은 `3261e7f33becb7ada614605116f96222fc097f016b48cd627e01055f1535f981`이다. 이 값은 내려받은 바이트를 고정하는 감사 기록이며 별도의 vendor 서명 증명이 아니다.
+`prepare_llama_source.py`는 Python3.12에서 명시한 원본 archive를 읽고 새 디렉터리에만 소스를 준비한다. 기본 대상은 llama.cpp b11460의 전체 commit `78651c410dd8d97e3e22e533e0e7117889e3863a`다. [고정 소스 archive](https://codeload.github.com/ggml-org/llama.cpp/tar.gz/78651c410dd8d97e3e22e533e0e7117889e3863a)의 관찰한 SHA-256은 `3261e7f33becb7ada614605116f96222fc097f016b48cd627e01055f1535f981`이다. 이 값은 내려받은 바이트를 고정하는 감사 기록이며 별도의 vendor 서명 증명이 아니다. 추가 감사한 b11868은 [Linux 준비/실행 결과](linux-device-validation-results.ko.md#b11868-single-view-소스-준비-도구)처럼 전체 revision을 명시적으로 선택할 수 있다. 아래 Mac 명령의 기본 대상과 실제 Mac 검증 범위는 바뀌지 않는다.
 
-Idefics3 공식 처리기는 한 장의 view에 row/column tile을 추가하지 않는다. 해당 native 경로는 같은 작은 이미지에 overview와 tile을 모두 넣었다. 준비 도구는 grid가1×1일 때 중복 tile과 tile 구분 개행을 제거한다. 다른 projector·여러 tile의 분기는 유지한다. archive와 수정할 두 소스의 해시·문맥을 검사하며 다른 revision·기존 출력 디렉터리를 거부한다. 원본 archive·weights·projector·LICENSE를 보존하고 수정 전후 해시를 `aiolm-source-compatibility.json`에 기록한다.
+Idefics3 공식 처리기는 한 장의 view에 row/column tile을 추가하지 않는다. 해당 native 경로는 같은 작은 이미지에 overview와 tile을 모두 넣었다. 준비 도구는 grid가1×1일 때 중복 tile과 tile 구분 개행을 제거한다. 다른 projector·여러 tile의 분기는 유지한다. 선택한 revision의 archive와 수정할 두 소스의 해시·문맥을 검사하며 감사하지 않은 revision·기존 출력 디렉터리를 거부한다. 원본 archive·weights·projector·LICENSE를 보존하고 수정 전후 해시를 `aiolm-source-compatibility.json`에 기록한다.
 
 ```sh
 python3 -B scripts/provider-compatibility/prepare_llama_source.py \

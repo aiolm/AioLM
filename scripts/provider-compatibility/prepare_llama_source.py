@@ -17,6 +17,16 @@ SOURCE_HASHES = {
     'tools/mtmd/mtmd-image.cpp': '83d61f416c6681ee44a2db7dc2972c87caee24e318b4380af53e704b8ba359d5',
     'tools/mtmd/mtmd.cpp': '648a9a46d5a042fe2afcf6d782b1f660939bd5af2d4e550a3fc9412b3dc9777d',
 }
+AUDITED_SOURCES = {
+    REVISION: {'archive_sha256': ARCHIVE_SHA256, 'source_hashes': SOURCE_HASHES},
+    '78a8ae14be559b45f5f13ddee82c188b683d5d8d': {
+        'archive_sha256': '1b7430a305cff97c514dcef80c963bd362d877b8fef4450ba8ef7f116cc45cc6',
+        'source_hashes': {
+            'tools/mtmd/mtmd-image.cpp': '3d9c70e8ad25ead29c85b576a5b8d37ea0f11cd867e24ca206c65a27a83252b1',
+            'tools/mtmd/mtmd.cpp': '1884e78cf8116413b54602f9bc4aeb2b2ed3f49a1be33d2df2e45cca93d6262a',
+        },
+    },
+}
 
 
 def replace_once(text, before, after):
@@ -57,28 +67,32 @@ def patch_tokens(text):
                     }''')
 
 
-def prepare(archive, output):
+def prepare(archive, output, revision=REVISION):
+    try:
+        selected = AUDITED_SOURCES[revision]
+    except KeyError:
+        raise ValueError('unsupported upstream revision') from None
     archive, output = Path(archive), Path(output)
     original_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if original_hash != ARCHIVE_SHA256:
+    if original_hash != selected['archive_sha256']:
         raise ValueError('upstream archive SHA-256 mismatch')
     # A failed/partial preparation remains reviewable; never reuse or overwrite it.
     output.mkdir(parents=False, exist_ok=False)
     with tarfile.open(archive) as source:
         source.extractall(output, filter='data')
-    root = output / ('llama.cpp-' + REVISION)
+    root = output / ('llama.cpp-' + revision)
     changes = []
     for name, patch in [('tools/mtmd/mtmd-image.cpp', patch_images), ('tools/mtmd/mtmd.cpp', patch_tokens)]:
         path = root / name
         before = path.read_bytes()
-        if hashlib.sha256(before).hexdigest() != SOURCE_HASHES[name]:
+        if hashlib.sha256(before).hexdigest() != selected['source_hashes'][name]:
             raise ValueError('upstream source file SHA-256 mismatch')
         after = patch(before.decode()).encode()
         path.write_bytes(after)
-        changes.append({'file': name, 'before_sha256': SOURCE_HASHES[name], 'after_sha256': hashlib.sha256(after).hexdigest()})
+        changes.append({'file': name, 'before_sha256': selected['source_hashes'][name], 'after_sha256': hashlib.sha256(after).hexdigest()})
     if hashlib.sha256(archive.read_bytes()).hexdigest() != original_hash:
         raise ValueError('source archive changed during preparation')
-    audit = {'schema_version': 1, 'revision': REVISION, 'local_revision': REVISION[:9] + '-aiolm.single1',
+    audit = {'schema_version': 1, 'revision': revision, 'local_revision': revision[:9] + '-aiolm.single1',
              'source_archive_sha256': original_hash, 'corrections': changes}
     (root / 'aiolm-source-compatibility.json').write_text(json.dumps(audit, indent=2) + '\n')
     return audit
@@ -88,5 +102,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', required=True)
     parser.add_argument('--output-directory', required=True)
+    parser.add_argument('--revision', choices=tuple(AUDITED_SOURCES), default=REVISION,
+                        help='audited upstream revision; defaults to the original b11460 source')
     args = parser.parse_args()
-    print(json.dumps(prepare(args.archive, args.output_directory), indent=2))
+    print(json.dumps(prepare(args.archive, args.output_directory, args.revision), indent=2))
