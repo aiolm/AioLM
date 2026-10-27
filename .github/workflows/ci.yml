@@ -78,6 +78,10 @@ jobs:
         run: npm rebuild esbuild
       - name: Lint frontend
         run: npm run lint
+      - name: Check generated provider options
+        run: npm run test:provider-options
+      - name: Packaging and runtime smoke tooling
+        run: npm run test:scripts
       - name: Audit npm dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Install Rust

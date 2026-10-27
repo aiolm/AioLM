@@ -4,3 +4,6 @@ src-tauri/tests/runtime_binding_arity_help.txt text eol=lf whitespace=-blank-at-
 # Generated provider projections are compared with their canonical JSON bytes.
 src/shared/config/providerLaunchOptions.json text eol=lf
 src/shared/config/providerRequestOptions.json text eol=lf
+
+# Keep the pinned Linux runtime inputs and scripts portable across checkouts.
+scripts/appimage-runtime/** text eol=lf
