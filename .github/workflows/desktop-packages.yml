@@ -1,223 +1,50 @@
-name: Validate desktop packages
+name: Validate v0.3.2 Windows release installers
 
 on:
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: Desktop platforms to validate
-        required: true
-        default: all
-        type: choice
-        options: [all, macos]
-      package_run_id:
-        description: Recheck installers from a successful package run (empty builds new packages)
-        required: false
-        type: string
-      source_build:
-        description: Also build a pinned llama.cpp pull request from source on hosted Macs
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
   actions: read
 
 jobs:
-  package:
-    if: inputs.package_run_id == ''
-    name: Package (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15","macos-15-intel"]' || '["windows-latest","ubuntu-24.04","macos-15","macos-15-intel"]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    env:
-      CARGO_INCREMENTAL: "0"
-      # AppImage's build tools can run without mounting FUSE in hosted CI.
-      APPIMAGE_EXTRACT_AND_RUN: "1"
+  install:
+    name: Install exact v0.3.2 Windows release artifacts
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - name: Checkout
+      - name: Checkout the release validation scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: e439b52038142439c8c85b112d2949687fa273f2
           persist-credentials: false
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: ".node-version"
-          cache: npm
-      - name: Setup pinned npm
-        shell: bash
-        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils bubblewrap
-      - name: Enable unprivileged user namespaces for the AppImage runtime build
-        if: runner.os == 'Linux'
-        run: |
-          # Ubuntu 24.04 restricts unprivileged user namespaces; bwrap needs one
-          # to build the pinned AppImage runtime without root.
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
-        with:
-          toolchain: "1.98.0"
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Rebuild esbuild
-        run: npm rebuild esbuild
-      - name: Validate packaging selection
-        run: npm run test:scripts
-      - name: Build host packages
-        run: npm run package:tauri
-      - name: Release CLI with a clean home
-        run: npm run test:native-cli -- .codex-target/release/aiolm-cli${{ runner.os == 'Windows' && '.exe' || '' }}
-      - name: Install, reinstall and remove desktop packages
-        timeout-minutes: 15
-        run: node scripts/smoke-installers.mjs
-      - name: Fetch public runtime metadata without the shared anonymous API limit
-        if: runner.os == 'macOS'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
-      - name: Real macOS CPU runtime and CLI lifecycle
-        if: runner.os == 'macOS'
-        timeout-minutes: 20
-        env:
-          AIOLM_NATIVE_CPU: "1"
-          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
-          # Cargo runs integration tests from src-tauri, so select the release
-          # binary by its absolute workspace path.
-          AIOLM_NATIVE_CLI: ${{ github.workspace }}/.codex-target/release/aiolm-cli
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
-      - name: macOS Keychain roundtrip
-        if: (success() || failure()) && runner.os == 'macOS'
-        timeout-minutes: 5
-        env:
-          AIOLM_VAULT_SMOKE: roundtrip
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
-      - name: Real Cocoa approval cancellation and deadline
-        if: (success() || failure()) && runner.os == 'macOS'
-        timeout-minutes: 5
-        env:
-          AIOLM_MACOS_APPROVAL_SMOKE: "1"
-        run: |
-          mkdir -p tmp
-          swiftc scripts/macos-window-probe.swift -o tmp/macos-window-probe
-          AIOLM_MACOS_WINDOW_PROBE="$PWD/tmp/macos-window-probe" cargo test --locked --manifest-path src-tauri/Cargo.toml --lib mcp::macos_approval::tests::real_cocoa_window_closes_on_cancellation_and_deadline -- --ignored --exact --nocapture --test-threads=1
-      - name: Collect package checksums
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import hashlib
-          from pathlib import Path
-          root = Path('.codex-target/release/bundle')
-          files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix in {'.deb', '.AppImage', '.dmg', '.exe', '.msi'})
-          if not files:
-              raise SystemExit('No desktop packages were produced')
-          with (root / 'checksums.txt').open('w', encoding='utf-8', newline='\n') as output:
-              for path in files:
-                  with path.open('rb') as source:
-                      digest = hashlib.file_digest(source, 'sha256').hexdigest()
-                  output.write(f'{digest}  {path.relative_to(root).as_posix()}\n')
-          PY
-      - name: Retain packages for native verification
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: desktop-packages-${{ matrix.os }}
-          if-no-files-found: error
-          retention-days: 14
-          path: |
-            .codex-target/release/bundle/**/*.exe
-            .codex-target/release/bundle/**/*.msi
-            .codex-target/release/bundle/**/*.deb
-            .codex-target/release/bundle/**/*.AppImage
-            .codex-target/release/bundle/**/*.dmg
-            .codex-target/release/bundle/checksums.txt
-
-  macos-source-build:
-    if: inputs.source_build && inputs.package_run_id == ''
-    name: Source build (${{ matrix.os }}, ${{ matrix.backend }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos-15, backend: cpu }
-          - { os: macos-15, backend: metal }
-          - { os: macos-15-intel, backend: cpu }
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
-        with:
-          toolchain: "1.98.0"
-      - name: Record the host build toolchain
-        run: |
-          xcode-select -p
-          cmake --version
-          clang --version
-      - name: Probe hosted Metal device availability
-        if: matrix.backend == 'metal'
-        run: swift scripts/macos-metal-probe.swift
-      - name: Fetch public PR metadata without the shared anonymous API limit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api repos/ggml-org/llama.cpp/pulls/29903 > "$RUNNER_TEMP/aiolm-pull-request.json"
-      - name: Real PR source build and CLI lifecycle
-        timeout-minutes: 100
-        env:
-          AIOLM_NATIVE_SOURCE: ${{ matrix.backend }}
-          AIOLM_NATIVE_PULL_REQUEST: ${{ runner.temp }}/aiolm-pull-request.json
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_source_build_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
-
-  install:
-    if: inputs.package_run_id != ''
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15","macos-15-intel"]' || '["windows-latest","ubuntu-24.04","macos-15","macos-15-intel"]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
           node-version-file: .node-version
-      - name: Download packages from a successful build
-        shell: bash
+      - name: Download the completed Windows release build
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
-          PACKAGE_OS: ${{ matrix.os }}
         run: |
-          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
-          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
-          gh run download "$PACKAGE_RUN_ID" --name "desktop-packages-$PACKAGE_OS" --dir .codex-target/release/bundle
-          cd .codex-target/release/bundle
-          if [ "$RUNNER_OS" = macOS ]; then
-            shasum -a 256 --check checksums.txt
-          else
-            sha256sum --check checksums.txt
-          fi
-      - name: Refresh Linux dependency metadata
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends desktop-file-utils
-      - name: Install, reinstall and remove desktop packages
+          $ErrorActionPreference = "Stop"
+          $run = gh api repos/aiolm/AioLM/actions/runs/40496431689 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read the release run" }
+          if ($run.head_sha -ne "e439b52038142439c8c85b112d2949687fa273f2" -or $run.path -ne ".github/workflows/release.yml") { throw "Release source mismatch" }
+          $jobs = gh api repos/aiolm/AioLM/actions/runs/40496431689/jobs | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read release build jobs" }
+          $build = @($jobs.jobs | Where-Object { $_.id -eq 122163002953 })
+          if ($build.Count -ne 1 -or $build[0].conclusion -ne "success") { throw "Windows release build did not pass" }
+          $artifacts = gh api repos/aiolm/AioLM/actions/runs/40496431689/artifacts | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read release artifacts" }
+          $artifact = @($artifacts.artifacts | Where-Object { $_.id -eq 12733595133 -and $_.name -eq "windows-release-assets" })
+          if ($artifact.Count -ne 1 -or $artifact[0].expired) { throw "Windows release artifact is unavailable" }
+          if ($artifact[0].digest -ne "sha256:a49bb40f69f62eba013952ab3193d5c951692f9295431561e103edd25ac915cc") { throw "Release artifact digest mismatch" }
+          gh run download 40496431689 --repo aiolm/AioLM --name windows-release-assets --dir tmp/release-assets
+          if ($LASTEXITCODE -ne 0) { throw "Release artifact download failed" }
+          New-Item -ItemType Directory -Force .codex-target/release/bundle/nsis, .codex-target/release/bundle/msi | Out-Null
+          Move-Item tmp/release-assets/AioLM_0.3.2_x64-setup.exe .codex-target/release/bundle/nsis/
+          Move-Item tmp/release-assets/AioLM_0.3.2_x64_en-US.msi .codex-target/release/bundle/msi/
+          Get-ChildItem .codex-target/release/bundle -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-List
+      - name: Install, reinstall, repair and remove NSIS and MSI
         run: node scripts/smoke-installers.mjs
