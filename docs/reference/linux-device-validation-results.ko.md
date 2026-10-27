@@ -473,3 +473,16 @@ python3 -B scripts/provider-compatibility/prepare_llama_source.py \
 실제 원본3904개 regular 파일을 대조해 두 C++ 파일만 바뀌고 LICENSE·나머지 파일·archive가 같은 것을 확인했다. 추가 파일은 상대 파일 이름과 수정 전후 해시를 담은 `aiolm-source-compatibility.json` 하나다. Python 호환성 전체17검사는 두 revision의 거부/보존·기본값 호환·기존 출력 거부를 포함해 exit0이다. 같은 도구가 실제 준비한 소스로 Linux CPU 서버를 새로 빌드했다. GNU15.2/static CPU/ngl0·local marker `78a8ae14b-aiolm.single1`이며 서버 SHA-256은 `21c96b92c2f8fca092b059471b2f49cc22d5dc43cd42a02b6f47099a7d520b6f`다.
 
 그 실행 파일에 원래 raw 요청·weights/projector/PNG·32/T0를 그대로 보낸 추가1회는 HTTP200·`Rectangle and Circle`/PP93·TG5로 앞의 single-view 제어와 같았다. 준비/빌드와 직접 native 응답·usage·소유 listener/health/model ID·정상 wait0/포트 폐쇄·입력/모델 해시는 확인했으나 색/정사각형은 여전히 누락해 F09는fail이다. 앞 절의5회와 이번 추가1회를 구분한다. 보정을 현재 GUI의 runtime으로 자동 설치하거나 내용 정답을 보정하지 않았다. 다른 OS·GPU·portable bundle·새 GUI 여정 통과를 주장하지 않는다. 데스크톱 Rust/프런트엔드 코드와 고정22 배포물은 그대로이며 이번 개발 도구 변경 때문에 전체 자동 검사·패키징을 새로 실행했다고 표현하지 않는다. 원본은 `tmp/linux-acceptance/native-singleview-source23/`에 있다.
+
+
+## F09 vision tensor와 실제 입력 토큰 대조
+
+단일 view 보정 경로에서 같은 원래 f16 projector/PNG로 실제 native 픽셀·중간 특징을 캡처했다. 원본 모델·이미지 파일을 바꾸거나 다른 weights를 다운로드하지 않았다. 고정 Transformers revision `a22a4378d97d06b7a1d9abad6e0086d30fdea199`의 vision/connector 클래스를 사용해 원래 GGUF tensor198개를 한 번씩 모두 로드하고 같은 native 정규화 픽셀을 입력했다. 고정 base 설정의 차원·활성 함수·정규화 epsilon도 대조했다. FFN의 저장 이름과 실제 up/down 방향은 native의 기존 자동 교환과 tensor shape에 맞췄다. 이는 독립 tokenizer나 텍스트 디코더까지 검증한 결과가 아니다.
+
+512×512 픽셀의 patch/position embedding·첫 층·마지막 층·pixel shuffle과 최종64×576 투영을 대조했다. 최종36,864원소는 최대 절대 차이0.047698974609375·RMSE0.004766750313220033·상대 L2 `0.00070238295386069`·cosine `0.9999997538099131`이었다. 텐서는 float32를 유지하고 차이 집계는 float64로 계산했다. 첫 float32 cosine 집계의1 초과 값은 최종 값으로 사용하지 않고 원본에 남겼다. 첫 native 캡처가 빈 output vector를 넘겨 최종 결과를 복사하지 않은 것도 caller 오류로 구분했다. 출력 크기를 지정한 별도 캡처에서 픽셀/중간 tensor6개의 원래 해시가 같고 최종 투영147,456바이트를 얻었다. 임의 허용 오차로 내용 정확도를pass 처리하지 않았다.
+
+관측된 vision 수치 차이의 영향만 구분하기 위해 별도 진단 빌드에서 실제 native 계산 뒤 최종 이미지 특징을 동일 가중치·픽셀의 기준 구현 값으로 한 번 대체했다. 원래 요청 raw bytes·32/T0·언어 모델은 유지했다. 원본 파일 SHA를 고정한147,456바이트 대체가 한 번 적용된 로그를 확인했지만 응답은 여전히 `Rectangle and Circle`/PP93·TG5였다. 이 대조는 측정한 vision 차이를 해소하는 것만으로 해당 single-view 내용 실패가 해결되지 않음을 보여준다. 진단 hook이나 기준 특징 파일을 제품·배포 runtime에 넣지 않았으며 이를 원래 실행 복원이나 품질 통과로 계산하지 않는다.
+
+추가 진단 빌드는 server slot의 실제 prefill 입력을 직접 관찰했다. 같은 raw 요청의 입력93개 중23–86번(0부터)의64개는 이미지 특징이고 나머지29개는 텍스트였다. System 지침·User의 원래 `Name the two shapes and their colors.`·이미지 경계·Assistant prefix가 모두 남았다. 고정 base 템플릿과 공식 single-image 처리기로 만든 예상 문자열을 같은 native vocabulary로 tokenization하고 이미지 토큰을 media 위치로 대응시키면 실제93개 ID가 전부 같았다. `/apply-template`의 내부 media marker만 원래 image marker로 대응한 문자열도 같았다. 두 원문과 해시를 모두 보존했다. 독립 HF tokenizer나 GGUF text 가중치 변환의 일치를 증명한 것은 아니다. 이 실행의 응답도 `Rectangle and Circle`/PP93·TG5로 실패를 유지했다.
+
+이번 두 진단 HTTP 실행은 앞 절의6회와 구분하며 새 소유 PID/birth·FD/listener·health/model ID를 확인한 뒤 요청했다. 두 프로세스는 wait0/생성 식별 종료·IPv4/IPv6 포트 폐쇄와 원래 입력/모델 해시 보존을 확인했다. Vision 캡처·기준 계산 명령도 종료됐다. 데스크톱·개발 도구 제품 코드와 기존 고정22/23 원본 근거는 바뀌지 않았고 새 GUI/패키지 검사로 확대하지 않는다. 원본은 `tmp/linux-acceptance/f09-vision-tensor-control-v1/`이며 `final-guard-v2.json`의50개 raw pin/SHA-256 `336c40c16e46fccccee2b0bcdf2c7597da06ed13d7b3c8bcc6689a1bacb7a2d0`으로 연결한다. F09와 전체67/1/4/1/1은 그대로다. 다음은 동일 GGUF의 텍스트 가중치 배열·수치/생성 경로를 독립 대조하는 범위이며, 현재 증거만으로 모델 품질의 배타적 원인을 확정하지 않는다.

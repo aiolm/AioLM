@@ -47,7 +47,7 @@
 
 | ID | 상태 | 정확한 남은 범위/재개 조건 |
 | --- | --- | --- |
-| L02-F09 | fail | 원래 모델/projector/PNG·요청 raw bytes·32/T0의 별도 native78 제어에서 duplicate tile+overview를 실제 관측했다. single-view 보정으로 응답은 달라졌으나 색/도형을 모두 맞히지 못했다. longest2048 단독 대조도 실패했고 square pixel shuffle 대조는 차이0이었다. 원래 전체 argv/실제 tensor는 복구하지 못했다. 모델·입력·한도 변경이나 앱 전용 정답 보정으로 통과시키지 않는다. |
+| L02-F09 | fail | 원래 모델/projector/PNG·raw 요청·32/T0를 유지한다. single-view 보정 뒤 원래198개 projector tensor/동일 native 픽셀의 기준 구현 대조와 최종 특징 대체도 같은 오답이었다. 실제 prefill93개(이미지64/텍스트29) ID는 같은 native vocabulary에서 공식 템플릿/처리기 예상과 같고 질문의 색·도형 문구가 남았다. 독립 tokenizer·GGUF text 가중치 배열/디코더 수치는 아직 확인하지 못했다. 해당 경로를 고정한 독립 대조가 다음 실행이다. |
 | L03-D07 | unrun | EN/KO/JA/ZH updater 가능·불가의 실제 조건부 안내 조합. 기존 일반 알림 설정/종료/현재 버전 안내는 부분 근거다. |
 | L03-U02 | unrun | 실제 DEB/AppImage 설치 가능 판별과 소유/arch 불일치 안내의 최종 UI. |
 | L03-U03 | unrun | 실제 설치 가능/불가 classifier·진행·installer·release 이동. 기존 Check 오류/버튼 회복·동률 재열기는 부분 검증이다. |
@@ -64,6 +64,7 @@
 `tmp/`와 빌드·모델·개인 사용자 자료는 Git에 올리지 않는다. 다음은 저장소 루트 기준 로컬 경로다.
 
 - `tmp/linux-acceptance/linux-window-restore-source22/`: 창 복원 수정/전체 검사·독립 패키지·새 개인 엔진 실제 GUI/CLI와 종료/재열기. `source22-final-guard.json`(SHA-256 `ec6f5d4595225afced9819c52922bd9fc1da2f3232267ba46ca3968bfeacaa65`)의39핀과 `source22-commit-join.json`을 함께 읽는다. 실제 화면 before/after는 `two-display-preflight-v1/`, `two-display-source22/`, 추출 AppRun은 `appimage-window-source22/`이며 원래 화면은 복구됐고 모든 검증 앱은 종료됐다.
+- `tmp/linux-acceptance/f09-vision-tensor-control-v1/`: 동일 projector198개 tensor·native 픽셀의 층별/최종 투영 대조, 기준 특징 대체의 동일 오답과 실제 prefill93개 ID 일치. `final-guard-v2.json`(SHA-256 `336c40c16e46fccccee2b0bcdf2c7597da06ed13d7b3c8bcc6689a1bacb7a2d0`)의50핀을 읽는다. 두 진단 서버와 기준 계산은 종료됐다. 첫 출력 buffer/float32 집계의 범위도 원본으로 구분한다.
 - `tmp/linux-acceptance/f09-singleview-control-v1/`: 원래 raw 요청/모델/한도를 유지한 native before/after와 longest-size 진단의5회 실제 추론·관측/정리, 합성 pixel-shuffle 대조. 내용 실패를 보존한다.
 - `tmp/linux-acceptance/resume-20261027-review/`: 고정21의 실제/렌더된 입력 실패·최소 수정 검사·freeze·패키지/25개 내부 symlink 검사·합성/개인 GUI 네 실행·재열기·정리 근거. `baseline-causal-reproduction.json`, `source21-final-guard.json`(SHA-256 `17f7ac08cc1af3646ad9b9a08bd30bfb8751202661167104b329094d26f37baf`), `source21-commit-join.json`을 함께 읽는다. 원래 자동화 오류/exit1·타입 검사 오류와 보정 전 receipt도 그대로 있다. 새 개인 엔진 build/manifest/provenance는 `tmp/linux-acceptance/personal-engine-source21/`이다.
 - `tmp/linux-acceptance/resume-20261026T151655Z/`: 고정20의 최초 실패/검사·freeze·패키지544파일 검사·actual GUI/가져오기/argv/응답·두 Close와 새 source 연결 근거. `root-validation-outcome.json`, `root-observation-corrections.json`, `commit-source-join.json`, `final-guard.json`을 함께 읽는다. 이후 `help-stale-audit-v1/root-causal-acceptance.json`이 원래 미확정 stale 원인의 대조 결과를 추가한다.
