@@ -1,0 +1,242 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import * as api from '../../shared/api';
+import { I18nProvider } from '../../shared/i18n/i18n';
+import { testConfig } from '../../testing/appStore';
+import { effectiveSchema } from '../../testing/effectiveSchema';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
+import RuntimeHelpReview from './RuntimeHelpReview';
+
+vi.mock('../../shared/api', async origin => ({
+  ...await origin<typeof import('../../shared/api')>(),
+  runtimeHelpTarget: vi.fn(), runtimeHelpDiscoverSelected: vi.fn(),
+  runtimeHelpCancelSelected: vi.fn(async () => true), runtimeHelpAccept: vi.fn(),
+  pickRuntimePath: vi.fn(),
+}));
+
+const cfg = { ...testConfig, active_provider: 'custom.synthetic' as const, active_runtime: 'build-1' };
+const effective = effectiveSchema([]);
+const report: api.HelpReport = {
+  identity: { fingerprint: 'a'.repeat(64), executable_sha256: 'b'.repeat(64), artifacts_sha256: {}, parser_version: 1 },
+  scope: [], stdout: { text: 'stdout options', clean_text: 'stdout options', encoding: 'utf-8', decoding_loss: false, truncated: false },
+  stderr: { text: 'stderr options', clean_text: 'stderr options', encoding: 'utf-8', decoding_loss: false, truncated: false },
+  success: true, cancelled: false, timed_out: false, exit_code: 0, elapsed_ms: 1,
+};
+const result: [api.HelpReport, api.RuntimeDescriptor] = [report, {
+  engine: 'custom.synthetic', runtime: 'build-1', fingerprint: report.identity.fingerprint,
+  help_complete: true, schema: effective.schema, retained: ['old_value'],
+  diff: { added: ['new_flag'], removed: ['old_flag'], changed: ['changed_arity'], retained_unknown: ['old_value'] },
+}];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const task of getTaskSnapshot()) removeTask(task.id);
+  vi.mocked(api.runtimeHelpTarget).mockImplementation(async config => ({
+    engine: config.active_provider!, runtime: config.active_runtime!, program: '/synthetic/python', fixed: false,
+    prefix: ['-I', '/synthetic path/engine.py'], request: { args: ['-I', '/synthetic path/engine.py', '--help'], scope: [] },
+  }));
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockResolvedValue(result);
+  vi.mocked(api.runtimeHelpAccept).mockResolvedValue({ version: 1, fingerprint: report.identity.fingerprint, request: { args: ['--help'], scope: [] } });
+});
+
+function view(config = cfg, onAccepted = vi.fn()) {
+  return <I18nProvider initialLocale="en"><RuntimeHelpReview cfg={config} effective={effective} disabled={false} onAccepted={onAccepted} /></I18nProvider>;
+}
+
+it('reloads help text choices, invalidates a review on edit and can return to the omitted defaults', async () => {
+  vi.mocked(api.runtimeHelpTarget).mockResolvedValueOnce({
+    engine: cfg.active_provider, runtime: cfg.active_runtime, program: '/synthetic/engine', fixed: true,
+    prefix: [], request: { args: ['--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8' },
+  });
+  render(view());
+  expect(await screen.findByRole('combobox', { name: 'Help encoding' })).toHaveTextContent('Korean (Windows CP949)');
+  const locale = screen.getByLabelText('Help locale (optional)');
+  expect(locale).toHaveValue('ko_KR.UTF-8');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  fireEvent.change(locale, { target: { value: 'C' } });
+  expect(screen.queryByRole('button', { name: "Use these options" })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' });
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
+  await waitFor(() => expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint,
+    { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Auto (BOM or UTF-8)' }));
+  fireEvent.change(locale, { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [] });
+});
+
+it('reviews an explicit execution directory, clears stale review on edit and retains the backend-pinned context', async () => {
+  const onAccepted = vi.fn();
+  render(view(cfg, onAccepted));
+  const directory = await screen.findByLabelText('Execution working directory (optional)');
+  expect(directory).toHaveValue('');
+  fireEvent.change(directory, { target: { value: '/synthetic/first directory' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/first directory' }));
+  fireEvent.change(directory, { target: { value: '/synthetic/second 눈길' } });
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  const request = vi.mocked(api.runtimeHelpDiscoverSelected).mock.calls.at(-1)![1];
+  expect(request.working_directory).toBe('/synthetic/second 눈길');
+  vi.mocked(api.runtimeHelpAccept).mockResolvedValueOnce({ version: 1, fingerprint: report.identity.fingerprint,
+    request, working_directory: '/synthetic/second 눈길' });
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
+  await waitFor(() => expect(onAccepted).toHaveBeenCalledOnce());
+  expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, request);
+  expect(directory).toHaveValue('/synthetic/second 눈길');
+});
+
+it('recovers a missing pinned directory through the common folder control without dropping saved options', async () => {
+  vi.mocked(api.runtimeHelpTarget).mockResolvedValueOnce({
+    engine: cfg.active_provider, runtime: cfg.active_runtime, program: '/synthetic/engine', fixed: false, prefix: [],
+    request: { args: ['--help'], scope: [] }, accepted: { version: 1, fingerprint: 'old',
+      request: { args: ['--help'], scope: [] }, working_directory: '/synthetic/missing' },
+  });
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new Error('The reviewed execution directory is missing'));
+  vi.mocked(api.pickRuntimePath).mockResolvedValueOnce('/synthetic/recovered');
+  render(view());
+  expect(await screen.findByLabelText('Execution working directory (optional)')).toHaveValue('/synthetic/missing');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByText(/reviewed execution directory is missing/);
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+  await waitFor(() => expect(screen.getByLabelText('Execution working directory (optional)')).toHaveValue('/synthetic/recovered'));
+  expect(api.pickRuntimePath).toHaveBeenCalledWith('folder');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/recovered' }));
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+});
+
+it('discovers only on explicit action, preserves token boundaries, reviews the diff and accepts the exact result', async () => {
+  const accepted = vi.fn();
+  render(view(cfg, accepted));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  expect(api.runtimeHelpDiscoverSelected).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Add argument' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Help arguments after the entry point Argument 2' }), { target: { value: 'a b 한글' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByText(/New options: new_flag/);
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenCalledExactlyOnceWith(cfg, {
+    program: null, args: ['-I', '/synthetic path/engine.py', '--help', 'a b 한글'], scope: [],
+  });
+  expect(screen.getByText(/Removed options: old_flag/)).toBeVisible();
+  expect(screen.getByText(/Changed options: changed_arity/)).toBeVisible();
+  fireEvent.click(screen.getByText('Raw help'));
+  expect(screen.getByText('stdout options stderr options')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
+  await waitFor(() => expect(accepted).toHaveBeenCalledOnce());
+  expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, expect.objectContaining({ args: ['-I', '/synthetic path/engine.py', '--help', 'a b 한글'] }));
+});
+
+it('shows failed help diagnostics containing cancelled without allowing acceptance', async () => {
+  const diagnostic = 'help output is incomplete; rediscover before building options\n'
+    + 'Help capture: success=false, exit_code=17, timed_out=false\n'
+    + 'stderr (encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n'
+    + 'An optional earlier operation was cancelled; this help command failed.';
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(diagnostic);
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(api.runtimeHelpDiscoverSelected).toHaveBeenCalledOnce());
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('help output is incomplete');
+  const disclosure = alert.querySelector('details')!;
+  expect(disclosure).not.toHaveAttribute('open');
+  fireEvent.click(disclosure.querySelector('summary')!);
+  expect(alert.querySelector('pre')).toBeVisible();
+  expect(alert.querySelector('pre')).toHaveTextContent('exit_code=17');
+  expect(alert.querySelector('pre')).toHaveTextContent('earlier operation was cancelled');
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: diagnostic })]);
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled();
+});
+
+it('keeps canonical native cancellation quiet and permits a fresh discovery', async () => {
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new Error('help discovery cancelled'));
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  expect(await screen.findByRole('button', { name: 'Use these options' })).toBeEnabled();
+});
+
+it('keeps an actual Cancel quiet even when the child failure has no cancellation keyword', async () => {
+  let reject!: (cause: string) => void;
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise((_, failure) => { reject = failure; }));
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
+  await act(async () => { reject('process stopped before complete help'); });
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled();
+});
+
+it('cancels the old runtime when selection changes and rejects its late help publication', async () => {
+  let finish!: (value: typeof result) => void;
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const rendered = render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  rendered.rerender(view({ ...cfg, active_runtime: 'build-2' }));
+  expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
+  await act(async () => { finish(result); });
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/new_flag/)).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+});
+
+it('keeps a cancelled late success unavailable for acceptance and can discover again', async () => {
+  let finish!: (value: typeof result) => void;
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await act(async () => { finish(result); });
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  expect(await screen.findByRole('button', { name: "Use these options" })).toBeEnabled();
+});
+
+it('cancels an owned discovery when unmounted and never accepts an incomplete report', async () => {
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockResolvedValueOnce([report, { ...result[1], help_complete: false }]);
+  const rendered = render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByText(/The help is incomplete/);
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise(() => undefined));
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  rendered.unmount();
+  expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
+});
+
+it('keeps a later manual directory edit when an earlier folder picker resolves', async () => {
+  let finish!: (value: string) => void;
+  vi.mocked(api.pickRuntimePath).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  render(view());
+  const directory = await screen.findByLabelText('Execution working directory (optional)');
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+  fireEvent.change(directory, { target: { value: '/synthetic/new manual directory' } });
+  await act(async () => { finish('/synthetic/earlier picker directory'); });
+  expect(directory).toHaveValue('/synthetic/new manual directory');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: "Use these options" });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/new manual directory' }));
+});

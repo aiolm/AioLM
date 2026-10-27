@@ -77,15 +77,3 @@ export const storageAdapter: StorageAdapter = {
 export function storageSchema(): { name: string; version: number; store: string } {
   return { name: DB_NAME, version: DB_VERSION, store: STORE_NAME };
 }
-
-export async function migrateLegacyKey<T>(key: string, legacyKey = key): Promise<T | null> {
-  const current = await storageAdapter.get<T>(key);
-  if (current !== null) return current;
-  const storage = localStorageSafe();
-  if (!storage) return null;
-  try {
-    const legacy = JSON.parse(storage.getItem(legacyKey) ?? "null") as T | null;
-    if (legacy !== null) await storageAdapter.set(key, legacy);
-    return legacy;
-  } catch { return null; }
-}

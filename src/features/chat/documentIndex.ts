@@ -221,7 +221,7 @@ async function readIndexedRecords(): Promise<DocumentIndexRecord[]> {
     const request = db.transaction(INDEX_STORE, "readonly").objectStore(INDEX_STORE).getAll();
     request.onsuccess = () => {
       db.close();
-      resolve(request.result.filter(validRecord).slice(-MAX_RECORDS));
+      resolve(boundedIndexRecords(request.result.filter(validRecord)).records);
     };
     request.onerror = () => {
       db.close();
@@ -230,22 +230,75 @@ async function readIndexedRecords(): Promise<DocumentIndexRecord[]> {
   });
 }
 
-async function writeIndexedRecords(records: DocumentIndexRecord[]): Promise<void> {
+async function writeIndexedRecords(
+  update: (records: DocumentIndexRecord[]) => DocumentIndexRecord[] | null,
+): Promise<number> {
   const db = await openIndexDb();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(INDEX_STORE, "readwrite");
-    const store = transaction.objectStore(INDEX_STORE);
-    const bounded = boundedIndexRecords(records);
-    for (const key of bounded.removedKeys) store.delete(key);
-    for (const record of bounded.records) store.put(record);
+    let transaction: IDBTransaction;
+    try {
+      transaction = db.transaction(INDEX_STORE, "readwrite");
+    } catch (error) {
+      db.close();
+      reject(error);
+      return;
+    }
+    let removed = 0;
+    let failure: unknown;
     transaction.oncomplete = () => {
       db.close();
-      resolve();
+      resolve(removed);
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(failure ?? transaction.error ?? new Error("Document index write failed."));
     };
     transaction.onerror = () => {
-      db.close();
-      reject(transaction.error ?? new Error("Document index write failed."));
+      failure ??= transaction.error ?? new Error("Document index write failed.");
     };
+    const abort = (error: unknown) => {
+      failure = error;
+      try {
+        transaction.abort();
+      } catch {
+        db.close();
+        reject(error);
+      }
+    };
+    try {
+      const store = transaction.objectStore(INDEX_STORE);
+      const valuesRequest = store.getAll();
+      const keysRequest = store.getAllKeys();
+      let values: unknown[] | undefined;
+      let keys: IDBValidKey[] | undefined;
+      const apply = () => {
+        const raw = values, primaryKeys = keys;
+        if (!raw || !primaryKeys) return;
+        try {
+          if (raw.length !== primaryKeys.length) throw new Error("Document index keys and values do not match.");
+          const existing = boundedIndexRecords(raw.filter(validRecord)).records;
+          const remaining = update(existing);
+          if (remaining === null) return;
+          removed = existing.length - remaining.length;
+          const retained = new Map(boundedIndexRecords(remaining).records.map((record) => [record.key, record]));
+          const originals = new Map(primaryKeys.map((key, index) => [key, raw[index]] as const));
+          for (const key of primaryKeys) {
+            if (typeof key !== "string" || !retained.has(key)) store.delete(key);
+          }
+          for (const [key, record] of retained) {
+            if (originals.get(key) !== record) store.put(record);
+          }
+        } catch (error) {
+          abort(error);
+        }
+      };
+      valuesRequest.onsuccess = () => { values = valuesRequest.result; apply(); };
+      keysRequest.onsuccess = () => { keys = keysRequest.result; apply(); };
+      valuesRequest.onerror = () => { failure = valuesRequest.error ?? new Error("Document index read failed."); };
+      keysRequest.onerror = () => { failure = keysRequest.error ?? new Error("Document index key read failed."); };
+    } catch (error) {
+      abort(error);
+    }
   });
 }
 
@@ -270,9 +323,10 @@ export function saveDocumentVectors(model: string, chunks: DocumentChunk[], vect
   return enqueueIndexMutation(async () => {
     const next = indexRecordsForChunks(model, chunks, vectors, Date.now(), namespace);
     try {
-      const existing = await readIndexedRecords();
-      const keys = new Set(next.map((record) => record.key));
-      await writeIndexedRecords([...existing.filter((record) => !keys.has(record.key)), ...next]);
+      await writeIndexedRecords((existing) => {
+        const keys = new Set(next.map((record) => record.key));
+        return [...existing.filter((record) => !keys.has(record.key)), ...next];
+      });
     } catch {
       const existing = readLocalRecords();
       const keys = new Set(next.map((record) => record.key));
@@ -294,10 +348,10 @@ export function removeDocumentVectorsForPaths(paths: string[]): Promise<number> 
   return enqueueIndexMutation(async () => {
     const keep = (record: DocumentIndexRecord) => !doomed.has(record.path);
     try {
-      const existing = await readIndexedRecords();
-      const remaining = existing.filter(keep);
-      if (remaining.length !== existing.length) await writeIndexedRecords(remaining);
-      return existing.length - remaining.length;
+      return await writeIndexedRecords((existing) => {
+        const remaining = existing.filter(keep);
+        return remaining.length === existing.length ? null : remaining;
+      });
     } catch {
       const existing = readLocalRecords();
       const remaining = existing.filter(keep);

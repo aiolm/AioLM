@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import { useContext, useEffect, useRef, useState } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
@@ -5,7 +6,7 @@ import type { ViewId } from '../../shared/types/navigation';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { useI18n } from '../../shared/i18n/i18n';
 import { modelStatusKey } from '../../shared/lib/serverLifecycle';
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -18,6 +19,8 @@ import ApiExamples, { type ApiFormat } from './ApiExamples';
 import { apiServerCopy } from './apiServerCopy';
 import { useApiServer } from './useApiServer';
 import './api-server.css';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 type Props = { store: AppStore; section?: 'api' | 'diagnostics'; onNavigate?: (view: ViewId) => void };
 
@@ -31,15 +34,19 @@ export default function DeveloperPanel({ store, section = 'api', onNavigate }: P
 
 function ModelDiagnostics({ store }: { store: AppStore }) {
   const { t } = useI18n();
+  const model = loadedModelPath(store.status);
+  const execution = store.status.execution ? { ...store.cfg, ...store.status.execution } : store.cfg;
+  const runtime = store.status.engine ? { ...execution, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : execution;
   return <div className="app-page-scroll developer-panel api-server-page" data-developer-section="diagnostics">
     <div className="api-server-content">
       <header className="api-page-heading"><h2>{t('section.diagnostics')}</h2><p>{t('ui.diagnosticsDescription')}</p></header>
       <section className="developer-section--diagnostics api-section">
         <h3>{t('ui.diagnosticsTitle')}</h3>
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
-          {store.status.model && <> · <span title={normalizeDisplayPath(store.status.model)}>{modelDisplayName(store.status.model)}</span></>}
+          {model && <> · <span title={normalizeDisplayPath(model)}>{<ModelName model={model} />}</span></>}
         </p>
-        <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
+        <p className="api-hint"><RuntimeSelectionLabel config={runtime} /></p>
+        <pre tabIndex={0} role="region" aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
       </section>
     </div>
   </div>;
@@ -104,9 +111,11 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
 
   const applyPort = async (port: number): Promise<boolean> => {
     setError(null);
+    const actionRevision = apiServer.getActionRevision();
     try { await store.updateConfig({ port }); }
     catch (caught) { setError(errorMessage(caught)); return false; }
-    if (apiRunning) await apiServer.restart();
+    // A later listener action, such as Stop, supersedes this save's restart.
+    if (apiRunning && apiServer.getActionRevision() === actionRevision) await apiServer.restart();
     return true;
   };
 

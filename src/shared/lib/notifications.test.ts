@@ -16,13 +16,13 @@ function savePrefs(notifications: Partial<AppPreferences["notifications"]>, loca
   savePreferences({ ...base, locale, notifications: { ...base.notifications, ...notifications } });
 }
 
-/** Native plugin double: permission state plus every notify payload it accepted. */
+/** Native service double: permission state plus every payload it accepted. */
 function plugin(permission: boolean | null = true, notify: () => Promise<unknown> = async () => undefined) {
   const sent: Array<{ title: string; body: string }> = [];
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "plugin:notification|is_permission_granted") return permission;
     if (command === "plugin:notification|request_permission") return "granted";
-    if (command === "plugin:notification|notify") {
+    if (command === "send_desktop_notification") {
       await notify();
       sent.push((args as { options: { title: string; body: string } }).options);
       return undefined;
@@ -86,11 +86,16 @@ describe("notification permission", () => {
 });
 
 describe("sendTestNotification", () => {
-  it("submits a localized sample even with every category off", async () => {
-    savePrefs({}, "ko");
+  it.each([
+    { locale: "en", title: "AioLM test notification", body: "This is a test notification from AioLM." },
+    { locale: "ko", title: "AioLM 테스트 알림", body: "AioLM에서 보낸 테스트 알림입니다." },
+    { locale: "ja", title: "AioLMのテスト通知", body: "AioLMからのテスト通知です。" },
+    { locale: "zh", title: "AioLM 测试通知", body: "这是来自 AioLM 的测试通知。" },
+  ] as const)("submits a sample without claiming future alerts while every category is off in $locale", async (copy) => {
+    savePrefs({}, copy.locale);
     const sent = plugin(true);
     await expect(sendTestNotification()).resolves.toBe(true);
-    expect(sent).toEqual([{ title: "알림이 켜져 있습니다", body: "작업이 끝나면 AioLM이 여기에서 알려 드립니다." }]);
+    expect(sent).toEqual([{ title: copy.title, body: copy.body }]);
   });
 
   it("returns false without sending when permission is not granted", async () => {

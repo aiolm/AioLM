@@ -71,6 +71,16 @@ beforeEach(() => {
 });
 
 describe("chat completion notifications", () => {
+  it("does not announce a token-limited partial answer as complete", async () => {
+    streamMock.mockImplementationOnce(async (_url, _key, _model, _messages, _sampling, onDelta) => {
+      onDelta({ content: 'Partial answer', finish_reason: 'length' });
+      return 'Partial answer';
+    });
+    const { result } = setup();
+    await act(async () => { await result.current.send(); });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
   it("announces a completed answer once", async () => {
     answers("Answer");
     const { result } = setup();

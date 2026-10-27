@@ -12,14 +12,15 @@ import type { PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes
 type Msg = ChatHistoryMessage;
 
 export function sameImages(left: ImageAttachment[] | undefined, right: ImageAttachment[]) {
-  return (left ?? []).length === right.length && (left ?? []).every((image, index) => image.dataUrl === right[index]?.dataUrl);
+  return (left ?? []).length === right.length && (left ?? []).every((image, index) => (image.ref ?? image.dataUrl) === (right[index]?.ref ?? right[index]?.dataUrl)
+    && JSON.stringify(image.preparation) === JSON.stringify(right[index]?.preparation));
 }
 
-export function toChatMessage(message: Msg): api.ChatMessage {
+export function toChatMessage(message: Msg, mediaBeforeText = false): api.ChatMessage {
   const content = `${message.content}${buildDocumentContext(message.documents ?? [], 12_000, message.content)}`;
   return {
     role: message.role,
-    content: message.images?.length ? buildMultimodalContent(content, message.images) : content,
+    content: message.images?.length ? buildMultimodalContent(content, message.images, mediaBeforeText) : content,
   };
 }
 
@@ -32,12 +33,12 @@ export function validateToolArguments(schema: unknown, value: Record<string, unk
   const objectSchema = schema as { required?: unknown; properties?: unknown };
   if (Array.isArray(objectSchema.required)) {
     for (const key of objectSchema.required) {
-      if (typeof key === "string" && !(key in value)) return `missing required field: ${key}`;
+      if (typeof key === "string" && !Object.prototype.hasOwnProperty.call(value, key)) return `missing required field: ${key}`;
     }
   }
   if (objectSchema.properties && typeof objectSchema.properties === "object" && !Array.isArray(objectSchema.properties)) {
     for (const [key, rule] of Object.entries(objectSchema.properties as Record<string, unknown>)) {
-      if (!(key in value) || !rule || typeof rule !== "object") continue;
+      if (!Object.prototype.hasOwnProperty.call(value, key) || !rule || typeof rule !== "object") continue;
       const type = (rule as { type?: unknown }).type;
       const actual = value[key];
       if (type === "string" && typeof actual !== "string") return `${key} must be a string`;
@@ -59,26 +60,29 @@ export interface RetrievalResult {
 }
 
 /** Vector-ranks attached documents against `text`, falling back to lexical order when embeddings are unavailable. */
-export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string): Promise<RetrievalResult> {
+export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string, namespace = baseUrl, signal?: AbortSignal): Promise<RetrievalResult> {
+  signal?.throwIfAborted();
   let documentContext: string | null = null;
   let retrievalSources = pendingDocuments.map((document) => `${document.name} (lexical fallback)`);
   let retrievalCitations: ChatCitation[] = pendingDocuments.map((document) => ({ name: document.name, path: document.path, offset: 0 }));
   let documentChunksTruncated = false;
-  if (pendingDocuments.length > 0 && text) {
+  if (pendingDocuments.length > 0 && text && model) {
     try {
       documentChunksTruncated = documentChunksExceedSearchLimit(pendingDocuments);
       const chunks = splitDocumentChunks(pendingDocuments, undefined, MAX_SEARCHABLE_DOCUMENT_CHUNKS);
-      const cachedVectors = await loadDocumentVectors(model, chunks, baseUrl);
+      const cachedVectors = await loadDocumentVectors(model, chunks, namespace);
+      signal?.throwIfAborted();
       let chunkVectors: number[][];
       let queryVector: number[] | undefined;
       if (cachedVectors) {
         chunkVectors = cachedVectors;
-        [queryVector] = await api.embedText(baseUrl, apiKey, model, [text]);
+        [queryVector] = await api.embedText(baseUrl, apiKey, model, [text], signal);
       } else {
-        const vectors = await api.embedText(baseUrl, apiKey, model, [...chunks.map((chunk) => chunk.text), text]);
+        const vectors = await api.embedText(baseUrl, apiKey, model, [...chunks.map((chunk) => chunk.text), text], signal);
+        signal?.throwIfAborted();
         chunkVectors = vectors.slice(0, chunks.length);
         queryVector = vectors[chunks.length];
-        void saveDocumentVectors(model, chunks, chunkVectors, baseUrl).catch(() => undefined);
+        void saveDocumentVectors(model, chunks, chunkVectors, namespace).catch(() => undefined);
       }
       if (queryVector) {
         const rankedVectors = [...chunkVectors, queryVector];
@@ -87,12 +91,15 @@ export async function retrieveDocumentContext(pendingDocuments: DocumentAttachme
         retrievalSources = retrieval.retrievalSources;
         retrievalCitations = retrieval.retrievalCitations;
       }
-    } catch {
+    } catch (cause) {
+      signal?.throwIfAborted();
+      if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
       // Older llama.cpp builds may not expose embeddings; lexical retrieval remains the safe fallback.
     }
   }
   // Lexical ranking scans the complete attachments, so only pay for it when
   // vector retrieval cannot provide context.
+  signal?.throwIfAborted();
   documentContext ??= buildDocumentContext(pendingDocuments, 12_000, text);
   return { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated };
 }
@@ -101,6 +108,7 @@ export interface StreamAccumulator {
   assistant: string;
   reasoning: string;
   toolCalls: api.ChatToolCall[];
+  finishReason?: string;
 }
 
 /** Builds the `chatStream` delta callback: accumulates content/reasoning/tool-call deltas into `streamRef` and throttles bubble repaint via `scheduleAssistantRender`. */
@@ -115,11 +123,13 @@ export function createStreamDeltaHandler(options: {
   return (delta: api.ChatDelta) => {
     const generated = delta.content || delta.reasoning || delta.tool_calls?.some((tool) => tool.name || tool.arguments);
     if (generated && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
+    if (generated && streamResponses) setPhase("streaming");
     if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
     if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
+    if (delta.metrics) metricsRef.current.serverMetrics = { ...metricsRef.current.serverMetrics, ...delta.metrics };
+    if (typeof delta.finish_reason === 'string' && delta.finish_reason) streamRef.current.finishReason = delta.finish_reason;
     if (delta.reasoning) streamRef.current.reasoning += delta.reasoning;
     if (delta.content) {
-      if (streamResponses) setPhase("streaming");
       streamRef.current.assistant += delta.content;
     }
     for (const toolDelta of delta.tool_calls ?? []) {
@@ -133,7 +143,7 @@ export function createStreamDeltaHandler(options: {
       if (toolDelta.arguments) current.function.arguments += toolDelta.arguments;
       streamRef.current.toolCalls[toolDelta.index] = current;
     }
-    if (streamResponses || delta.usage || delta.timings) scheduleAssistantRender();
+    if (streamResponses || delta.usage || delta.timings || delta.metrics) scheduleAssistantRender();
   };
 }
 

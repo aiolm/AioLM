@@ -1,11 +1,14 @@
 //! Backend modules, public client APIs and desktop application startup.
 pub mod app_update;
+mod attachment_drop;
 pub mod backends;
 mod benchmark;
 pub mod branding;
 mod commands;
 pub mod config;
 mod conversations;
+#[cfg(target_os = "linux")]
+mod desktop_notifications;
 mod discover;
 mod gateway;
 pub mod gguf;
@@ -14,15 +17,18 @@ pub mod hardware;
 mod hardware_memory;
 pub mod home;
 mod inference_args;
+mod launch_jobs;
 #[cfg(any(target_os = "macos", test))]
 mod launch_path;
 mod mcp;
+pub mod media;
 pub mod models;
 pub mod performance_bench;
 pub mod performance_memory;
 mod personalization;
 mod process_output;
 mod procutil;
+pub mod providers;
 mod resource_estimate;
 pub mod runtime;
 pub mod server;
@@ -33,9 +39,12 @@ mod state;
 mod tray;
 pub mod tuning_defaults;
 pub mod verify;
+#[cfg(windows)]
+mod window_placement;
 
 pub use commands::launch::validate_launch_config;
-pub use commands::models::deletable_model_path;
+pub use commands::models::{deletable_model_path, delete_owned_snapshot};
+pub use commands::providers::inspect_catalog as scan_model_catalog;
 pub use config::AppConfig;
 pub use server::ErrBuf;
 
@@ -57,10 +66,14 @@ use tauri::{Manager, RunEvent, WindowEvent};
 /// sessions untouched; if the spawn itself fails the app stays open and usable
 /// (servers already stopped) with an error.
 pub(crate) fn shutdown_managed_processes(state: &AppState) {
+    state.launch_preflights.cancel_all();
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
     state.discover_cancel.store(true, Ordering::Release);
     state.verify_cancel.store(true, Ordering::Release);
+    // Help discoveries publish nothing after this; their children are owned
+    // transient trees and are terminated below.
+    let _ = commands::runtime_help_cmd::cancel_all_discoveries();
     state.sessions.cancel_all_pending_starts();
     // A window close can end the async build future before it observes
     // runtime_cancel. Kill the tracked CMake process trees while the app is
@@ -124,11 +137,14 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::restore_main_window(app);
         }))
-        // Completion alerts use the official plugin's native path on every
-        // desktop OS. The frontend awaits its `notify` command directly: on
-        // desktop that call only confirms the toast was prepared and handed to
-        // the OS, never that the OS displayed it.
-        .plugin(tauri_plugin_notification::init());
+        // Permission calls and non-Linux alerts use the official plugin.
+        // Linux submissions retain their bus sender for the app's lifetime.
+        .plugin(tauri_plugin_notification::init())
+        // The tray menu is handled once for the whole process; see
+        // `tray::on_menu_event` for why not with each tray icon.
+        .on_menu_event(tray::on_menu_event);
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(desktop_notifications::NotificationService::default());
     // Native WKWebView acceptance needs an embedded driver on macOS. It is
     // explicitly opted into by CI and can never open an automation endpoint in
     // a release build, even if a caller enables every Cargo feature.
@@ -136,7 +152,52 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     let app = builder
         .manage(AppState::default())
+        .on_window_event(attachment_drop::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            commands::notifications::send_desktop_notification,
+            commands::providers::provider_catalog,
+            commands::providers::runtime_adapter_register,
+            commands::providers::pick_runtime_adapter,
+            commands::providers::provider_runtimes,
+            commands::providers::provider_runtime_options,
+            commands::providers::provider_register,
+            commands::providers::provider_install,
+            commands::providers::provider_remove,
+            commands::providers::provider_portable_export,
+            commands::providers::provider_portable_import,
+            commands::providers::model_artifact,
+            commands::providers::list_model_artifacts,
+            commands::providers::model_compatibility,
+            commands::providers::provider_import_command,
+            commands::providers::provider_command_preview,
+            commands::providers::provider_option_issues,
+            commands::runtime_help_cmd::runtime_help_discover,
+            commands::runtime_help_cmd::runtime_help_cached,
+            commands::runtime_help_cmd::runtime_help_cancel,
+            commands::runtime_help_cmd::runtime_help_cancel_owner,
+            commands::runtime_help_cmd::runtime_help_cancel_all,
+            commands::runtime_help_cmd::runtime_help_resolve,
+            commands::runtime_help_cmd::runtime_help_apply_overlay,
+            commands::runtime_help_cmd::runtime_help_diff,
+            commands::runtime_help_cmd::runtime_help_parse,
+            commands::runtime_help_cmd::runtime_help_resolve_plan,
+            commands::runtime_help_cmd::runtime_help_target,
+            commands::runtime_help_cmd::runtime_help_discover_selected,
+            commands::runtime_help_cmd::runtime_help_cancel_selected,
+            commands::runtime_help_cmd::runtime_help_accept,
+            commands::runtime_help_cmd::runtime_help_confirm_syntax,
+            commands::runtime_help_cmd::runtime_help_clear_confirmed_syntax,
+            commands::runtime_help_cmd::provider_option_schema,
+            commands::runtime_help_cmd::runtime_help_import,
+            commands::runtime_help_cmd::entrypoint_help_discover,
+            commands::runtime_help_cmd::entrypoint_help_cancel,
+            commands::runtime_help_cmd::entrypoint_manifest_preview,
+            commands::runtime_help_cmd::adapter_setup_list,
+            commands::runtime_help_cmd::adapter_setup_import,
+            commands::runtime_help_cmd::adapter_setup_prepare,
+            commands::runtime_help_cmd::adapter_setup_cancel,
+            commands::providers::runtime_entrypoint_register,
+            commands::providers::pick_runtime_path,
             commands::benchmark_explorer::open_aiolm_website,
             commands::benchmark_explorer::open_benchmark_explorer,
             commands::benchmark_explorer::read_public_benchmark,
@@ -166,8 +227,10 @@ pub fn run() {
             commands::discover::hf_model_files,
             commands::discover::hf_open_model_card,
             commands::discover::hf_download_model,
+            commands::discover::hf_download_snapshot,
             commands::discover::hf_cancel_download,
             commands::discover::hf_installed_files,
+            commands::discover::hf_installed_snapshots,
             commands::mcp::mcp_list_servers,
             commands::mcp::mcp_save_server,
             commands::mcp::mcp_remove_server,
@@ -175,13 +238,23 @@ pub fn run() {
             commands::mcp::mcp_call_tool,
             commands::mcp::mcp_cancel_tool_call,
             commands::documents::pick_attachment,
+            commands::documents::claim_attachment_drop,
+            commands::documents::discard_attachment_drop,
             commands::documents::pick_document,
+            commands::projects::project_export_json,
+            commands::projects::project_import_json,
             commands::documents::read_document_text,
             commands::documents::read_document_binding,
             commands::documents::pick_image,
             commands::documents::read_image_data,
+            commands::documents::import_media,
+            commands::documents::resolve_media,
+            commands::documents::transcribe_media,
+            commands::documents::extract_video_frames,
+            commands::documents::cancel_media_operation,
             commands::server::start_server,
             commands::launch::preflight_launch,
+            commands::launch::preflight_launch_cancel,
             commands::launch::verify_model_deeply,
             commands::launch::verify_cancel,
             commands::launch::allow_verification_override,
@@ -252,6 +325,10 @@ pub fn run() {
                 #[cfg(any(windows, target_os = "linux"))]
                 if let Err(error) = window.set_decorations(false) {
                     eprintln!("could not remove the native title bar: {error}");
+                }
+                #[cfg(windows)]
+                if let Err(error) = window_placement::fit_initial_window(&window) {
+                    eprintln!("could not fit the initial window to its work area: {error}");
                 }
                 let _ = window.show();
                 let _ = window.set_focus();

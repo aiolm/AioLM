@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   CHAT_WORKSPACE_KEY,
+  chatRetrySnapshot,
   createChatThread,
   defaultChatWorkspace,
   loadChatWorkspace,
@@ -8,6 +9,7 @@ import {
   mergeHydratedWorkspace,
   saveChatWorkspace,
   saveChatWorkspaceAsync,
+  savedRetry,
   threadMatchesQuery,
   titleFromMessage,
   type ChatHistoryMessage,
@@ -27,6 +29,17 @@ const empty = defaultChatWorkspace(1000);
 assert.equal(empty.threads.length, 1);
 assert.equal(empty.threads[0].id, "thread-1000");
 assert.equal(empty.threads[0].systemPrompt, "");
+const boundStore = storage();
+const boundWorkspace = defaultChatWorkspace(1200);
+boundWorkspace.threads[0].projectBinding = { id: 'synthetic-project', updatedAt: 1100 };
+boundWorkspace.threads[0].systemPrompt = 'Conversation override after project application';
+saveChatWorkspace(boundWorkspace, boundStore);
+const reloadedBinding = loadChatWorkspace(boundStore).threads[0];
+assert.deepEqual(reloadedBinding.projectBinding, { id: 'synthetic-project', updatedAt: 1100 });
+assert.equal(reloadedBinding.systemPrompt, 'Conversation override after project application');
+boundStore.setItem(CHAT_WORKSPACE_KEY, JSON.stringify({ ...boundWorkspace, threads: [{ ...boundWorkspace.threads[0], projectBinding: { id: [], updatedAt: 'unknown' } }] }));
+assert.equal(loadChatWorkspace(boundStore).threads[0].projectBinding, undefined);
+assert.equal(loadChatWorkspace(boundStore).threads[0].systemPrompt, 'Conversation override after project application');
 assert.equal(titleFromMessage("  Explain local inference\nwith details "), "Explain local inference with details");
 assert.equal(titleFromMessage(""), "New conversation");
 assert.equal(titleFromMessage("긴 대화 제목을 생략하지 않습니다. ".repeat(20)), "긴 대화 제목을 생략하지 않습니다. ".repeat(20).trim());
@@ -56,6 +69,25 @@ assert.deepEqual(loadChatWorkspace(store), saved);
 const priorPrompt = { ...saved, threads: [{ ...saved.threads[0], systemPrompt: "Keep this conversation instruction." }] };
 saveChatWorkspace(priorPrompt, store);
 assert.equal(loadChatWorkspace(store).threads[0].systemPrompt, "Keep this conversation instruction.");
+
+// A tool turn's Retry snapshot keeps which MCP tools it offered, and an
+// earlier snapshot without them is readable but never resent as complete.
+const retryTool = { serverId: "catalog", serverName: "Synthetic catalog", toolName: "lookup",
+  definition: { type: "function" as const, function: { name: "catalog__lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } } } };
+const toolRequest = { text: "Synthetic tool question", images: [], documents: [], history: [{ role: "user" as const, content: "Synthetic tool question" }] };
+const toolSnapshot = chatRetrySnapshot({ ...toolRequest, tools: [retryTool] }, false);
+assert.deepEqual(toolSnapshot, { version: 1, ...toolRequest, tools: [retryTool] });
+const toolReply: ChatHistoryMessage = { role: "assistant", content: "", finishReason: "tool_calls", toolRound: "cancelled", retry: toolSnapshot };
+const toolStore = storage();
+saveChatWorkspace({ activeThreadId: "thread-3000", threads: [{ ...createChatThread(3000), messages: [{ role: "user", content: "Synthetic tool question" }, toolReply] }] }, toolStore);
+const reloadedToolReply = loadChatWorkspace(toolStore).threads[0].messages.at(-1);
+assert.deepEqual(reloadedToolReply, toolReply);
+assert.deepEqual(savedRetry(reloadedToolReply), { kind: "ready", snapshot: toolSnapshot });
+const earlierToolSnapshot = { version: 1 as const, ...toolRequest };
+assert.deepEqual(savedRetry({ ...toolReply, retry: earlierToolSnapshot }), { kind: "unavailable", reason: "tools-not-saved" });
+assert.deepEqual(savedRetry({ role: "assistant", content: "Partial", interrupted: true, retry: earlierToolSnapshot }), { kind: "ready", snapshot: earlierToolSnapshot });
+assert.deepEqual(savedRetry({ ...toolReply, retry: { ...toolSnapshot, tools: [{ ...retryTool, definition: { type: "function", function: { name: 1 } } }] } as never }),
+  { kind: "unavailable", reason: "not-saved" });
 
 function workspaceWithMetrics(metrics: unknown) {
   return {
@@ -106,6 +138,15 @@ const legacyStore = storage();
 legacyStore.setItem("aiolm.chat-workspace.v1", JSON.stringify(legacyWorkspace));
 assert.deepEqual(loadChatWorkspace(legacyStore), legacyWorkspace);
 
+for (const finishReason of ['length', 'stop', 'tool_calls', 'future_runtime_reason']) {
+  const limited = { ...legacyWorkspace, threads: [{ ...legacyWorkspace.threads[0], messages: [{ role: 'assistant' as const, content: 'Retain this answer', finishReason }] }] };
+  saveChatWorkspace(limited, store);
+  assert.deepEqual(loadChatWorkspace(store), limited);
+}
+const invalidEnding = { ...legacyWorkspace, threads: [{ ...legacyWorkspace.threads[0], messages: [{ role: 'assistant' as const, content: 'Keep this answer', finishReason: 42 }] }] };
+store.setItem(CHAT_WORKSPACE_KEY, JSON.stringify(invalidEnding));
+assert.deepEqual(loadChatWorkspace(store).threads[0].messages, [{ role: 'assistant', content: 'Keep this answer' }]);
+
 assert.equal(threadMatchesQuery({ ...saved.threads[0], messages: [{ role: "user", content: "find this phrase" }] }, "phrase"), true);
 assert.equal(threadMatchesQuery({ ...saved.threads[0], messages: [{ role: "user", content: "find this phrase" }] }, "missing"), false);
 
@@ -147,6 +188,8 @@ assert.equal(merged.threads.find((thread) => thread.id === "thread-local")?.mess
 assert.equal(merged.threads.some((thread) => thread.id === "thread-other"), true);
 assert.equal(merged.threads.some((thread) => thread.id === "thread-deleted"), false);
 assert.equal(mergeHydratedWorkspace(persistedWorkspace, initialWorkspace, initialWorkspace).activeThreadId, "thread-persisted");
+assert.deepEqual(mergeHydratedWorkspace(persistedWorkspace, structuredClone(initialWorkspace), initialWorkspace), persistedWorkspace,
+  "An equal replacement still accepts hydrated history instead of treating reference changes as local edits.");
 
 store.setItem("aiolm.chat-workspace.v1", "not-json");
 assert.equal(loadChatWorkspace(store).threads.length, 1);

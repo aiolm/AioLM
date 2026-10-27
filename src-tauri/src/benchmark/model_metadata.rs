@@ -301,10 +301,7 @@ pub(crate) fn collect(root: &Path, path: &Path) -> Option<BenchmarkModelMetadata
         || metadata.file_type.is_some()
         || declared_repository.is_some()
         || !metadata.base_models.is_empty();
-    let from_receipt = metadata.artifact.is_some()
-        || receipt
-            .as_ref()
-            .is_some_and(|receipt| repository_id(&receipt.repository).is_some());
+    let from_receipt = metadata.artifact.is_some() || receipt_repository.is_some();
     let source = match (from_header, from_receipt) {
         (true, true) => "gguf+huggingface",
         (true, false) => "gguf",

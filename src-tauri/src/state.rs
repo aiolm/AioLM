@@ -22,6 +22,8 @@ pub(crate) struct AppState {
     pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
     pub(crate) model_scans: Arc<models::ScanRegistry>,
+    pub(crate) media_jobs: Arc<crate::media::jobs::MediaJobs>,
+    pub(crate) launch_preflights: Arc<crate::launch_jobs::PreflightJobs>,
     /// The external API listener. It is independent of every model process:
     /// starting, stopping or replacing models never touches it, and stopping
     /// it never unloads a model.
@@ -36,6 +38,7 @@ pub(crate) struct AppState {
     pub(crate) api_key: Arc<str>,
     pub(crate) selected_image: Mutex<Option<PathBuf>>,
     pub(crate) selected_document: Mutex<Option<PathBuf>>,
+    pub(crate) attachment_drops: Mutex<crate::attachment_drop::AttachmentDrops>,
     pub(crate) exiting: Arc<AtomicBool>,
     /// Set once the normal `RunEvent::Exit` path begins. The update installer
     /// path also sets `exiting` to block new starts before its pre-launch
@@ -62,11 +65,14 @@ impl Default for AppState {
             discover_cancel: Arc::new(AtomicBool::new(false)),
             verify_cancel: Arc::new(AtomicBool::new(false)),
             model_scans: Arc::new(models::ScanRegistry::default()),
+            media_jobs: Arc::new(crate::media::jobs::MediaJobs::default()),
+            launch_preflights: Arc::new(crate::launch_jobs::PreflightJobs::default()),
             gateway: Arc::new(Mutex::new(None)),
             api_control: tokio::sync::Mutex::new(()),
             api_key: new_api_key(),
             selected_image: Mutex::new(None),
             selected_document: Mutex::new(None),
+            attachment_drops: Mutex::new(crate::attachment_drop::AttachmentDrops::default()),
             exiting: Arc::new(AtomicBool::new(false)),
             normal_exit: Mutex::new(false),
             sessions: Arc::new(session::SessionManager::new()),
@@ -90,6 +96,8 @@ impl AppState {
     }
 
     pub(crate) fn begin_normal_exit(&self) {
+        self.media_jobs.cancel_all();
+        self.launch_preflights.cancel_all();
         let mut normal_exit = self
             .normal_exit
             .lock()

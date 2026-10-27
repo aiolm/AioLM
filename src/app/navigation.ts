@@ -3,7 +3,7 @@ import type { Locale } from '../shared/i18n/i18nCatalog';
 import type { ViewId } from '../shared/types/navigation';
 export type { ViewId } from '../shared/types/navigation';
 type GroupId = 'workspace' | 'models' | 'execution' | 'integrations' | 'tools';
-export interface NavigationItem { id: ViewId; label: UnifiedKey; icon: string }
+interface NavigationItem { id: ViewId; label: UnifiedKey; icon: string }
 export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
  { id: 'workspace', items: [
   { id: 'chat', label: 'tab.chat', icon: 'M5 4h14v12H9l-4 4V4Z M9 8h6M9 12h4' },

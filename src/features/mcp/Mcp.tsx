@@ -1,6 +1,6 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { formatMcpCommand, validateMcpServerDraft } from "./mcpUtils";
@@ -15,9 +15,30 @@ import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { approvalKey, canAutoApprove, loadMcpApprovalPolicy, saveMcpApprovalPolicy, type McpApprovalPolicy } from "./approvalPolicy";
 import { normalizeDisplayPath, normalizeDisplayPathLines, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { finishTask, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 
 
 type Approval = { tool: api.McpTool; args: Record<string, unknown> };
+type ToolCall = { id: string; taskId: string; label: string; cancelRequested: boolean; settled: boolean; cancelPending?: Promise<void> };
+type DeleteConfirmation = { server: api.McpServer };
+
+function toolExecutionFailed(response: unknown): boolean {
+  return response !== null && typeof response === "object" && "isError" in response && response.isError === true;
+}
+
+function requestCallCancellation(call: ToolCall): Promise<void> {
+  if (call.cancelPending) return call.cancelPending;
+  call.cancelRequested = true;
+  updateTask(call.taskId, { state: "cancelling" });
+  call.cancelPending = api.mcpCancelToolCall(call.id).catch(caught => {
+    call.cancelRequested = false;
+    call.cancelPending = undefined;
+    if (!call.settled) updateTask(call.taskId, { state: "running", detail: caught instanceof Error ? caught.message : String(caught) });
+    throw caught;
+  });
+  return call.cancelPending;
+}
 
 function newId() {
   return `mcp-${Date.now().toString(36)}`;
@@ -31,6 +52,12 @@ const POLICY_LABELS: Record<McpApprovalPolicy, UiTextKey> = {
   deny: "policyDeny",
 };
 
+const McpToolSchema = memo(function McpToolSchema({ tool }: { tool: api.McpTool }) {
+  const { t } = useI18n();
+  const display = useMemo(() => normalizeDisplayText(JSON.stringify(tool.input_schema, null, 2)), [tool.input_schema]);
+  return <pre tabIndex={0} aria-label={t("ui.inputSchema")} className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-canvas p-2 font-mono text-xs text-faint">{display}</pre>;
+});
+
 export default function McpPanel(_props: { store: AppStore }) {
   const { t } = useI18n();
   const policyLabel = (policy: McpApprovalPolicy) => t(`ui.${POLICY_LABELS[policy]}`);
@@ -41,6 +68,8 @@ export default function McpPanel(_props: { store: AppStore }) {
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [approvalPolicy, setApprovalPolicy] = useState<McpApprovalPolicy>(() => loadMcpApprovalPolicy());
   const [approvedCalls, setApprovedCalls] = useState<Set<string>>(() => new Set());
   const [tools, setTools] = useState<api.McpTool[]>([]);
@@ -52,35 +81,87 @@ export default function McpPanel(_props: { store: AppStore }) {
   const [approval, setApproval] = useState<Approval | null>(null);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const approvalBusyRef = useRef(false);
+  const activeCallRef = useRef<ToolCall | null>(null);
+  const selectionGeneration = useRef(0);
+  const discoveryGeneration = useRef(0);
   const [result, setResult] = useState<unknown>(null);
-  const [pendingDelete, setPendingDelete] = useState<api.McpServer | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeleteConfirmation | null>(null);
+  const pendingDeleteRef = useRef<DeleteConfirmation | null>(null);
+  const deleteDialogRevision = useRef(0);
+  const removingIdsRef = useRef(new Set<string>());
+  const [removingIds, setRemovingIds] = useState<Set<string>>(() => new Set());
+  const removalView = useRef<{ selectedId: string | null } | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const approvalSectionRef = useRef<HTMLElement>(null);
 
+  // Deletion feedback belongs to the committed view that issued it. A later
+  // edit or action can own feedback without changing the selected server.
+  useLayoutEffect(() => {
+    const view = { selectedId };
+    removalView.current = view;
+    return () => { if (removalView.current === view) removalView.current = null; };
+  }, [selectedId, name, command, argsText, enabled, approvalPolicy, selectedTool, argsJson, approval, approvalBusy, tools, toolLoading, result, saving, notice, error]);
+
+  const cancelCall = async (call: ToolCall) => {
+    try { await requestCallCancellation(call); }
+    catch (caught) { if (activeCallRef.current === call) setError(caught instanceof Error ? caught.message : String(caught)); }
+  };
+  const cancelActiveCall = async () => {
+    const call = activeCallRef.current;
+    if (call) await cancelCall(call);
+  };
+
+  useEffect(() => () => {
+    selectionGeneration.current += 1;
+    discoveryGeneration.current += 1;
+    const call = activeCallRef.current;
+    activeCallRef.current = null;
+    pendingDeleteRef.current = null;
+    deleteDialogRevision.current += 1;
+    if (call) void requestCallCancellation(call).catch(() => undefined);
+  }, []);
+
   useEffect(() => {
-    if (approval) {
-      window.requestAnimationFrame(() => approvalSectionRef.current?.focus());
+    if (approval || approvalBusy) {
+      window.requestAnimationFrame(() => {
+        const section = approvalSectionRef.current;
+        section?.focus();
+        section?.scrollIntoView({ block: "center" });
+      });
     }
-  }, [approval]);
+  }, [approval, approvalBusy]);
 
   useEffect(() => {
     const dialog = deleteDialogRef.current;
     if (!dialog) return;
     if (pendingDelete && !dialog.open) {
       dialog.showModal();
-      window.requestAnimationFrame(() => cancelDeleteRef.current?.focus());
+      window.requestAnimationFrame(() => { if (pendingDeleteRef.current === pendingDelete) cancelDeleteRef.current?.focus(); });
     } else if (!pendingDelete && dialog.open) {
       dialog.close();
     }
   }, [pendingDelete]);
 
-  const closeDeleteDialog = () => {
-    const serverId = pendingDelete?.id;
-    setPendingDelete(null);
-    if (serverId) window.requestAnimationFrame(() => deleteButtonRefs.current[serverId]?.focus());
+  const openDeleteDialog = (server: api.McpServer) => {
+    const confirmation = { server };
+    deleteDialogRevision.current += 1;
+    pendingDeleteRef.current = confirmation;
+    setPendingDelete(confirmation);
   };
+
+  const closeDeleteConfirmation = (confirmation: DeleteConfirmation | null, restoreFocus = true) => {
+    if (!confirmation || pendingDeleteRef.current !== confirmation) return;
+    pendingDeleteRef.current = null;
+    const revision = ++deleteDialogRevision.current;
+    const focusOwner = document.activeElement;
+    setPendingDelete(null);
+    if (restoreFocus) window.requestAnimationFrame(() => {
+      if (deleteDialogRevision.current === revision && pendingDeleteRef.current === null && document.activeElement === focusOwner) deleteButtonRefs.current[confirmation.server.id]?.focus();
+    });
+  };
+  const closeDeleteDialog = () => closeDeleteConfirmation(pendingDeleteRef.current);
 
   const loadServers = async () => {
     try {
@@ -94,6 +175,10 @@ export default function McpPanel(_props: { store: AppStore }) {
   useEffect(() => { void loadServers(); }, []);
 
   const resetDraft = () => {
+    void cancelActiveCall();
+    selectionGeneration.current += 1;
+    discoveryGeneration.current += 1;
+    setToolLoading(false);
     setSelectedId(null);
     setName("");
     setCommand("");
@@ -110,6 +195,10 @@ export default function McpPanel(_props: { store: AppStore }) {
   };
 
   const selectServer = (server: api.McpServer) => {
+    void cancelActiveCall();
+    selectionGeneration.current += 1;
+    discoveryGeneration.current += 1;
+    setToolLoading(false);
     setSelectedId(server.id);
     setName(server.name);
     setCommand(server.command);
@@ -120,55 +209,102 @@ export default function McpPanel(_props: { store: AppStore }) {
     setApproval(null);
     setResult(null);
     setError(null);
+    setNotice(null);
   };
 
   const save = async () => {
+    if (savingRef.current) return;
     const args = argsText.split("\n").map((arg) => arg.trim()).filter(Boolean);
     const validation = validateMcpServerDraft({ name, command, args, enabled });
     if (validation) { setError(validation); return; }
     const id = selectedId ?? newId();
+    const server = { id, name: name.trim(), command: command.trim(), args, enabled };
+    const previous = servers.find(candidate => candidate.id === id);
+    const definitionChanged = !previous || previous.command !== server.command
+      || previous.enabled !== enabled || JSON.stringify(previous.args) !== JSON.stringify(args);
+    savingRef.current = true;
+    setSaving(true);
+    if (definitionChanged) {
+      // Metadata and remembered approvals belong to the executable definition,
+      // even when the saved server ID and tool names are unchanged.
+      void cancelActiveCall();
+      selectionGeneration.current += 1;
+      discoveryGeneration.current += 1;
+      setToolLoading(false);
+      setTools([]);
+      setSelectedTool(null);
+      setApproval(null);
+      setResult(null);
+      setApprovedCalls(current => new Set([...current].filter(key => !key.startsWith(`${id}:`))));
+    }
+    const generation = selectionGeneration.current;
+    setNotice(null);
+    setError(null);
     try {
-      const next = await api.mcpSaveServer({ id, name: name.trim(), command: command.trim(), args, enabled });
+      const next = await api.mcpSaveServer(server);
       setServers(next);
+      if (generation !== selectionGeneration.current) return;
       setSelectedId(id);
       setNotice(t("ui.mcpSaved"));
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (generation === selectionGeneration.current) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
-  const doRemove = async (server: api.McpServer) => {
+  const doRemove = async (server: api.McpServer, confirmation: DeleteConfirmation | null = null) => {
+    if (removingIdsRef.current.has(server.id)) return;
+    removingIdsRef.current.add(server.id);
+    setRemovingIds(new Set(removingIdsRef.current));
+    const view = removalView.current;
     try {
-      setServers(await api.mcpRemoveServer(server.id));
-      if (selectedId === server.id) resetDraft();
-      setNotice(t("ui.mcpRemoved"));
-      setError(null);
+      const next = await api.mcpRemoveServer(server.id);
+      const current = removalView.current;
+      if (!current) return;
+      const removedCurrentTarget = current.selectedId === server.id;
+      setServers(next);
+      if (removedCurrentTarget) resetDraft();
+      if (removedCurrentTarget || current === view) {
+        setNotice(t("ui.mcpRemoved"));
+        setError(null);
+      }
+      const confirmationNow = pendingDeleteRef.current;
+      if (confirmationNow?.server.id === server.id && !next.some(candidate => candidate.id === server.id)) {
+        closeDeleteConfirmation(confirmationNow, current === view);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (view && removalView.current === view) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setPendingDelete(null);
-      window.requestAnimationFrame(() => deleteButtonRefs.current[server.id]?.focus());
+      removingIdsRef.current.delete(server.id);
+      if (removalView.current) setRemovingIds(new Set(removingIdsRef.current));
+      closeDeleteConfirmation(confirmation, view !== null && removalView.current === view);
     }
   };
 
   const discoverTools = async () => {
-    if (!selectedId) return;
+    if (!selectedId || savingRef.current) return;
+    const generation = ++discoveryGeneration.current;
     setToolLoading(true);
     setError(null);
     setNotice(null);
     try {
-      setTools(await api.mcpListTools(selectedId));
+      const discovered = await api.mcpListTools(selectedId);
+      if (generation !== discoveryGeneration.current) return;
+      setTools(discovered);
       setNotice(t("ui.mcpToolsLoaded"));
     } catch (caught) {
+      if (generation !== discoveryGeneration.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setToolLoading(false);
+      if (generation === discoveryGeneration.current) setToolLoading(false);
     }
   };
 
   const prepareCall = () => {
-    if (!selectedTool) return;
+    if (!selectedTool || savingRef.current) return;
     let parsedArgs: Record<string, unknown>;
     try {
       const parsed = JSON.parse(argsJson) as unknown;
@@ -195,26 +331,49 @@ export default function McpPanel(_props: { store: AppStore }) {
   };
 
   const runToolCall = async (pending: Approval, autoApproved: boolean) => {
-    if (!selectedId || approvalBusyRef.current) return;
+    if (!selectedId || approvalBusyRef.current || savingRef.current) return;
     const serverId = selectedId;
     const key = approvalKey(serverId, pending.tool.name);
+    const generation = selectionGeneration.current;
+    const id = crypto.randomUUID();
+    const call: ToolCall = { id, taskId: `mcp-tool-call-${id}`, label: `${servers.find(server => server.id === serverId)?.name ?? serverId} · ${pending.tool.name}`, cancelRequested: false, settled: false };
+    activeCallRef.current = call;
+    registerTask({ id: call.taskId, kind: "other", label: call.label, phase: t("ui.approveRunning"), interruptible: true, cancel: () => cancelCall(call) });
     approvalBusyRef.current = true;
     setApprovalBusy(true);
     setApproval(null);
+    setResult(null);
+    setNotice(null);
+    setError(null);
     try {
-      setResult(await api.mcpCallTool(serverId, pending.tool.name, pending.args));
+      const response = await api.mcpCallTool(serverId, pending.tool.name, pending.args, id);
+      call.settled = true;
+      const toolError = toolExecutionFailed(response) ? t("ui.mcpToolFailed", { name: pending.tool.name }) : null;
+      finishTask(call.taskId, call.cancelRequested ? "cancelled" : toolError ? "failed" : "completed", call.cancelRequested ? undefined : toolError ?? undefined);
+      if (activeCallRef.current !== call || generation !== selectionGeneration.current) return;
+      if (call.cancelRequested) { setNotice(t("ui.taskCancelled")); return; }
+      setResult(response);
       if (approvalPolicy === "session" || approvalPolicy === "server-tool") {
         setApprovedCalls((current) => new Set(current).add(key));
       }
+      if (toolError) { setError(toolError); return; }
       setNotice(autoApproved
         ? `${t("ui.mcpAutoApproved", { policy: policyLabel(approvalPolicy) })} ${t("ui.mcpToolCompleted", { name: pending.tool.name })}`
         : t("ui.mcpToolCompleted", { name: pending.tool.name }));
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const message = caught instanceof Error ? caught.message : String(caught);
+      call.settled = true;
+      finishTask(call.taskId, call.cancelRequested ? "cancelled" : "failed", call.cancelRequested ? undefined : message);
+      if (activeCallRef.current !== call || generation !== selectionGeneration.current) return;
+      if (call.cancelRequested) { setNotice(t("ui.taskCancelled")); setError(null); }
+      else setError(message);
     } finally {
-      approvalBusyRef.current = false;
-      setApprovalBusy(false);
+      if (activeCallRef.current === call) {
+        activeCallRef.current = null;
+        approvalBusyRef.current = false;
+        setApprovalBusy(false);
+      }
     }
   };
 
@@ -243,14 +402,19 @@ export default function McpPanel(_props: { store: AppStore }) {
       </PanelFeedback>
 
       <div className="grid min-h-0 gap-4 app-master-detail">
-        <aside className="app-card app-card--tight"><div className="flex items-center justify-between gap-2"><h3 className="app-section-title">{t("panel.configuredServers")}</h3><button type="button" data-icon="add" onClick={resetDraft} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button></div><div className="mt-3 space-y-1.5">{servers.length === 0 && <EmptyState title={t("panel.noMcpServers")} description={t("ui.mcpEmptyHint")} />}{servers.map((server) => <div key={server.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${server.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectServer(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium text-ink">{normalizeDisplayText(server.name)}</span><span className="mt-0.5 block"><StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} /></span></button><button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} onClick={() => { if (shouldConfirmDestructive()) setPendingDelete(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger mr-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div></aside>
+        <aside className="app-card app-card--tight"><div className="flex items-center justify-between gap-2"><h3 className="app-section-title">{t("panel.configuredServers")}</h3><button type="button" data-icon="add" onClick={resetDraft} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button></div><div className="mt-3 space-y-1.5">{servers.length === 0 && <EmptyState title={t("panel.noMcpServers")} description={t("ui.mcpEmptyHint")} />}{servers.map((server) => <div key={server.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${server.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectServer(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium text-ink">{normalizeDisplayText(server.name)}</span><span className="mt-0.5 block"><StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} /></span></button><button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} onClick={() => { if (shouldConfirmDestructive()) openDeleteDialog(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger mr-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div></aside>
 
-        <div className="min-w-0 space-y-4"><section className="app-card"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.serverDefinition")}</h3><p className="app-section-hint">{t("ui.serverDefinitionHint")}</p></div><div className="flex items-center gap-2"><Switch id="mcp-server-enabled" checked={enabled} onChange={setEnabled} /><label htmlFor="mcp-server-enabled" className="text-xs text-muted">{t("ui.enabled")}</label></div></div><div className="mt-3.5 grid gap-3 app-form-grid"><label className="text-xs text-muted">{t("ui.fieldName")}<input value={normalizeDisplayText(name)} onChange={(event) => setName(event.target.value)} placeholder={t("ui.fieldNamePlaceholder")} className="app-input mt-1" /></label><label className="text-xs text-muted">{t("ui.fieldCommand")}<input value={normalizeDisplayPath(command)} onChange={(event) => setCommand(event.target.value)} placeholder="npx or C:\\Tools\\server.exe" className="app-input mt-1 font-mono" /></label></div><label className="mt-3.5 block text-xs text-muted">{t("ui.fieldArgs")}<textarea value={normalizeDisplayPathLines(argsText)} onChange={(event) => setArgsText(event.target.value)} rows={4} placeholder={"-y\n@modelcontextprotocol/server-filesystem\nC:\\Documents"} className="app-textarea mt-1 app-mono" /></label><div className="mt-4 flex flex-wrap items-center gap-2.5"><div className="flex items-center gap-2 text-xs text-muted"><span>{t("ui.approvalPolicy")}</span><CustomSelect ariaLabel={t("ui.approvalPolicy")} value={approvalPolicy} options={[{ value: "always-ask", label: t("ui.policyAlwaysAsk") }, { value: "once", label: t("ui.policyOnce") }, { value: "session", label: t("ui.policySession") }, { value: "server-tool", label: t("ui.policyServerTool") }, { value: "deny", label: t("ui.policyDeny") }]} onChange={(val) => { const nextPolicy = val as McpApprovalPolicy; setApprovalPolicy(nextPolicy); saveMcpApprovalPolicy(nextPolicy); setApprovedCalls(new Set()); setNotice(`${t("ui.approvalPolicy")}: ${policyLabel(nextPolicy)}`); }} size="sm" triggerClassName="w-[140px]" /></div><button type="button" onClick={() => void save()} className="app-button app-button--primary app-button--sm">{t("ui.saveServer")}</button>{selectedServer && <><code className="max-w-full app-text-wrap rounded bg-canvas px-2.5 py-1.5 font-mono text-xs text-muted" title={displayMcpCommand}>{displayMcpCommand}</code><button type="button" onClick={() => void discoverTools()} disabled={toolLoading || !selectedServer.enabled} className="app-button app-button--secondary app-button--sm"><StableLabel value={toolLoading ? t("ui.discovering") : t("ui.discoverTools")} labels={[t("ui.discovering"), t("ui.discoverTools")]} /></button></>}</div></section>
+        <div className="min-w-0 space-y-4"><section className="app-card"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.serverDefinition")}</h3><p className="app-section-hint">{t("ui.serverDefinitionHint")}</p></div><div className="flex items-center gap-2"><Switch id="mcp-server-enabled" checked={enabled} onChange={setEnabled} /><label htmlFor="mcp-server-enabled" className="text-xs text-muted">{t("ui.enabled")}</label></div></div><div className="mt-3.5 grid gap-3 app-form-grid"><label className="text-xs text-muted">{t("ui.fieldName")}<input value={normalizeDisplayText(name)} onChange={(event) => setName(event.target.value)} placeholder={t("ui.fieldNamePlaceholder")} className="app-input mt-1" /></label><label className="text-xs text-muted">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPath(command)} onChange={(event) => setCommand(event.target.value)} placeholder="npx or C:\\Tools\\server.exe" className="app-input mt-1 font-mono" /></label></div><label className="mt-3.5 block text-xs text-muted">{t("ui.fieldArgs")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPathLines(argsText)} onChange={(event) => setArgsText(event.target.value)} rows={4} placeholder={"-y\n@modelcontextprotocol/server-filesystem\nC:\\Documents"} className="app-textarea mt-1 app-mono" /></label><div className="mt-4 flex flex-wrap items-center gap-2.5"><div className="flex items-center gap-2 text-xs text-muted"><span>{t("ui.approvalPolicy")}</span><CustomSelect ariaLabel={t("ui.approvalPolicy")} value={approvalPolicy} options={[{ value: "always-ask", label: t("ui.policyAlwaysAsk") }, { value: "once", label: t("ui.policyOnce") }, { value: "session", label: t("ui.policySession") }, { value: "server-tool", label: t("ui.policyServerTool") }, { value: "deny", label: t("ui.policyDeny") }]} onChange={(val) => { const nextPolicy = val as McpApprovalPolicy; setApprovalPolicy(nextPolicy); saveMcpApprovalPolicy(nextPolicy); setApprovedCalls(new Set()); setNotice(`${t("ui.approvalPolicy")}: ${policyLabel(nextPolicy)}`); }} size="sm" triggerClassName="w-[140px]" /></div><button type="button" onClick={() => void save()} disabled={saving} aria-busy={saving} className="app-button app-button--primary app-button--sm">{t("ui.saveServer")}</button>{selectedServer && <><code className="max-w-full app-text-wrap rounded bg-canvas px-2.5 py-1.5 font-mono text-xs text-muted" title={displayMcpCommand}>{displayMcpCommand}</code><button type="button" onClick={() => void discoverTools()} disabled={saving || toolLoading || !selectedServer.enabled} className="app-button app-button--secondary app-button--sm"><StableLabel value={toolLoading ? t("ui.discovering") : t("ui.discoverTools")} labels={[t("ui.discovering"), t("ui.discoverTools")]} /></button></>}</div></section>
 
-          {selectedServer && <section className="app-card"><div className="flex items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.toolsTitle")} {tools.length > 0 && <span className="text-accent">· {tools.length}</span>}</h3><p className="app-section-hint">{t("ui.toolsHint")}</p></div><Badge tone="warning">{t("ui.approvalRequiredBadge")}</Badge></div>{tools.length === 0 && <p className="mt-4 text-sm text-faint">{t("ui.discoverToolsHint")}</p>}<div className="mt-3.5 space-y-2.5">{tools.map((tool) => <div key={tool.name} className={`app-list-row p-3.5 ${selectedTool?.name === tool.name ? "is-selected" : ""}`}><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><code className="font-mono text-xs text-accent">{normalizeDisplayText(tool.name)}</code><p className="mt-1 text-xs leading-relaxed text-muted">{normalizeDisplayText(tool.description || t("ui.noToolDescription"))}</p></div><button type="button" onClick={() => { setSelectedTool(tool); setArgsJson("{}\n"); setApproval(null); setResult(null); }} aria-label={`${t("ui.prepareCall")}: ${normalizeDisplayText(tool.name)}`} className="app-button app-button--secondary app-button--sm">{t("ui.prepareCall")}</button></div>{selectedTool?.name === tool.name && <div className="mt-3.5 border-t border-line pt-3.5"><label className="block text-xs text-muted">{t("ui.jsonArguments")}<textarea value={normalizeDisplayText(argsJson)} onChange={(event) => setArgsJson(event.target.value)} rows={4} className="app-textarea mt-1 app-mono" /></label><details className="mt-2.5"><summary className="cursor-pointer text-xs text-faint">{t("ui.inputSchema")}</summary><pre tabIndex={0} aria-label={t("ui.inputSchema")} className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-canvas p-2 font-mono text-xs text-faint">{normalizeDisplayText(JSON.stringify(tool.input_schema, null, 2))}</pre></details><button type="button" onClick={prepareCall} className="app-button app-button--primary app-button--sm mt-3.5">{t("ui.reviewToolCall")}</button></div>}</div>)}</div></section>}
+          {approvalBusy && activeCallRef.current && <section ref={approvalSectionRef} tabIndex={-1} className="app-card app-card--tight flex flex-wrap items-center justify-between gap-3" role="status">
+            <span className="min-w-0 app-text-wrap">{t("ui.approveRunning")}: {normalizeDisplayText(activeCallRef.current.label)}</span>
+            <LocalTaskCancelButton taskId={activeCallRef.current.taskId} onClick={() => void cancelActiveCall()}>{t("panel.cancel")}</LocalTaskCancelButton>
+          </section>}
 
-          {approval && selectedServer && <section ref={approvalSectionRef} tabIndex={-1} className="app-card app-card--warning focus:outline-none" role="alert"><h3 className="app-section-title text-warning">{t("ui.approveTitle")}</h3><p className="app-section-hint text-warning/80">{t("ui.approveBody", { tool: normalizeDisplayText(approval.tool.name), server: normalizeDisplayText(selectedServer.name) })}</p><pre tabIndex={0} aria-label={t("ui.approveTitle")} className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(JSON.stringify(approval.args, null, 2))}</pre><div className="mt-3.5 flex gap-2"><button type="button" disabled={approvalBusy} onClick={() => void approveCall()} className="app-button app-button--primary app-button--sm"><StableLabel value={approvalBusy ? t("ui.approveRunning") : t("ui.approveRun")} labels={[t("ui.approveRunning"), t("ui.approveRun")]} /></button><button type="button" disabled={approvalBusy} onClick={() => setApproval(null)} className="app-button app-button--secondary app-button--sm">{t("panel.cancel")}</button></div></section>}
-          {result !== null && <section className="app-card app-card--success"><h3 className="app-section-title text-success">{t("ui.toolResult")}</h3><pre tabIndex={0} aria-label={t("ui.toolResult")} className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre></section>}
+          {selectedServer && <section className="app-card"><div className="flex items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.toolsTitle")} {tools.length > 0 && <span className="text-accent">· {tools.length}</span>}</h3><p className="app-section-hint">{t("ui.toolsHint")}</p></div><Badge tone="warning">{t("ui.approvalRequiredBadge")}</Badge></div>{tools.length === 0 && <p className="mt-4 text-sm text-faint">{t("ui.discoverToolsHint")}</p>}<div className="mt-3.5 space-y-2.5">{tools.map((tool) => <div key={tool.name} className={`app-list-row p-3.5 ${selectedTool?.name === tool.name ? "is-selected" : ""}`}><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><code className="font-mono text-xs text-accent">{normalizeDisplayText(tool.name)}</code><p className="mt-1 text-xs leading-relaxed text-muted">{normalizeDisplayText(tool.description || t("ui.noToolDescription"))}</p></div><button type="button" disabled={saving} onClick={() => { setSelectedTool(tool); setArgsJson("{}\n"); setApproval(null); setResult(null); }} aria-label={`${t("ui.prepareCall")}: ${normalizeDisplayText(tool.name)}`} className="app-button app-button--secondary app-button--sm">{t("ui.prepareCall")}</button></div>{selectedTool?.name === tool.name && <div className="mt-3.5 border-t border-line pt-3.5"><label className="block text-xs text-muted">{t("ui.jsonArguments")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayText(argsJson)} onChange={(event) => setArgsJson(event.target.value)} rows={4} className="app-textarea mt-1 app-mono" /></label><details className="mt-2.5"><summary className="cursor-pointer text-xs text-faint">{t("ui.inputSchema")}</summary><McpToolSchema tool={tool} /></details><button type="button" onClick={prepareCall} disabled={saving} className="app-button app-button--primary app-button--sm mt-3.5">{t("ui.reviewToolCall")}</button></div>}</div>)}</div></section>}
+
+          {approval && selectedServer && <section ref={approvalSectionRef} tabIndex={-1} className="app-card app-card--warning focus:outline-none" role="alert"><h3 className="app-section-title text-warning">{t("ui.approveTitle")}</h3><p className="app-section-hint text-warning/80">{t("ui.approveBody", { tool: normalizeDisplayText(approval.tool.name), server: normalizeDisplayText(selectedServer.name) })}</p><pre tabIndex={0} aria-label={t("ui.approveTitle")} className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(JSON.stringify(approval.args, null, 2))}</pre><div className="mt-3.5 flex gap-2"><button type="button" disabled={saving || approvalBusy} onClick={() => void approveCall()} className="app-button app-button--primary app-button--sm"><StableLabel value={approvalBusy ? t("ui.approveRunning") : t("ui.approveRun")} labels={[t("ui.approveRunning"), t("ui.approveRun")]} /></button><button type="button" disabled={approvalBusy} onClick={() => setApproval(null)} className="app-button app-button--secondary app-button--sm">{t("panel.cancel")}</button></div></section>}
+          {result !== null && <section className={toolExecutionFailed(result) ? "app-card" : "app-card app-card--success"}><h3 className={`app-section-title ${toolExecutionFailed(result) ? "text-error" : "text-success"}`}>{t("ui.toolResult")}</h3><pre tabIndex={0} aria-label={t("ui.toolResult")} className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre></section>}
         </div>
       </div>
 
@@ -265,11 +429,11 @@ export default function McpPanel(_props: { store: AppStore }) {
           <div className="app-confirm-dialog__eyebrow">{t("ui.destructiveAction")}</div>
           <h2 id="mcp-delete-title">{t("ui.deleteServerTitle")}</h2>
           <p id="mcp-delete-description">
-            {t("ui.deleteServerBody", { name: normalizeDisplayText(pendingDelete?.name ?? "") })}
+            {t("ui.deleteServerBody", { name: normalizeDisplayText(pendingDelete?.server.name ?? "") })}
           </p>
           <div className="app-confirm-dialog__actions">
             <button type="button" ref={cancelDeleteRef} className="app-button app-button--secondary" onClick={closeDeleteDialog}>{t("panel.cancel")}</button>
-            <button type="button" className="app-button app-button--danger" onClick={() => pendingDelete && void doRemove(pendingDelete)}>{t("ui.deleteServer")}</button>
+            <button type="button" className="app-button app-button--danger" disabled={pendingDelete !== null && removingIds.has(pendingDelete.server.id)} aria-busy={pendingDelete !== null && removingIds.has(pendingDelete.server.id)} onClick={() => pendingDelete && void doRemove(pendingDelete.server, pendingDelete)}>{t("ui.deleteServer")}</button>
           </div>
         </div>
       </dialog>

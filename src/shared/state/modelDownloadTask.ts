@@ -9,7 +9,7 @@ export const MODEL_DOWNLOAD_TASK_ID = "model-download";
 const MAX_SPEED_SAMPLES = 30;
 
 /** Turn one progress event into the fields the task row shows. */
-export function downloadTaskPatch(
+function downloadTaskPatch(
   next: api.ModelDownloadProgress,
   samples: DownloadSample[],
 ): Partial<Omit<AppTask, "id">> {
@@ -51,8 +51,9 @@ export function useModelDownloadTask(): void {
       const patch = downloadTaskPatch(next, samples);
       // A row already on screen is patched in place, so restarting a download
       // cannot leave a stale row behind or open a second one.
-      if (getTaskSnapshot().some((task) => task.id === MODEL_DOWNLOAD_TASK_ID)) {
-        updateTask(MODEL_DOWNLOAD_TASK_ID, { ...patch, state: "running" });
+      const current = getTaskSnapshot().find((task) => task.id === MODEL_DOWNLOAD_TASK_ID);
+      if (current) {
+        updateTask(MODEL_DOWNLOAD_TASK_ID, { ...patch, state: current.state === 'cancelling' ? 'cancelling' : 'running' });
       } else {
         registerTask({
           id: MODEL_DOWNLOAD_TASK_ID,

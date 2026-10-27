@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import TuningSamplerChain from './TuningSamplerChain';
 
@@ -65,6 +65,30 @@ describe('sampler chain ordering', () => {
     expect(screen.getByRole('combobox')).toBeDisabled();
     expect(stage('top_k')).toHaveAttribute('draggable', 'false');
     expect(chainOrder()).toEqual(value);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('ignores a drop after a controlled reorder and shrink invalidates the dragged item', () => {
+    const changed = vi.fn();
+    function Harness() {
+      const [value, setValue] = useState(['top_k', 'top_p', 'temperature']);
+      return <>
+        <button type="button" onClick={() => setValue(['temperature', 'top_p'])}>Replace samplers</button>
+        <button type="button" onClick={() => setValue(['temperature'])}>Shrink samplers</button>
+        <TuningSamplerChain value={value} onChange={next => { changed(next); setValue(next); }} />
+      </>;
+    }
+
+    render(wrap(<Harness />));
+    fireEvent.dragStart(stage('top_p'));
+    // A parent can replace and reorder the controlled value while the pointer
+    // is still holding the old chip.
+    fireEvent.click(screen.getByRole('button', { name: 'Replace samplers' }));
+    fireEvent.dragStart(stage('top_p'));
+    fireEvent.click(screen.getByRole('button', { name: 'Shrink samplers' }));
+
+    expect(() => fireEvent.drop(stage('temperature'))).not.toThrow();
+    expect(chainOrder()).toEqual(['temperature']);
     expect(changed).not.toHaveBeenCalled();
   });
 });

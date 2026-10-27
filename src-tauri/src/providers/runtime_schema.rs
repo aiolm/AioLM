@@ -1,0 +1,4637 @@
+//! One effective option schema per selected runtime.
+//!
+//! Built-in option catalogs and manifest options are adapter-sourced facts.
+//! Help that a user discovered and accepted for the exact runtime adds the
+//! options those catalogs do not describe. The settings UI renders this one
+//! schema, saved values are validated against it and launch arguments come
+//! from the same resolver, for built-in and registered engines alike.
+//!
+//! Which help applies is pinned: acceptance records the fingerprint of the
+//! exact help command (executable and declared artifact hashes, argv, full
+//! environment, runtime version, scope and parser). Launch recomputes that
+//! identity and refuses saved help options when anything changed, keeping the
+//! values for review instead of reusing another script's or build's options.
+//!
+//! App-owned bindings come from the adapter, not from option names: built-in
+//! managed flags, and for registered engines every flag or positional slot its
+//! launch template fills from `{model}`, `{port}`, `{host}` and friends.
+use super::{
+    options::{self, OptionKind, OptionSpec, OptionTarget},
+    registry::{self, ExternalOption},
+    runtime_help::{Encoding, HelpCommand, MAX_STREAM_BYTES},
+    runtime_help_store::{self, HelpSnapshot},
+    runtime_metadata::{self, Applies, FactConflict, MetadataView, OptionMetadata},
+    runtime_options::{
+        Arity, Certainty, Fact, ManagedBinding, NumericRange, OptionDefinition, OptionIssue,
+        OptionSchema, ResolvedOptions, RuntimeDefault, Source, Spelling, Target, ValueKind,
+        ValueStyle, SCHEMA_VERSION,
+    },
+    runtime_ordered::{self, ORDER_KEY},
+    runtime_positional::{self, CommandEntry, PositionalRole},
+    ProviderId,
+};
+use crate::config::AppConfig;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
+
+pub const ACCEPTED_VERSION: u32 = 1;
+const ACCEPTED_FILE: &str = "accepted.json";
+const ACCEPTED_LIMIT: u64 = 65_536;
+use super::adapter::help::{Compat, HELP_TIMEOUT_MS};
+pub use super::adapter::help::{RuntimeKey, Selected};
+
+/// Saved provider values with dedicated controls; never generic options.
+const RESERVED_KEYS: &[&str] = &[
+    options::EXTRA_ARGS_KEY,
+    options::TRUST_REMOTE_CODE_KEY,
+    super::launch::LORA_ADAPTERS_KEY,
+    super::launch::REQUEST_LORA_KEY,
+    super::launch::DRAFT_MODEL_KEY,
+    ORDER_KEY,
+];
+
+/// The help command a user chose, minus everything the adapter decides
+/// (environment, working directory, artifacts, limits).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HelpRequest {
+    /// Explicit decoding for help bytes only; omitted requests keep Auto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<Encoding>,
+    /// Child-local locale, never an operating system setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Explicit execution context. Declared adapter directories stay fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+    /// Registered engines default to their launch program; a bridge's engine
+    /// executable may be asked when it is a declared, hash-checked artifact.
+    #[serde(default)]
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub scope: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedHelp {
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
+    pub fingerprint: String,
+    pub request: HelpRequest,
+}
+
+/// What the settings UI may ask: the program and prefix are adapter-owned.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct HelpTarget {
+    pub engine: String,
+    pub runtime: String,
+    pub program: String,
+    /// Built-in engines always ask their own entry point.
+    pub fixed: bool,
+    /// Arguments every help request for the launch program starts with.
+    pub prefix: Vec<String>,
+    pub request: HelpRequest,
+    pub accepted: Option<AcceptedHelp>,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpState {
+    /// No help was accepted; only catalog/manifest options apply.
+    None,
+    /// The accepted help still describes the runtime exactly.
+    Current,
+    /// The runtime, its artifacts or its help command changed since review.
+    Stale,
+    /// Accepted, but the identity was not recomputed for this view.
+    Unchecked,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EffectiveSchema {
+    pub schema: OptionSchema,
+    /// Subcommand scope the accepted help describes.
+    pub scope: Vec<String>,
+    pub help_state: HelpState,
+    pub help_detail: String,
+    pub accepted_fingerprint: Option<String>,
+    /// Keys from the built-in catalog or manifest (compatibility mapping).
+    pub compat_keys: Vec<String>,
+    /// Keys only accepted help describes.
+    pub help_keys: Vec<String>,
+    /// Help options hidden because a catalog option already covers them.
+    pub shadowed: Vec<String>,
+    /// Catalog/manifest facts that differ from the accepted help rows they
+    /// shadow, with provenance. The declaration keeps its legacy mapping;
+    /// a blocking difference refuses a saved value instead of misplacing it.
+    pub conflicts: Vec<FactConflict>,
+    /// The engine's explicit option metadata: provenance, the options it
+    /// described and the declarations observed help or bindings overrode.
+    pub metadata: Option<MetadataView>,
+    /// Value counts and repetition the user confirmed for help options whose
+    /// help left them unknown, shown apart from help and adapter facts.
+    pub supplement: Option<SupplementView>,
+    /// A saved confirmation file this app refuses to read (malformed, newer,
+    /// oversized); nothing from it applies and help options needing it block.
+    pub supplement_error: Option<String>,
+    /// The registered command head (program, prefix, layout, bindings) a
+    /// pasted command and positional roles are judged against. Absent for
+    /// built-in runtimes, whose commands the app builds itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<CommandEntry>,
+}
+
+pub const SUPPLEMENT_VERSION: u32 = 1;
+/// Written only when a positional role is confirmed, so files without one
+/// stay readable by earlier versions and newer roles are refused by them.
+pub const SUPPLEMENT_POSITIONAL_VERSION: u32 = 2;
+const SUPPLEMENT_FILE: &str = "supplement.json";
+const SUPPLEMENT_LIMIT: u64 = 262_144;
+
+/// Syntax a user confirmed for one help option. Only facts the help left
+/// unknown can be confirmed; this never describes protocol abilities, types,
+/// ranges, defaults, constraints or app-owned bindings.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedSyntax {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arity: Option<Arity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeatable: Option<bool>,
+    /// Who fills a help positional slot; only with supplement version 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional: Option<PositionalRole>,
+}
+
+/// Confirmations pinned to the accepted help they were made for. Another
+/// help fingerprint (a rebuilt runtime or a newer review) never inherits them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Supplement {
+    pub version: u32,
+    pub fingerprint: String,
+    pub options: BTreeMap<String, ConfirmedSyntax>,
+}
+
+/// A confirmation the current help contradicts or no longer covers.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SupplementConflict {
+    pub key: String,
+    /// `option` (absent or app-owned now), `arity` or `repeatable`.
+    pub field: String,
+    pub confirmed: Value,
+    /// What the current help documents; null when it has no such option.
+    pub help: Value,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SupplementView {
+    pub fingerprint: String,
+    pub options: BTreeMap<String, ConfirmedSyntax>,
+    /// The confirmations describe the accepted help and are in effect.
+    pub current: bool,
+    /// Keys whose unknown facts the confirmations established.
+    pub applied: Vec<String>,
+    pub conflicts: Vec<SupplementConflict>,
+}
+
+pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, String> {
+    super::adapter::help::runtime_key(cfg)
+}
+
+/// Preserve the exact adapter environment without lossy name conversion.
+pub(crate) fn unicode_environment(
+    pairs: Vec<(OsString, OsString)>,
+) -> Result<BTreeMap<String, String>, String> {
+    pairs
+        .into_iter()
+        .map(|(key, value)| {
+            Ok((
+                key.into_string()
+                    .map_err(|_| "a runtime environment name is not Unicode".to_string())?,
+                value
+                    .into_string()
+                    .map_err(|_| "a runtime environment value is not Unicode".to_string())?,
+            ))
+        })
+        .collect()
+}
+
+fn same_program(left: &str, right: &str) -> bool {
+    if Path::new(left) == Path::new(right) {
+        return true;
+    }
+    match (
+        Path::new(left).canonicalize(),
+        Path::new(right).canonicalize(),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The adapter-owned parts of a help request for the selected runtime.
+pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
+    let selected = Selected::from_config(cfg)?;
+    help_target_for(root, cfg, &selected)
+}
+
+fn help_target_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+) -> Result<HelpTarget, String> {
+    let accepted = load_accepted(root, &selected.key.engine, &selected.key.runtime)?;
+    super::adapter::help::help_target(cfg, selected, accepted)
+}
+
+/// The exact shell-free help command for the selected runtime. The adapter
+/// decides the environment, working directory and artifacts so the help
+/// describes the same process launch would start.
+pub fn help_command(cfg: &AppConfig, request: &HelpRequest) -> Result<HelpCommand, String> {
+    help_command_for(cfg, &Selected::from_config(cfg)?, request)
+}
+
+fn help_command_for(
+    cfg: &AppConfig,
+    selected: &Selected,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let mut command = super::adapter::help::help_command(cfg, selected, request)?;
+    apply_help_text_settings(&mut command, request)?;
+    command.working_directory =
+        super::execution_context::directory(cfg, command.working_directory)?;
+    Ok(command)
+}
+
+/// The help command for a registered (or about to be registered) engine's
+/// manifest: its launch program or a declared artifact, the exact entry
+/// prefix, literal adapter environment, working directory and artifacts.
+pub fn manifest_help_command(
+    manifest: &registry::RuntimeManifest,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let program = request
+        .program
+        .clone()
+        .unwrap_or_else(|| manifest.launch.program.clone());
+    let launch_program = same_program(&program, &manifest.launch.program);
+    if !launch_program && !manifest.artifacts.iter().any(|a| same_program(a, &program)) {
+        return Err(
+            "help must run the registered launch program or one of its declared artifacts".into(),
+        );
+    }
+    let prefix = registry::launch_prefix(manifest);
+    if launch_program && !request.args.starts_with(&prefix) {
+        // Literal entry arguments may contain credentials. The caller can
+        // display its structured, masked command separately from this error.
+        return Err("help arguments must start with the registered entry point".into());
+    }
+    if launch_program
+        && request.scope
+            != super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?
+    {
+        return Err("the help scope does not match the entry point; explicitly map its subcommand tokens and discover again".into());
+    }
+    let mut environment = unicode_environment(super::python_env::engine_environment())?;
+    // Literal adapter environment applies; templated values (model,
+    // port, credentials) only exist for an actual launch.
+    for (name, value) in &manifest.launch.env {
+        if !value.contains('{') {
+            environment.insert(name.clone(), value.clone());
+        }
+    }
+    if let Some((name, value)) = registry::bridge_environment(manifest)? {
+        environment.insert(name, value);
+    }
+    let mut command = HelpCommand {
+        program: PathBuf::from(program),
+        args: request.args.clone(),
+        environment,
+        working_directory: super::execution_context::requested(
+            manifest.launch.working_directory.clone().map(PathBuf::from),
+            request.working_directory.as_deref(),
+        )?,
+        artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
+        // Hashes identify the build; this names the registration so a
+        // discovery before registration matches the one after it. Declared
+        // option facts are part of what a review accepts, so changed
+        // metadata makes an earlier acceptance stale.
+        runtime_version: match &manifest.option_metadata {
+            None => format!(
+                "registered:{}/{}",
+                manifest.engine_id.as_str(),
+                manifest.runtime_id
+            ),
+            Some(metadata) => format!(
+                "registered:{}/{};option-metadata:{}",
+                manifest.engine_id.as_str(),
+                manifest.runtime_id,
+                metadata.digest()
+            ),
+        },
+        scope: request.scope.clone(),
+        encoding: Encoding::Auto,
+        timeout_ms: HELP_TIMEOUT_MS,
+        output_limit: MAX_STREAM_BYTES,
+    };
+    if let Some(digest) = registry::option_scope_digest(manifest) {
+        command
+            .runtime_version
+            .push_str(&format!(";option-scopes:{digest}"));
+    }
+    if let Some(layout) = &manifest.command_layout {
+        command.runtime_version.push_str(&format!(
+            ";command-layout:{:x}",
+            Sha256::digest(serde_json::to_vec(layout).map_err(|error| error.to_string())?)
+        ));
+    }
+    apply_help_text_settings(&mut command, request)?;
+    Ok(command)
+}
+
+/// Apply after adapter environment resolution so the explicitly chosen
+/// locale cannot be replaced by the old deterministic default. Neither
+/// setting changes inference HTTP/SSE decoding or the global environment.
+fn apply_help_text_settings(
+    command: &mut HelpCommand,
+    request: &HelpRequest,
+) -> Result<(), String> {
+    let locale = request.locale.as_deref().unwrap_or("C");
+    if locale.is_empty()
+        || locale.len() > 64
+        || !locale
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-@".contains(&byte))
+    {
+        return Err("help locale must be 1..64 ASCII letters, digits, _, ., - or @; choose a locale the engine supports".into());
+    }
+    command.encoding = request.encoding.unwrap_or_default();
+    command.environment.insert("LC_ALL".into(), locale.into());
+    Ok(())
+}
+
+fn require_launch_help(command: HelpCommand, launch_program: &str) -> Result<HelpCommand, String> {
+    if !same_program(&command.program.to_string_lossy(), launch_program) {
+        return Err("artifact help is inspection only; discover the HTTP launch entry point's help to configure its options".into());
+    }
+    Ok(command)
+}
+
+fn option_help_command_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let target = help_target_for(root, cfg, selected)?;
+    require_launch_help(help_command_for(cfg, selected, request)?, &target.program)
+}
+
+/// Check a draft's help evidence before registration: the discovery must
+/// describe exactly the engine the draft registers (same command identity)
+/// and document every binding flag. Returns the acceptance to record once
+/// the registration is published.
+pub fn draft_acceptance(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<AcceptedHelp>, String> {
+    let Some(help) = &draft.help else {
+        return Ok(None);
+    };
+    if help.request.working_directory.is_some() && draft.working_directory.is_none() {
+        return Err(
+            "make the reviewed working directory part of the entry point before registration"
+                .into(),
+        );
+    }
+    let command = require_launch_help(
+        manifest_help_command(manifest, &help.request)?,
+        &manifest.launch.program,
+    )?;
+    let snapshot = runtime_help_store::load_snapshot(
+        root,
+        manifest.engine_id.as_str(),
+        &manifest.runtime_id,
+        &help.fingerprint,
+    )?
+    .ok_or("discover the entry point's help again; the reviewed discovery is missing")?;
+    registry::check_draft_against_help(draft, &snapshot.schema)?;
+    let identity = command.identity(&AtomicBool::new(false))?;
+    if identity.fingerprint != help.fingerprint {
+        return Err(
+            "the entry point changed since its help was discovered; discover its help again".into(),
+        );
+    }
+    Ok(Some(AcceptedHelp {
+        version: ACCEPTED_VERSION,
+        working_directory: Some(super::execution_context::observed(
+            command.working_directory,
+        )?),
+        fingerprint: help.fingerprint.clone(),
+        request: help.request.clone(),
+    }))
+}
+
+/// Register an entry point from an explicit draft: build its manifest, check
+/// any reviewed help against it, register (hash + probe + publish) and pin
+/// that help for the new registration.
+pub async fn register_entrypoint(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    cancel: Option<std::sync::Arc<AtomicBool>>,
+) -> Result<registry::RuntimeManifest, String> {
+    match register_entrypoint_outcome(root, draft, cancel).await? {
+        EntrypointRegistration::Complete(manifest) => Ok(manifest),
+        EntrypointRegistration::HelpPending { cause, .. } => Err(cause),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum EntrypointRegistration {
+    Complete(registry::RuntimeManifest),
+    HelpPending {
+        manifest: registry::RuntimeManifest,
+        fingerprint: String,
+        cause: String,
+    },
+}
+
+pub(crate) async fn register_entrypoint_outcome(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    cancel: Option<std::sync::Arc<AtomicBool>>,
+) -> Result<EntrypointRegistration, String> {
+    let manifest = registry::manifest_from_draft(draft)?;
+    let check = (root.to_path_buf(), draft.clone(), manifest.clone());
+    let accepted =
+        tokio::task::spawn_blocking(move || draft_acceptance(&check.0, &check.1, &check.2))
+            .await
+            .map_err(|e| e.to_string())??;
+    let registered = registry::register_manifest(manifest, cancel).await?;
+    if let Some(accepted) = accepted {
+        let fingerprint = accepted.fingerprint.clone();
+        let target = (
+            root.to_path_buf(),
+            registered.engine_id,
+            registered.runtime_id.clone(),
+        );
+        let saved = tokio::task::spawn_blocking(move || {
+            write_accepted(&target.0, target.1.as_str(), &target.2, &accepted)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if let Err(cause) = saved {
+            return Ok(EntrypointRegistration::HelpPending {
+                manifest: registered,
+                fingerprint,
+                cause,
+            });
+        }
+    }
+    Ok(EntrypointRegistration::Complete(registered))
+}
+
+/// Complete only the reviewed-help write for this exact, still-valid
+/// registration. Callers serialize this with runtime lifecycle operations.
+pub(crate) fn resume_entrypoint_help(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+) -> Result<registry::RuntimeManifest, String> {
+    let expected = registry::manifest_from_draft(draft)?;
+    let registered = registry::manifest_for_help_resume(&expected)?;
+    let accepted = draft_acceptance(root, draft, &registered)?
+        .ok_or("this entry point has no reviewed help to finish saving")?;
+    write_accepted(
+        root,
+        registered.engine_id.as_str(),
+        &registered.runtime_id,
+        &accepted,
+    )?;
+    Ok(registered)
+}
+
+fn accepted_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+    Ok(runtime_help_store::snapshot_root(root, engine, runtime)?.join(ACCEPTED_FILE))
+}
+
+pub fn load_accepted(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<Option<AcceptedHelp>, String> {
+    let path = accepted_path(root, engine, runtime)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > ACCEPTED_LIMIT {
+        return Err("accepted help record is not a bounded regular file".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let accepted: AcceptedHelp =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid accepted help: {e}"))?;
+    if accepted.version != ACCEPTED_VERSION {
+        return Err(format!(
+            "accepted help version {} is not supported by this app",
+            accepted.version
+        ));
+    }
+    Ok(Some(accepted))
+}
+
+/// Record that the user reviewed this exact discovery for launch. The current
+/// command must still produce the discovered fingerprint, and its complete
+/// snapshot must exist.
+pub fn accept(
+    root: &Path,
+    cfg: &AppConfig,
+    fingerprint: &str,
+    request: &HelpRequest,
+) -> Result<AcceptedHelp, String> {
+    let key = runtime_key(cfg)?;
+    let selected = Selected::from_config(cfg)?;
+    let command = option_help_command_for(root, cfg, &selected, request)?;
+    let identity = command.identity(&AtomicBool::new(false))?;
+    if identity.fingerprint != fingerprint {
+        return Err(
+            "the runtime or its help command changed since this discovery; discover again".into(),
+        );
+    }
+    runtime_help_store::load_snapshot(root, &key.engine, &key.runtime, fingerprint)?
+        .ok_or("discover this runtime's help before accepting it")?;
+    let accepted = AcceptedHelp {
+        version: ACCEPTED_VERSION,
+        working_directory: Some(super::execution_context::observed(
+            command.working_directory,
+        )?),
+        fingerprint: fingerprint.into(),
+        request: request.clone(),
+    };
+    write_accepted(root, &key.engine, &key.runtime, &accepted)?;
+    Ok(accepted)
+}
+
+fn write_accepted(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    accepted: &AcceptedHelp,
+) -> Result<(), String> {
+    let path = accepted_path(root, engine, runtime)?;
+    std::fs::create_dir_all(path.parent().expect("accepted record has a directory"))
+        .map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(accepted).map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&path, &bytes)
+}
+
+pub(crate) fn adapter_source(engine: &str, revision: &str) -> Source {
+    Source::Adapter {
+        id: engine.into(),
+        revision: revision.into(),
+    }
+}
+
+fn documented<T>(value: T, source: &Source) -> Fact<T> {
+    Fact {
+        value: Some(value),
+        certainty: Certainty::Documented,
+        source: Some(source.clone()),
+    }
+}
+
+fn blank(key: &str, group: &str, target: Target) -> OptionDefinition {
+    OptionDefinition {
+        key: key.into(),
+        scope: Vec::new(),
+        spellings: Vec::new(),
+        position: None,
+        kind: Fact::default(),
+        arity: Fact::default(),
+        repeatable: Fact::default(),
+        choices: Fact::default(),
+        range: Fact::default(),
+        unit: Fact::default(),
+        runtime_default: Fact::default(),
+        group: group.into(),
+        help: String::new(),
+        target,
+        request_field: Fact::default(),
+        restart_required: Fact::default(),
+        sensitive: Fact::default(),
+        local_path: Fact::default(),
+        managed: None,
+        raw_spans: Vec::new(),
+    }
+}
+
+/// Shared shape of catalog and manifest kinds.
+enum CompatKind {
+    Integer(f64, f64),
+    Number(f64, f64),
+    Flag,
+    Toggle,
+    Choice(Vec<String>),
+    Text,
+    Path,
+    Json,
+}
+
+fn compat_definition(
+    key: &str,
+    group: &str,
+    flag: Option<&str>,
+    request: bool,
+    kind: CompatKind,
+    runtime_default: Option<&str>,
+    source: &Source,
+) -> OptionDefinition {
+    let mut option = blank(
+        key,
+        group,
+        if request {
+            Target::Request
+        } else {
+            Target::Launch
+        },
+    );
+    if request {
+        option.request_field = documented(key.to_owned(), source);
+    } else if let Some(flag) = flag {
+        option.spellings.push(Spelling {
+            flag: flag.into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+    }
+    let one = Arity {
+        min: 1,
+        max: Some(1),
+    };
+    let (value_kind, arity) = match &kind {
+        CompatKind::Integer(..) => (ValueKind::Integer, one),
+        CompatKind::Number(..) => (ValueKind::Number, one),
+        CompatKind::Flag | CompatKind::Toggle => (
+            ValueKind::Boolean,
+            Arity {
+                min: 0,
+                max: Some(0),
+            },
+        ),
+        CompatKind::Json => (ValueKind::Json, one),
+        CompatKind::Choice(_) | CompatKind::Text | CompatKind::Path => (ValueKind::Text, one),
+    };
+    option.kind = documented(value_kind, source);
+    option.arity = documented(arity, source);
+    match kind {
+        CompatKind::Integer(min, max) | CompatKind::Number(min, max) => {
+            option.range = documented(
+                NumericRange {
+                    min: Some(min),
+                    max: Some(max),
+                },
+                source,
+            );
+        }
+        // The catalog documents that a false flag emits nothing.
+        CompatKind::Flag => {
+            option.runtime_default = documented(
+                RuntimeDefault {
+                    literal: Value::Bool(false),
+                },
+                source,
+            );
+        }
+        CompatKind::Toggle => {
+            if let Some(flag) = flag.filter(|_| !request) {
+                option.spellings = vec![
+                    Spelling {
+                        flag: flag.into(),
+                        style: ValueStyle::Separate,
+                        polarity: Some(true),
+                    },
+                    Spelling {
+                        flag: format!("--no-{}", flag.trim_start_matches('-')),
+                        style: ValueStyle::Separate,
+                        polarity: Some(false),
+                    },
+                ];
+            }
+        }
+        CompatKind::Choice(choices) => {
+            option.choices = documented(choices.into_iter().map(Value::String).collect(), source);
+        }
+        CompatKind::Path => option.local_path = documented(true, source),
+        CompatKind::Text | CompatKind::Json => {}
+    }
+    if let Some(text) = runtime_default.filter(|_| option.runtime_default.value.is_none()) {
+        option.runtime_default = documented(
+            RuntimeDefault {
+                literal: Value::String(text.into()),
+            },
+            source,
+        );
+    }
+    option
+}
+
+/// A built-in catalog option as a common schema option.
+pub fn from_spec(spec: &OptionSpec, source: &Source) -> OptionDefinition {
+    let kind = match spec.kind {
+        OptionKind::Integer { min, max } => CompatKind::Integer(min as f64, max as f64),
+        OptionKind::Number { min, max } => CompatKind::Number(min, max),
+        OptionKind::Flag => CompatKind::Flag,
+        OptionKind::Toggle => CompatKind::Toggle,
+        OptionKind::Choice { choices } => {
+            CompatKind::Choice(choices.iter().map(|c| (*c).to_owned()).collect())
+        }
+        OptionKind::Text { .. } => CompatKind::Text,
+        OptionKind::Path => CompatKind::Path,
+        OptionKind::Json => CompatKind::Json,
+    };
+    compat_definition(
+        spec.key,
+        spec.group,
+        spec.flag,
+        spec.target == OptionTarget::Request,
+        kind,
+        spec.runtime_default,
+        source,
+    )
+}
+
+/// A manifest v1 option as a common schema option.
+pub fn from_external(option: &ExternalOption, source: &Source) -> Option<OptionDefinition> {
+    let number = |name: &str| option.kind[name].as_f64();
+    let kind = match option.kind["type"].as_str()? {
+        "integer" => CompatKind::Integer(number("min")?, number("max")?),
+        "number" => CompatKind::Number(number("min")?, number("max")?),
+        "flag" => CompatKind::Flag,
+        "toggle" => CompatKind::Toggle,
+        "choice" => CompatKind::Choice(
+            option.kind["choices"]
+                .as_array()?
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        "text" => CompatKind::Text,
+        "path" => CompatKind::Path,
+        "json" => CompatKind::Json,
+        _ => return None,
+    };
+    let mut definition = compat_definition(
+        &option.key,
+        &option.group,
+        option.flag.as_deref(),
+        option.target == "request",
+        kind,
+        option.runtime_default.as_deref(),
+        source,
+    );
+    if let Some(scope) = &option.scope {
+        definition.scope = scope.clone();
+    }
+    Some(definition)
+}
+
+/// The argv a valid built-in catalog value produces, through the common
+/// resolver. Invalid values produce nothing; callers validate first.
+pub fn spec_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
+    let source = adapter_source("builtin.catalog", "1");
+    from_spec(spec, &source)
+        .resolve_one(&None, std::slice::from_ref(value))
+        .unwrap_or_default()
+}
+
+/// The selected runtime's explicit option metadata, as its effective schema
+/// applies it, for reviewing a discovery before it is accepted.
+pub fn selected_metadata(cfg: &AppConfig) -> Result<Option<(OptionMetadata, bool)>, String> {
+    Ok(compat(&Selected::from_config(cfg)?)?.metadata)
+}
+
+fn adapter_label(option: &OptionDefinition) -> String {
+    [
+        &option.kind.source,
+        &option.arity.source,
+        &option.request_field.source,
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|source| match source {
+        Source::Adapter { id, revision } => Some(format!("{id} {revision}")),
+        _ => None,
+    })
+    .unwrap_or_default()
+}
+
+/// Differences between a catalog/manifest option and the accepted help row
+/// it shadows (matched by a shared spelling or key). The declaration stays
+/// in effect for its legacy key; only a value count it would serialize
+/// outside the observed one blocks a saved value.
+fn declared_differences(
+    declared: &OptionDefinition,
+    observed: &OptionDefinition,
+) -> Vec<FactConflict> {
+    let flag = declared
+        .spellings
+        .iter()
+        .find(|s| observed.spellings.iter().any(|o| o.flag == s.flag))
+        .or(observed.spellings.first())
+        .map(|s| s.flag.clone())
+        .unwrap_or_default();
+    let conflict = |field: &str, seen: Value, said: Value, blocking: bool| FactConflict {
+        key: declared.key.clone(),
+        flag: flag.clone(),
+        positional: None,
+        field: field.into(),
+        observed: seen,
+        declared: said,
+        declared_by: adapter_label(declared),
+        applies: Applies::Declared,
+        blocking,
+    };
+    let mut found = Vec::new();
+    if declared.key != observed.key {
+        found.push(conflict(
+            "key",
+            Value::from(observed.key.clone()),
+            Value::from(declared.key.clone()),
+            false,
+        ));
+    }
+    if declared.target != observed.target {
+        found.push(conflict(
+            "target",
+            serde_json::json!(observed.target),
+            serde_json::json!(declared.target),
+            false,
+        ));
+        return found;
+    }
+    if let (Some(seen), Some(said)) = (observed.arity.supported(), declared.arity.supported()) {
+        if seen != said {
+            let outside =
+                said.min < seen.min || seen.max.is_some_and(|max| said.max.is_none_or(|n| n > max));
+            found.push(conflict(
+                "arity",
+                serde_json::json!(seen),
+                serde_json::json!(said),
+                outside,
+            ));
+        }
+    }
+    // A type, choice list or range the help observes also limits which saved
+    // values the runtime accepts: those differences refuse a saved value
+    // outside the observed facts. Repetition and defaults stay informational.
+    macro_rules! compare {
+        ($field:ident, $name:literal, $values:literal) => {
+            if let (Some(seen), Some(said)) =
+                (observed.$field.supported(), declared.$field.supported())
+            {
+                if seen != said {
+                    found.push(conflict(
+                        $name,
+                        serde_json::json!(seen),
+                        serde_json::json!(said),
+                        $values,
+                    ));
+                }
+            }
+        };
+    }
+    compare!(kind, "kind", true);
+    compare!(range, "range", true);
+    compare!(repeatable, "repeatable", false);
+    compare!(runtime_default, "runtime_default", false);
+    if let (Some(seen), Some(said)) = (observed.choices.supported(), declared.choices.supported()) {
+        if seen.len() != said.len() || seen.iter().any(|value| !said.contains(value)) {
+            found.push(conflict(
+                "choices",
+                Value::from(seen.clone()),
+                Value::from(said.clone()),
+                true,
+            ));
+        }
+    }
+    found
+}
+
+/// The argv text of a saved scalar, as observed choices spell it.
+fn argv_text(value: &Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// Whether one saved scalar is outside the facts the help observed.
+fn outside_observed(conflict: &FactConflict, value: &Value) -> bool {
+    match conflict.field.as_str() {
+        "choices" => conflict.observed.as_array().is_some_and(|choices| {
+            !choices
+                .iter()
+                .any(|choice| choice == value || choice.as_str() == Some(&argv_text(value)))
+        }),
+        "kind" => serde_json::from_value::<ValueKind>(conflict.observed.clone())
+            .is_ok_and(|kind| !runtime_metadata::typed(kind, value)),
+        "range" => value.as_f64().is_none_or(|number| {
+            conflict.observed["min"]
+                .as_f64()
+                .is_some_and(|min| number < min)
+                || conflict.observed["max"]
+                    .as_f64()
+                    .is_some_and(|max| number > max)
+        }),
+        _ => true,
+    }
+}
+
+/// The reason a blocking difference refuses this saved value, if it does.
+fn blocking_issue(conflict: &FactConflict, saved: &Value, sensitive: bool) -> Option<String> {
+    let recovery = "remove the saved value, or correct that declaration and register the runtime again (or select a runtime whose help matches it)";
+    match conflict.field.as_str() {
+        "arity" => Some(format!(
+            "{}: the reviewed help shows {} value(s) for this option but {} declares {}; the saved value was retained because launching it would misplace arguments. Remove the saved value, or correct that option declaration and register the runtime again (or select a runtime whose help matches it)",
+            conflict.flag,
+            value_count(&conflict.observed),
+            conflict.declared_by,
+            value_count(&conflict.declared)
+        )),
+        "choices" | "kind" | "range" => {
+            let rows = runtime_help_store::overrides_from_map(&Map::from_iter([(
+                conflict.key.clone(),
+                saved.clone(),
+            )]));
+            let outside = rows
+                .get(&conflict.key)
+                .into_iter()
+                .flat_map(|row| row.occurrences.iter().flatten())
+                .find(|value| outside_observed(conflict, value))?;
+            let observed = match conflict.observed.as_array() {
+                Some(choices) => choices.iter().map(argv_text).collect::<Vec<_>>().join(", "),
+                None => argv_text(&conflict.observed),
+            };
+            // A secret value, and the declared list it came from, are never
+            // repeated in a diagnostic; the reason and recovery suffice.
+            Some(if sensitive {
+                format!(
+                    "{}: the reviewed help accepts {} {observed} but the saved (hidden) value is outside it, although {} declares it; the saved value was retained. Choose a value the help documents, {recovery}",
+                    conflict.flag, conflict.field, conflict.declared_by,
+                )
+            } else {
+                format!(
+                    "{}: the reviewed help accepts {} {observed} but the saved value {} is outside it, although {} declares {}; the saved value was retained. Choose a value the help documents, {recovery}",
+                    conflict.flag,
+                    conflict.field,
+                    argv_text(outside),
+                    conflict.declared_by,
+                    argv_text(&conflict.declared),
+                )
+            })
+        }
+        "reserved" => Some(format!(
+            "{}: {} reserves this option because {}; the saved value was retained. Remove it — the app provides this behavior",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.declared)
+        )),
+        "constraint" => Some(format!(
+            "{}: {} declares a constraint the reviewed help cannot honor ({}); the saved value was retained instead of launching without it. Correct the option metadata and register the runtime again, or remove the saved value",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.declared)
+        )),
+        _ => Some(format!(
+            "{}: {} declares facts for this option that could not be applied ({}); the saved value was retained instead of launching without them. Correct the option metadata and register the runtime again, or remove the saved value",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.observed)
+        )),
+    }
+}
+
+fn value_count(arity: &Value) -> String {
+    let min = arity["min"].as_u64().unwrap_or_default();
+    match arity["max"].as_u64() {
+        Some(max) if max == min => min.to_string(),
+        Some(max) => format!("{min} to {max}"),
+        None => format!("{min} or more"),
+    }
+}
+
+/// Saved keys for help review. Kept separate from discovery so catalog and
+/// dedicated settings can be compared against the effective option contract.
+pub fn discovery_saved_keys(cfg: &AppConfig, selected: &Selected) -> Result<Vec<String>, String> {
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(selected.key.provider.as_str())
+        .unwrap_or(&empty);
+    let catalog = compat(selected)?;
+    let known = catalog
+        .options
+        .iter()
+        .map(|option| option.key.as_str())
+        .collect::<BTreeSet<_>>();
+    Ok(generic_entries(values)
+        .filter(|(key, _)| !known.contains(key.as_str()))
+        .map(|(key, _)| key.clone())
+        .collect())
+}
+
+/// A new entry point has no manifest option catalog. Its saved provider values
+/// must be reviewed against its new help, even before any help was accepted.
+pub fn entrypoint_saved_keys(cfg: &AppConfig, provider: ProviderId) -> Vec<String> {
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(provider.as_str())
+        .unwrap_or(&empty);
+    generic_entries(values)
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
+/// Re-registration compares against reviewed help, not a newer exploratory
+/// discovery that has not been accepted. New registrations may use the latest
+/// snapshot solely to show changes between their own discovery attempts.
+pub fn entrypoint_baseline(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<runtime_help_store::Baseline, String> {
+    match load_accepted(root, engine, runtime)? {
+        Some(accepted) => Ok(runtime_help_store::Baseline::Accepted(
+            runtime_help_store::load_snapshot(root, engine, runtime, &accepted.fingerprint)?
+                .map(Box::new),
+        )),
+        None => Ok(runtime_help_store::Baseline::Latest),
+    }
+}
+
+/// A documented alias of an app binding remains app-owned even when a
+/// manifest/catalog option shadows that help row in the effective schema.
+fn protect_binding_aliases(compat: &mut Compat, help: &[OptionDefinition]) {
+    for option in help {
+        let binding = option.managed.or_else(|| {
+            option
+                .spellings
+                .iter()
+                .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                .copied()
+        });
+        if let Some(binding) = binding {
+            for spelling in &option.spellings {
+                compat
+                    .managed_flags
+                    .entry(spelling.flag.clone())
+                    .or_insert(binding);
+            }
+        }
+    }
+    for option in &mut compat.options {
+        if option.target == Target::Launch {
+            option.managed = option.managed.or_else(|| {
+                option
+                    .spellings
+                    .iter()
+                    .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                    .copied()
+            });
+        }
+    }
+}
+
+fn compat(selected: &Selected) -> Result<Compat, String> {
+    super::adapter::help::option_descriptor(selected)
+}
+
+fn compat_fingerprint(engine: &str, runtime: &str, options: &[OptionDefinition]) -> String {
+    let identity = serde_json::json!({"engine": engine, "runtime": runtime, "options": options});
+    format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+}
+
+fn current_identity(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    accepted: &AcceptedHelp,
+) -> Result<(), String> {
+    let identity = option_help_command_for(root, cfg, selected, &accepted.request)?
+        .identity(&AtomicBool::new(false))?;
+    if identity.fingerprint == accepted.fingerprint {
+        Ok(())
+    } else {
+        Err("the runtime, its declared artifacts or its help command changed since its options were reviewed; discover its help again and review the changes".into())
+    }
+}
+
+/// The one schema the settings UI renders and launch resolves for `cfg`.
+/// `verify` recomputes the accepted help identity (hashing the executable and
+/// artifacts); views that only display may skip it.
+pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<EffectiveSchema, String> {
+    effective_for(root, cfg, &Selected::from_config(cfg)?, verify)
+}
+
+pub fn effective_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    verify: bool,
+) -> Result<EffectiveSchema, String> {
+    build_effective(root, cfg, selected, verify, true)
+}
+
+fn build_effective(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    verify: bool,
+    with_supplement: bool,
+) -> Result<EffectiveSchema, String> {
+    let key = &selected.key;
+    let mut compat = compat(selected)?;
+    let accepted = load_accepted(root, &key.engine, &key.runtime)?;
+    let snapshot: Option<HelpSnapshot> = match &accepted {
+        Some(accepted) => runtime_help_store::load_snapshot(
+            root,
+            &key.engine,
+            &key.runtime,
+            &accepted.fingerprint,
+        )?,
+        None => None,
+    };
+    let (help_state, help_detail) = match (&accepted, &snapshot) {
+        (None, _) => (HelpState::None, String::new()),
+        (Some(_), None) => (
+            HelpState::Stale,
+            "the accepted help snapshot is missing; discover this runtime's help again".into(),
+        ),
+        (Some(accepted), Some(_)) if verify => {
+            match current_identity(root, cfg, selected, accepted) {
+                Ok(()) => (HelpState::Current, String::new()),
+                Err(error) => (HelpState::Stale, error),
+            }
+        }
+        (Some(_), Some(_)) => (HelpState::Unchecked, String::new()),
+    };
+    protect_binding_aliases(
+        &mut compat,
+        snapshot
+            .as_ref()
+            .map_or(&[], |snapshot| snapshot.schema.options.as_slice()),
+    );
+    let compat_keys: Vec<String> = compat.options.iter().map(|o| o.key.clone()).collect();
+    let mut compat_flags: BTreeSet<String> = BTreeSet::new();
+    for option in &compat.options {
+        for spelling in &option.spellings {
+            compat_flags.insert(spelling.flag.clone());
+        }
+    }
+    let compat_metadata = compat.metadata.take();
+    let entry = compat.entry.take();
+    let compat_len = compat.options.len();
+    let mut options = compat.options;
+    let mut help_keys = Vec::new();
+    let mut shadowed = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut schema_extras = None;
+    let mut scope = Vec::new();
+    if let Some(snapshot) = &snapshot {
+        scope = snapshot.report.scope.clone();
+        // Catalog/manifest options apply to the same launch subcommand the
+        // help describes, so one resolution orders and validates them all.
+        for option in &mut options {
+            option.scope = compat
+                .explicit_scopes
+                .get(&option.key)
+                .cloned()
+                .unwrap_or_else(|| scope.clone());
+        }
+        for help in &snapshot.schema.options {
+            let covered = help
+                .spellings
+                .iter()
+                .any(|spelling| compat_flags.contains(&spelling.flag));
+            if covered || compat_keys.contains(&help.key) {
+                for declared in options[..compat_len].iter().filter(|declared| {
+                    declared.key == help.key
+                        || declared
+                            .spellings
+                            .iter()
+                            .any(|s| help.spellings.iter().any(|h| h.flag == s.flag))
+                }) {
+                    conflicts.extend(declared_differences(declared, help));
+                }
+                shadowed.push(help.key.clone());
+                continue;
+            }
+            let mut help = help.clone();
+            if help.managed.is_none() {
+                if help.position.is_some() {
+                    // Positional slots follow the adapter's launch template;
+                    // their order relative to it cannot be proven from help.
+                    help.managed = Some(ManagedBinding::Discovery);
+                } else if let Some(binding) = help
+                    .spellings
+                    .iter()
+                    .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                    .copied()
+                {
+                    help.managed = Some(binding);
+                }
+            }
+            help_keys.push(help.key.clone());
+            options.push(help);
+        }
+        let kept: BTreeSet<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        let constraints = snapshot
+            .schema
+            .constraints
+            .iter()
+            .filter(|constraint| match constraint.supported() {
+                Some(
+                    super::runtime_options::Relation::Requires { when, other }
+                    | super::runtime_options::Relation::Excludes { when, other },
+                ) => kept.contains(when.key.as_str()) && kept.contains(other.key.as_str()),
+                None => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        schema_extras = Some((
+            constraints,
+            snapshot.schema.raw_help.clone(),
+            snapshot.schema.end_of_options.clone(),
+        ));
+    }
+    let fingerprint = accepted
+        .as_ref()
+        .filter(|_| snapshot.is_some())
+        .map(|accepted| accepted.fingerprint.clone())
+        .unwrap_or_else(|| compat_fingerprint(&key.engine, &key.runtime, &options));
+    let (constraints, raw_help, end_of_options) = schema_extras.unwrap_or_default();
+    let mut schema = OptionSchema {
+        schema_version: SCHEMA_VERSION,
+        binding: super::runtime_options::SchemaBinding {
+            engine: key.engine.clone(),
+            runtime: key.runtime.clone(),
+            fingerprint,
+        },
+        options,
+        constraints,
+        raw_help,
+        end_of_options,
+    };
+    // Adapter facts fill what help and catalogs leave unknown before user
+    // confirmations do; declarations for absent options are only reported
+    // once reviewed help says which options exist.
+    let metadata = compat_metadata.map(|(metadata, builtin)| {
+        runtime_metadata::apply(
+            &mut schema,
+            &metadata,
+            builtin,
+            !builtin && snapshot.is_some(),
+        )
+    });
+    let saved = if with_supplement {
+        load_supplement(root, &key.engine, &key.runtime)
+    } else {
+        Ok(None)
+    };
+    let (supplement, supplement_error) = match saved {
+        Ok(None) => (None, None),
+        Ok(Some(saved)) => {
+            let current = snapshot.is_some()
+                && accepted
+                    .as_ref()
+                    .is_some_and(|accepted| accepted.fingerprint == saved.fingerprint);
+            (
+                Some(apply_supplement(
+                    &mut schema,
+                    &help_keys,
+                    entry.as_ref(),
+                    saved,
+                    current,
+                )),
+                None,
+            )
+        }
+        Err(error) => (None, Some(error)),
+    };
+    let mut entry = entry;
+    if let (Some(entry), Some(view)) = (entry.as_mut(), supplement.as_ref()) {
+        if view.current && !view.conflicts.iter().any(|c| c.field == "positional") {
+            entry.positional_roles = view
+                .options
+                .iter()
+                .filter(|(key, _)| view.applied.contains(key))
+                .filter_map(|(key, syntax)| syntax.positional.clone().map(|r| (key.clone(), r)))
+                .collect();
+        }
+    }
+    schema.validate()?;
+    Ok(EffectiveSchema {
+        schema,
+        scope,
+        help_state,
+        help_detail,
+        accepted_fingerprint: accepted.map(|accepted| accepted.fingerprint),
+        compat_keys,
+        help_keys,
+        shadowed,
+        conflicts,
+        metadata,
+        supplement,
+        supplement_error,
+        entry,
+    })
+}
+
+fn supplement_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+    Ok(runtime_help_store::snapshot_root(root, engine, runtime)?.join(SUPPLEMENT_FILE))
+}
+
+fn valid_confirmation(syntax: &ConfirmedSyntax) -> bool {
+    (syntax.arity.is_some() || syntax.repeatable.is_some() || syntax.positional.is_some())
+        && match &syntax.positional {
+            Some(PositionalRole::Binding { name }) => !name.is_empty() && name.len() <= 64,
+            Some(PositionalRole::Static { index }) => *index < 128,
+            _ => true,
+        }
+        && syntax
+            .arity
+            .is_none_or(|a| a.min <= 256 && a.max.is_none_or(|max| max >= a.min && max <= 256))
+}
+
+/// The saved confirmations, refused (never repaired) when malformed, newer
+/// than this app, oversized or not a regular file.
+pub fn load_supplement(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<Option<Supplement>, String> {
+    let path = supplement_path(root, engine, runtime)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > SUPPLEMENT_LIMIT {
+        return Err("confirmed option syntax is not a bounded regular file".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let raw: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("confirmed option syntax is malformed: {e}"))?;
+    match raw.get("version").and_then(Value::as_u64) {
+        Some(version)
+            if version == u64::from(SUPPLEMENT_VERSION)
+                || version == u64::from(SUPPLEMENT_POSITIONAL_VERSION) => {}
+        Some(version) => {
+            return Err(format!(
+                "confirmed option syntax version {version} is not supported by this app"
+            ))
+        }
+        None => return Err("confirmed option syntax has no valid version".into()),
+    }
+    let saved: Supplement = serde_json::from_value(raw)
+        .map_err(|e| format!("confirmed option syntax is malformed: {e}"))?;
+    if saved.fingerprint.len() != 64
+        || !saved.fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        || saved.options.len() > 4096
+        || saved
+            .options
+            .iter()
+            .any(|(key, syntax)| key.is_empty() || key.len() > 128 || !valid_confirmation(syntax))
+    {
+        return Err("confirmed option syntax is invalid".into());
+    }
+    if saved.version == SUPPLEMENT_VERSION
+        && saved
+            .options
+            .values()
+            .any(|syntax| syntax.positional.is_some())
+    {
+        return Err("confirmed option syntax version 1 cannot hold positional roles".into());
+    }
+    Ok(Some(saved))
+}
+
+/// The help scope's positional slots: (key, help position).
+fn help_slots(schema: &OptionSchema, help_keys: &[String]) -> Vec<(String, u16)> {
+    schema
+        .options
+        .iter()
+        .filter(|o| o.target == Target::Launch && help_keys.contains(&o.key))
+        .filter_map(|o| o.position.map(|position| (o.key.clone(), position)))
+        .collect()
+}
+
+/// The ownership a confirmed role gives its slot: none for a user value.
+fn role_binding(role: &PositionalRole) -> Option<ManagedBinding> {
+    match role {
+        PositionalRole::User => None,
+        PositionalRole::Binding { name } => Some(binding_for(name)),
+        PositionalRole::Static { .. } => Some(ManagedBinding::EntryPoint),
+    }
+}
+
+/// A slot key and the one template token a confirmed role places there.
+type SlotToken = (String, String);
+
+/// Slots the confirmed positional layout gives to template tokens, with the
+/// token each holds: an entry literal, or a binding's placeholder (expanded
+/// by the caller that knows the launch values).
+fn template_slot_tokens(effective: &EffectiveSchema) -> Vec<SlotToken> {
+    let Some(entry) = &effective.entry else {
+        return Vec::new();
+    };
+    entry
+        .positional_roles
+        .iter()
+        .filter_map(|(key, role)| match role {
+            PositionalRole::User => None,
+            PositionalRole::Binding { name } => Some((key.clone(), format!("{{{name}}}"))),
+            PositionalRole::Static { index } => entry
+                .prefix
+                .get(*index)
+                .map(|token| (key.clone(), token.clone())),
+        })
+        .collect()
+}
+
+/// Template indices the confirmed positional layout lifts out of the launch
+/// template, and each slot's actual token from the expanded template. A
+/// binding is found by its exact placeholder token after the entry prefix,
+/// never by searching argument values.
+fn lifted_template_slots(
+    effective: &EffectiveSchema,
+    manifest: &registry::RuntimeManifest,
+    expanded: &[String],
+) -> Result<(Vec<usize>, Vec<SlotToken>), String> {
+    let mut lift = Vec::new();
+    let mut tokens = Vec::new();
+    let Some(entry) = &effective.entry else {
+        return Ok((lift, tokens));
+    };
+    let prefix_len = entry.prefix.len();
+    for (key, role) in &entry.positional_roles {
+        let index = match role {
+            PositionalRole::User => continue,
+            PositionalRole::Static { index } => *index,
+            PositionalRole::Binding { name } => {
+                let placeholder = format!("{{{name}}}");
+                manifest
+                    .launch
+                    .args
+                    .iter()
+                    .enumerate()
+                    .skip(prefix_len)
+                    .find(|(_, arg)| **arg == placeholder)
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| {
+                        format!("{key}: the launch template has no positional {name} binding; review its positional roles")
+                    })?
+            }
+        };
+        let token = expanded
+            .get(index)
+            .ok_or("the launch template changed; review its positional roles")?;
+        lift.push(index);
+        tokens.push((key.clone(), token.clone()));
+    }
+    Ok((lift, tokens))
+}
+
+/// The schema and values one resolution sees when template tokens fill
+/// slots: each such slot holds exactly its one token, so user slots before,
+/// between and after it resolve in declared slot order. A value the user
+/// saved for such a slot is not replaced; it stays refused as app-owned.
+fn with_template_slots(
+    schema: &OptionSchema,
+    mut values: Map<String, Value>,
+    tokens: &[SlotToken],
+) -> (OptionSchema, Map<String, Value>) {
+    if tokens.is_empty() {
+        return (schema.clone(), values);
+    }
+    let mut schema = schema.clone();
+    for (key, token) in tokens {
+        if values.contains_key(key) {
+            continue;
+        }
+        let Some(option) = schema.options.iter_mut().find(|o| o.key == *key) else {
+            continue;
+        };
+        option.managed = None;
+        // The confirmed role places exactly one template token here. A value
+        // count help documents stays authoritative (a mismatch is refused).
+        if option.arity.supported().is_none() {
+            option.arity = Fact {
+                value: Some(Arity {
+                    min: 1,
+                    max: Some(1),
+                }),
+                certainty: Certainty::UserConfirmed,
+                source: Some(Source::User {
+                    note: "one launch template token, by its confirmed positional role".into(),
+                }),
+            };
+        }
+        values.insert(key.clone(), Value::String(token.clone()));
+    }
+    (schema, values)
+}
+
+/// Establish confirmed facts on help options whose help left them unknown.
+/// Help observations, adapter facts and app-owned bindings always win; a
+/// confirmation they contradict is reported, not applied.
+fn apply_supplement(
+    schema: &mut OptionSchema,
+    help_keys: &[String],
+    entry: Option<&CommandEntry>,
+    saved: Supplement,
+    current: bool,
+) -> SupplementView {
+    let mut applied = Vec::new();
+    let mut conflicts = Vec::new();
+    // Positional roles are one layout: all of them apply, or none does.
+    let roles: BTreeMap<String, PositionalRole> = saved
+        .options
+        .iter()
+        .filter_map(|(key, syntax)| syntax.positional.clone().map(|role| (key.clone(), role)))
+        .collect();
+    let layout = if current {
+        runtime_positional::validate_roles(entry, &help_slots(schema, help_keys), &roles)
+    } else {
+        Ok(())
+    };
+    if let Err(message) = &layout {
+        for (key, role) in &roles {
+            conflicts.push(SupplementConflict {
+                key: key.clone(),
+                field: "positional".into(),
+                confirmed: serde_json::to_value(role).unwrap_or(Value::Null),
+                help: Value::from(message.clone()),
+            });
+        }
+    }
+    let source = Source::User {
+        note: format!(
+            "confirmed in AioLM for reviewed help {}",
+            &saved.fingerprint[..12]
+        ),
+    };
+    for (key, syntax) in &saved.options {
+        let mut placed = false;
+        if let Some(role) = &syntax.positional {
+            let slot = schema.options.iter_mut().find(|o| {
+                o.key == *key
+                    && help_keys.contains(key)
+                    && o.position.is_some()
+                    && o.target == Target::Launch
+                    && o.managed == Some(ManagedBinding::Discovery)
+            });
+            let Some(slot) = slot else {
+                conflicts.push(SupplementConflict {
+                    key: key.clone(),
+                    field: "option".into(),
+                    confirmed: serde_json::to_value(syntax).unwrap_or(Value::Null),
+                    help: Value::Null,
+                });
+                continue;
+            };
+            if current && layout.is_ok() {
+                slot.managed = role_binding(role);
+                placed = true;
+            }
+            if syntax.arity.is_none() && syntax.repeatable.is_none() {
+                if placed {
+                    applied.push(key.clone());
+                }
+                continue;
+            }
+        }
+        let option = schema
+            .options
+            .iter_mut()
+            .find(|option| option.key == *key && help_keys.contains(key));
+        let Some(option) = option.filter(|o| o.managed.is_none() && o.target == Target::Launch)
+        else {
+            conflicts.push(SupplementConflict {
+                key: key.clone(),
+                field: "option".into(),
+                confirmed: serde_json::to_value(syntax).unwrap_or(Value::Null),
+                help: Value::Null,
+            });
+            continue;
+        };
+        let mut established = placed;
+        if let Some(arity) = syntax.arity {
+            match option.arity.supported() {
+                None if current => {
+                    option.arity = Fact {
+                        value: Some(arity),
+                        certainty: Certainty::UserConfirmed,
+                        source: Some(source.clone()),
+                    };
+                    established = true;
+                }
+                Some(documented) if *documented != arity => conflicts.push(SupplementConflict {
+                    key: key.clone(),
+                    field: "arity".into(),
+                    confirmed: serde_json::to_value(arity).unwrap_or(Value::Null),
+                    help: serde_json::to_value(documented).unwrap_or(Value::Null),
+                }),
+                _ => {}
+            }
+        }
+        if let Some(repeatable) = syntax.repeatable {
+            match option.repeatable.supported() {
+                None if current => {
+                    option.repeatable = Fact {
+                        value: Some(repeatable),
+                        certainty: Certainty::UserConfirmed,
+                        source: Some(source.clone()),
+                    };
+                    established = true;
+                }
+                Some(documented) if *documented != repeatable => {
+                    conflicts.push(SupplementConflict {
+                        key: key.clone(),
+                        field: "repeatable".into(),
+                        confirmed: Value::Bool(repeatable),
+                        help: Value::Bool(*documented),
+                    })
+                }
+                _ => {}
+            }
+        }
+        if established {
+            applied.push(key.clone());
+        }
+    }
+    SupplementView {
+        fingerprint: saved.fingerprint,
+        options: saved.options,
+        current,
+        applied,
+        conflicts,
+    }
+}
+
+/// Save the user's confirmations for the accepted help of the selected
+/// runtime, replacing earlier ones. Each must name a help option whose help
+/// leaves that fact unknown; the runtime must still match its reviewed help.
+/// An empty set removes the file.
+pub fn save_supplement(
+    root: &Path,
+    cfg: &AppConfig,
+    fingerprint: &str,
+    options: BTreeMap<String, ConfirmedSyntax>,
+) -> Result<EffectiveSchema, String> {
+    let selected = Selected::from_config(cfg)?;
+    let key = &selected.key;
+    let path = supplement_path(root, &key.engine, &key.runtime)?;
+    if options.is_empty() {
+        return clear_supplement(root, cfg);
+    }
+    if options.len() > 4096 {
+        return Err("too many confirmed options".into());
+    }
+    let mut base = effective_for(root, cfg, &selected, true)?;
+    if base.help_state != HelpState::Current
+        || base.accepted_fingerprint.as_deref() != Some(fingerprint)
+    {
+        return Err("confirm option syntax for the runtime's current reviewed help; discover and accept its help again".into());
+    }
+    // Confirmations are judged against the help itself, not earlier ones.
+    if base.supplement.is_some() {
+        base = build_effective(root, cfg, &selected, false, false)?;
+    }
+    for (name, syntax) in &options {
+        let option = base
+            .schema
+            .options
+            .iter()
+            .find(|option| option.key == *name && base.help_keys.contains(name))
+            .ok_or_else(|| format!("{name} is not an option of this runtime's reviewed help"))?;
+        let unmapped_slot = option.position.is_some()
+            && option.target == Target::Launch
+            && option.managed == Some(ManagedBinding::Discovery);
+        match &syntax.positional {
+            Some(_) if !unmapped_slot => {
+                return Err(format!(
+                    "{name} is not a positional whose role the reviewed help leaves open"
+                ))
+            }
+            Some(role)
+                if *role != PositionalRole::User
+                    && (syntax.arity.is_some() || syntax.repeatable.is_some()) =>
+            {
+                return Err(format!(
+                    "{name}: confirm a value count only for a positional you supply"
+                ))
+            }
+            Some(_) => {}
+            None if option.managed.is_some() || option.target != Target::Launch => {
+                return Err(format!(
+                    "{name} is managed by the app and cannot be confirmed"
+                ));
+            }
+            None => {}
+        }
+        if !valid_confirmation(syntax) {
+            return Err(format!("{name}: confirm a valid value count or repetition"));
+        }
+        if (syntax.arity.is_some() && option.arity.supported().is_some())
+            || (syntax.repeatable.is_some() && option.repeatable.supported().is_some())
+        {
+            return Err(format!(
+                "{name}: the reviewed help already documents this; confirmations cannot replace it"
+            ));
+        }
+    }
+    let roles: BTreeMap<String, PositionalRole> = options
+        .iter()
+        .filter_map(|(key, syntax)| syntax.positional.clone().map(|role| (key.clone(), role)))
+        .collect();
+    runtime_positional::validate_roles(
+        base.entry.as_ref(),
+        &help_slots(&base.schema, &base.help_keys),
+        &roles,
+    )?;
+    let saved = Supplement {
+        version: if roles.is_empty() {
+            SUPPLEMENT_VERSION
+        } else {
+            SUPPLEMENT_POSITIONAL_VERSION
+        },
+        fingerprint: fingerprint.into(),
+        options,
+    };
+    let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > SUPPLEMENT_LIMIT {
+        return Err("confirmed option syntax exceeds 256 KiB".into());
+    }
+    std::fs::create_dir_all(path.parent().expect("supplement has a directory"))
+        .map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&path, &bytes)?;
+    effective_for(root, cfg, &selected, true)
+}
+
+/// Remove every confirmation for the selected runtime, including a file this
+/// app refuses to read. Saved option values are untouched.
+pub fn clear_supplement(root: &Path, cfg: &AppConfig) -> Result<EffectiveSchema, String> {
+    let selected = Selected::from_config(cfg)?;
+    let path = supplement_path(root, &selected.key.engine, &selected.key.runtime)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            return Err("confirmed option syntax path is a directory".into())
+        }
+        Ok(_) => std::fs::remove_file(&path).map_err(|e| e.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    effective_for(root, cfg, &selected, true)
+}
+
+/// The binding a launch template placeholder carries.
+pub(crate) fn binding_for(placeholder: &str) -> ManagedBinding {
+    match placeholder {
+        "model" | "model_alias" => ManagedBinding::Model,
+        "host" => ManagedBinding::Host,
+        "port" => ManagedBinding::Port,
+        "api_key" => ManagedBinding::Authentication,
+        _ => ManagedBinding::Discovery,
+    }
+}
+
+/// Saved entries a generic option may hold (dedicated bindings excluded).
+fn generic_entries(values: &Map<String, Value>) -> impl Iterator<Item = (&String, &Value)> + '_ {
+    values
+        .iter()
+        .filter(|(key, _)| !RESERVED_KEYS.contains(&key.as_str()))
+}
+
+fn generic_values(values: &Map<String, Value>) -> Map<String, Value> {
+    generic_entries(values)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Saved values only accepted help can describe.
+fn help_values(values: &Map<String, Value>, compat_keys: &[String]) -> Map<String, Value> {
+    generic_entries(values)
+        .filter(|(key, _)| {
+            !compat_keys
+                .iter()
+                .any(|compat| compat.as_str() == key.as_str())
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Problems with saved values, resolved together against the effective
+/// schema so constraints spanning catalog and help options apply. Keys the
+/// caller's catalog check already reported (`reported`) are not repeated;
+/// keys no schema describes stay saved and are reported.
+pub fn saved_issues(
+    root: &Path,
+    cfg: &AppConfig,
+    values: &Map<String, Value>,
+    reported: &BTreeSet<String>,
+) -> Vec<options::OptionIssue> {
+    saved_issues_for(root, cfg, Selected::from_config(cfg), values, reported)
+}
+
+pub fn saved_issues_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: Result<Selected, String>,
+    values: &Map<String, Value>,
+    reported: &BTreeSet<String>,
+) -> Vec<options::OptionIssue> {
+    let has_generic = generic_entries(values).next().is_some();
+    let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
+        key: key.into(),
+        code,
+        message,
+    };
+    if !has_generic {
+        // A record ordering nothing still names values that do not exist.
+        return match runtime_ordered::saved_order(values) {
+            Err(message) => vec![issue(ORDER_KEY, "order", message)],
+            Ok(_) => Vec::new(),
+        };
+    }
+    let effective = match selected.and_then(|selected| effective_for(root, cfg, &selected, false)) {
+        Ok(effective) => effective,
+        Err(error) => {
+            return generic_entries(values)
+                .filter(|(key, _)| !reported.contains(key.as_str()))
+                .map(|(key, _)| {
+                    issue(
+                        key,
+                        "unknown",
+                        format!("{key}: runtime options unavailable: {error}"),
+                    )
+                })
+                .collect()
+        }
+    };
+    let mut issues = Vec::new();
+    let mut describable = Map::new();
+    let mut blocked = BTreeSet::new();
+    for (key, value) in generic_entries(values) {
+        if reported.contains(key.as_str()) {
+            continue;
+        }
+        let sensitive = effective.schema.options.iter().any(|option| {
+            option.key.as_str() == key.as_str() && option.sensitive.supported() == Some(&true)
+        });
+        let refusal = effective
+            .conflicts
+            .iter()
+            .chain(effective.metadata.iter().flat_map(|view| &view.conflicts))
+            .filter(|conflict| conflict.blocking && conflict.key.as_str() == key.as_str())
+            .find_map(|conflict| blocking_issue(conflict, value, sensitive));
+        if let Some(message) = refusal {
+            issues.push(issue(key, "conflict", message));
+            blocked.insert(key.clone());
+            continue;
+        }
+        if effective
+            .schema
+            .options
+            .iter()
+            .any(|option| option.key.as_str() == key.as_str())
+        {
+            describable.insert(key.clone(), value.clone());
+        } else if effective.accepted_fingerprint.is_none() {
+            issues.push(issue(
+                key,
+                "unknown",
+                format!("{key} is not an option this runtime describes; discover and accept its help, or remove the retained value"),
+            ));
+        } else {
+            issues.push(issue(
+                key,
+                "unknown",
+                format!("{key} is absent from this runtime's reviewed help; its saved value was retained"),
+            ));
+        }
+    }
+    if let Some(error) = &effective.supplement_error {
+        if describable
+            .keys()
+            .any(|key| effective.help_keys.contains(key))
+        {
+            issues.push(issue(
+                "@confirmed_syntax",
+                "help",
+                format!("{error}; discard the confirmations and confirm again"),
+            ));
+        }
+    }
+    // The order record is checked against every saved value; it may only
+    // order values this runtime describes and that passed earlier checks.
+    let order = match runtime_ordered::saved_order(values) {
+        Ok(order) => order,
+        Err(message) => {
+            issues.push(issue(ORDER_KEY, "order", message));
+            None
+        }
+    };
+    if let Some(order) = &order {
+        let outside = order
+            .keys()
+            .into_iter()
+            .filter(|key| !describable.contains_key(*key))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if outside.is_empty() {
+            describable.insert(
+                ORDER_KEY.into(),
+                values.get(ORDER_KEY).cloned().expect("order present"),
+            );
+        } else {
+            // A value refused for its own reason already says why; the order
+            // that includes it is not described as unknown as well.
+            if outside
+                .iter()
+                .any(|key| !reported.contains(key) && !blocked.contains(key))
+            {
+                issues.push(issue(
+                    ORDER_KEY,
+                    "order",
+                    format!(
+                        "the saved option order includes {} that this runtime does not describe; the order was retained",
+                        outside.join(", ")
+                    ),
+                ));
+            }
+            // Values the order covers cannot be checked out of order.
+            for key in order.keys() {
+                describable.remove(key);
+            }
+        }
+    }
+    let (schema, describable) = with_template_slots(
+        &effective.schema,
+        describable,
+        &template_slot_tokens(&effective),
+    );
+    if let Err(found) = runtime_ordered::resolve_saved(&schema, &effective.scope, &describable) {
+        issues.extend(found.into_iter().map(|found: OptionIssue| {
+            let code = if effective.compat_keys.contains(&found.key) {
+                "type"
+            } else {
+                "help"
+            };
+            issue(&found.key, code, found.message)
+        }));
+    }
+    issues
+}
+
+/// Resolve saved values for launch with the effective schema. Any value only
+/// accepted help describes requires that help to still describe the runtime
+/// exactly; a changed runtime blocks launch with the values retained.
+fn resolve_launch_plan(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    mut values: Map<String, Value>,
+    order: Option<&Value>,
+    slot_tokens: &[SlotToken],
+) -> Result<(ResolvedOptions, Vec<String>), String> {
+    if values.is_empty() && order.is_none() && slot_tokens.is_empty() {
+        return Ok((
+            ResolvedOptions {
+                argv: Vec::new(),
+                request: Map::new(),
+                scope_boundaries: Vec::new(),
+            },
+            Vec::new(),
+        ));
+    }
+    let mut effective = effective_for(root, cfg, selected, false)?;
+    // Template tokens a confirmed positional role relocates are judged by
+    // the same reviewed help as saved values: it must still be current.
+    let help_keys = values
+        .keys()
+        .chain(slot_tokens.iter().map(|(key, _)| key))
+        .filter(|key| !effective.compat_keys.contains(key))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !help_keys.is_empty() {
+        let keys = help_keys.join(", ");
+        effective = effective_for(root, cfg, selected, true)?;
+        match effective.help_state {
+            HelpState::Current => {}
+            HelpState::None => {
+                return Err(format!(
+                    "saved options {keys} need this runtime's reviewed help; discover and accept it first (values are retained)"
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "{} Saved options {keys} were retained.",
+                    effective.help_detail
+                ))
+            }
+        }
+        if let Some(error) = &effective.supplement_error {
+            return Err(format!(
+                "{error}; saved options {keys} were retained until the confirmations are discarded or saved again"
+            ));
+        }
+    }
+    if let Some(order) = order {
+        values.insert(ORDER_KEY.into(), order.clone());
+    }
+    let (schema, values) = with_template_slots(&effective.schema, values, slot_tokens);
+    let resolved =
+        runtime_ordered::resolve_saved(&schema, &effective.scope, &values).map_err(|issues| {
+            issues
+                .iter()
+                .map(|issue| format!("{}: {}", issue.key, issue.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+    if !resolved.request.is_empty() {
+        return Err("request fields are sent with requests, not launch arguments".into());
+    }
+    Ok((resolved, effective.scope))
+}
+
+fn resolve_launch(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    values: Map<String, Value>,
+    order: Option<&Value>,
+) -> Result<Vec<String>, String> {
+    let (resolved, scope) = resolve_launch_plan(root, cfg, selected, values, order, &[])?;
+    strip_scope(resolved.argv, &scope)
+}
+
+/// The full argv of a registered entry without a command layout: the
+/// expanded template, minus binding tokens a confirmed positional layout
+/// moves into slot order, then every saved option through one resolver.
+pub fn registered_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    manifest: &registry::RuntimeManifest,
+    template: &[String],
+) -> Result<Vec<String>, String> {
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let (lift, tokens) = lifted_template_slots(&effective, manifest, template)?;
+    let all = super::launch::provider_options(cfg, selected.key.provider);
+    let values: Map<String, Value> = generic_values(&all)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    let (resolved, scope) =
+        resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY), &tokens)?;
+    let mut argv: Vec<String> = template
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !lift.contains(index))
+        .map(|(_, token)| token.clone())
+        .collect();
+    argv.extend(strip_scope(resolved.argv, &scope)?);
+    Ok(argv)
+}
+
+/// A registered layout assembles the exact same resolver output used by
+/// validation and preview, without finding subcommands by their spelling.
+pub fn assemble_registered_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    manifest: &registry::RuntimeManifest,
+    template: &[String],
+) -> Result<Vec<String>, String> {
+    let layout = manifest
+        .command_layout
+        .as_ref()
+        .ok_or("the entry has no command layout")?;
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let all = super::launch::provider_options(cfg, selected.key.provider);
+    let values: Map<String, Value> = generic_values(&all)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    let (lift, tokens) = lifted_template_slots(&effective, manifest, template)?;
+    if values.is_empty() && !all.contains_key(ORDER_KEY) && tokens.is_empty() {
+        return Ok(template.to_vec());
+    }
+    let (resolved, scope) =
+        resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY), &tokens)?;
+    let prefix = registry::launch_prefix(manifest);
+    if layout.scope(&prefix)? != scope {
+        return Err("review help for the declared subcommands before using scoped options; saved values were retained".into());
+    }
+    layout.assemble(&prefix, template, &resolved.sections(&scope)?, &lift)
+}
+
+/// Launch arguments for every saved generic option of a registered engine:
+/// manifest options and accepted help options through one resolver.
+/// Request-target manifest options are left for requests.
+pub fn launch_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    values: &Map<String, Value>,
+) -> Result<Vec<String>, String> {
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let launch = generic_values(values)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    resolve_launch(root, cfg, &selected, launch, values.get(ORDER_KEY))
+}
+
+/// Launch arguments for saved values only accepted help describes, appended
+/// after a built-in catalog's own arguments (which the catalog mapping
+/// produces through the same resolver). Catalog values a saved order record
+/// positions are resolved here in that order; the catalog skips them
+/// (`runtime_ordered::recorded_keys`).
+pub fn help_launch_args(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    values: &Map<String, Value>,
+    compat_keys: &[String],
+) -> Result<Vec<String>, String> {
+    let mut launch = help_values(values, compat_keys);
+    for key in runtime_ordered::recorded_keys(values) {
+        if RESERVED_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        if let Some(value) = values.get(&key) {
+            launch.insert(key, value.clone());
+        }
+    }
+    resolve_launch(root, cfg, selected, launch, values.get(ORDER_KEY))
+}
+
+/// The launch template already names the subcommand; drop the scope words
+/// the resolver places before scoped options.
+fn strip_scope(argv: Vec<String>, scope: &[String]) -> Result<Vec<String>, String> {
+    if scope.is_empty() {
+        return Ok(argv);
+    }
+    if argv.len() >= scope.len() && argv[..scope.len()] == *scope {
+        return Ok(argv[scope.len()..].to_vec());
+    }
+    Err("saved options belong outside the launch subcommand and cannot be placed".into())
+}
+
+/// Identity of everything help-derived that changes the launched process.
+pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> Value {
+    let empty = Map::new();
+    let saved = cfg
+        .provider_options
+        .get(super::provider_of(cfg).as_str())
+        .unwrap_or(&empty);
+    let values = help_values(saved, compat_keys);
+    let accepted = runtime_key(cfg)
+        .ok()
+        .and_then(|key| {
+            load_accepted(root, &key.engine, &key.runtime)
+                .ok()
+                .flatten()
+        })
+        .map(|accepted| accepted.fingerprint);
+    let mut identity = Map::new();
+    identity.insert(
+        "help".into(),
+        accepted.map(Value::String).unwrap_or(Value::Null),
+    );
+    identity.insert("values".into(), Value::Object(values));
+    // Profiles without the newer records keep their exact earlier identity.
+    if let Some(order) = saved.get(ORDER_KEY) {
+        identity.insert("order".into(), order.clone());
+    }
+    if let Ok(key) = runtime_key(cfg) {
+        if let Ok(Some(supplement)) = load_supplement(root, &key.engine, &key.runtime) {
+            identity.insert(
+                "confirmed".into(),
+                serde_json::to_value(supplement).unwrap_or(Value::Null),
+            );
+        }
+    }
+    Value::Object(identity)
+}
+
+/// Written over a secret in display and record copies of argv or settings.
+pub const REDACTED: &str = "[REDACTED]";
+
+fn secret_keys_of(schema: &OptionSchema, keys: &mut BTreeSet<String>) {
+    keys.extend(
+        schema
+            .options
+            .iter()
+            .filter(|option| option.sensitive.supported() == Some(&true))
+            .map(|option| option.key.clone()),
+    );
+}
+
+/// Keys of the selected runtime's options its schema marks secret (adapter
+/// metadata, built-in facts). A stale accepted help still counts, and so
+/// does an accepted snapshot an earlier parser wrote, so stored secrets stay
+/// hidden while the user rediscovers. Names alone never make a key secret.
+pub fn sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let Ok(selected) = Selected::from_config(cfg) else {
+        return keys;
+    };
+    if let Ok(effective) = effective_for(root, cfg, &selected, false) {
+        secret_keys_of(&effective.schema, &mut keys);
+    }
+    let key = &selected.key;
+    if let Ok(Some(accepted)) = load_accepted(root, &key.engine, &key.runtime) {
+        if let Some(mut schema) = runtime_help_store::stored_schema(
+            root,
+            &key.engine,
+            &key.runtime,
+            &accepted.fingerprint,
+        ) {
+            if let Some((metadata, builtin)) = compat(&selected).ok().and_then(|c| c.metadata) {
+                runtime_metadata::apply(&mut schema, &metadata, builtin, false);
+            }
+            secret_keys_of(&schema, &mut keys);
+        }
+    }
+    keys
+}
+
+/// Literal entry prefix tokens a known-sensitive positional slot holds
+/// through an explicit static role in the saved supplement, current or
+/// stale. Display-only: a stale role never configures launch (see
+/// `build_effective`), but it still identifies an already-known secret.
+/// Unknown certainty, non-positional slots, slots outside the reviewed help
+/// and out-of-range indices contribute nothing; the program is not a prefix
+/// index.
+fn sensitive_entry_tokens(effective: &EffectiveSchema) -> BTreeSet<String> {
+    let (Some(supplement), Some(entry)) = (&effective.supplement, &effective.entry) else {
+        return BTreeSet::new();
+    };
+    sensitive_static_tokens(
+        effective
+            .schema
+            .options
+            .iter()
+            .filter(|option| effective.help_keys.contains(&option.key)),
+        supplement,
+        entry,
+    )
+}
+
+fn sensitive_static_tokens<'a>(
+    options: impl Iterator<Item = &'a OptionDefinition>,
+    supplement: &SupplementView,
+    entry: &CommandEntry,
+) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    for option in options {
+        if option.position.is_none() || option.target != Target::Launch {
+            continue;
+        }
+        if option.sensitive.supported() != Some(&true) {
+            continue;
+        }
+        let role = supplement
+            .options
+            .get(&option.key)
+            .and_then(|syntax| syntax.positional.as_ref());
+        if let Some(PositionalRole::Static { index }) = role {
+            if let Some(token) = entry.prefix.get(*index) {
+                if !token.is_empty() {
+                    tokens.insert(token.clone());
+                }
+            }
+        }
+    }
+    tokens
+}
+
+/// Historical help can prove secrecy without becoming current launch help.
+/// Only roles pinned to that accepted schema can identify its prefix tokens.
+fn historical_sensitive_entry_tokens(
+    root: &Path,
+    selected: &Selected,
+    effective: &EffectiveSchema,
+) -> BTreeSet<String> {
+    let (Some(fingerprint), Some(supplement), Some(entry)) = (
+        &effective.accepted_fingerprint,
+        &effective.supplement,
+        &effective.entry,
+    ) else {
+        return BTreeSet::new();
+    };
+    if effective.help_state != HelpState::Stale
+        || !effective.help_keys.is_empty()
+        || supplement.fingerprint != *fingerprint
+    {
+        return BTreeSet::new();
+    }
+    let key = &selected.key;
+    let Some(mut schema) =
+        runtime_help_store::stored_schema(root, &key.engine, &key.runtime, fingerprint)
+    else {
+        return BTreeSet::new();
+    };
+    if schema.binding.fingerprint != *fingerprint || schema.validate().is_err() {
+        return BTreeSet::new();
+    }
+    if let Some((metadata, builtin)) = compat(selected).ok().and_then(|c| c.metadata) {
+        runtime_metadata::apply(&mut schema, &metadata, builtin, false);
+    }
+    sensitive_static_tokens(schema.options.iter(), supplement, entry)
+}
+
+/// The argv text of every saved value of the selected runtime's secret keys,
+/// plus literal entry prefix tokens that known-sensitive static roles hold.
+/// The launch argv itself is never changed.
+fn secret_texts(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
+    let keys = sensitive_keys(root, cfg);
+    let values = super::launch::provider_options(cfg, super::provider_of(cfg));
+    let secret = values
+        .iter()
+        .filter(|(key, _)| keys.contains(*key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let mut secrets: BTreeSet<String> = runtime_help_store::overrides_from_map(&secret)
+        .values()
+        .flat_map(|row| row.occurrences.iter().flatten())
+        .map(argv_text)
+        .filter(|text| !text.is_empty())
+        .collect();
+    // Entry prefix tokens are not saved option values, so the key lookup
+    // above cannot see them; add the ones static roles provably hold.
+    if let Ok(selected) = Selected::from_config(cfg) {
+        if let Ok(effective) = effective_for(root, cfg, &selected, false) {
+            secrets.extend(sensitive_entry_tokens(&effective));
+            secrets.extend(historical_sensitive_entry_tokens(
+                root, &selected, &effective,
+            ));
+        }
+    }
+    secrets
+}
+
+/// A display or record copy of argv with the selected runtime's secret
+/// option values replaced, including `--flag=value` spellings. The launch
+/// argv itself is never changed.
+pub fn mask_argv(
+    root: &Path,
+    cfg: &AppConfig,
+    argv: Vec<String>,
+    placeholder: &str,
+) -> Vec<String> {
+    let secrets = secret_texts(root, cfg);
+    if secrets.is_empty() {
+        return argv;
+    }
+    argv.into_iter()
+        .map(|token| {
+            if secrets.contains(&token) {
+                return placeholder.to_owned();
+            }
+            match token.split_once('=') {
+                Some((flag, value)) if flag.starts_with('-') && secrets.contains(value) => {
+                    format!("{flag}={placeholder}")
+                }
+                _ => token,
+            }
+        })
+        .collect()
+}
+
+/// Secret keys one stored runtime declares, without selecting it: its
+/// accepted help (whatever parser wrote it) and, for a registered engine,
+/// its manifest options, with its option metadata or built-in facts applied.
+/// Only for hiding values; never for launch.
+fn stored_runtime_sensitive_keys(
+    root: &Path,
+    provider: ProviderId,
+    runtime: &str,
+) -> BTreeSet<String> {
+    let engine = provider.as_str();
+    let mut keys = BTreeSet::new();
+    let (declared, metadata) = super::adapter::help::stored_option_facts(provider, runtime);
+    let help = load_accepted(root, engine, runtime)
+        .ok()
+        .flatten()
+        .and_then(|accepted| {
+            runtime_help_store::stored_schema(root, engine, runtime, &accepted.fingerprint)
+        });
+    let manifest_schema = (!declared.is_empty()).then(|| OptionSchema {
+        schema_version: SCHEMA_VERSION,
+        binding: super::runtime_options::SchemaBinding {
+            engine: engine.into(),
+            runtime: runtime.into(),
+            fingerprint: compat_fingerprint(engine, runtime, &declared),
+        },
+        options: declared,
+        constraints: Vec::new(),
+        raw_help: Vec::new(),
+        end_of_options: Fact::default(),
+    });
+    for mut schema in help.into_iter().chain(manifest_schema) {
+        if let Some(metadata) = &metadata {
+            runtime_metadata::apply(&mut schema, metadata, false, false);
+        }
+        secret_keys_of(&schema, &mut keys);
+    }
+    keys
+}
+
+/// Secret keys per engine for every runtime this app has stored facts for
+/// (registrations and reviewed help under `root`), plus the selected
+/// runtime's effective schema. Runtimes of one engine that declare
+/// different facts all count, so every saved copy of that engine's options
+/// stays hidden whichever runtime or provider is selected. Every stored
+/// engine and runtime directory is read: a partial scan would show a secret
+/// as plain text.
+pub fn stored_sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeMap<String, BTreeSet<String>> {
+    let mut all: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if let Ok(selected) = Selected::from_config(cfg) {
+        all.entry(selected.key.engine.clone())
+            .or_default()
+            .extend(sensitive_keys(root, cfg));
+    }
+    for engine in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let Some(provider) = engine.file_name().to_str().and_then(ProviderId::parse) else {
+            continue;
+        };
+        for runtime in std::fs::read_dir(engine.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let Some(name) = runtime.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if runtime_help_store::valid_segment(&name) {
+                all.entry(provider.as_str().to_owned())
+                    .or_default()
+                    .extend(stored_runtime_sensitive_keys(root, provider, &name));
+            }
+        }
+    }
+    all.retain(|_, keys| !keys.is_empty());
+    all
+}
+
+/// Hide secret option values in a serialized configuration: every
+/// `provider_options.<engine>.<key>`, including the copies saved profiles
+/// and sessions keep, for every engine, not only the selected one. Stored
+/// values stay.
+pub fn mask_config(root: &Path, cfg: &AppConfig, projection: &mut Value, placeholder: &str) {
+    fn walk(value: &mut Value, secrets: &BTreeMap<String, BTreeSet<String>>, placeholder: &str) {
+        match value {
+            Value::Object(object) => {
+                for (name, child) in object.iter_mut() {
+                    if name == "provider_options" {
+                        if let Some(engines) = child.as_object_mut() {
+                            for (engine, options) in engines.iter_mut() {
+                                let (Some(keys), Some(options)) =
+                                    (secrets.get(engine), options.as_object_mut())
+                                else {
+                                    continue;
+                                };
+                                for (key, value) in options.iter_mut() {
+                                    if keys.contains(key) {
+                                        *value = Value::from(placeholder);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    walk(child, secrets, placeholder);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, secrets, placeholder);
+                }
+            }
+            _ => {}
+        }
+    }
+    let secrets = stored_sensitive_keys(root, cfg);
+    if !secrets.is_empty() {
+        walk(projection, &secrets, placeholder);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn entrypoint_help_resume_preserves_the_checked_registration_without_running_a_probe() {
+        use registry::{
+            ArgBinding, AuthBinding, DraftHelp, EntrypointDraft, ProcessSpec, ServingProtocol,
+        };
+        use std::fs;
+        const CHILD: &str = "AIOLM_ENTRYPOINT_HELP_RESUME_FIXTURE";
+        const FILTER: &str = "providers::runtime_schema::tests::entrypoint_help_resume_preserves_the_checked_registration_without_running_a_probe";
+        if std::env::var_os(CHILD).is_none() {
+            let previous = std::env::var_os("AIOLM_HOME");
+            let home = owned_fixture_home();
+            fs::write(
+                home.join(".help-resume-fixture-owner"),
+                b"synthetic help resume fixture",
+            )
+            .unwrap();
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FILTER, "--nocapture"])
+                .env(CHILD, &home)
+                .env("AIOLM_HOME", &home);
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                std::time::Duration::from_secs(30),
+                256 * 1024,
+                None,
+            )
+            .unwrap();
+            assert_eq!(std::env::var_os("AIOLM_HOME"), previous);
+            assert!(
+                output.status.success(),
+                "isolated help resume failed; retained home: {}\nstdout:{}\nstderr:{}",
+                home.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed"));
+            remove_owned_fixture_home(&home);
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
+        assert_eq!(PathBuf::from(std::env::var_os(CHILD).unwrap()), home);
+        let canonical = fs::canonicalize(&home).unwrap();
+        let temporary = fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(canonical, home);
+        assert_eq!(canonical.parent(), Some(temporary.as_path()));
+        assert_eq!(
+            fs::read(home.join(".help-resume-fixture-owner")).unwrap(),
+            b"synthetic help resume fixture"
+        );
+        let launch = home.join("synthetic-launch.bin");
+        let probe_program = home.join("synthetic-probe.bin");
+        let artifact = home.join("synthetic-artifact.data");
+        let marker = home.join("probe-marker.txt");
+        // These are deliberately not executable. A successful repair cannot
+        // have re-run a probe; the marker also detects accidental rewrites.
+        for path in [&launch, &probe_program, &artifact] {
+            fs::write(path, b"synthetic engine bytes").unwrap();
+        }
+        fs::write(&marker, b"preserve later probe sentinel").unwrap();
+        let engine = ProviderId::parse("custom.helpresume").unwrap();
+        let request = HelpRequest {
+            encoding: None,
+            locale: None,
+            working_directory: None,
+            program: None,
+            args: vec!["--help".into()],
+            scope: vec![],
+        };
+        let mut draft = EntrypointDraft {
+            command_layout: None,
+            options_separator: None,
+            launch_resources: None,
+            models: vec![],
+            engine_id: engine,
+            runtime_id: "pending-help".into(),
+            display_name: "Synthetic help recovery".into(),
+            program: launch.to_string_lossy().into_owned(),
+            prefix: vec![],
+            working_directory: Some(home.to_string_lossy().into_owned()),
+            artifacts: vec![artifact.to_string_lossy().into_owned()],
+            environment: BTreeMap::new(),
+            model: ArgBinding::Flag {
+                flag: "--model".into(),
+                equals: false,
+            },
+            port: ArgBinding::Flag {
+                flag: "--port".into(),
+                equals: false,
+            },
+            host: None,
+            served_model: None,
+            auth: AuthBinding::None,
+            protocol: ServingProtocol::OpenaiHttp,
+            probe: ProcessSpec {
+                program: probe_program.to_string_lossy().into_owned(),
+                args: vec!["{model}".into()],
+                env: BTreeMap::from([(
+                    "FAKE_PROBE_MARKER".into(),
+                    marker.to_string_lossy().into_owned(),
+                )]),
+                working_directory: None,
+            },
+            health_path: "/health".into(),
+            health_authenticated: false,
+            model_formats: vec!["unknown".into()],
+            help: None,
+            option_metadata: None,
+        };
+        let manifest = registry::manifest_from_draft(&draft).unwrap();
+        let identity = manifest_help_command(&manifest, &request)
+            .unwrap()
+            .identity(&AtomicBool::new(false))
+            .unwrap();
+        let mut report = complete_help_report(&identity.fingerprint);
+        report.identity = identity.clone();
+        report.stdout.text =
+            "Options:\n  --model MODEL  model path\n  --port PORT  listen port\n".into();
+        report.stdout.clean_text = report.stdout.text.clone();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: engine.as_str().into(),
+                runtime: draft.runtime_id.clone(),
+                fingerprint: identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        let root = registry::root();
+        let snapshot = HelpSnapshot { report, schema };
+        let snapshot_path =
+            runtime_help_store::save_snapshot(&root, engine.as_str(), &draft.runtime_id, &snapshot)
+                .unwrap();
+        draft.help = Some(DraftHelp {
+            fingerprint: identity.fingerprint.clone(),
+            request: request.clone(),
+        });
+        let digest = |path: &Path| format!("{:x}", Sha256::digest(fs::read(path).unwrap()));
+        let mut record = json!({"manifest":manifest,"executable_sha256":digest(&launch),"probe_sha256":digest(&probe_program),
+            "artifacts_sha256":BTreeMap::from([(artifact.to_string_lossy().into_owned(),digest(&artifact))]),
+            "probe":{"schema_version":1,"engine_id":engine,"runtime_id":draft.runtime_id,"version":"synthetic-1","accelerator":"cpu",
+                "model":"","model_supported":true,"served_model":"synthetic","capabilities":{"tasks":["generate"],
+                "modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}}});
+        let directory = root.join(engine.as_str()).join(&draft.runtime_id);
+        let registered = directory.join("registration.json");
+        let accepted = directory.join("help").join("accepted.json");
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let reject = |draft: &EntrypointDraft, needle: &str| {
+            let current = fs::read(&registered).unwrap();
+            let pin = fs::read(&accepted).ok();
+            let error = resume_entrypoint_help(&root, draft).unwrap_err();
+            assert!(error.contains(needle), "{error}");
+            assert_eq!(fs::read(&registered).unwrap(), current);
+            assert_eq!(fs::read(&accepted).ok(), pin);
+            assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+        };
+        fs::create_dir(&accepted).unwrap();
+        reject(&draft, "");
+        reject(&draft, "");
+        fs::remove_dir(&accepted).unwrap();
+        let initial_bytes = fs::read(&registered).unwrap();
+        assert_eq!(resume_entrypoint_help(&root, &draft).unwrap(), manifest);
+        assert_eq!(fs::read(&registered).unwrap(), initial_bytes);
+        assert_eq!(
+            load_accepted(&root, engine.as_str(), &draft.runtime_id)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            identity.fingerprint
+        );
+        assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+
+        let mut changed = draft.clone();
+        changed.health_path = "/different-health".into();
+        let different = registry::manifest_from_draft(&changed).unwrap();
+        assert_eq!(
+            manifest_help_command(&different, &request)
+                .unwrap()
+                .identity(&AtomicBool::new(false))
+                .unwrap()
+                .fingerprint,
+            identity.fingerprint
+        );
+        reject(&changed, "registered runtime changed");
+        let mut without_help = draft.clone();
+        without_help.help = None;
+        reject(&without_help, "no reviewed help");
+        for path in [&launch, &probe_program, &artifact] {
+            let bytes = fs::read(path).unwrap();
+            fs::write(path, b"changed engine bytes").unwrap();
+            reject(&draft, "changed");
+            fs::remove_file(path).unwrap();
+            reject(&draft, "unreadable");
+            fs::write(path, bytes).unwrap();
+        }
+        let snapshot_bytes = fs::read(&snapshot_path).unwrap();
+        fs::remove_file(&snapshot_path).unwrap();
+        reject(&draft, "missing");
+        fs::write(&snapshot_path, b"not a snapshot").unwrap();
+        reject(&draft, "");
+        fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        let baseline_record = record.clone();
+        for bad in [
+            Value::Null,
+            json!({"schema_version":2}),
+            json!({"runtime_id":"another-runtime"}),
+            json!({"version":""}),
+            json!({"accelerator":"x".repeat(129)}),
+            json!({"capabilities":{"tasks":["invented-task"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}}),
+        ] {
+            record = baseline_record.clone();
+            if bad.is_null() {
+                record["probe"] = Value::Null;
+            } else {
+                for (key, value) in bad.as_object().unwrap() {
+                    record["probe"][key] = value.clone();
+                }
+            }
+            fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+            reject(&draft, "");
+        }
+        record = baseline_record.clone();
+        record["artifacts_sha256"] = json!({});
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        reject(&draft, "artifact hashes");
+        // The complete manifest matches, but help must still document its bindings.
+        let mut bad_binding = draft.clone();
+        bad_binding.model = ArgBinding::Flag {
+            flag: "--typo".into(),
+            equals: false,
+        };
+        record = baseline_record.clone();
+        record["manifest"] =
+            serde_json::to_value(registry::manifest_from_draft(&bad_binding).unwrap()).unwrap();
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        reject(&bad_binding, "--typo");
+        record = baseline_record.clone();
+        // A legitimate later selected-model result need not claim model support
+        // or Ready to allow saving the reviewed options of this same build.
+        record["probe"]["model"] = json!(home.join("selected-model").to_string_lossy());
+        record["probe"]["model_supported"] = json!(false);
+        record["probe"]["capabilities"]["tasks"] = json!([]);
+        record["probe"]["version"] = json!("synthetic-later-model-probe");
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let current_bytes = fs::read(&registered).unwrap();
+        assert_eq!(resume_entrypoint_help(&root, &draft).unwrap(), manifest);
+        assert_eq!(fs::read(&registered).unwrap(), current_bytes);
+        assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+        assert!(
+            matches!(register_entrypoint_outcome(&root,&draft,None).await,Err(error) if error.contains("already registered"))
+        );
+        assert!(register_entrypoint(&root, &draft, None)
+            .await
+            .unwrap_err()
+            .contains("already registered"));
+        fs::remove_file(&registered).unwrap();
+        assert!(resume_entrypoint_help(&root, &draft)
+            .unwrap_err()
+            .contains("cannot read runtime registration"));
+        assert!(!registered.exists());
+    }
+
+    /// What the catalog emitted before it was mapped onto the common schema.
+    fn legacy_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
+        let flag = spec.flag.unwrap().to_owned();
+        match spec.kind {
+            OptionKind::Flag => {
+                if value.as_bool() == Some(true) {
+                    vec![flag]
+                } else {
+                    vec![]
+                }
+            }
+            OptionKind::Toggle => {
+                if value.as_bool() == Some(true) {
+                    vec![flag]
+                } else {
+                    vec![format!("--no-{}", &flag[2..])]
+                }
+            }
+            OptionKind::Json => vec![flag, value.to_string()],
+            _ => vec![
+                flag,
+                match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                },
+            ],
+        }
+    }
+
+    fn samples(spec: &OptionSpec) -> Vec<Value> {
+        match spec.kind {
+            OptionKind::Integer { min, max } => vec![json!(min), json!(max)],
+            OptionKind::Number { min, max } => {
+                vec![json!(min), json!(max), json!((min + max) / 2.0)]
+            }
+            OptionKind::Flag | OptionKind::Toggle => vec![json!(true), json!(false)],
+            OptionKind::Choice { choices } => choices.iter().map(|c| json!(c)).collect(),
+            OptionKind::Text { .. } => vec![json!("synthetic text"), json!("한글 값")],
+            OptionKind::Path => vec![json!("/synthetic path/file")],
+            OptionKind::Json => vec![json!({"synthetic": {"nested": [1, 2.5]}})],
+        }
+    }
+
+    #[test]
+    fn builtin_catalogs_produce_identical_arguments_through_the_common_resolver() {
+        let mut checked = 0;
+        for provider in [ProviderId::Vllm, ProviderId::MlxVlm] {
+            for spec in options::schema(provider)
+                .iter()
+                .filter(|spec| spec.target == OptionTarget::Launch)
+            {
+                for value in samples(spec) {
+                    assert_eq!(
+                        spec_arguments(spec, &value),
+                        legacy_arguments(spec, &value),
+                        "{} {value}",
+                        spec.key
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50, "{checked}");
+    }
+
+    #[test]
+    fn catalog_and_manifest_options_keep_their_facts_as_adapter_metadata() {
+        let source = adapter_source("custom.example", "manifest-v1");
+        let toggle = from_external(
+            &serde_json::from_value(
+                json!({"key":"cache","flag":"--cache","target":"launch","kind":{"type":"toggle"}}),
+            )
+            .unwrap(),
+            &source,
+        )
+        .unwrap();
+        assert_eq!(toggle.spellings.len(), 2);
+        assert_eq!(toggle.spellings[1].flag, "--no-cache");
+        assert_eq!(toggle.spellings[1].polarity, Some(false));
+        let request = from_external(
+            &serde_json::from_value(json!({"key":"temperature","target":"request","kind":{"type":"number","min":0,"max":2}}))
+                .unwrap(),
+            &source,
+        )
+        .unwrap();
+        assert_eq!(request.target, Target::Request);
+        assert_eq!(
+            request.request_field.supported().map(String::as_str),
+            Some("temperature")
+        );
+        assert!(request.spellings.is_empty());
+        // A manifest kind this app does not know is not converted at all.
+        assert!(from_external(
+            &serde_json::from_value(
+                json!({"key":"x","flag":"--x","target":"launch","kind":{"type":"future"}})
+            )
+            .unwrap(),
+            &source
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn help_review_does_not_report_valid_catalog_or_dedicated_settings_as_removed() {
+        let runtime = super::super::python_env::PythonRuntimeManifest {
+            format: 1,
+            provider: ProviderId::Vllm,
+            id: "synthetic-review".into(),
+            kind: super::super::python_env::InstallationKind::External,
+            python: "/synthetic/python".into(),
+            requested_version: None,
+            probe: None,
+        };
+        let selected = Selected::python(&runtime).unwrap();
+        let reserved = json!({
+            "@option_order": {"version": 1, "occurrences": []},
+            "draft_model": "/synthetic/draft",
+            "extra_args": ["--synthetic"],
+            "lora_adapters": [{"name": "selected", "path": "/synthetic/adapter"}],
+            "request_lora": "selected",
+            "trust_remote_code": false
+        });
+        let mut mixed = reserved.as_object().unwrap().clone();
+        mixed.insert(
+            "alpha".into(),
+            json!({"nested": ["값", false, null, 18446744073709551615_u64]}),
+        );
+        mixed.insert("removed".into(), json!("retained"));
+        mixed.insert("temperature".into(), json!(0.7));
+        mixed.insert("한글".into(), json!({"unchanged": [0, ""]}));
+        for (label, values, expected_discovery, expected_entrypoint) in [
+            ("absent", None, vec![], vec![]),
+            ("empty", Some(Map::new()), vec![], vec![]),
+            (
+                "all reserved",
+                Some(reserved.as_object().unwrap().clone()),
+                vec![],
+                vec![],
+            ),
+            (
+                "mixed",
+                Some(mixed),
+                vec!["alpha", "removed", "한글"],
+                vec!["alpha", "removed", "temperature", "한글"],
+            ),
+        ] {
+            let mut provider_options = BTreeMap::from([(
+                "mlx-vlm".into(),
+                json!({"other_provider_only": {"nested": ["foreign"]}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )]);
+            if let Some(values) = values {
+                provider_options.insert("vllm".into(), values);
+            }
+            let cfg = AppConfig {
+                active_provider: "mlx-vlm".into(),
+                provider_options,
+                ..Default::default()
+            };
+            assert_ne!(cfg.active_provider, selected.key.provider.as_str());
+            let before = serde_json::to_vec(&cfg).unwrap();
+            assert_eq!(
+                discovery_saved_keys(&cfg, &selected).unwrap(),
+                expected_discovery,
+                "{label}",
+            );
+            assert_eq!(
+                entrypoint_saved_keys(&cfg, ProviderId::Vllm),
+                expected_entrypoint,
+                "{label}",
+            );
+            assert_eq!(serde_json::to_vec(&cfg).unwrap(), before, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_shadowed_help_alias_cannot_override_the_selected_model() {
+        let source = adapter_source("custom.example", "manifest-v1");
+        let option = from_external(
+            &serde_json::from_value(json!({
+                "key":"checkpoint", "flag":"--checkpoint", "target":"launch",
+                "kind":{"type":"path"}
+            }))
+            .unwrap(),
+            &source,
+        )
+        .unwrap();
+        let mut help = option.clone();
+        help.key = "weights".into();
+        help.spellings.push(Spelling {
+            flag: "--weights".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        let mut compat = Compat {
+            explicit_scopes: BTreeMap::new(),
+            options: vec![option],
+            managed_flags: BTreeMap::from([("--weights".into(), ManagedBinding::Model)]),
+            metadata: None,
+            entry: None,
+        };
+        protect_binding_aliases(&mut compat, &[help]);
+        let mut schema = help_schema();
+        schema.options = compat.options;
+        let saved: super::super::runtime_options::Overrides = serde_json::from_value(json!({
+            "checkpoint":{"occurrences":[["/synthetic/other.model"]]}
+        }))
+        .unwrap();
+        let original = saved.clone();
+        let issues = schema.resolve(&[], &saved).unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].key, "checkpoint");
+        assert!(issues[0].message.contains("managed by the app"));
+        assert_eq!(
+            saved, original,
+            "invalid stored values stay available for review"
+        );
+        assert!(schema.resolve(&[], &Default::default()).is_ok());
+    }
+
+    #[test]
+    fn accepted_native_model_source_options_cannot_replace_app_bindings() {
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!("aiolm-model-source-help-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let presets = [
+            "--embd-gemma-default",
+            "--fim-qwen-1.5b-default",
+            "--fim-qwen-3b-default",
+            "--fim-qwen-7b-default",
+            "--fim-qwen-7b-spec",
+            "--fim-qwen-14b-spec",
+            "--fim-qwen-30b-default",
+            "--gpt-oss-20b-default",
+            "--gpt-oss-120b-default",
+            "--vision-gemma-4b-default",
+            "--vision-gemma-12b-default",
+        ];
+        let text = format!("Options:\n  -hf, -hfr, --hf-repo REPO           model source\n  -hff, --hf-file FILE               model file\n  -mu, --model-url URL               model source URL\n  -dr, --docker-repo REPO            model source\n  --spec-draft-hf, -hfd, -hfrd, --hf-repo-draft REPO   draft source\n{}", presets.iter().map(|flag|format!("  {flag}  replaces model and port")).collect::<Vec<_>>().join("\n"));
+        let fingerprint = "a".repeat(64);
+        let output = |text: &str| json!({"text":text,"clean_text":text,"encoding":"utf-8","decoding_loss":false,"truncated":false,"read_error":null});
+        let report: super::super::runtime_help::HelpReport = serde_json::from_value(json!({
+            "identity":{"fingerprint":fingerprint,"executable_sha256":"b".repeat(64),"artifacts_sha256":{},"parser_version":super::super::runtime_help::PARSER_VERSION},
+            "scope":[],"stdout":output(&text),"stderr":output(""),"exit_code":0,"success":true,"cancelled":false,"timed_out":false,"error":null,"elapsed_ms":1
+        })).unwrap();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: "llama.cpp".into(),
+                runtime: "cpu-source-test".into(),
+                fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        runtime_help_store::save_snapshot(
+            &root,
+            "llama.cpp",
+            "cpu-source-test",
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap();
+        write_accepted(
+            &root,
+            "llama.cpp",
+            "cpu-source-test",
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                working_directory: None,
+                fingerprint,
+                request: HelpRequest {
+                    encoding: None,
+                    locale: None,
+                    working_directory: None,
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "source-test".into(),
+            ..Default::default()
+        };
+        // Test the effective schema composition without pretending that a
+        // synthetic help report proves an installed engine's identity.
+        let effective = effective(&root, &cfg, false).unwrap();
+        for flag in [
+            "-hf",
+            "-hfr",
+            "--hf-repo",
+            "-hff",
+            "--hf-file",
+            "-mu",
+            "--model-url",
+            "-dr",
+            "--docker-repo",
+            "--spec-draft-hf",
+            "-hfd",
+            "-hfrd",
+            "--hf-repo-draft",
+        ]
+        .into_iter()
+        .chain(presets)
+        {
+            let option = effective
+                .schema
+                .options
+                .iter()
+                .find(|option| {
+                    option
+                        .spellings
+                        .iter()
+                        .any(|spelling| spelling.flag == flag)
+                })
+                .expect(flag);
+            let value = if option.kind.supported() == Some(&ValueKind::Boolean) {
+                json!(true)
+            } else {
+                json!("synthetic/other-model")
+            };
+            let overrides = BTreeMap::from([(
+                option.key.clone(),
+                super::super::runtime_options::Override {
+                    spelling: Some(flag.into()),
+                    occurrences: vec![vec![value]],
+                },
+            )]);
+            let issues = effective.schema.resolve(&[], &overrides).unwrap_err();
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.key == option.key
+                        && issue.message.contains("managed by the app")),
+                "{flag}: {issues:?}"
+            );
+            let raw = AppConfig {
+                server_args: vec![flag.into()],
+                ..Default::default()
+            };
+            assert!(
+                super::super::adapter::native_arguments(
+                    &raw,
+                    "",
+                    &crate::gpu::ResolvedGpu::default()
+                )
+                .unwrap_err()
+                .contains("app-managed"),
+                "raw argv must not bypass {flag}"
+            );
+        }
+        assert_eq!(root.parent(), Some(temporary.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Accept synthetic llama-server help for an uninstalled test build so the
+    /// effective schema is composed exactly as the settings UI receives it.
+    fn accepted_llama_help(text: &str) -> (PathBuf, AppConfig) {
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!("aiolm-llama-metadata-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let fingerprint = "c".repeat(64);
+        let output = |text: &str| json!({"text":text,"clean_text":text,"encoding":"utf-8","decoding_loss":false,"truncated":false,"read_error":null});
+        let report: super::super::runtime_help::HelpReport = serde_json::from_value(json!({
+            "identity":{"fingerprint":fingerprint,"executable_sha256":"d".repeat(64),"artifacts_sha256":{},"parser_version":super::super::runtime_help::PARSER_VERSION},
+            "scope":[],"stdout":output(text),"stderr":output(""),"exit_code":0,"success":true,"cancelled":false,"timed_out":false,"error":null,"elapsed_ms":1
+        })).unwrap();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: "llama.cpp".into(),
+                runtime: "cpu-metadata-test".into(),
+                fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        runtime_help_store::save_snapshot(
+            &root,
+            "llama.cpp",
+            "cpu-metadata-test",
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap();
+        write_accepted(
+            &root,
+            "llama.cpp",
+            "cpu-metadata-test",
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                working_directory: None,
+                fingerprint,
+                request: HelpRequest {
+                    encoding: None,
+                    locale: None,
+                    working_directory: None,
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "metadata-test".into(),
+            ..Default::default()
+        };
+        (root, cfg)
+    }
+
+    #[test]
+    fn reviewed_llama_help_marks_only_the_documented_access_token_sensitive() {
+        // The pinned llama.cpp source defines `-hft, --hf-token TOKEN` as the
+        // Hugging Face access token. Help prose alone never makes it secret,
+        // and an unrelated name containing "token" stays unknown.
+        let (root, cfg) = accepted_llama_help(
+            "Options:\n  -hft, --hf-token TOKEN   Hugging Face access token (default: value from HF_TOKEN environment variable)\n  --fresh-token-count N    synthetic count whose name mentions a token\n  -t, --threads N          number of threads\n",
+        );
+        let effective = effective(&root, &cfg, false).unwrap();
+        let by_flag = |flag: &str| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.spellings.iter().any(|s| s.flag == flag))
+                .unwrap_or_else(|| panic!("{flag}"))
+                .clone()
+        };
+        let token = by_flag("-hft");
+        assert_eq!(token.sensitive.supported(), Some(&true));
+        assert!(
+            matches!(&token.sensitive.source, Some(Source::Adapter { id, .. }) if id == "llama.cpp"),
+            "{:?}",
+            token.sensitive.source
+        );
+        assert!(token.managed.is_none(), "the token stays a user setting");
+        for flag in ["--fresh-token-count", "--threads"] {
+            assert!(by_flag(flag).sensitive.supported().is_none(), "{flag}");
+        }
+        // Masking needs no saved value to change: the syntax still comes from
+        // help and the value reaches argv unchanged.
+        let overrides = BTreeMap::from([(
+            token.key.clone(),
+            super::super::runtime_options::Override {
+                spelling: None,
+                occurrences: vec![vec![json!("synthetic-access-token")]],
+            },
+        )]);
+        let argv = effective.schema.resolve(&[], &overrides).unwrap().argv;
+        assert_eq!(
+            argv,
+            [token.spellings[0].flag.as_str(), "synthetic-access-token"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn help_parsed_by_an_earlier_parser_is_stale_and_its_values_are_kept() {
+        let (root, mut cfg) = accepted_llama_help(
+            "--no-host   bypass host buffer allowing extra buffers to be used\n--host HOST   IP addresses to listen on\n-hft, --hf-token TOKEN   Hugging Face access token\n",
+        );
+        // Rewrite the accepted snapshot as the earlier parser recorded it.
+        let path = runtime_help_store::snapshot_root(&root, "llama.cpp", "cpu-metadata-test")
+            .unwrap()
+            .join(format!("{}.json", "c".repeat(64)));
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["report"]["identity"]["parser_version"] =
+            json!(super::super::runtime_help::PARSER_VERSION - 1);
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        let effective = effective(&root, &cfg, false).unwrap();
+        assert_eq!(effective.help_state, HelpState::Stale);
+        assert!(effective.help_keys.is_empty());
+        let values: Map<String, Value> =
+            serde_json::from_value(json!({"host": false, "no_host": true})).unwrap();
+        cfg.provider_options
+            .insert("llama.cpp".into(), values.clone());
+        let issues = saved_issues(&root, &cfg, &values, &BTreeSet::new());
+        for key in ["host", "no_host"] {
+            assert!(
+                issues.iter().any(|issue| issue.key == key),
+                "{key}: {issues:?}"
+            );
+        }
+        assert_eq!(cfg.provider_options["llama.cpp"], values);
+        // The stale snapshot still says which stored value is secret, so it
+        // stays hidden in display copies while help is rediscovered.
+        let mut stored = values.clone();
+        stored.insert("hf_token".into(), json!("synthetic-hub-credential"));
+        cfg.provider_options.insert("llama.cpp".into(), stored);
+        assert!(sensitive_keys(&root, &cfg).contains("hf_token"));
+        assert_eq!(
+            mask_argv(
+                &root,
+                &cfg,
+                vec!["-hft".into(), "synthetic-hub-credential".into()],
+                REDACTED
+            ),
+            ["-hft", REDACTED]
+        );
+        let mut projection = serde_json::to_value(&cfg).unwrap();
+        mask_config(&root, &cfg, &mut projection, REDACTED);
+        assert_eq!(
+            projection["provider_options"]["llama.cpp"]["hf_token"],
+            REDACTED
+        );
+        assert_eq!(projection["provider_options"]["llama.cpp"]["no_host"], true);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn help_schema() -> OptionSchema {
+        let help = Source::Help {
+            document: "stdout".into(),
+            start_line: 1,
+            end_line: 1,
+        };
+        let mut pair = blank("fresh_pair", "", Target::Launch);
+        pair.spellings.push(Spelling {
+            flag: "--fresh-pair".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        pair.arity = Fact {
+            value: Some(Arity {
+                min: 2,
+                max: Some(2),
+            }),
+            certainty: Certainty::Verified,
+            source: Some(help.clone()),
+        };
+        let mut items = blank("fresh_items", "", Target::Launch);
+        items.spellings.push(Spelling {
+            flag: "--fresh-items".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        let mut port = items.clone();
+        port.key = "port".into();
+        port.spellings[0].flag = "--port".into();
+        port.managed = Some(ManagedBinding::Port);
+        OptionSchema {
+            schema_version: SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: "custom.example".into(),
+                runtime: "build-1".into(),
+                fingerprint: "a".repeat(64),
+            },
+            options: vec![pair, items, port],
+            constraints: vec![],
+            raw_help: vec![super::super::runtime_options::RawHelp {
+                id: "stdout".into(),
+                scope: vec![],
+                stream: super::super::runtime_options::HelpStream::Stdout,
+                text: "--fresh-pair A B\n".into(),
+                truncated: false,
+            }],
+            end_of_options: Fact::default(),
+        }
+    }
+
+    #[test]
+    fn mapped_template_tokens_move_into_declared_slot_order() {
+        // [user input, app model, fixed marker, user output] behind
+        // `-I engine.py --label serve serve api MARKER {model} --port {port}`.
+        let mut schema = help_schema();
+        let scope = vec!["serve".to_string(), "api".to_string()];
+        for (position, key, managed) in [
+            (0, "input", None),
+            (1, "model", Some(ManagedBinding::Model)),
+            (2, "marker", Some(ManagedBinding::EntryPoint)),
+            (3, "output", None),
+        ] {
+            let mut slot = blank(key, "", Target::Launch);
+            slot.position = Some(position);
+            slot.scope = scope.clone();
+            slot.managed = managed;
+            if managed.is_none() {
+                slot.arity = Fact {
+                    value: Some(Arity {
+                        min: 1,
+                        max: Some(1),
+                    }),
+                    certainty: Certainty::Verified,
+                    source: Some(Source::Help {
+                        document: "stdout".into(),
+                        start_line: 1,
+                        end_line: 1,
+                    }),
+                };
+            }
+            schema.options.push(slot);
+        }
+        for option in &mut schema.options {
+            option.scope = scope.clone();
+        }
+        let tokens = vec![
+            ("model".to_string(), "/m/model.bin".to_string()),
+            ("marker".to_string(), "MARKER".to_string()),
+        ];
+        let values: Map<String, Value> = serde_json::from_value(json!({
+            "output": "out.txt", "input": "in.txt",
+            "fresh_pair": {"occurrences": [["a", "b"]]}
+        }))
+        .unwrap();
+        let (with_slots, values) = with_template_slots(&schema, values, &tokens);
+        let resolved = runtime_ordered::resolve_saved(&with_slots, &scope, &values).unwrap();
+        let prefix: Vec<String> = [
+            "-I",
+            "engine.py",
+            "--label",
+            "serve",
+            "serve",
+            "api",
+            "MARKER",
+        ]
+        .map(String::from)
+        .to_vec();
+        let mut template = prefix.clone();
+        template.extend(["/m/model.bin", "--port", "9"].map(String::from));
+        let layout = super::super::runtime_command::CommandLayout {
+            version: 1,
+            subcommands: vec![4, 5],
+            options: vec![
+                super::super::runtime_command::PrefixOption {
+                    index: 0,
+                    values: 0,
+                },
+                super::super::runtime_command::PrefixOption {
+                    index: 2,
+                    values: 1,
+                },
+            ],
+        };
+        let argv = layout
+            .assemble(
+                &prefix,
+                &template,
+                &resolved.sections(&scope).unwrap(),
+                &[6, 7],
+            )
+            .unwrap();
+        assert_eq!(
+            argv,
+            [
+                "-I",
+                "engine.py",
+                "--label",
+                "serve",
+                "serve",
+                "api",
+                "--port",
+                "9",
+                "--fresh-pair",
+                "a",
+                "b",
+                "in.txt",
+                "/m/model.bin",
+                "MARKER",
+                "out.txt"
+            ]
+        );
+        // Tokens before the leaf command never move.
+        assert!(layout
+            .assemble(
+                &prefix,
+                &template,
+                &resolved.sections(&scope).unwrap(),
+                &[1]
+            )
+            .is_err());
+        // A value saved for an app-filled slot is kept and refused.
+        let mut forged: Map<String, Value> =
+            serde_json::from_value(json!({"model": "/other.bin", "input": "in.txt"})).unwrap();
+        forged.insert("output".into(), json!("out.txt"));
+        let (with_slots, forged) = with_template_slots(&schema, forged, &tokens);
+        assert!(runtime_ordered::resolve_saved(&with_slots, &scope, &forged)
+            .unwrap_err()
+            .iter()
+            .any(|issue| issue.key == "model"));
+    }
+
+    fn confirmations(entries: Value) -> BTreeMap<String, ConfirmedSyntax> {
+        serde_json::from_value(entries).unwrap()
+    }
+
+    #[test]
+    fn confirmed_syntax_fills_only_unknown_help_facts_and_stays_user_sourced() {
+        let keys = vec![
+            "fresh_pair".to_string(),
+            "fresh_items".into(),
+            "port".into(),
+        ];
+        let saved = Supplement {
+            version: SUPPLEMENT_VERSION,
+            fingerprint: "a".repeat(64),
+            options: confirmations(json!({
+                "fresh_pair": {"arity": {"min": 1, "max": 1}, "repeatable": true},
+                "fresh_items": {"arity": {"min": 0, "max": null}},
+                "port": {"repeatable": true},
+                "removed": {"repeatable": true}
+            })),
+        };
+        let mut schema = help_schema();
+        let view = apply_supplement(&mut schema, &keys, None, saved.clone(), true);
+        schema.validate().unwrap();
+        let find = |schema: &OptionSchema, key: &str| {
+            schema
+                .options
+                .iter()
+                .find(|o| o.key == key)
+                .unwrap()
+                .clone()
+        };
+        // Repetition was unknown and is now user-confirmed, never verified.
+        let pair = find(&schema, "fresh_pair");
+        assert_eq!(pair.repeatable.certainty, Certainty::UserConfirmed);
+        assert!(matches!(pair.repeatable.source, Some(Source::User { .. })));
+        // The observed arity wins; the contradicting confirmation is shown.
+        assert_eq!(pair.arity.certainty, Certainty::Verified);
+        assert_eq!(pair.arity.value.unwrap().min, 2);
+        assert!(view.conflicts.iter().any(|c| c.key == "fresh_pair"
+            && c.field == "arity"
+            && c.help == json!({"min": 2, "max": 2})));
+        // A variadic count the help left unknown now generates argv.
+        let items = find(&schema, "fresh_items");
+        assert_eq!(items.arity.certainty, Certainty::UserConfirmed);
+        let overrides = runtime_help_store::overrides_from_map(
+            &serde_json::from_value(
+                json!({"fresh_items": {"spelling": null, "occurrences": [["a", "b c"]]}}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            schema.resolve(&[], &overrides).unwrap().argv,
+            ["--fresh-items", "a", "b c"]
+        );
+        // App-owned bindings and vanished options are never supplemented.
+        assert!(find(&schema, "port").repeatable.supported().is_none());
+        for key in ["port", "removed"] {
+            assert!(view
+                .conflicts
+                .iter()
+                .any(|c| c.key == key && c.field == "option"));
+        }
+        assert_eq!(view.applied, ["fresh_items", "fresh_pair"]);
+
+        // Confirmations for another help fingerprint never apply, but their
+        // differences from the current help are still shown for review.
+        let mut stale = help_schema();
+        let view = apply_supplement(&mut stale, &keys, None, saved, false);
+        assert!(!view.current && view.applied.is_empty());
+        assert!(find(&stale, "fresh_items").arity.supported().is_none());
+        assert!(view.conflicts.iter().any(|c| c.field == "arity"));
+        let unknown = runtime_help_store::overrides_from_map(
+            &serde_json::from_value(json!({"fresh_items": "kept"})).unwrap(),
+        );
+        assert!(stale.resolve(&[], &unknown).unwrap_err()[0]
+            .message
+            .contains("arity is unknown"));
+    }
+
+    #[test]
+    fn saved_confirmations_refuse_future_malformed_and_oversized_files() {
+        let root = std::env::temp_dir().join(format!("aiolm-supplement-{}", uuid::Uuid::new_v4()));
+        let dir = runtime_help_store::snapshot_root(&root, "custom.example", "build-1").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SUPPLEMENT_FILE);
+        let load = || load_supplement(&root, "custom.example", "build-1");
+        assert_eq!(load().unwrap(), None);
+        let good = json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"fresh_items": {"arity": {"min": 1, "max": null}}}});
+        std::fs::write(&path, good.to_string()).unwrap();
+        assert_eq!(load().unwrap().unwrap().options.len(), 1);
+        let roles = json!({"version": 2, "fingerprint": "a".repeat(64), "options": {
+            "model": {"positional": {"role": "binding", "name": "model"}},
+            "output": {"positional": {"role": "user"}, "arity": {"min": 1, "max": 1}}}});
+        std::fs::write(&path, roles.to_string()).unwrap();
+        assert_eq!(
+            load().unwrap().unwrap().options["output"].positional,
+            Some(PositionalRole::User)
+        );
+        for (bad, needle) in [
+            (
+                json!({"version": 3, "fingerprint": "a".repeat(64), "options": {}}),
+                "version 3",
+            ),
+            // Positional roles exist only from version 2, so version-1
+            // readers never meet one they would misread.
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"positional": {"role": "user"}}}}),
+                "cannot hold positional",
+            ),
+            (
+                json!({"version": 2, "fingerprint": "a".repeat(64), "options": {"x": {"positional": {"role": "later"}}}}),
+                "malformed",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {}, "auto": true}),
+                "malformed",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "short", "options": {}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {}}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"arity": {"min": 3, "max": 2}}}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"kind": "integer"}}}),
+                "malformed",
+            ),
+        ] {
+            std::fs::write(&path, bad.to_string()).unwrap();
+            let error = load().unwrap_err();
+            assert!(error.contains(needle), "{error}");
+        }
+        std::fs::write(&path, vec![b' '; SUPPLEMENT_LIMIT as usize + 1]).unwrap();
+        assert!(load().unwrap_err().contains("bounded"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scope_words_are_stripped_only_from_the_front() {
+        let scope = vec!["serve".to_string()];
+        assert_eq!(
+            strip_scope(vec!["serve".into(), "--a".into(), "1".into()], &scope).unwrap(),
+            vec!["--a".to_string(), "1".into()]
+        );
+        assert!(strip_scope(vec!["--a".into(), "serve".into()], &scope).is_err());
+        assert_eq!(strip_scope(vec!["--a".into()], &[]).unwrap(), vec!["--a"]);
+    }
+    /// Isolated-home fixture: the parent test never touches the process
+    /// environment. It creates an owned temp home, spawns this test binary
+    /// with an exact fixture filter plus isolated `AIOLM_HOME`, checks the
+    /// child status with its output preserved, then removes only the owned
+    /// home it created. The child builds every fixture under that home.
+    const STATIC_PREFIX_FIXTURE_MODE: &str = "AIOLM_STATIC_PREFIX_FIXTURE_MODE";
+
+    /// Create the temp home this parent test owns. Only this exact directory
+    /// is ever removed, after checking it stays inside the temp root.
+    fn owned_fixture_home() -> PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir resolves");
+        let home = base.join(format!("aiolm-static-prefix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("create owned fixture home");
+        home
+    }
+
+    fn remove_owned_fixture_home(home: &Path) {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir resolves");
+        let owned = home.canonicalize().expect("owned fixture home exists");
+        assert!(
+            owned.starts_with(&base),
+            "refusing to remove outside the owned temp home"
+        );
+        std::fs::remove_dir_all(&owned).expect("remove owned fixture home");
+    }
+
+    fn run_static_prefix_fixture(mode: &str) {
+        // The parent never assigns the process environment: the isolated
+        // home travels to the child through its own spawn environment only.
+        let parent_home = std::env::var_os("AIOLM_HOME");
+        let home = owned_fixture_home();
+        let output = match crate::procutil::std_command(
+            std::env::current_exe().expect("current test binary"),
+        )
+        .args([
+            "--exact",
+            "providers::runtime_schema::tests::isolated_static_prefix_mask_fixture",
+            "--nocapture",
+        ])
+        .env("AIOLM_HOME", &home)
+        .env(STATIC_PREFIX_FIXTURE_MODE, mode)
+        .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                remove_owned_fixture_home(&home);
+                panic!("failed to spawn isolated mask fixture: {error}");
+            }
+        };
+        remove_owned_fixture_home(&home);
+        assert_eq!(
+            std::env::var_os("AIOLM_HOME"),
+            parent_home,
+            "the parent process environment must stay untouched"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated mask fixture {mode} failed:\nstdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // An exact filter matching nothing also exits successfully, so require
+        // the child's own summary: the mask case really ran and passed.
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "isolated mask fixture {mode} ran no mask case:\n{stdout}"
+        );
+    }
+
+    fn synthetic_engine_ids() -> (String, String, String) {
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        (
+            format!("custom.staticprefix{}", &tag[..24]),
+            format!("staticprefix-{}", &tag[..12]),
+            format!("synthetic-entry-amber-{}", &tag[..8]),
+        )
+    }
+
+    fn prefix_with_static_secret(secret: &str) -> Vec<String> {
+        ["-I", "engine.py", "serve", secret, "plain-token"]
+            .iter()
+            .map(|token| token.to_string())
+            .collect()
+    }
+
+    fn manifest_with_static_prefix(
+        engine: &str,
+        runtime: &str,
+        home: &Path,
+        secret: &str,
+    ) -> registry::RuntimeManifest {
+        let program = home
+            .join("static-prefix-engine.exe")
+            .to_string_lossy()
+            .into_owned();
+        let probe = home
+            .join("static-prefix-probe.exe")
+            .to_string_lossy()
+            .into_owned();
+        let mut args = prefix_with_static_secret(secret);
+        args.push("{model}".into());
+        args.push("--port".into());
+        args.push("{port}".into());
+        registry::RuntimeManifest {
+            command_layout: Some(super::super::runtime_command::CommandLayout {
+                version: 1,
+                subcommands: vec![2],
+                options: vec![super::super::runtime_command::PrefixOption {
+                    index: 0,
+                    values: 0,
+                }],
+            }),
+            schema_version: registry::VERSION,
+            adapter_version: registry::VERSION,
+            engine_id: super::ProviderId::parse(engine).unwrap(),
+            runtime_id: runtime.into(),
+            display_name: "Synthetic static-prefix engine".into(),
+            platforms: vec![registry::Platform {
+                os: "windows".into(),
+                arch: "x86_64".into(),
+            }],
+            protocol: "openai-v1".into(),
+            probe: registry::ProcessSpec {
+                program: probe,
+                args: vec!["{model}".into()],
+                env: BTreeMap::new(),
+                working_directory: None,
+            },
+            launch: registry::ProcessSpec {
+                program,
+                args,
+                env: BTreeMap::new(),
+                working_directory: None,
+            },
+            launch_bindings: Some(registry::LaunchBindings {
+                version: 1,
+                options_separator: None,
+                prefix_len: 5,
+                bindings: vec![
+                    registry::BoundArgument {
+                        name: "model".into(),
+                        argument: registry::ArgBinding::Positional,
+                    },
+                    registry::BoundArgument {
+                        name: "port".into(),
+                        argument: registry::ArgBinding::Flag {
+                            flag: "--port".into(),
+                            equals: false,
+                        },
+                    },
+                ],
+            }),
+            bridge_command: None,
+            launch_resources: None,
+            option_metadata: None,
+            options: vec![],
+            model_formats: vec!["unknown".into()],
+            models: vec![],
+            artifacts: vec![],
+            health_path: "/health".into(),
+            health_authenticated: false,
+        }
+    }
+
+    fn positional_slot(key: &str, position: u16, sensitive: Fact<bool>) -> OptionDefinition {
+        let mut option = blank(key, "options", Target::Launch);
+        option.position = Some(position);
+        option.sensitive = sensitive;
+        option.help = format!("{key} help");
+        option
+    }
+
+    fn documented_sensitive() -> Fact<bool> {
+        Fact {
+            value: Some(true),
+            certainty: Certainty::Documented,
+            source: Some(Source::Adapter {
+                id: "synthetic.role".into(),
+                revision: "1".into(),
+            }),
+        }
+    }
+
+    fn schema_with_sensitive_slot(
+        engine: &str,
+        runtime: &str,
+        fingerprint: &str,
+        marker_sensitive: Fact<bool>,
+    ) -> OptionSchema {
+        OptionSchema {
+            schema_version: SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: engine.into(),
+                runtime: runtime.into(),
+                fingerprint: fingerprint.into(),
+            },
+            options: vec![
+                positional_slot(
+                    "modelslot",
+                    0,
+                    Fact {
+                        value: Some(false),
+                        certainty: Certainty::Documented,
+                        source: Some(Source::Adapter {
+                            id: "synthetic.role".into(),
+                            revision: "1".into(),
+                        }),
+                    },
+                ),
+                positional_slot("marker", 1, marker_sensitive),
+                positional_slot("plain", 2, Fact::default()),
+            ],
+            constraints: vec![],
+            raw_help: vec![],
+            end_of_options: Fact::default(),
+        }
+    }
+
+    fn complete_help_report(fingerprint: &str) -> super::super::runtime_help::HelpReport {
+        let output = |text: &str| super::super::runtime_help::TextOutput {
+            text: text.into(),
+            clean_text: text.into(),
+            encoding: "utf-8".into(),
+            decoding_loss: false,
+            truncated: false,
+            read_error: None,
+            raw_bytes_base64: None,
+        };
+        super::super::runtime_help::HelpReport {
+            identity: super::super::runtime_help::Identity {
+                fingerprint: fingerprint.into(),
+                executable_sha256: "e".repeat(64),
+                artifacts_sha256: BTreeMap::new(),
+                parser_version: super::super::runtime_help::PARSER_VERSION,
+            },
+            scope: vec![],
+            stdout: output("synthetic help"),
+            stderr: output(""),
+            exit_code: Some(0),
+            success: true,
+            cancelled: false,
+            timed_out: false,
+            error: None,
+            elapsed_ms: 1,
+        }
+    }
+
+    fn supplement_with_static_roles(fingerprint: &str) -> Supplement {
+        let mut options = BTreeMap::new();
+        options.insert(
+            "modelslot".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Binding {
+                    name: "model".into(),
+                }),
+            },
+        );
+        options.insert(
+            "marker".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 3 }),
+            },
+        );
+        options.insert(
+            "plain".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 4 }),
+            },
+        );
+        Supplement {
+            version: SUPPLEMENT_POSITIONAL_VERSION,
+            fingerprint: fingerprint.into(),
+            options,
+        }
+    }
+
+    /// Plant a manifest, accepted snapshot and supplement under the given
+    /// adapters root. `supplement_fp` equal to `snapshot_fp` is current;
+    /// different is stale. Filesystem writes only; the process environment
+    /// is never read or changed here.
+    fn build_engine_fixture(
+        adapters: &Path,
+        home: &Path,
+        snapshot_fp: &str,
+        supplement_fp: &str,
+        marker_sensitive: Fact<bool>,
+    ) -> (AppConfig, String, String, String) {
+        let (engine, runtime, secret) = synthetic_engine_ids();
+        let manifest = manifest_with_static_prefix(&engine, &runtime, home, &secret);
+        registry::validate_manifest(&manifest).unwrap();
+        let record = serde_json::json!({
+            "manifest": serde_json::to_value(&manifest).unwrap(),
+            "executable_sha256": "e".repeat(64),
+            "probe_sha256": "f".repeat(64),
+        });
+        let registration = adapters
+            .join(&engine)
+            .join(&runtime)
+            .join("registration.json");
+        std::fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        std::fs::write(&registration, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let schema = schema_with_sensitive_slot(&engine, &runtime, snapshot_fp, marker_sensitive);
+        runtime_help_store::save_snapshot(
+            adapters,
+            &engine,
+            &runtime,
+            &HelpSnapshot {
+                report: complete_help_report(snapshot_fp),
+                schema,
+            },
+        )
+        .unwrap();
+        write_accepted(
+            adapters,
+            &engine,
+            &runtime,
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                working_directory: None,
+                fingerprint: snapshot_fp.into(),
+                request: HelpRequest {
+                    encoding: None,
+                    locale: None,
+                    working_directory: None,
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let supplement = supplement_with_static_roles(supplement_fp);
+        let dir = runtime_help_store::snapshot_root(adapters, &engine, &runtime).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(SUPPLEMENT_FILE),
+            serde_json::to_vec(&supplement).unwrap(),
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_provider: engine.clone(),
+            active_runtime: runtime.clone(),
+            ..Default::default()
+        };
+        (cfg, engine, runtime, secret)
+    }
+
+    #[test]
+    fn static_entry_prefix_secrets_are_masked_for_current_help() {
+        run_static_prefix_fixture("current");
+    }
+
+    #[test]
+    fn stale_static_roles_stay_masked_without_applying_launch() {
+        run_static_prefix_fixture("stale");
+    }
+
+    #[test]
+    fn unknown_sensitivity_never_masks_entry_tokens() {
+        run_static_prefix_fixture("unknown");
+    }
+
+    /// Child entry point for the isolated mask cases above. Runs only when
+    /// spawned with an isolated `AIOLM_HOME`; a plain suite run returns
+    /// immediately without touching the process environment. Never spawns.
+    #[test]
+    fn isolated_static_prefix_mask_fixture() {
+        // The mode variable only travels with a spawned isolated child; a
+        // plain suite run (whose ambient environment may well define a home)
+        // returns immediately without touching anything.
+        let Ok(mode) = std::env::var(STATIC_PREFIX_FIXTURE_MODE) else {
+            return;
+        };
+        let Some(home) = std::env::var_os("AIOLM_HOME") else {
+            return;
+        };
+        let home = PathBuf::from(home);
+        let adapters = home.join("runtimes").join("adapters");
+        match mode.as_str() {
+            "current" => current_mask_case(&adapters, &home),
+            "stale" => stale_mask_case(&adapters, &home),
+            "unknown" => unknown_mask_case(&adapters, &home),
+            "old-parser" => old_parser_static_prefix_mask_case(&adapters, &home),
+            "old-parser-negative" => historical_static_prefix_negative_case(&adapters, &home),
+            "old-parser-metadata" => historical_static_prefix_metadata_case(&adapters, &home),
+            mode => panic!("unknown static prefix fixture mode: {mode}"),
+        }
+    }
+
+    fn current_mask_case(root: &Path, home: &Path) {
+        let snapshot = "a".repeat(64);
+        let (cfg, engine, runtime, secret) =
+            build_engine_fixture(root, home, &snapshot, &snapshot, documented_sensitive());
+        // The stored registration is legal and keeps the real token.
+        let manifest =
+            registry::manifest(super::ProviderId::parse(&engine).unwrap(), &runtime).unwrap();
+        assert!(manifest.launch.args.contains(&secret));
+        assert_eq!(manifest.launch.args[3], secret);
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+            format!("--token={secret}"),
+        ];
+        let masked = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        let redacted_token = format!("--token={REDACTED}");
+        let expected = [
+            "C:\\synthetic\\static-prefix-engine.exe",
+            "-I",
+            "engine.py",
+            "serve",
+            REDACTED,
+            "plain-token",
+            redacted_token.as_str(),
+        ];
+        assert_eq!(
+            masked,
+            expected
+                .iter()
+                .map(|token| token.to_string())
+                .collect::<Vec<_>>()
+        );
+        // The input argv and the stored manifest keep their exact bytes.
+        assert!(argv.contains(&secret));
+        assert!(manifest.launch.args.contains(&secret));
+        // Current roles still configure launch.
+        let effective = effective(root, &cfg, false).unwrap();
+        assert_eq!(
+            effective
+                .entry
+                .as_ref()
+                .unwrap()
+                .positional_roles
+                .get("marker"),
+            Some(&PositionalRole::Static { index: 3 })
+        );
+    }
+
+    fn stale_mask_case(root: &Path, home: &Path) {
+        let (cfg, _engine, _runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            documented_sensitive(),
+        );
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+        ];
+        let masked = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        let expected = [
+            "C:\\synthetic\\static-prefix-engine.exe",
+            "serve",
+            REDACTED,
+            "plain-token",
+        ];
+        assert_eq!(
+            masked,
+            expected
+                .iter()
+                .map(|token| token.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(argv.contains(&secret));
+        // A stale role never configures launch, only display copies.
+        let effective = effective(root, &cfg, false).unwrap();
+        assert!(!effective.supplement.as_ref().unwrap().current);
+        assert!(effective
+            .entry
+            .as_ref()
+            .unwrap()
+            .positional_roles
+            .is_empty());
+    }
+
+    fn unknown_mask_case(root: &Path, home: &Path) {
+        let snapshot = "a".repeat(64);
+        let (cfg, _engine, _runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &snapshot,
+            &snapshot,
+            Fact {
+                value: Some(true),
+                certainty: Certainty::Unknown,
+                source: None,
+            },
+        );
+        let argv = vec!["serve".into(), secret.clone(), "plain-token".into()];
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+    }
+
+    #[test]
+    fn sensitive_entry_tokens_cover_only_proven_prefix_positions() {
+        let entry = CommandEntry {
+            version: 1,
+            program: "/synthetic/engine".into(),
+            prefix: prefix_with_static_secret("synthetic-entry-secret"),
+            layout: None,
+            separator: None,
+            positional_bindings: None,
+            positional_roles: BTreeMap::new(),
+        };
+        let mut options = BTreeMap::new();
+        options.insert(
+            "marker".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 3 }),
+            },
+        );
+        // Guessed roles for unproven slots must not widen the mask.
+        options.insert(
+            "guess".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 4 }),
+            },
+        );
+        options.insert(
+            "far".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 99 }),
+            },
+        );
+        let view = |sensitive: Fact<bool>| {
+            let mut schema_options = vec![
+                positional_slot("marker", 1, sensitive),
+                positional_slot("guess", 2, Fact::default()),
+            ];
+            // A request-scoped secret is not a launch token.
+            let mut request = positional_slot("request", 3, documented_sensitive());
+            request.target = Target::Request;
+            schema_options.push(request);
+            // A non-positional launch secret has no prefix position.
+            let mut flag = positional_slot("flag", 4, documented_sensitive());
+            flag.position = None;
+            schema_options.push(flag);
+            EffectiveSchema {
+                schema: OptionSchema {
+                    schema_version: SCHEMA_VERSION,
+                    binding: super::super::runtime_options::SchemaBinding {
+                        engine: "custom.example".into(),
+                        runtime: "build-1".into(),
+                        fingerprint: "a".repeat(64),
+                    },
+                    options: schema_options,
+                    constraints: vec![],
+                    raw_help: vec![],
+                    end_of_options: Fact::default(),
+                },
+                scope: vec![],
+                help_state: HelpState::Current,
+                help_detail: String::new(),
+                accepted_fingerprint: Some("a".repeat(64)),
+                compat_keys: vec![],
+                help_keys: vec![
+                    "marker".into(),
+                    "guess".into(),
+                    "far".into(),
+                    "request".into(),
+                    "flag".into(),
+                ],
+                shadowed: vec![],
+                conflicts: vec![],
+                metadata: None,
+                supplement: Some(SupplementView {
+                    fingerprint: "a".repeat(64),
+                    options: options.clone(),
+                    current: true,
+                    applied: vec!["marker".into()],
+                    conflicts: vec![],
+                }),
+                supplement_error: None,
+                entry: Some(entry.clone()),
+            }
+        };
+        // Only the proven sensitive slot's token is covered; the program,
+        // the plain neighbour and every unproven role stay exact.
+        assert_eq!(
+            sensitive_entry_tokens(&view(documented_sensitive())),
+            BTreeSet::from(["synthetic-entry-secret".into()])
+        );
+        assert!(sensitive_entry_tokens(&view(Fact::default())).is_empty());
+    }
+    #[test]
+    fn rejected_help_prefix_does_not_echo_literal_entry_arguments() {
+        let secret = "synthetic-static-credential";
+        let manifest = manifest_with_static_prefix(
+            "custom.help-diagnostic",
+            "build-2",
+            Path::new("/synthetic"),
+            secret,
+        );
+        let request: HelpRequest = serde_json::from_value(json!({
+            "program": null, "args": ["--help"], "scope": []
+        }))
+        .unwrap();
+        let error = manifest_help_command(&manifest, &request).unwrap_err();
+        assert!(error.contains("help arguments must start with the registered entry point"));
+        assert!(
+            !error.contains(secret),
+            "help errors are displayed while a replaced runtime's saved command is stale"
+        );
+        assert!(!error.contains("plain-token"));
+        assert_eq!(
+            manifest.launch.args[3], secret,
+            "validation must preserve the registered argv"
+        );
+    }
+    // No real engine is spawned. The existing isolated-home wrapper starts only
+    // this crate's exact Rust test child and requires its one-test pass summary.
+
+    #[test]
+    fn static_entry_prefix_secrets_stay_masked_after_parser_upgrade() {
+        run_static_prefix_fixture("old-parser");
+    }
+
+    fn old_parser_static_prefix_mask_case(root: &Path, home: &Path) {
+        let snapshot_fp = "a".repeat(64);
+        let (cfg, engine, runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &snapshot_fp,
+            &snapshot_fp,
+            documented_sensitive(),
+        );
+        let provider = super::ProviderId::parse(&engine).unwrap();
+        let manifest = registry::manifest(provider, &runtime).unwrap();
+        let registration_path = root.join(&engine).join(&runtime).join("registration.json");
+        let registration_before = std::fs::read(&registration_path).unwrap();
+        let accepted_path = accepted_path(root, &engine, &runtime).unwrap();
+        let accepted_before = std::fs::read(&accepted_path).unwrap();
+        let supplement_path = supplement_path(root, &engine, &runtime).unwrap();
+        let supplement_before = std::fs::read(&supplement_path).unwrap();
+        let cfg_before = serde_json::to_value(&cfg).unwrap();
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+            format!("--token={secret}"),
+        ];
+        let argv_before = argv.clone();
+        let expected = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            REDACTED.into(),
+            "plain-token".into(),
+            format!("--token={REDACTED}"),
+        ];
+        assert_eq!(manifest.launch.args[3], secret);
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{snapshot_fp}.json"));
+        let snapshot_before = std::fs::read(&snapshot_path).unwrap();
+        let original: Value = serde_json::from_slice(&snapshot_before).unwrap();
+        let mut historical = original.clone();
+        let previous_parser = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        historical["report"]["identity"]["parser_version"] = json!(previous_parser);
+        let historical_bytes = serde_json::to_vec(&historical).unwrap();
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+        let mut restored = historical.clone();
+        restored["report"]["identity"]["parser_version"] =
+            original["report"]["identity"]["parser_version"].clone();
+        assert_eq!(
+            restored, original,
+            "the fixture changes only the parser version"
+        );
+
+        assert!(
+            runtime_help_store::load_snapshot(root, &engine, &runtime, &snapshot_fp)
+                .unwrap()
+                .is_none()
+        );
+        let stale = effective(root, &cfg, false).unwrap();
+        assert_eq!(stale.help_state, HelpState::Stale);
+        assert!(stale.help_keys.is_empty());
+        assert!(stale.entry.as_ref().unwrap().positional_roles.is_empty());
+        assert!(sensitive_keys(root, &cfg).contains("marker"));
+        let retained: Map<String, Value> =
+            serde_json::from_value(json!({"marker":"synthetic-retained-user-value"})).unwrap();
+        let launch_error = launch_arguments(root, &cfg, &retained).unwrap_err();
+        assert!(
+            launch_error.contains("accepted help snapshot is missing"),
+            "{launch_error}"
+        );
+        assert!(
+            launch_error.contains("Saved options marker were retained"),
+            "{launch_error}"
+        );
+
+        let actual = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(argv, argv_before, "the caller's launch argv stays exact");
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), cfg_before);
+        assert_eq!(registry::manifest(provider, &runtime).unwrap(), manifest);
+        assert_eq!(
+            std::fs::read(&registration_path).unwrap(),
+            registration_before
+        );
+        assert_eq!(std::fs::read(&accepted_path).unwrap(), accepted_before);
+        assert_eq!(std::fs::read(&supplement_path).unwrap(), supplement_before);
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
+        // Public-output receipt precedes the intended privacy assertion, so RED
+        // retains complete actual/expected argv and byte-ownership identities.
+        println!(
+            "R61_OLD_PARSER_STATIC_MASK {}",
+            json!({
+                "actual": actual, "expected": expected, "argv_unchanged": argv == argv_before,
+                "registration_sha256": format!("{:x}", Sha256::digest(&registration_before)),
+                "snapshot_before_sha256": format!("{:x}", Sha256::digest(&snapshot_before)),
+                "snapshot_historical_sha256": format!("{:x}", Sha256::digest(&historical_bytes)),
+                "accepted_sha256": format!("{:x}", Sha256::digest(&accepted_before)),
+                "supplement_sha256": format!("{:x}", Sha256::digest(&supplement_before)),
+                "help_state": stale.help_state, "launch_error": launch_error,
+            })
+        );
+        assert_eq!(
+            actual, expected,
+            "an explicitly known-sensitive static prefix token stays hidden after a parser upgrade"
+        );
+    }
+
+    #[test]
+    fn historical_static_prefix_mask_requires_reviewed_evidence() {
+        run_static_prefix_fixture("old-parser-negative");
+    }
+
+    fn historical_static_prefix_negative_case(root: &Path, home: &Path) {
+        let fingerprint = "a".repeat(64);
+        let (cfg, engine, runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &fingerprint,
+            &fingerprint,
+            documented_sensitive(),
+        );
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{fingerprint}.json"));
+        let supplement_path = supplement_path(root, &engine, &runtime).unwrap();
+        let supplement_bytes = std::fs::read(&supplement_path).unwrap();
+        let mut snapshot: HelpSnapshot =
+            serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+        snapshot.report.identity.parser_version = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        let historical_bytes = serde_json::to_vec(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+        let argv = vec!["serve".into(), secret.clone(), format!("--token={secret}")];
+        let expected = vec![
+            "serve".into(),
+            REDACTED.into(),
+            format!("--token={REDACTED}"),
+        ];
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+
+        // These schemas are otherwise valid, so each secrecy/target/index
+        // guard is exercised independently of malformed-schema rejection.
+        let mut unknown = snapshot.clone();
+        unknown.schema.options[1].sensitive.certainty = Certainty::Unknown;
+        let mut public = snapshot.clone();
+        public.schema.options[1].sensitive.value = Some(false);
+        let mut request = snapshot.clone();
+        request.schema.options[1].target = Target::Request;
+        request.schema.options[1].position = None;
+        request.schema.options[1].request_field =
+            documented("marker".into(), &adapter_source("synthetic.role", "1"));
+        let mut flag = snapshot.clone();
+        flag.schema.options[1].position = None;
+        flag.schema.options[1].spellings = vec![Spelling {
+            flag: "--marker".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        }];
+        for (name, candidate) in [
+            ("unknown sensitivity", unknown),
+            ("explicit public", public),
+            ("request target", request),
+            ("nonpositional option", flag),
+        ] {
+            candidate.schema.validate().expect(name);
+            std::fs::write(&snapshot_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+
+        let mut foreign_engine = snapshot.clone();
+        foreign_engine.schema.binding.engine = "custom.foreign".into();
+        let mut foreign_runtime = snapshot.clone();
+        foreign_runtime.schema.binding.runtime = "foreign-runtime".into();
+        let mut foreign_fingerprint = snapshot.clone();
+        foreign_fingerprint.schema.binding.fingerprint = "b".repeat(64);
+        let mut invalid_schema = snapshot.clone();
+        invalid_schema.schema.schema_version = SCHEMA_VERSION + 1;
+        for (name, candidate) in [
+            ("foreign engine", foreign_engine),
+            ("foreign runtime", foreign_runtime),
+            ("foreign schema fingerprint", foreign_fingerprint),
+            ("unsupported schema", invalid_schema),
+        ] {
+            std::fs::write(&snapshot_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+        std::fs::write(&snapshot_path, b"{").unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::remove_file(&snapshot_path).unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+
+        let original_supplement: Supplement = serde_json::from_slice(&supplement_bytes).unwrap();
+        let mut foreign_supplement = original_supplement.clone();
+        foreign_supplement.fingerprint = "b".repeat(64);
+        let mut far_index = original_supplement.clone();
+        far_index.options.get_mut("marker").unwrap().positional =
+            Some(PositionalRole::Static { index: 99 });
+        let mut invalid_index = original_supplement.clone();
+        invalid_index.options.get_mut("marker").unwrap().positional =
+            Some(PositionalRole::Static { index: 128 });
+        let mut unknown_key = original_supplement.clone();
+        let role = unknown_key.options.remove("marker").unwrap();
+        unknown_key.options.insert("unknown_slot".into(), role);
+        let mut user_role = original_supplement.clone();
+        user_role.options.get_mut("marker").unwrap().positional = Some(PositionalRole::User);
+        for (name, candidate) in [
+            ("foreign supplement fingerprint", foreign_supplement),
+            ("outside prefix index", far_index),
+            ("invalid stored index", invalid_index),
+            ("unknown slot key", unknown_key),
+            ("user role", user_role),
+        ] {
+            std::fs::write(&supplement_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+        std::fs::write(&supplement_path, b"{").unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::remove_file(&supplement_path).unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::write(&supplement_path, &supplement_bytes).unwrap();
+        // Restoring valid evidence restores masking on the next call.
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
+        assert_eq!(std::fs::read(&supplement_path).unwrap(), supplement_bytes);
+    }
+
+    #[test]
+    fn historical_static_prefix_secrecy_uses_explicit_runtime_metadata() {
+        run_static_prefix_fixture("old-parser-metadata");
+    }
+
+    fn historical_static_prefix_metadata_case(root: &Path, home: &Path) {
+        let fingerprint = "a".repeat(64);
+        let (cfg, engine, runtime, secret) =
+            build_engine_fixture(root, home, &fingerprint, &fingerprint, Fact::default());
+        let registration_path = root.join(&engine).join(&runtime).join("registration.json");
+        let mut registration: Value =
+            serde_json::from_slice(&std::fs::read(&registration_path).unwrap()).unwrap();
+        registration["manifest"]["option_metadata"] = json!({
+            "version": runtime_metadata::METADATA_VERSION,
+            "engine_id": engine,
+            "adapter": {"id": "synthetic.role", "revision": "1"},
+            "options": [{"positional": "marker", "sensitive": true}],
+        });
+        let registration_bytes = serde_json::to_vec(&registration).unwrap();
+        std::fs::write(&registration_path, &registration_bytes).unwrap();
+        let argv = vec!["serve".into(), secret.clone(), format!("--token={secret}")];
+        let expected = vec![
+            "serve".into(),
+            REDACTED.into(),
+            format!("--token={REDACTED}"),
+        ];
+        let current_mask = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(current_mask, expected);
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{fingerprint}.json"));
+        let mut snapshot: HelpSnapshot =
+            serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+        assert!(snapshot.schema.options[1].sensitive.supported().is_none());
+        snapshot.report.identity.parser_version = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        let snapshot_bytes = serde_json::to_vec(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        let stale = effective(root, &cfg, false).unwrap();
+        assert_eq!(stale.help_state, HelpState::Stale);
+        assert!(stale.help_keys.is_empty());
+        assert!(stale.entry.as_ref().unwrap().positional_roles.is_empty());
+        assert!(sensitive_keys(root, &cfg).contains("marker"));
+        let actual = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(
+            std::fs::read(&registration_path).unwrap(),
+            registration_bytes
+        );
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), snapshot_bytes);
+        println!(
+            "R61_HISTORICAL_METADATA_STATIC_MASK {}",
+            json!({"actual": actual, "expected": expected, "current_mask": current_mask})
+        );
+        assert_eq!(
+            actual, expected,
+            "explicit runtime metadata preserves historical static-slot secrecy"
+        );
+
+        // Metadata only fills observed unknowns. It cannot contradict an
+        // explicit public fact or infer a slot from an unrelated selector.
+        snapshot.schema.options[1].sensitive = Fact {
+            value: Some(false),
+            certainty: Certainty::Documented,
+            source: Some(adapter_source("synthetic.role", "1")),
+        };
+        std::fs::write(&snapshot_path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(!sensitive_keys(root, &cfg).contains("marker"));
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        snapshot.schema.options[1].sensitive = Fact::default();
+        std::fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        registration["manifest"]["option_metadata"]["options"][0]["positional"] =
+            json!("unrelated_slot");
+        std::fs::write(
+            &registration_path,
+            serde_json::to_vec(&registration).unwrap(),
+        )
+        .unwrap();
+        assert!(!sensitive_keys(root, &cfg).contains("marker"));
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+    }
+}

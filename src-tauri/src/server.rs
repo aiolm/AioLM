@@ -1,7 +1,6 @@
 // src-tauri/src/server.rs
 use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
 use crate::process_output::{OutputBuffer, Retain};
-use crate::runtime;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -11,12 +10,13 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A model process owns its temporary credential and stderr reader. Teardown
+/// A model process owns its temporary credential and output readers. Teardown
 /// also runs when a launch fails before attaching to a session.
 pub struct Child {
     process: Option<crate::procutil::OwnedChild>,
     key_file: Option<ApiKeyFile>,
-    stderr_reader: Option<StderrReader>,
+    output_readers: Vec<OutputReader>,
+    launch_resources: Option<crate::providers::launch_resources::Directory>,
 }
 
 impl From<std::process::Child> for Child {
@@ -24,7 +24,8 @@ impl From<std::process::Child> for Child {
         Self {
             process: Some(child.into()),
             key_file: None,
-            stderr_reader: None,
+            output_readers: Vec::new(),
+            launch_resources: None,
         }
     }
 }
@@ -41,21 +42,86 @@ impl std::ops::DerefMut for Child {
     }
 }
 impl Child {
-    pub fn release(mut self) -> std::process::Child {
+    /// A headless start: detached from the CLI's console, but owned by a job
+    /// until `release`, so readiness accepts a listener in the launched tree
+    /// (e.g. the interpreter a venv `python.exe` starts) and nothing else.
+    #[cfg(windows)]
+    pub fn spawn_with_creation_flags(
+        command: &mut std::process::Command,
+        creation_flags: u32,
+    ) -> std::io::Result<Self> {
+        let process =
+            crate::procutil::OwnedChild::spawn_with_creation_flags(command, creation_flags)?;
+        Ok(Self {
+            process: Some(process),
+            key_file: None,
+            output_readers: Vec::new(),
+            launch_resources: None,
+        })
+    }
+
+    pub fn release(mut self) -> std::io::Result<std::process::Child> {
         // Persistent CLI children do not use a temporary credential or this
         // reader; their stdout/stderr are managed by the headless log pump.
-        self.process.take().expect("owned server process").release()
+        // A failed release terminates the process, and dropping `self` then
+        // removes its launch resources.
+        let child = self
+            .process
+            .take()
+            .expect("owned server process")
+            .release()?;
+        if let Some(resources) = self.launch_resources.take() {
+            resources.release();
+        }
+        Ok(child)
+    }
+
+    pub fn attach_launch_resources(
+        &mut self,
+        mut resources: Option<crate::providers::launch_resources::Directory>,
+    ) -> Result<(), String> {
+        if let Some(resources) = resources.as_mut() {
+            resources.bind(self.id())?;
+        }
+        self.launch_resources = resources;
+        Ok(())
     }
 }
 impl Drop for Child {
     fn drop(&mut self) {
+        // Waiting for the tree and removing its launch directory share one bound.
+        let deadline = Instant::now() + LAUNCH_TREE_EXIT_WAIT;
+        #[cfg(windows)]
+        let tree = self
+            .launch_resources
+            .as_ref()
+            .and(self.process.as_ref())
+            .and_then(|process| process.process_handle());
         if let Some(process) = self.process.as_mut() {
             process.terminate();
         }
-        self.stderr_reader.take();
+        // Close the root's own handle too before waiting for the tree.
+        self.process.take();
+        self.output_readers.clear();
         self.key_file.take();
+        // Descendants may still hold files in the launch directory (an engine
+        // log) while they exit, and a file can still be closing after the job
+        // reports no process. A tree or file still held after this bound
+        // leaves the directory, with its owner record, to the next launch's
+        // recovery.
+        #[cfg(windows)]
+        if let Some(tree) = tree {
+            tree.wait_exited(deadline.saturating_duration_since(Instant::now()));
+        }
+        if let Some(resources) = self.launch_resources.take() {
+            let _ = resources.remove_stopped_until(deadline);
+        }
     }
 }
+
+/// How long unloading waits for a terminated tree and its launch directory's
+/// files; the same bound the CLI gives a stopped server and its cleanup.
+const LAUNCH_TREE_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 struct ApiKeyFile(PathBuf);
 impl Drop for ApiKeyFile {
@@ -64,11 +130,81 @@ impl Drop for ApiKeyFile {
     }
 }
 
-struct StderrReader {
+enum OutputPipe {
+    Stdout(std::process::ChildStdout),
+    Stderr(std::process::ChildStderr),
+}
+
+impl From<std::process::ChildStdout> for OutputPipe {
+    fn from(pipe: std::process::ChildStdout) -> Self {
+        Self::Stdout(pipe)
+    }
+}
+impl From<std::process::ChildStderr> for OutputPipe {
+    fn from(pipe: std::process::ChildStderr) -> Self {
+        Self::Stderr(pipe)
+    }
+}
+impl Read for OutputPipe {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stdout(pipe) => pipe.read(buffer),
+            Self::Stderr(pipe) => pipe.read(buffer),
+        }
+    }
+}
+impl OutputPipe {
+    #[cfg(unix)]
+    fn fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        match self {
+            Self::Stdout(pipe) => pipe.as_raw_fd(),
+            Self::Stderr(pipe) => pipe.as_raw_fd(),
+        }
+    }
+
+    // Snapshot the unread pipe contents when stopping. A live descendant may
+    // retain the writer, so teardown must not wait for EOF or drain new output.
+    fn available(&self) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        {
+            let mut available: libc::c_int = 0;
+            if unsafe { libc::ioctl(self.fd(), libc::FIONREAD, &mut available) } == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(available.max(0) as usize)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let handle = match self {
+                Self::Stdout(pipe) => pipe.as_raw_handle(),
+                Self::Stderr(pipe) => pipe.as_raw_handle(),
+            };
+            let mut available = 0;
+            if unsafe {
+                windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                    handle,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(available as usize)
+        }
+    }
+}
+
+struct OutputReader {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-impl Drop for StderrReader {
+impl Drop for OutputReader {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Release);
         if let Some(thread) = self.thread.take() {
@@ -77,12 +213,13 @@ impl Drop for StderrReader {
     }
 }
 
-impl StderrReader {
-    fn attach(mut stderr: std::process::ChildStderr, ring: Arc<ErrBuf>) -> std::io::Result<Self> {
+impl OutputReader {
+    fn attach(pipe: impl Into<OutputPipe>, ring: Arc<ErrBuf>) -> std::io::Result<Self> {
+        let mut pipe = pipe.into();
+        let stdout = matches!(&pipe, OutputPipe::Stdout(_));
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd;
-            let fd = stderr.as_raw_fd();
+            let fd = pipe.fd();
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags == -1
                 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
@@ -93,44 +230,56 @@ impl StderrReader {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::Builder::new()
-            .name("model-stderr".into())
+            .name(
+                if stdout {
+                    "model-stdout"
+                } else {
+                    "model-stderr"
+                }
+                .into(),
+            )
             .spawn(move || {
                 let mut buffer = [0_u8; 8192];
+                let mut drain_remaining = None;
                 loop {
+                    if stopping.load(std::sync::atomic::Ordering::Acquire)
+                        && drain_remaining.is_none()
+                    {
+                        drain_remaining = Some(pipe.available().unwrap_or(0));
+                    }
+                    if drain_remaining == Some(0) {
+                        break;
+                    }
                     #[cfg(windows)]
-                    let limit = {
-                        use std::os::windows::io::AsRawHandle;
-                        let mut available = 0;
-                        if unsafe {
-                            windows_sys::Win32::System::Pipes::PeekNamedPipe(
-                                stderr.as_raw_handle(),
-                                std::ptr::null_mut(),
-                                0,
-                                std::ptr::null_mut(),
-                                &mut available,
-                                std::ptr::null_mut(),
-                            )
-                        } == 0
-                        {
-                            break;
-                        }
-                        (available as usize).min(buffer.len())
+                    let limit = match pipe.available() {
+                        Ok(available) => available.min(buffer.len()),
+                        Err(_) => break,
                     };
                     #[cfg(not(windows))]
                     let limit = buffer.len();
+                    let limit = limit.min(drain_remaining.unwrap_or(usize::MAX));
                     let read = if limit == 0 {
                         Err(std::io::ErrorKind::WouldBlock.into())
                     } else {
-                        stderr.read(&mut buffer[..limit])
+                        pipe.read(&mut buffer[..limit])
                     };
                     let pending = read_is_pending(&read);
                     match read {
                         Ok(0) => break,
-                        Ok(size) => ring.push(&buffer[..size]),
+                        Ok(size) => {
+                            if stdout {
+                                ring.push_stdout(&buffer[..size]);
+                            } else {
+                                ring.push(&buffer[..size]);
+                            }
+                            if let Some(remaining) = drain_remaining.as_mut() {
+                                *remaining = remaining.saturating_sub(size);
+                            }
+                        }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                         Err(_) => break,
                     }
-                    if stopping.load(std::sync::atomic::Ordering::Acquire) {
+                    if pending && drain_remaining.is_some() {
                         break;
                     }
                     if limit == 0 || pending {
@@ -192,6 +341,7 @@ pub struct ServerState {
     pub draft_model: String,
     /// Successful launch settings, independent of values saved for the next run.
     pub execution: Option<AppConfig>,
+    pub engine: Option<crate::providers::protocol::EngineInfo>,
     pub lifecycle: Lifecycle,
     pub last_error: Option<String>,
     pub last_activity_at: Instant,
@@ -220,6 +370,20 @@ fn file_size_mb(path: &str) -> Option<u64> {
 }
 
 pub fn estimate_memory(cfg: &AppConfig, model: &str, mmproj: &str) -> MemoryEstimate {
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        return MemoryEstimate {
+            model_mb: crate::providers::execution::inspect(std::path::Path::new(model))
+                .map(|artifact| artifact.size_bytes)
+                .unwrap_or(0)
+                .div_ceil(1024 * 1024),
+            context_mb: 0,
+            kv_mb: 0,
+            projector_mb: 0,
+            adapters_mb: 0,
+            total_mb: 0,
+            source: "unknown",
+        };
+    }
     let model_mb = file_size_mb(model).unwrap_or(0);
     let projector_mb = file_size_mb(mmproj).unwrap_or(0);
     let adapters_mb = cfg
@@ -254,6 +418,15 @@ pub fn estimate_memory(cfg: &AppConfig, model: &str, mmproj: &str) -> MemoryEsti
 /// A stopped server has no loaded model. Estimate the selected model then;
 /// while live, retain the identity of the model that is actually loaded.
 pub fn estimate_status_memory(cfg: &AppConfig, state: &ServerState) -> MemoryEstimate {
+    if state.lifecycle.blocks_resource_change() {
+        if let Some(execution) = state
+            .execution
+            .as_ref()
+            .filter(|execution| !execution.active_model.trim().is_empty())
+        {
+            return estimate_memory(execution, &execution.active_model, &execution.mmproj);
+        }
+    }
     if state.lifecycle.blocks_resource_change() && !state.model.is_empty() {
         estimate_memory(cfg, &state.model, &state.mmproj)
     } else {
@@ -272,6 +445,7 @@ impl ServerState {
             mmproj: String::new(),
             draft_model: String::new(),
             execution: None,
+            engine: None,
             lifecycle: Lifecycle::Stopped,
             last_error: None,
             last_activity_at: Instant::now(),
@@ -291,6 +465,7 @@ impl Default for ServerState {
 impl ServerState {
     pub fn begin_launch(&mut self) -> u64 {
         self.execution = None;
+        self.engine = None;
         self.active_requests = 0;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Starting;
@@ -352,9 +527,11 @@ impl ServerState {
     }
 }
 
-/// Thread-safe, bounded stderr ring — keeps the last ~4 KB so a failed start can surface why.
+/// Independent bounded output tails: a wrapper traceback on stderr must not
+/// erase a core error on stdout. Each stream retains at most 4 KiB.
 pub struct ErrBuf {
     inner: Mutex<OutputBuffer>,
+    stdout: Mutex<OutputBuffer>,
     secret: Mutex<String>,
 }
 
@@ -364,6 +541,7 @@ impl Default for ErrBuf {
     fn default() -> Self {
         Self {
             inner: Mutex::new(OutputBuffer::new(CAP, Retain::Tail)),
+            stdout: Mutex::new(OutputBuffer::new(CAP, Retain::Tail)),
             secret: Mutex::new(String::new()),
         }
     }
@@ -395,18 +573,45 @@ impl ErrBuf {
             .lock()
             .map(|guard| guard.snapshot())
             .unwrap_or_default();
-        let text = String::from_utf8_lossy(&bytes);
+        let stdout = self
+            .stdout
+            .lock()
+            .map(|guard| guard.snapshot())
+            .unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&bytes);
+        let text = if stdout.is_empty() {
+            stderr.into_owned()
+        } else if bytes.is_empty() {
+            format!("[stdout]\n{}", String::from_utf8_lossy(&stdout))
+        } else {
+            // Stream labels describe provenance, not chronological ordering.
+            format!(
+                "[stdout]\n{}\n[stderr]\n{stderr}",
+                String::from_utf8_lossy(&stdout)
+            )
+        };
         let secret = self
             .secret
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        strip_ansi(&redact_text(&text, &secret))
+        // Protect both the exact token and the text terminal controls render.
+        let text = strip_ansi(&redact_text(&text, &secret));
+        redact_text(&text, &strip_ansi(&secret))
     }
 
     pub fn clear(&self) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.clear();
+        }
+        if let Ok(mut guard) = self.stdout.lock() {
+            guard.clear();
+        }
+    }
+
+    fn push_stdout(&self, chunk: &[u8]) {
+        if let Ok(mut guard) = self.stdout.lock() {
+            guard.push(chunk);
         }
     }
 }
@@ -463,22 +668,10 @@ pub fn strip_ansi(text: &str) -> String {
 }
 
 /// Resolve the managed runtime executable. Only runtimes installed in AioLM
-/// are ever used; system PATH and WinGet copies are intentionally ignored so
-/// a stale outside binary can never serve a launch.
+/// are used for built-in engines; external adapters use the explicitly
+/// registered executable. System PATH and WinGet copies are never substituted.
 pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
-    if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-        return Err(
-            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
-        );
-    }
-    let path = runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?;
-    if path.is_file() {
-        return Ok(path.to_string_lossy().into_owned());
-    }
-    Err(format!(
-        "managed runtime is missing llama-server: {}",
-        path.display()
-    ))
+    crate::providers::adapter::resolve(cfg).executable(cfg)
 }
 
 /// Build the llama-server command line with no GPU placement resolved,
@@ -766,23 +959,29 @@ pub fn cleanup_api_key_file(path: Option<&Path>) {
     }
 }
 
-/// Spawn the server, drain stderr into the shared ring so the pipe never fills, and return it.
+/// Spawn the server and drain both output pipes into independent bounded tails.
 pub fn spawn(
     cfg: &AppConfig,
     api_key: &str,
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
 ) -> Result<(Child, String, Option<PathBuf>), String> {
-    let bin = server_bin(cfg)?;
-    // Resolve fallible environment setup before creating a credential file.
-    // Keep early environment-setup errors outside the credential lifetime.
-    // Launch validation guarantees a managed runtime, so the system
-    // environment fallback below is unreachable in production.
-    let environment =
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
-    let api_key_file = create_api_key_file(api_key)?;
+    let adapter = crate::providers::adapter::resolve(cfg);
+    let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
+    let bin = plan.program.to_string_lossy().into_owned();
+    let api_key_file = if adapter.kind() == crate::providers::adapter::RuntimeKind::Native {
+        create_api_key_file(api_key)?
+    } else {
+        None
+    };
     let key_guard = api_key_file.clone().map(ApiKeyFile);
-    let mut args = build_args_with_gpu(cfg, api_key, resolved_gpu);
+    let mut environment = plan.env;
+    let resources = crate::providers::launch_resources::prepare(
+        adapter.launch_resources(cfg)?,
+        &mut environment,
+    )?;
+    let working_directory = plan.working_directory;
+    let mut args = plan.args;
     if let Some(path) = api_key_file.as_ref() {
         args.push("--api-key-file".into());
         args.push(path.to_string_lossy().into_owned());
@@ -793,7 +992,10 @@ pub fn spawn(
     // consistent with probes and benchmarks, and never hand it inherited
     // credentials or unrelated application state.
     command.env_clear().envs(environment).args(&args);
-    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    if let Some(cwd) = working_directory {
+        command.current_dir(cwd);
+    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let process = crate::procutil::OwnedChild::spawn(&mut command).map_err(|e| {
         cleanup_api_key_file(api_key_file.as_deref());
         crate::procutil::spawn_error(Path::new(&bin), &e)
@@ -801,19 +1003,29 @@ pub fn spawn(
     let mut child = Child {
         process: Some(process),
         key_file: key_guard,
-        stderr_reader: None,
+        output_readers: Vec::new(),
+        launch_resources: None,
     };
+    child.attach_launch_resources(resources)?;
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
             terminate(&mut child);
             cleanup_api_key_file(api_key_file.as_deref());
-            return Err("llama-server stderr pipe was not available".to_string());
+            return Err("inference server stderr pipe was not available".to_string());
         }
     };
-    child.stderr_reader = Some(
-        StderrReader::attach(stderr, ring.clone())
+    child.output_readers.push(
+        OutputReader::attach(stderr, ring.clone())
             .map_err(|error| format!("failed to start server stderr reader: {error}"))?,
+    );
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "inference server stdout pipe was not available".to_string())?;
+    child.output_readers.push(
+        OutputReader::attach(stdout, ring.clone())
+            .map_err(|error| format!("failed to start server stdout reader: {error}"))?,
     );
     Ok((
         child,
@@ -826,19 +1038,20 @@ fn auth_header(api_key: &str) -> String {
     format!("Bearer {api_key}")
 }
 
+/// PID of a TCP listener on `port` in one `netstat -ano` line.
 #[cfg(any(windows, test))]
-fn netstat_line_owns_listener(line: &str, pid: u32, port: u16) -> bool {
+fn netstat_listener_pid(line: &str, port: u16) -> Option<u32> {
     let fields = line.split_whitespace().collect::<Vec<_>>();
     if fields.len() < 5
         || !fields[0].eq_ignore_ascii_case("TCP")
         || !fields[3].eq_ignore_ascii_case("LISTENING")
-        || fields[4] != pid.to_string()
+        || !fields[1]
+            .rsplit_once(':')
+            .is_some_and(|(_, value)| value == port.to_string())
     {
-        return false;
+        return None;
     }
-    fields[1]
-        .rsplit_once(':')
-        .is_some_and(|(_, value)| value == port.to_string())
+    fields[4].parse().ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -912,7 +1125,7 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     command.args([
         "-nP",
         "-a",
-        "-p",
+        "-g",
         &pid,
         &port_filter,
         "-sTCP:LISTEN",
@@ -938,7 +1151,14 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     })
 }
 
-fn listener_owned_by_child(pid: u32, port: u16) -> bool {
+/// Unix accepts the child's process group; Windows accepts the child or any
+/// process in its job, e.g. the interpreter a venv `python.exe` launcher starts.
+#[cfg_attr(not(windows), allow(unused_variables))]
+fn listener_owned_by_child(
+    pid: u32,
+    port: u16,
+    owner: Option<crate::procutil::ProcessHandle>,
+) -> bool {
     #[cfg(windows)]
     {
         let mut command = crate::procutil::std_command("netstat");
@@ -952,12 +1172,40 @@ fn listener_owned_by_child(pid: u32, port: u16) -> bool {
         };
         let text = String::from_utf8_lossy(&output.stdout);
         text.lines()
-            .any(|line| netstat_line_owns_listener(line, pid, port))
+            .filter_map(|line| netstat_listener_pid(line, port))
+            .any(|listener| {
+                listener == pid || owner.as_ref().is_some_and(|tree| tree.contains(listener))
+            })
     }
     #[cfg(target_os = "linux")]
     {
         proc_tcp_listener_inodes(port)
-            .map(|inodes| process_has_socket_inode(pid, &inodes))
+            .map(|inodes| {
+                if process_has_socket_inode(pid, &inodes) {
+                    return true;
+                }
+                std::fs::read_dir("/proc")
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|entry| {
+                        let Some(child_pid) = entry
+                            .file_name()
+                            .to_str()
+                            .and_then(|name| name.parse::<u32>().ok())
+                        else {
+                            return false;
+                        };
+                        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                            return false;
+                        };
+                        let group = stat
+                            .rsplit_once(')')
+                            .and_then(|(_, rest)| rest.split_whitespace().nth(2))
+                            .and_then(|value| value.parse::<u32>().ok());
+                        group == Some(pid) && process_has_socket_inode(child_pid, &inodes)
+                    })
+            })
             .unwrap_or_else(|| lsof_listener_owned_by_child(pid, port))
     }
     #[cfg(all(unix, not(target_os = "linux")))]
@@ -967,7 +1215,10 @@ fn listener_owned_by_child(pid: u32, port: u16) -> bool {
 }
 
 pub(crate) fn port_from_url(url: &str) -> Option<u16> {
-    reqwest::Url::parse(url).ok()?.port()
+    reqwest::Url::parse(url)
+        .ok()?
+        .port()
+        .or_else(|| (url == "http://127.0.0.1:80/v1").then_some(80))
 }
 
 /// Poll both /health and /v1/models until the child is usable or timeout expires.
@@ -980,6 +1231,7 @@ pub async fn wait_ready(
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(500))
         .timeout(Duration::from_secs(2))
         .build()
@@ -989,8 +1241,27 @@ pub async fn wait_ready(
             }
             format!("failed to create readiness client: {e}")
         })?;
-    let health = url.replace("/v1", "/health");
+    let mut health = url.replace("/v1", "/health");
+    let mut health_authenticated = true;
     let models = format!("{url}/models");
+    let engine = shared
+        .lock()
+        .map_err(|_| "server state lock was poisoned")?
+        .engine
+        .clone();
+    if let Some(info) = engine.as_ref().filter(|info| info.provider.is_custom()) {
+        let manifest = match crate::providers::registry::manifest(info.provider, &info.runtime_id) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if let Ok(mut state) = shared.lock() {
+                    kill(&mut state.child, None);
+                }
+                return Err(error);
+            }
+        };
+        health_authenticated = manifest.health_authenticated;
+        health = format!("{}{}", url.trim_end_matches("/v1"), manifest.health_path);
+    }
     let port = match port_from_url(url) {
         Some(port) => port,
         None => {
@@ -1047,13 +1318,45 @@ pub async fn wait_ready(
         }
 
         let header = auth_header(api_key);
-        let health_ok = client
-            .get(&health)
-            .header("Authorization", &header)
-            .send()
-            .await
-            .map(|response| response.status().as_u16() == 200)
-            .unwrap_or(false);
+        let mut health_request = client.get(&health);
+        if health_authenticated {
+            health_request = health_request.header("Authorization", &header);
+        }
+        let health_response = health_request.send().await.ok();
+        let health_ok = match health_response {
+            Some(response) if response.status().is_success() => {
+                if engine
+                    .as_ref()
+                    .is_some_and(|info| info.provider == crate::providers::ProviderId::MlxVlm)
+                {
+                    response
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .is_some_and(|value| {
+                            engine.as_ref().is_some_and(|info| {
+                                let generation_ready =
+                                    !info.tasks.iter().any(|task| task == "generate")
+                                        || value
+                                            .get("loaded_model")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(info.upstream_model.as_str());
+                                let embeddings_ready =
+                                    info.embedding_model.as_ref().is_none_or(|model| {
+                                        value
+                                            .pointer("/loaded_models/embedding/model")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(model.as_str())
+                                    });
+                                generation_ready && embeddings_ready
+                            })
+                        })
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        };
         if health_ok {
             let models_response = client
                 .get(&models)
@@ -1068,25 +1371,79 @@ pub async fn wait_ready(
                         .as_ref()
                         .and_then(|value| value.get("data"))
                         .and_then(serde_json::Value::as_array)
-                        .and_then(|items| items.first())
+                        .and_then(|items| match engine.as_ref() {
+                            Some(info) if info.provider != crate::providers::ProviderId::Llama => {
+                                items.iter().find(|item| {
+                                    item.get("id").and_then(serde_json::Value::as_str)
+                                        == Some(info.upstream_model.as_str())
+                                })
+                            }
+                            _ => items.first(),
+                        })
                         .and_then(|item| item.get("id"))
                         .and_then(serde_json::Value::as_str)
                         .filter(|id| !id.trim().is_empty())
-                        .map(str::to_owned);
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            engine
+                                .as_ref()
+                                .filter(|info| {
+                                    info.provider == crate::providers::ProviderId::MlxVlm
+                                })
+                                .map(|info| info.upstream_model.clone())
+                        });
                     if let Some(model_id) = model_id {
-                        let pid = shared
+                        let (pid, owner) = shared
                             .lock()
                             .map_err(|_| "server state lock was poisoned".to_string())?
                             .child
                             .as_ref()
-                            .map(|child| child.id())
+                            .map(|child| (child.id(), child.process_handle()))
                             .ok_or_else(|| "server process tracking was lost".to_string())?;
-                        let owns_listener =
-                            tokio::task::spawn_blocking(move || listener_owned_by_child(pid, port))
-                                .await
-                                .unwrap_or(false);
+                        let owns_listener = tokio::task::spawn_blocking(move || {
+                            listener_owned_by_child(pid, port, owner)
+                        })
+                        .await
+                        .unwrap_or(false);
                         if owns_listener {
+                            let confirmed = if let Some(info) = engine.clone() {
+                                let confirmation = tokio::time::timeout_at(
+                                    tokio::time::Instant::from_std(deadline),
+                                    crate::providers::execution::confirm_ready(
+                                        info, &client, url, api_key, deadline,
+                                    ),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    "runtime task verification exceeded the server startup deadline"
+                                        .to_string()
+                                })
+                                .and_then(|result| result);
+                                match confirmation {
+                                    Ok(info) => Some(info),
+                                    Err(error) => {
+                                        if let Ok(mut state) = shared.lock() {
+                                            if state
+                                                .child
+                                                .as_ref()
+                                                .is_some_and(|child| child.id() == pid)
+                                            {
+                                                kill(&mut state.child, None);
+                                            }
+                                        }
+                                        return Err(error);
+                                    }
+                                }
+                            } else {
+                                None
+                            };
                             if let Ok(mut state) = shared.lock() {
+                                if !state.child.as_ref().is_some_and(|child| child.id() == pid) {
+                                    return Err("server start cancelled".into());
+                                }
+                                if let Some(info) = confirmed {
+                                    state.engine = Some(info);
+                                }
                                 state.model = model_id;
                             }
                             return Ok(());
@@ -1181,9 +1538,12 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "signal".into());
     state.last_error = Some(if tail.trim().is_empty() {
-        format!("llama-server exited unexpectedly ({code})")
+        format!("inference server exited unexpectedly ({code})")
     } else {
-        format!("llama-server exited unexpectedly ({code}). {}", tail.trim())
+        format!(
+            "inference server exited unexpectedly ({code}). {}",
+            tail.trim()
+        )
     });
 }
 
@@ -1357,11 +1717,84 @@ mod tests {
     }
 
     #[test]
+    fn explicit_http80_readiness_port_is_recovered_without_a_listener() {
+        assert_eq!(port_from_url("http://127.0.0.1:80/v1"), Some(80));
+        assert_eq!(port_from_url("http://127.0.0.1:8080/v1"), Some(8080));
+        assert_eq!(port_from_url("http://127.0.0.1/v1"), None);
+        assert_eq!(port_from_url("not a URL"), None);
+    }
+
+    #[test]
     fn netstat_listener_ownership_requires_managed_pid_and_port() {
         let line = "  TCP    127.0.0.1:8080    0.0.0.0:0    LISTENING    24128";
-        assert!(netstat_line_owns_listener(line, 24128, 8080));
-        assert!(!netstat_line_owns_listener(line, 24129, 8080));
-        assert!(!netstat_line_owns_listener(line, 24128, 8081));
+        assert_eq!(netstat_listener_pid(line, 8080), Some(24128));
+        assert_eq!(netstat_listener_pid(line, 8081), None);
+        let connection = "  TCP    127.0.0.1:8080    127.0.0.1:50013    ESTABLISHED    24128";
+        assert_eq!(netstat_listener_pid(connection, 8080), None);
+    }
+
+    /// A venv `python.exe` launcher re-spawns the interpreter that listens, so
+    /// the listener is a grandchild in the owned job, never the direct child.
+    #[cfg(windows)]
+    #[test]
+    fn windows_listener_in_the_owned_job_counts_and_an_outside_listener_does_not() {
+        let free_port = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let listen = |port: u16| {
+            format!(
+                "$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,{port});$l.Start();Start-Sleep 60"
+            )
+        };
+        let (owned_port, outside_port) = (free_port(), free_port());
+        let mut launcher = crate::procutil::std_command("cmd");
+        launcher
+            .args([
+                "/c",
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                &listen(owned_port),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut owned = crate::procutil::OwnedChild::spawn(&mut launcher).unwrap();
+        let mut outside = crate::procutil::std_command("powershell")
+            .args(["-NoProfile", "-Command", &listen(outside_port)])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let tree = owned.process_handle();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut seen = false;
+        while Instant::now() < deadline && !seen {
+            seen = listener_owned_by_child(owned.id(), owned_port, tree.clone());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let exact_pid_only = listener_owned_by_child(owned.id(), owned_port, None);
+        let mut outside_seen = false;
+        while Instant::now() < deadline && !outside_seen {
+            outside_seen = std::net::TcpStream::connect(("127.0.0.1", outside_port)).is_ok();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let outside_claimed = listener_owned_by_child(owned.id(), outside_port, tree);
+        owned.terminate();
+        let _ = outside.kill();
+        let _ = outside.wait();
+        assert!(seen, "the grandchild listener in the owned job must count");
+        assert!(!exact_pid_only, "the launcher PID itself does not listen");
+        assert!(outside_seen, "the outside listener must have started");
+        assert!(
+            !outside_claimed,
+            "a listener outside the job must not count"
+        );
     }
 
     #[test]
@@ -1386,8 +1819,8 @@ mod tests {
     fn linux_listener_ownership_identifies_a_real_socket() {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(listener_owned_by_child(std::process::id(), port));
-        assert!(!listener_owned_by_child(0, port));
+        assert!(listener_owned_by_child(std::process::id(), port, None));
+        assert!(!listener_owned_by_child(0, port, None));
     }
 
     #[cfg(unix)]
@@ -1539,6 +1972,59 @@ mod tests {
     }
 
     #[test]
+    fn core_output_survives_wrapper_overflow_and_clears_for_the_next_launch() {
+        let ring = ErrBuf::default();
+        ring.set_secret("synthetic-session-key");
+        let core = "\x1b[31mcore failure 🙂 synthetic-session-key\x1b[0m";
+        for chunk in core.as_bytes().chunks(3) {
+            ring.push_stdout(chunk);
+        }
+        ring.push(&vec![b'x'; CAP * 16]);
+        ring.push(b"\nwrapper failure synthetic-session-key");
+        let log = ring.tail();
+        assert!(log.contains("[stdout]\ncore failure 🙂 [REDACTED]"));
+        assert!(log.contains("[stderr]\n"));
+        assert!(log.contains("wrapper failure [REDACTED]"));
+        assert!(!log.contains("synthetic-session-key"));
+        assert!(!log.contains('\x1b'));
+        assert!(log.len() < CAP * 3);
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push_stdout(b"new launch synthetic-session-key");
+        assert_eq!(ring.tail(), "[stdout]\nnew launch [REDACTED]");
+    }
+
+    #[test]
+    fn dropping_output_readers_does_not_wait_for_a_live_writer() {
+        let mut command = if cfg!(windows) {
+            let mut command = crate::procutil::std_command("cmd");
+            command.args(["/c", "ping -n 60 127.0.0.1 > nul"]);
+            command
+        } else {
+            let mut command = crate::procutil::std_command("sh");
+            command.args(["-c", "sleep 60"]);
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut process = crate::procutil::OwnedChild::spawn(&mut command).unwrap();
+        let ring = Arc::new(ErrBuf::default());
+        let stdout = OutputReader::attach(process.stdout.take().unwrap(), ring.clone()).unwrap();
+        let stderr = OutputReader::attach(process.stderr.take().unwrap(), ring).unwrap();
+        let started = Instant::now();
+        drop((stdout, stderr));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "reader teardown must not await pipe EOF"
+        );
+        assert!(process.try_wait().unwrap().is_none());
+        process.terminate();
+        assert!(process.try_wait().unwrap().is_some());
+    }
+
+    #[test]
     fn lifecycle_activity_blocks_unload_while_a_request_is_active() {
         let mut state = ServerState::new();
         state.last_activity_at = std::time::Instant::now() - Duration::from_secs(20);
@@ -1593,6 +2079,41 @@ mod tests {
         assert!(estimate.kv_mb > 0);
         assert!(estimate.total_mb > estimate.model_mb);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn python_file_and_snapshot_sizes_do_not_inherit_llama_allocations() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-python-memory-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let gguf = root.join("dense.gguf");
+        std::fs::File::create(&gguf)
+            .unwrap()
+            .set_len(2 * 1024 * 1024)
+            .unwrap();
+        let snapshot = root.join("snapshot");
+        std::fs::create_dir(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        std::fs::File::create(snapshot.join("model.safetensors"))
+            .unwrap()
+            .set_len(3 * 1024 * 1024)
+            .unwrap();
+        let cfg = AppConfig {
+            active_provider: "vllm".into(),
+            ctx_size: 32768,
+            parallel: 8,
+            ..Default::default()
+        };
+        for (model, size) in [(&gguf, 2), (&snapshot, 4)] {
+            let estimate = estimate_memory(&cfg, &model.to_string_lossy(), "unused-projector.gguf");
+            assert_eq!(estimate.model_mb, size);
+            assert_eq!(
+                (estimate.kv_mb, estimate.projector_mb, estimate.total_mb),
+                (0, 0, 0)
+            );
+            assert_eq!(estimate.source, "unknown");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1889,12 +2410,13 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let reader =
-                StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+                OutputReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
                     .unwrap();
             let owner = Child {
                 process: Some(process),
                 key_file: Some(ApiKeyFile(path.clone())),
-                stderr_reader: Some(reader),
+                output_readers: vec![reader],
+                launch_resources: None,
             };
             let started = Instant::now();
             drop(owner);
@@ -1918,7 +2440,7 @@ mod tests {
             .spawn()
             .unwrap();
         let reader =
-            StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+            OutputReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
                 .unwrap();
         let started = Instant::now();
         drop(reader);
@@ -1928,5 +2450,176 @@ mod tests {
         let _ = process.wait();
         assert!(still_running);
         assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn diagnostic_tokens_remain_redacted_when_terminal_sequences_split_them() {
+        let secret = "synthetic-token";
+        for token in [
+            "synthetic-token",
+            "synthetic-\x1b[31mtoken\x1b[0m",
+            "synthetic-\x1b]0;synthetic-title\x07token",
+            "synthetic-\x1b]0;synthetic-title\x1b\\token",
+        ] {
+            let message = format!("前🙂 \x1b[32mcontext\x1b[0m {token} 終\n");
+            for chunk_size in [1, 3, message.len()] {
+                let ring = ErrBuf::default();
+                ring.set_secret(secret);
+                for chunk in message.as_bytes().chunks(chunk_size) {
+                    ring.push(chunk);
+                }
+                let tail = ring.tail();
+                eprintln!("diagnostic token={token:?} chunk={chunk_size} tail={tail:?}");
+                assert_eq!(tail, "前🙂 context [REDACTED] 終\n");
+                assert!(!tail.contains(secret));
+                assert!(!tail.contains('\x1b'));
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_redaction_keeps_empty_clear_and_replacement_secret_contracts() {
+        let ring = ErrBuf::default();
+        ring.push("前🙂 \x1b[32mpublic\x1b[0m synthetic-token".as_bytes());
+        assert_eq!(ring.tail(), "前🙂 public synthetic-token");
+        ring.clear();
+        ring.set_secret("old-token");
+        ring.push(b"old-token");
+        assert_eq!(ring.tail(), "[REDACTED]");
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push(b"old-\x1b[31mtoken\x1b[0m");
+        assert_eq!(ring.tail(), "[REDACTED]");
+        ring.clear();
+        ring.set_secret("new-token");
+        ring.push(b"old-token new-\x1b]0;title\x07token");
+        assert_eq!(ring.tail(), "old-token [REDACTED]");
+        ring.clear_secret();
+        assert_eq!(ring.tail(), "old-token new-token");
+        ring.clear();
+        assert!(ring.tail().is_empty());
+    }
+
+    #[test]
+    fn diagnostic_redaction_preserves_raw_and_visible_escape_containing_secrets() {
+        let ring = ErrBuf::default();
+        let secret = "synthetic-\x1b[31mtoken\x1b[0m";
+        ring.set_secret(secret);
+        for token in [secret, "synthetic-token", "synthetic-\x1b[32mtoken\x1b[0m"] {
+            ring.clear();
+            ring.push(format!("readable {token} 🙂").as_bytes());
+            assert_eq!(ring.tail(), "readable [REDACTED] 🙂");
+        }
+        ring.clear();
+        ring.set_secret("\x1b[31m\x1b[0m");
+        ring.push(b"visible \x1b[31m\x1b[0m text");
+        assert_eq!(ring.tail(), "visible [REDACTED] text");
+        ring.clear();
+        ring.push(b"visible text");
+        assert_eq!(ring.tail(), "visible text");
+    }
+
+    #[test]
+    fn diagnostic_stream_labels_and_retention_survive_normalized_redaction() {
+        // Supplement to the public push/tail cases: stdout is a private helper.
+        let ring = ErrBuf::default();
+        ring.set_secret("synthetic-token");
+        ring.push_stdout(&vec![b'x'; CAP * 16]);
+        ring.push_stdout("\ncore 🙂 synthetic-\x1b[31mtoken\x1b[0m".as_bytes());
+        ring.push(&vec![b'y'; CAP * 16]);
+        ring.push(b"\nwrapper synthetic-\x1b]0;title\x07token");
+        let tail = ring.tail();
+        eprintln!("diagnostic streams tail={tail:?}");
+        assert!(tail.starts_with("[stdout]\n"));
+        assert!(tail.contains("core 🙂 [REDACTED]"));
+        assert!(tail.contains("\n[stderr]\n"));
+        assert!(tail.contains("wrapper [REDACTED]"));
+        assert!(!tail.contains("synthetic-token"));
+        assert!(!tail.contains('\x1b'));
+        assert!(tail.len() < CAP * 3);
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push_stdout(b"next synthetic-token");
+        assert_eq!(ring.tail(), "[stdout]\nnext [REDACTED]");
+    }
+
+    #[test]
+    fn status_memory_keeps_fallbacks_for_missing_execution_bindings_and_inactive_sessions() {
+        // Supplementary fallback coverage; actual readiness is exercised by smoke_fake.
+        struct Area(PathBuf);
+        impl Drop for Area {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("aiolm-memory-fallback-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let area = Area(root.clone());
+        let selected = root.join("selected.gguf");
+        let loaded = root.join("loaded.gguf");
+        let projector = root.join("projector.gguf");
+        for (path, mib) in [(&selected, 16), (&loaded, 8), (&projector, 2)] {
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(mib * 1024 * 1024)
+                .unwrap();
+        }
+        let cfg = AppConfig {
+            active_model: selected.to_string_lossy().into_owned(),
+            ctx_size: 1024,
+            parallel: 1,
+            ..Default::default()
+        };
+        let mut state = ServerState::new();
+        state.model = loaded.to_string_lossy().into_owned();
+        state.mmproj = projector.to_string_lossy().into_owned();
+        let expected_live =
+            serde_json::to_value(estimate_memory(&cfg, &state.model, &state.mmproj)).unwrap();
+        let expected_selected =
+            serde_json::to_value(estimate_memory(&cfg, &cfg.active_model, &cfg.mmproj)).unwrap();
+        let mut observations = Vec::new();
+        for lifecycle in [Lifecycle::Starting, Lifecycle::Ready, Lifecycle::Stopping] {
+            state.lifecycle = lifecycle;
+            for binding in [None, Some(""), Some(" \t ")] {
+                state.execution = binding.map(|active_model| AppConfig {
+                    active_model: active_model.into(),
+                    ctx_size: 4096,
+                    parallel: 4,
+                    ..Default::default()
+                });
+                observations.push((
+                    serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                    expected_live.clone(),
+                ));
+            }
+            state.model.clear();
+            observations.push((
+                serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                expected_selected.clone(),
+            ));
+            state.model = loaded.to_string_lossy().into_owned();
+        }
+        state.execution = Some(AppConfig {
+            active_model: state.model.clone(),
+            ctx_size: 4096,
+            parallel: 4,
+            ..Default::default()
+        });
+        for lifecycle in [Lifecycle::Stopped, Lifecycle::Crashed] {
+            state.lifecycle = lifecycle;
+            observations.push((
+                serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                expected_selected.clone(),
+            ));
+        }
+        drop(area);
+        assert!(
+            !root.exists(),
+            "owned fallback fixture removed before assertions"
+        );
+        for (actual, expected) in observations {
+            assert_eq!(actual, expected);
+        }
     }
 }

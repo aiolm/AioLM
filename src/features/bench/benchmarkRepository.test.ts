@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteBenchmarkHistoryRecord, loadAllBenchmarkHistory, migrateBenchmarkHistory, type BenchmarkHistoryStore } from './benchmarkRepository';
+import { deleteBenchmarkHistoryRecord, loadAllBenchmarkHistory, migrateBenchmarkHistory, rememberBenchmarkResult, type BenchmarkHistoryStore } from './benchmarkRepository';
 import { PERFORMANCE_HISTORY_KEY, type PerformanceBenchmarkRecord } from './performanceRecords';
 import * as transport from '../../shared/api/transport';
 
@@ -9,7 +9,7 @@ function record(index: number): PerformanceBenchmarkRecord {
     result: { run_id: `legacy-${index}`, rows: [], status: 'partial', args: [], runtime_version: '1', context_size: 4096, parallel: 1 } };
 }
 
-describe('benchmark history deletion', () => {
+describe('benchmark history storage', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.spyOn(transport, 'isNativeRuntimeAvailable').mockReturnValue(false);
@@ -50,6 +50,49 @@ describe('benchmark history deletion', () => {
     invoke.mockRejectedValueOnce(new Error('active run'));
     await expect(deleteBenchmarkHistoryRecord('legacy-1')).rejects.toThrow('active run');
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(original);
+  });
+
+  it('reads one browser snapshot for a large export while preserving order, duplicate resolution and original bytes', async () => {
+    const records = Array.from({ length: 251 }, (_, index) => record(index));
+    const replacement = { ...record(150), build: 'replacement' };
+    const cancelled = record(500);
+    cancelled.result.status = 'cancelled';
+    const bytes = JSON.stringify([...records, { schemaVersion: 99, original: 'retained' }, cancelled, replacement]);
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
+    const getItem = vi.spyOn(Storage.prototype, 'getItem');
+    const expected = [...records];
+    expected[150] = replacement;
+
+    expect(await loadAllBenchmarkHistory()).toEqual(expected);
+    expect(getItem).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(bytes);
+  });
+
+  it('reads fresh browser history after save and deletion on later exports', async () => {
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([record(1)]));
+    expect(await loadAllBenchmarkHistory()).toEqual([record(1)]);
+    await rememberBenchmarkResult(record(2));
+    expect(await loadAllBenchmarkHistory()).toEqual([record(2), record(1)]);
+    await deleteBenchmarkHistoryRecord('legacy-1');
+    expect(await loadAllBenchmarkHistory()).toEqual([record(2)]);
+  });
+
+  it('keeps native exports paginated with duplicate resolution and cursor validation', async () => {
+    vi.mocked(transport.isNativeRuntimeAvailable).mockReturnValue(true);
+    const cancelled = record(2);
+    cancelled.result.status = 'cancelled';
+    const replacement = { ...record(1), build: 'replacement' };
+    const invoke = vi.spyOn(transport, 'invoke')
+      .mockResolvedValueOnce({ records: [record(1), cancelled], total: 4, next_offset: 2 })
+      .mockResolvedValueOnce({ records: [record(3), replacement], total: 4, next_offset: null });
+
+    expect(await loadAllBenchmarkHistory()).toEqual([replacement, record(3)]);
+    expect(invoke.mock.calls).toEqual([
+      ['benchmark_history_list', { offset: 0, limit: 100 }],
+      ['benchmark_history_list', { offset: 2, limit: 100 }],
+    ]);
+    invoke.mockResolvedValueOnce({ records: [], total: 2, next_offset: 0 });
+    await expect(loadAllBenchmarkHistory()).rejects.toThrow('Invalid benchmark history page.');
   });
 });
 

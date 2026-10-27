@@ -226,9 +226,8 @@ export function throwForNativeSubmit(response: SharingSubmitResult, submissionId
   }
   const parsed = parseServiceError(response.status, response.body, response.retry_after ? retryMs(response.retry_after) : undefined);
   const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-  const error = new HttpError(parsed.recoverable || retryable ? "http" : "http", parsed.message, retryable || parsed.recoverable, response.status, parsed.retryAfterMs);
+  const error = new HttpError("http", parsed.message, retryable || parsed.recoverable, response.status, parsed.retryAfterMs);
   (error as HttpError & { serviceCode?: string }).serviceCode = parsed.code;
-  if (parsed.terminal) (error as HttpError & { serviceCode?: string }).serviceCode = parsed.code;
   void submissionId;
   throw error;
 }

@@ -29,14 +29,16 @@ export function mcpFunctionName(serverId: string, toolName: string): string {
 
 export function buildMcpFunctionNames(entries: McpFunctionIdentity[]): string[] {
   const used = new Set<string>();
+  const nextSuffix = new Map<string, number>();
   return entries.map((entry) => {
     const base = mcpFunctionName(entry.serverId, entry.toolName);
     let candidate = base;
-    let suffix = 2;
+    let suffix = nextSuffix.get(base) ?? 2;
     while (used.has(candidate)) {
       const marker = `_${suffix++}`;
       candidate = `${base.slice(0, 96 - marker.length)}${marker}`;
     }
+    if (suffix > 2) nextSuffix.set(base, suffix);
     used.add(candidate);
     return candidate;
   });

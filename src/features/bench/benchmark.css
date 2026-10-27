@@ -76,6 +76,9 @@
 .performance-result-context strong { color: var(--ui-ink); font-weight: 600; }
 .performance-result-context p { width: 100%; }
 .performance-table-scroll { max-width: 100%; overflow-x: auto; }
+.performance-table-navigation { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--ui-border); font-size: var(--ui-text-support); color: var(--ui-muted); }
+.performance-table-navigation > span:first-child { margin-right: auto; }
+.performance-table-navigation > button { flex-shrink: 0; }
 .performance-results table { width: 100%; border-collapse: collapse; font-size: var(--ui-text-support); text-align: right; font-variant-numeric: tabular-nums; }
 .performance-results th, .performance-results td { padding: 11px 14px; white-space: nowrap; border-bottom: 1px solid var(--ui-border); }
 .performance-results thead th { color: var(--ui-muted); font-weight: 500; background: var(--ui-panel-raised); }

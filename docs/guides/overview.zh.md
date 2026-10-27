@@ -4,7 +4,7 @@
 
 [文档目录](../README.md) — 安装、开发、代码结构及项目政策。
 
-AioLM（All-in-One LM）— `llama.cpp` 的 Windows/macOS/Linux 桌面运行时管理器。通过基于 `llama-server` 的 Tauri v2 桌面 UI，管理模型、运行时、聊天和基准测试。
+AioLM（All-in-One LM）— 通过 Tauri v2 UI 管理模型、运行时、聊天和基准测试的 Windows/macOS/Linux 桌面应用。可选择 llama.cpp、Linux 或 Apple Silicon macOS（vllm-metal）上的 vLLM，以及 Apple Silicon macOS 上的 MLX。兼容性和验证范围请参阅[推理运行时](../reference/inference-runtimes.md)。
 
 模型加载与 API 服务器启动相互独立。加载模型后即可使用应用内聊天；若要让外部
 应用连接，请在侧边栏的 **API 服务器** 中启动服务器，复制 URL、密钥和模型 ID，

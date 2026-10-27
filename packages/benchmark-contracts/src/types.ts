@@ -63,6 +63,7 @@ export interface BenchmarkModelMetadata {
 }
 
 export interface BenchmarkModelIdentity {
+  format?: 'gguf' | 'hf-safetensors' | 'mlx' | 'unknown';
   status: 'sha256' | 'unidentified' | 'multipart';
   sha256: string | null;
   size_bytes: number | null;
@@ -71,9 +72,7 @@ export interface BenchmarkModelIdentity {
 }
 
 /**
- * Currently llama.cpp settings. When adding vLLM or MLX, define settings
- * discriminated by runtime.name and update the JSON schema and validators
- * together, preserving existing llama.cpp records. Imports must retain the
+ * llama.cpp settings; Python engines leave these null. Imports retain the
  * recorded runtime's settings; context, concurrency and KV-cache controls
  * must not be translated between engines based on similar field names.
  */
@@ -90,10 +89,10 @@ export interface BenchmarkExecutionSettings {
 }
 
 export interface PublicBenchmarkSubmission {
-  schema_version: 1;
+  schema_version: 1 | 2;
   submission_id: string;
   app_version: string | null;
-  method: { id: 'cold-prompt-serving'; version: 1 } | null;
+  method: { id: 'cold-prompt-serving'; version: 1 | 2 } | null;
   workload: {
     corpus: BenchmarkCorpus;
     corpus_version: number | null;
@@ -105,7 +104,12 @@ export interface PublicBenchmarkSubmission {
     warmup: boolean;
   };
   model: BenchmarkModelIdentity;
-  runtime: { name: 'llama.cpp'; version: string | null; backend: string | null; build: string | null };
+  runtime: {
+    name: 'llama.cpp' | 'vllm' | 'mlx-vlm'; version: string | null; backend: string | null; build: string | null;
+    /** Present only when the measured vLLM platform is vllm-metal. */
+    variant?: 'vllm-metal';
+    plugin_version?: string;
+  };
   environment: {
     os: string | null;
     arch: string | null;

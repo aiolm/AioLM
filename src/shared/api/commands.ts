@@ -1,10 +1,12 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
+import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
+import type { ImageAttachment, PreparedVideoFrame } from "./mediaTypes.ts";
+import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata, ModelScanResult,
+  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
   VerificationRecord,
@@ -13,25 +15,66 @@ import type {
 
 export const getConfig = () => invoke<AppConfig>("get_config");
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
+export const projectExportJson = (contents: string, fileName?: string) =>
+  invoke<boolean>("project_export_json", { contents, fileName });
+export const projectImportJson = () => invoke<string | null>("project_import_json");
 
-export const listModels = (modelsDir: string, scanId?: string) => invoke<ModelScanResult>("list_models", { modelsDir, ...(scanId ? { scanId } : {}) });
+export { listModelArtifacts as listModels } from './providers.ts';
 export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_scan", { scanId });
 export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
 /** An empty query lists the catalog itself, which is what Discover opens on. */
-export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads") =>
-  invoke<HfModel[]>("hf_search_models", { query, limit, sort });
+export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads", format?: 'gguf' | 'safetensors' | 'mlx') =>
+  invoke<HfModel[]>("hf_search_models", { query, limit, sort, ...(format ? { format } : {}) });
 export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
 export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files", { repoId });
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
-export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string) =>
-  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir });
+/** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
+export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean) =>
+  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}) });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
+export const hfDownloadSnapshot = (repoId: string, modelsDir: string) => invoke<import('./providers').ModelArtifact>('hf_download_snapshot', { repoId, modelsDir });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
+export interface AttachmentDropNotice {
+  id: string | null;
+  count: number;
+  position: { x: number; y: number };
+  error?: string;
+}
+/** Claims only paths captured by a genuine native drop; callers cannot supply paths. */
+export const claimAttachmentDrop = (id: string) => invoke<string | null>('claim_attachment_drop', { id });
+export const discardAttachmentDrop = (id: string) => invoke<void>('discard_attachment_drop', { id });
+export async function onAttachmentDrop(callback: (notice: AttachmentDropNotice) => void): Promise<UnlistenFn> {
+  if (!isNativeRuntimeAvailable()) return () => undefined;
+  return listen<AttachmentDropNotice>('aiolm://attachments-dropped', event => callback(event.payload));
+}
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
+export const importMedia = (path: string) => invoke<ImageAttachment>('import_media', { path });
+export const resolveMedia = (reference: string, providerId: import('./providers').ProviderId) => invoke<import('./types').ChatContentPart>('resolve_media', { reference, providerId });
+export interface MediaTranscription { text: string; sessionId: string; model: string }
+async function mediaOperation<T>(command: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  const operationId = crypto.randomUUID();
+  const cancel = () => { void invoke<void>('cancel_media_operation', { operationId }).catch(() => undefined); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await invoke<T>(command, { ...args, operationId });
+    signal?.throwIfAborted();
+    return result;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+/** Uses one explicitly selected local speech session and immutable audio. */
+export const transcribeMedia = (reference: string, sessionId: string, signal?: AbortSignal) =>
+  mediaOperation<MediaTranscription>('transcribe_media', { reference, sessionId }, signal);
+export interface VideoFrames { frames: PreparedVideoFrame[] }
+/** Samples local video into immutable images; never reads a caller URL. */
+export const extractVideoFrames = (reference: string, signal?: AbortSignal, maxFrames = 4) =>
+  mediaOperation<VideoFrames>('extract_video_frames', { reference, maxFrames }, signal);
 export const pickDocument = () => invoke<string | null>("pick_document");
 export const readDocumentText = (path: string) => invoke<string>("read_document_text", { path });
 export const readDocumentBinding = (path: string) => invoke<string>("read_document_binding", { path });
@@ -54,7 +97,10 @@ export const mcpCallTool = (id: string, name: string, argumentsValue: Record<str
 export const mcpCancelToolCall = (callId: string) => invoke<void>("mcp_cancel_tool_call", { callId });
 
 export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
-export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_launch', { cfg });
+export const preflightLaunch = (cfg: AppConfig, operationId?: string) =>
+  invoke<AppConfig>('preflight_launch', { cfg, ...(operationId ? { operationId } : {}) });
+/** Cancel only this preflight, including one whose IPC command is still queued. */
+export const cancelLaunchPreflight = (operationId: string) => invoke<void>('preflight_launch_cancel', { operationId });
 /** Accept one blocked GPU placement, using the key printed in its refusal. */
 export const allowVerificationOverride = (key: string) => invoke<void>('allow_verification_override', { key });
 export const verifyModelDeeply = (cfg: AppConfig) => invoke<VerificationRecord>('verify_model_deeply', { cfg });
@@ -64,11 +110,11 @@ export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => i
 export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");
 export const serverActivity = (phase: "start" | "end" | "touch", sessionId?: string) => invoke<void>("server_activity", { phase, ...(sessionId ? { sessionId } : {}) });
-export const serverStatus = () => invoke<ServerStatus>("server_status");
+export const serverStatus = (phase: LayoutReadPhase = "initial") => invoke<ServerStatus>("server_status", undefined, phase);
 /** The public API listener has its own lifecycle; loading or unloading a model never touches it. */
 export const startApiServer = () => invoke<ApiServerStatus>("start_api_server");
 export const stopApiServer = () => invoke<void>("stop_api_server");
-export const apiServerStatus = () => invoke<ApiServerStatus>("api_server_status");
+export const apiServerStatus = (phase: LayoutReadPhase = "initial") => invoke<ApiServerStatus>("api_server_status", undefined, phase);
 export const startAnthropicGateway = () => invoke<string>("start_anthropic_gateway");
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");
@@ -78,11 +124,14 @@ export const runPerformanceBench = (cfg: AppConfig, request: PerformanceBenchmar
 export const benchCancel = () => invoke<void>("bench_cancel");
 
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
-export const sessionList = () => invoke<SessionStatus[] | SessionListResult>("session_list");
+export const sessionList = (phase: LayoutReadPhase = "initial") => invoke<SessionStatus[] | SessionListResult>("session_list", undefined, phase);
 export const sessionSummaryList = () => invoke<SessionSummary[]>("session_summary_list");
-export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting });
-export const sessionStop = (sessionId: string) => invoke<void>("session_stop", { sessionId });
-export const sessionUnload = (sessionId: string) => invoke<void>("session_unload", { sessionId });
+export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) =>
+  withSessionTransition(() => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting }));
+export const sessionStop = (sessionId: string) =>
+  withSessionTransition(() => invoke<void>("session_stop", { sessionId }));
+export const sessionUnload = (sessionId: string) =>
+  withSessionTransition(() => invoke<void>("session_unload", { sessionId }));
 
 export function normalizeSessionList(value: SessionStatus[] | SessionListResult): SessionStatus[] {
   return Array.isArray(value) ? value : Array.isArray(value.sessions) ? value.sessions : [];

@@ -1,7 +1,8 @@
-//! Repeatable cold-prompt serving benchmarks on an isolated llama-server.
+//! Repeatable cold-prompt serving benchmarks on the selected provider's isolated server.
 //! The application configuration and its managed server are never replaced.
 mod corpus;
 mod protocol;
+mod providers;
 
 use crate::{config::AppConfig, gpu::ResolvedGpu, performance_memory::PeakMemorySampler, server};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -17,6 +18,9 @@ use std::time::{Duration, Instant};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Warmup prompt length. Python engines prepare an exact prompt for it, so it
+/// never exceeds the longest measured prompt.
+const WARMUP_TOKENS: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PerformanceBenchRequest {
@@ -57,6 +61,14 @@ pub const UNKNOWN_RUNTIME_VERSION: &str = "unknown";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PerformanceBenchResult {
+    pub provider: crate::providers::ProviderId,
+    pub model_format: crate::providers::artifacts::ArtifactFormat,
+    pub runtime_accelerator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_variant: Option<String>,
+    /// Plugin version, separate from the core engine's `runtime_version`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_version: Option<String>,
     pub run_id: String,
     pub rows: Vec<PerformanceBenchRow>,
     pub status: &'static str,
@@ -67,6 +79,24 @@ pub struct PerformanceBenchResult {
     pub parallel: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) provenance: Option<crate::benchmark::provenance::BenchmarkProvenance>,
+}
+
+impl PerformanceBenchResult {
+    fn record_runtime(&mut self, probe: &crate::providers::python_env::ProbeRecord) {
+        self.runtime_accelerator = Some(probe.accelerator.clone());
+        self.runtime_version = if probe.version.is_empty() {
+            UNKNOWN_RUNTIME_VERSION.into()
+        } else {
+            probe.version.clone()
+        };
+        self.runtime_variant = None;
+        self.runtime_plugin_version = None;
+        if self.provider == crate::providers::ProviderId::Vllm && probe.variant == "vllm-metal" {
+            self.runtime_variant = Some(probe.variant.clone());
+            self.runtime_plugin_version =
+                (!probe.metal_version.is_empty()).then(|| probe.metal_version.clone());
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -129,6 +159,25 @@ pub fn failed(
     message: String,
 ) -> PerformanceBenchResult {
     PerformanceBenchResult {
+        provider: crate::providers::provider_of(cfg),
+        runtime_accelerator: None,
+        runtime_variant: None,
+        runtime_plugin_version: None,
+        model_format: if crate::providers::provider_of(cfg) == crate::providers::ProviderId::Llama {
+            crate::providers::artifacts::ArtifactFormat::Gguf
+        } else {
+            let path = std::path::Path::new(&cfg.active_model);
+            if path.is_dir() {
+                crate::providers::artifacts::inspect_snapshot(path).format
+            } else {
+                crate::providers::artifacts::inspect_gguf(
+                    path,
+                    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+                    &[],
+                )
+                .format
+            }
+        },
         run_id: request.run_id.clone(),
         rows: vec![],
         status: "failed",
@@ -158,6 +207,27 @@ fn isolated_config(
         .div_ceil(256)
         * 256;
     isolated.ctx_size = per_slot * isolated.parallel;
+    let provider = crate::providers::provider_of(cfg);
+    if provider != crate::providers::ProviderId::Llama {
+        let options = isolated
+            .provider_options
+            .entry(provider.as_str().into())
+            .or_default();
+        if provider == crate::providers::ProviderId::Vllm {
+            options.insert("max_model_len".into(), serde_json::json!(per_slot));
+            options.insert("max_num_seqs".into(), serde_json::json!(isolated.parallel));
+            options.insert("enable_prefix_caching".into(), serde_json::json!(false));
+            options.insert(
+                "enable_prompt_tokens_details".into(),
+                serde_json::json!(true),
+            );
+            options.insert("generation_config".into(), serde_json::json!("vllm"));
+        } else {
+            options.insert("max_num_seqs".into(), serde_json::json!(isolated.parallel));
+            options.insert("max_kv_size".into(), serde_json::json!(per_slot));
+            options.insert("enable_thinking".into(), serde_json::json!(false));
+        }
+    }
     isolated.keep = 0;
     isolated.sleep_idle_seconds = -1;
     isolated.request_timeout_seconds = REQUEST_TIMEOUT.as_secs() as u32;
@@ -292,9 +362,9 @@ fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
     (count > 0).then(|| sum / f64::from(count))
 }
 
-fn rate(tokens: u32, seconds: f64) -> Option<f64> {
+fn rate(tokens: u64, seconds: f64) -> Option<f64> {
     (tokens > 0 && seconds > 0.0)
-        .then(|| f64::from(tokens) / seconds)
+        .then(|| tokens as f64 / seconds)
         .filter(|value| value.is_finite())
 }
 
@@ -313,10 +383,13 @@ fn aggregate(
     let last_first = measurements.iter().filter_map(|m| m.first_token).max();
     let last = measurements.iter().filter_map(|m| m.last_token).max();
     let completion_tokens = measurements.iter().map(|m| m.completion_tokens).sum();
-    let prompt_tokens = measurements.iter().map(|m| m.prompt_tokens).sum();
+    let prompt_tokens = measurements
+        .iter()
+        .map(|m| u64::from(m.prompt_tokens))
+        .sum();
     let decoded = measurements
         .iter()
-        .map(|m| m.completion_tokens.saturating_sub(1))
+        .map(|m| u64::from(m.completion_tokens.saturating_sub(1)))
         .sum();
     let errors = measurements
         .iter()
@@ -359,7 +432,7 @@ fn aggregate(
             })
             .flatten(),
         e2e_ms: e2e * 1000.0,
-        total_tps: rate(completion_tokens, e2e),
+        total_tps: rate(u64::from(completion_tokens), e2e),
         peak_memory_bytes,
         timing_source: "client",
         error: (!errors.is_empty()).then(|| errors.join("; ")),
@@ -377,7 +450,7 @@ async fn batch(
     let mut requests = FuturesUnordered::new();
     for slot in 0..concurrency {
         let measured = protocol::measure(
-            endpoint.clone(),
+            endpoint,
             tokens.clone(),
             generation,
             slot,
@@ -420,6 +493,13 @@ async fn trial(
     progress: &Progress,
 ) -> Result<Vec<protocol::Measurement>, String> {
     let phase = if concurrency == 1 { "single" } else { "batch" };
+    if let Some(engine) = &endpoint.engine {
+        tokio::select! {
+            biased;
+            _ = protocol::cancelled(cancel) => return Err("benchmark cancelled".into()),
+            reset = engine.reset_cache(&endpoint.client, &endpoint.base, &endpoint.key) => reset?,
+        }
+    }
     emit(
         progress,
         request,
@@ -447,6 +527,27 @@ async fn trial(
     let Some(measured) = measured else {
         return Err("benchmark cancelled".into());
     };
+    // Raw runtime usage can be invalid yet individually representable. Keep
+    // every representable mismatch row; reject only totals the public u32 row
+    // cannot hold, before mutating rows, checkpointing or emitting a row.
+    for (name, total) in [
+        (
+            "output",
+            measured
+                .iter()
+                .try_fold(0u32, |sum, m| sum.checked_add(m.completion_tokens)),
+        ),
+        (
+            "cached",
+            measured
+                .iter()
+                .try_fold(0u32, |sum, m| sum.checked_add(m.cached_tokens)),
+        ),
+    ] {
+        total.ok_or_else(|| {
+            format!("The runtime reported too many {name} tokens to record this measurement.")
+        })?;
+    }
     let row = aggregate(
         request,
         prompt,
@@ -476,7 +577,7 @@ async fn warm_slots(
     progress: &Progress,
 ) -> Result<(), String> {
     emit(progress, request, "warmup", 0, None, None);
-    let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
+    let tokens = Arc::new(all_tokens[..all_tokens.len().min(WARMUP_TOKENS)].to_vec());
     let Some(warmup) = batch(endpoint, tokens, 16, slots, cancel, REQUEST_TIMEOUT).await else {
         return Err("benchmark cancelled".into());
     };
@@ -528,6 +629,10 @@ pub async fn run(
     runtime: RuntimeInfo,
 ) -> PerformanceBenchResult {
     let mut result = failed(&request, &cfg, String::new());
+    if crate::providers::provider_of(&cfg).is_custom() {
+        result.message = Some("unsupported: this adapter does not provide exact tokenizer and cold-cache benchmark procedures".into());
+        return result;
+    }
     if let Err(error) = validate_request(&mut request) {
         result.message = Some(error);
         return result;
@@ -547,10 +652,25 @@ pub async fn run(
         let isolated = isolated_config(&cfg, &request, port, runtime.cache_ram_supported);
         result.context_size = isolated.ctx_size;
         result.parallel = isolated.parallel;
-        result.args = redacted_args(server::build_args_with_gpu(&isolated, "", &gpu));
+        let provider = crate::providers::provider_of(&isolated);
+        if provider != crate::providers::ProviderId::Llama { result.context_size = isolated.ctx_size / isolated.parallel.max(1); }
+        let python_runtime = if provider == crate::providers::ProviderId::Llama { None } else { Some(crate::providers::selected_python_runtime(&isolated)?) };
+        if let Some(probe) = python_runtime.as_ref().and_then(|runtime| runtime.probe.as_ref()) {
+            result.record_runtime(probe);
+        }
+        result.args = match &python_runtime {
+            Some(runtime) => crate::providers::launch::preview(&crate::providers::launch::engine_command(&isolated, runtime, isolated.port, "")?),
+            None => redacted_args(crate::providers::adapter::resolve(&isolated).launch(&isolated, isolated.port, "", &gpu)?.args),
+        };
+        // Recorded with the result: schema-secret option values never are.
+        result.args = crate::providers::runtime_schema::mask_argv(&crate::providers::registry::root(), &isolated, std::mem::take(&mut result.args), "[redacted]");
         if let Some(provenance) = &mut result.provenance {
             provenance.execution_config = crate::benchmark::provenance::ExecutionConfig::from_args(&result.args);
         }
+        // Resolved before spawning: a failure after spawn but before the
+        // IsolatedServer guard exists would leave the server running.
+        let engine_info = crate::providers::execution::probed_info(&isolated).await?;
+        if !engine_info.tasks.iter().any(|task| task == "generate") { return Err("Select a generation session for a serving benchmark; transcription and embedding sessions serve different tasks.".into()); }
         let key = format!("bench-{}", uuid::Uuid::new_v4().simple());
         let ring = Arc::new(server::ErrBuf::default());
         drop(reservation);
@@ -560,17 +680,43 @@ pub async fn run(
         let pid = child.id();
         let mut dedicated_state = server::ServerState::default();
         dedicated_state.child = Some(child);
+        dedicated_state.engine = Some(engine_info.clone());
         let shared = Arc::new(Mutex::new(dedicated_state));
         managed = Some(IsolatedServer { state: shared.clone(), key_file, active_process: active_process.clone() });
         *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle;
         tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
-            ready = server::wait_ready(shared, &url, &key, server::SERVER_START_TIMEOUT_SECS, &ring) => ready?,
+            ready = server::wait_ready(shared.clone(), &url, &key, server::SERVER_START_TIMEOUT_SECS, &ring) => ready?,
         }
+        let engine_info = shared.lock().map_err(|_| "server state lock was poisoned")?
+            .engine.clone().ok_or("runtime task verification did not produce engine information")?;
+        if !engine_info.tasks.iter().any(|task| task == "generate") { return Err("Select a generation session for a serving benchmark; the ready runtime serves a different task.".into()); }
         let base = url.trim_end_matches("/v1");
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5))
             .timeout(REQUEST_TIMEOUT).build().map_err(|error| error.to_string())?;
+        let options = crate::providers::launch::provider_options(&isolated, provider);
+        let mut provider_protocol = python_runtime.map(|runtime| providers::ProviderProtocol {
+            provider,
+            // A vLLM session routed to a LoRA adapter is measured through it.
+            model: engine_info.request_lora.clone().unwrap_or_else(|| engine_info.upstream_model.clone()),
+            served: engine_info.upstream_model.clone(),
+            runtime,
+            prompts: std::collections::BTreeMap::new(),
+            stop_tokens: Vec::new(),
+            trust_remote_code: options.get("trust_remote_code").and_then(serde_json::Value::as_bool) == Some(true),
+            thinking_budget: options.get("thinking_budget").and_then(serde_json::Value::as_i64),
+        });
+        let required = request.prompt_lengths.iter().copied().max().unwrap_or(1) + request.generation_length;
+        if let Some(engine) = &provider_protocol {
+            // Context v2 records the per-sequence capacity the engine reports:
+            // vLLM max_model_len, or mlx-vlm's per-request KV allocation.
+            result.context_size = tokio::select! {
+                biased;
+                _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
+                context = engine.verify_settings(&client, base, &key, required) => context?,
+            };
+        } else {
         let props = tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
@@ -594,14 +740,25 @@ pub async fn run(
                 result.runtime_version = version.chars().take(256).collect();
             }
         }
+        }
         let max_prompt = request.prompt_lengths.iter().copied().max().unwrap_or(1) as usize;
+        let warmup_tokens = WARMUP_TOKENS.min(max_prompt);
         let mut target_bytes = (max_prompt * 8).max(4096);
         let all_tokens = loop {
             let text = corpus::text(&request.context_profile, target_bytes);
             let tokens = tokio::select! {
                 biased;
                 _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
-                tokens = protocol::tokenize(&client, base, &key, &text) => tokens?,
+                tokens = async {
+                    match provider_protocol.as_mut() {
+                        Some(engine) => {
+                            let mut lengths = request.prompt_lengths.clone(); lengths.push(warmup_tokens as u32);
+                            lengths.sort_unstable(); lengths.dedup();
+                            engine.tokenize(&client, base, &key, &text, lengths, cancel.clone()).await
+                        }
+                        None => protocol::tokenize(&client, base, &key, &text).await,
+                    }
+                } => tokens?,
             };
             if tokens.len() >= max_prompt {
                 if let Some(provenance) = &mut result.provenance {
@@ -612,9 +769,9 @@ pub async fn run(
             target_bytes *= 2;
             if target_bytes > 4 * 1024 * 1024 { return Err("could not construct enough corpus tokens within the text size limit".into()); }
         };
-        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone() };
+        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone(), engine: provider_protocol.map(Arc::new) };
         if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
-        warm_slots(&request, &endpoint, &all_tokens, isolated.parallel, &cancel, &progress).await?;
+        warm_slots(&request, &endpoint, &all_tokens[..warmup_tokens], isolated.parallel, &cancel, &progress).await?;
         // Concurrency is the outer sweep so every input length finishes at one level before the next: 1x runs for all lengths, then 2x, and so on.
         for concurrency in std::iter::once(1).chain(request.batch_sizes.iter().copied()) {
             for &prompt in &request.prompt_lengths {
@@ -678,6 +835,880 @@ mod tests {
             context_profile: "novel_ko".into(),
             warmup: true,
         }
+    }
+
+    // Exercise reported usage through owned loopback HTTP and the trial recorder.
+    // Representable mismatches retain rows; public-total overflow preserves prior work.
+    use serde_json::{json as usage_json, Value as UsageValue};
+
+    #[derive(Default)]
+    struct UsageSocketGroup {
+        sockets: Vec<std::net::TcpStream>,
+        workers: Vec<std::thread::JoinHandle<Result<(), String>>>,
+        errors: Vec<String>,
+    }
+
+    impl UsageSocketGroup {
+        fn retire(&mut self) {
+            for socket in self.sockets.drain(..) {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }
+            for worker in self.workers.drain(..) {
+                match worker.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => self.errors.push(error),
+                    Err(_) => self.errors.push("fixture socket worker panicked".into()),
+                }
+            }
+        }
+    }
+
+    impl Drop for UsageSocketGroup {
+        fn drop(&mut self) {
+            self.retire();
+        }
+    }
+
+    // A synchronous owning thread allows Drop to join even during async unwind or
+    // future timeout. No abort-only Tokio task or detached socket survives a step.
+    struct UsageHttpOwner {
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<Result<(), String>>>,
+        receipts: Arc<Mutex<Vec<UsageValue>>>,
+    }
+
+    impl UsageHttpOwner {
+        fn retire(&mut self) -> Result<(), String> {
+            self.stop.store(true, Ordering::Release);
+            match self.worker.take() {
+                Some(worker) => worker
+                    .join()
+                    .map_err(|_| "fixture listener worker panicked".to_string())?,
+                None => Ok(()),
+            }
+        }
+
+        fn finish(mut self) -> (Vec<UsageValue>, Result<(), String>) {
+            let joined = self.retire();
+            let receipts = self
+                .receipts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            (receipts, joined)
+        }
+    }
+
+    impl Drop for UsageHttpOwner {
+        fn drop(&mut self) {
+            let _ = self.retire();
+        }
+    }
+
+    fn usage_read_request(socket: &mut std::net::TcpStream) -> Result<UsageValue, String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        let (header_end, length) = loop {
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                return Err("request closed before its whole body".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            if bytes.len() > 1024 * 1024 {
+                return Err("fixture request exceeds 1 MiB".into());
+            }
+            if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                if end > 64 * 1024 {
+                    return Err("fixture headers exceed 64 KiB".into());
+                }
+                let head = std::str::from_utf8(&bytes[..end]).map_err(|e| e.to_string())?;
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .ok_or("missing Content-Length")?;
+                if length > 1024 * 1024 - end - 4 {
+                    return Err("fixture body too large".into());
+                }
+                break (end + 4, length);
+            }
+        };
+        while bytes.len() < header_end + length {
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                return Err("request body truncated".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        let head = std::str::from_utf8(&bytes[..header_end]).map_err(|e| e.to_string())?;
+        let headers: Vec<_> = head
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                line.split_once(':')
+                    .map(|(k, v)| (k.to_ascii_lowercase(), v.trim().to_owned()))
+            })
+            .collect();
+        let body: UsageValue = serde_json::from_slice(&bytes[header_end..header_end + length])
+            .map_err(|e| e.to_string())?;
+        Ok(usage_json!({"line": head.lines().next(), "headers":headers,
+            "body":body,"wire":bytes,"body_bytes":length}))
+    }
+
+    fn usage_http(
+        reports: Vec<[u32; 3]>,
+        stall: Option<usize>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<(protocol::Endpoint, UsageHttpOwner), String> {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|e| e.to_string())?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let base = format!(
+            "http://{}",
+            listener.local_addr().map_err(|e| e.to_string())?
+        );
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let stopped = stop.clone();
+        let captured = receipts.clone();
+        let worker = std::thread::Builder::new().name("benchmark-usage-fixture".into()).spawn(move || {
+            let mut owned = UsageSocketGroup::default();
+            let posted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let accept_result = (|| -> Result<(), String> {
+                while !stopped.load(Ordering::Acquire) {
+                    let (mut socket, _) = match listener.accept() {
+                        Ok(socket) => socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    };
+                    // Accepted sockets must use blocking reads even though the listener polls.
+                    socket.set_nonblocking(false).map_err(|e| e.to_string())?;
+                    socket.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+                    socket.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+                    owned.sockets.push(socket.try_clone().map_err(|e| e.to_string())?);
+                    let captured = captured.clone();
+                    let reports = reports.clone();
+                    let cancel = cancel.clone();
+                    let stopped = stopped.clone();
+                    let posted = posted.clone();
+                    owned.workers.push(std::thread::spawn(move || {
+                        let mut receipt = usage_read_request(&mut socket)?;
+                        let slot = receipt["body"]["id_slot"].as_u64().ok_or("missing slot")? as usize;
+                        let [prompt, completion, cached] = *reports.get(slot).ok_or("unexpected slot")?;
+                        let usage = usage_json!({"prompt_tokens":prompt,"completion_tokens":completion,
+                            "prompt_tokens_details":{"cached_tokens":cached}});
+                        let response = if stall == Some(slot) {
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"tokens\":[8],\"stop\":false}\n\n".to_owned()
+                        } else {
+                            let final_value = usage_json!({"tokens":[8,9],"stop":true,"usage":usage});
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {final_value}\n\n")
+                        };
+                        receipt["response"] = usage_json!(response);
+                        receipt["reported_usage"] = usage;
+                        captured.lock().map_err(|_| "fixture receipts poisoned")?.push(receipt);
+                        socket.write_all(response.as_bytes()).map_err(|e| e.to_string())?;
+                        posted.fetch_add(1, Ordering::AcqRel);
+                        if stall == Some(slot) {
+                            while posted.load(Ordering::Acquire) < reports.len() && !stopped.load(Ordering::Acquire) {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            cancel.store(true, Ordering::Release);
+                            while !stopped.load(Ordering::Acquire) {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        let _ = socket.shutdown(std::net::Shutdown::Both);
+                        Ok(())
+                    }));
+                }
+                Ok(())
+            })();
+            // This explicit path and Drop both stop/close/join every accepted socket.
+            owned.retire();
+            accept_result?;
+            if owned.errors.is_empty() { Ok(()) } else { Err(owned.errors.join("; ")) }
+        }).map_err(|e| e.to_string())?;
+        Ok((
+            protocol::Endpoint {
+                client,
+                base,
+                key: "r64-synthetic-key".into(),
+                engine: None,
+            },
+            UsageHttpOwner {
+                stop,
+                worker: Some(worker),
+                receipts,
+            },
+        ))
+    }
+
+    fn usage_expected_body(slot: usize) -> UsageValue {
+        // Independent frozen expected body: do not call completion_body to derive it.
+        usage_json!({"prompt":[1,2,3],"n_predict":2,"stream":true,"cache_prompt":false,
+            "ignore_eos":true,"return_tokens":true,"temperature":0,"seed":42,"top_k":1,
+            "top_p":1.0,"min_p":0.0,"repeat_penalty":1.0,"presence_penalty":0.0,
+            "frequency_penalty":0.0,"stop":[],"id_slot":slot})
+    }
+
+    fn usage_assert_requests(mut receipts: Vec<UsageValue>, reports: &[[u32; 3]]) {
+        receipts.sort_by_key(|r| r["body"]["id_slot"].as_u64());
+        assert_eq!(
+            receipts.len(),
+            reports.len(),
+            "SETUP: every request was captured"
+        );
+        for (slot, receipt) in receipts.iter().enumerate() {
+            assert_eq!(receipt["line"], "POST /completion HTTP/1.1");
+            assert_eq!(receipt["body"], usage_expected_body(slot));
+            let headers: Vec<(String, String)> =
+                serde_json::from_value(receipt["headers"].clone()).unwrap();
+            assert!(headers
+                .iter()
+                .any(|(k, v)| k == "authorization" && v == "Bearer r64-synthetic-key"));
+            assert!(headers
+                .iter()
+                .any(|(k, v)| k == "content-type" && v == "application/json"));
+            assert!(headers.iter().any(|(k, v)| k == "content-length"
+                && v.parse::<u64>().ok() == receipt["body_bytes"].as_u64()));
+            let [p, c, k] = reports[slot];
+            assert_eq!(
+                receipt["reported_usage"],
+                usage_json!({"prompt_tokens":p,
+                "completion_tokens":c,"prompt_tokens_details":{"cached_tokens":k}})
+            );
+            assert!(receipt["wire"]
+                .as_array()
+                .is_some_and(|bytes| !bytes.is_empty()));
+        }
+        println!("Usage_HTTP_RECEIPTS {}", usage_json!(receipts));
+    }
+
+    enum UsageExpected {
+        Row {
+            completion: u32,
+            cached: u32,
+            error: Option<&'static str>,
+        },
+        Error(&'static str),
+        Cancel,
+    }
+
+    async fn usage_step(
+        request: &PerformanceBenchRequest,
+        result: &mut PerformanceBenchResult,
+        checkpoint: &Checkpoint,
+        progress: &Progress,
+        reports: Vec<[u32; 3]>,
+        repetition: u32,
+        expected: UsageExpected,
+    ) {
+        use futures_util::FutureExt;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stall = matches!(expected, UsageExpected::Cancel).then_some(1);
+        let (endpoint, owner) = usage_http(reports.clone(), stall, cancel.clone()).unwrap();
+        let before = serde_json::to_value(&result.rows).unwrap();
+        let row_count = result.rows.len();
+        let outcome = std::panic::AssertUnwindSafe(trial(
+            request,
+            &endpoint,
+            Arc::new(vec![1, 2, 3]),
+            (3, reports.len() as u32, repetition),
+            0,
+            &cancel,
+            Duration::from_secs(5),
+            result,
+            Some(checkpoint),
+            progress,
+        ))
+        .catch_unwind()
+        .await;
+        // ALL setup, transport and semantic checks follow synchronous cleanup/join.
+        let (receipts, cleanup) = owner.finish();
+        println!(
+            "USAGE_TRIAL_RECEIPT {}",
+            usage_json!({"cleanup":cleanup,"outcome":format!("{outcome:?}"),"result":result})
+        );
+        assert!(cleanup.is_ok(), "SETUP/TRANSPORT cleanup: {cleanup:?}");
+        usage_assert_requests(receipts, &reports);
+        assert!(
+            outcome.is_ok(),
+            "aggregation panicked; cleanup completed, this is a FAILED regression"
+        );
+        let outcome = outcome.unwrap();
+        assert_eq!(
+            serde_json::to_value(&result.rows[..row_count]).unwrap(),
+            before,
+            "every prior row, including its complete numeric/timing/error payload, is immutable"
+        );
+        match expected {
+            UsageExpected::Error(message) => {
+                assert_eq!(outcome.unwrap_err(), message);
+                assert_eq!(result.rows.len(), row_count, "no lossy failed numeric row");
+            }
+            UsageExpected::Cancel => {
+                assert_eq!(outcome.unwrap_err(), "benchmark cancelled");
+                assert_eq!(result.rows.len(), row_count);
+            }
+            UsageExpected::Row {
+                completion,
+                cached,
+                error,
+            } => {
+                let measured = outcome.unwrap();
+                let mut facts: Vec<_> = measured
+                    .iter()
+                    .map(|m| [m.prompt_tokens, m.completion_tokens, m.cached_tokens])
+                    .collect();
+                facts.sort_unstable();
+                let mut expected_facts = reports.clone();
+                expected_facts.sort_unstable();
+                assert_eq!(
+                    facts, expected_facts,
+                    "all three raw fields passed through actual measure"
+                );
+                assert_eq!(result.rows.len(), row_count + 1);
+                let row = result.rows.last().unwrap();
+                assert_eq!(
+                    row.id,
+                    format!("test-p3-g2-c{}-r{repetition}", reports.len())
+                );
+                assert_eq!(
+                    (
+                        row.prompt_tokens,
+                        row.generation_length,
+                        row.concurrency,
+                        row.repetition
+                    ),
+                    (3, 2, reports.len() as u32, repetition)
+                );
+                assert_eq!(
+                    (row.completion_tokens, row.cached_tokens),
+                    (completion, cached)
+                );
+                match error {
+                    Some(message) => {
+                        assert!(row.error.as_deref().is_some_and(|e| e.contains(message)))
+                    }
+                    None => assert!(row.error.is_none(), "{:?}", row.error),
+                }
+                assert_eq!(row.timing_source, "client");
+                assert!(row.e2e_ms.is_finite() && row.e2e_ms > 0.0);
+                assert!(row.ttft_ms.is_some_and(|v| v.is_finite() && v >= 0.0));
+                assert!(row.pp_tps.is_some_and(|v| v.is_finite() && v > 0.0));
+                assert!(
+                    row.tpot_ms.is_none() && row.tg_tps.is_none(),
+                    "final-only stream has no decode interval"
+                );
+                let expected_rate = f64::from(completion) * 1000.0 / row.e2e_ms;
+                assert!((row.total_tps.unwrap() / expected_rate - 1.0).abs() < 1.0e-12);
+            }
+        }
+    }
+
+    async fn usage_usage_case(reports: Vec<[u32; 3]>, expected: UsageExpected, prior: bool) {
+        let request = PerformanceBenchRequest {
+            prompt_lengths: vec![3],
+            generation_length: 2,
+            batch_sizes: vec![2],
+            repetitions: 3,
+            ..request()
+        };
+        let mut result = failed(&request, &AppConfig::default(), "pending".into());
+        let checkpoints = Arc::new(Mutex::new(Vec::<UsageValue>::new()));
+        let captured = checkpoints.clone();
+        let checkpoint: Checkpoint = Arc::new(move |r| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(r).unwrap());
+            Ok(())
+        });
+        let events = Arc::new(Mutex::new(Vec::<UsageValue>::new()));
+        let captured = events.clone();
+        let progress: Progress = Arc::new(move |p| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(p).unwrap())
+        });
+        if prior {
+            usage_step(
+                &request,
+                &mut result,
+                &checkpoint,
+                &progress,
+                vec![[3, 2, 0]; 2],
+                1,
+                UsageExpected::Row {
+                    completion: 4,
+                    cached: 0,
+                    error: None,
+                },
+            )
+            .await;
+            usage_step(
+                &request,
+                &mut result,
+                &checkpoint,
+                &progress,
+                vec![[3, 1, 0], [3, 2, 0]],
+                2,
+                UsageExpected::Row {
+                    completion: 3,
+                    cached: 0,
+                    error: Some("output token count mismatch"),
+                },
+            )
+            .await;
+        }
+        let before_checkpoints = checkpoints.lock().unwrap().clone();
+        let before_events = events.lock().unwrap().clone();
+        let before_rows = result.rows.len();
+        let keeps_row = matches!(expected, UsageExpected::Row { .. });
+        let concurrency = reports.len();
+        let repetition = if prior { 3 } else { 1 };
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            reports,
+            repetition,
+            expected,
+        )
+        .await;
+        let after_checkpoints = checkpoints.lock().unwrap().clone();
+        assert_eq!(
+            &after_checkpoints[..before_checkpoints.len()],
+            &before_checkpoints
+        );
+        assert_eq!(
+            after_checkpoints.len(),
+            before_checkpoints.len() + usize::from(keeps_row)
+        );
+        if keeps_row {
+            assert_eq!(
+                after_checkpoints.last().unwrap(),
+                &serde_json::to_value(&result).unwrap()
+            );
+        }
+        let phase = if concurrency == 1 { "single" } else { "batch" };
+        let mut expected_events = before_events;
+        expected_events.push(usage_json!({"run_id":"test","phase":phase,"completed":before_rows,
+            "total":6,"row":null,"message":format!("3 input / 2 output, {concurrency} request(s), repetition {repetition}")}));
+        if keeps_row {
+            expected_events.push(
+                usage_json!({"run_id":"test","phase":phase,"completed":result.rows.len(),
+                "total":6,"row":result.rows.last(),"message":null}),
+            );
+        }
+        assert_eq!(
+            *events.lock().unwrap(),
+            expected_events,
+            "full progress payload and prefix must be exact"
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_usage_good_and_representable_mismatch_controls() {
+        usage_usage_case(
+            vec![[3, 2, 0]; 2],
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: None,
+            },
+            false,
+        )
+        .await;
+        usage_usage_case(
+            vec![[3, 1, 0], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: 3,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_prompt_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[u32::MAX, 2, 0]],
+            UsageExpected::Row {
+                completion: 2,
+                cached: 0,
+                error: Some("prompt token count mismatch"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_completion_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[3, u32::MAX, 0]],
+            UsageExpected::Row {
+                completion: u32::MAX,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_cache_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX]],
+            UsageExpected::Row {
+                completion: 2,
+                cached: u32::MAX,
+                error: Some("cold benchmark unexpectedly reused"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_prompt_sum_max_and_one_over_still_keep_rows() {
+        for p in [u32::MAX - 3, u32::MAX - 2] {
+            usage_usage_case(
+                vec![[p, 2, 0], [3, 2, 0]],
+                UsageExpected::Row {
+                    completion: 4,
+                    cached: 0,
+                    error: Some("prompt token count mismatch"),
+                },
+                true,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_usage_two_max_prompts_keep_original_mismatch_and_prior_rows() {
+        usage_usage_case(
+            vec![[u32::MAX, 2, 0]; 2],
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: Some("prompt token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_sum_highest_public_value_keeps_a_row() {
+        usage_usage_case(
+            vec![[3, u32::MAX - 2, 0], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: u32::MAX,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_one_over_returns_error_without_discarding_prior_rows() {
+        usage_usage_case(
+            vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_overflow_without_prior_rows_returns_error() {
+        usage_usage_case(
+            vec![[3, u32::MAX, 0]; 2],
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cache_sum_highest_public_value_keeps_a_row() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: 4,
+                cached: u32::MAX,
+                error: Some("cold benchmark unexpectedly reused"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cache_one_over_returns_error_without_discarding_prior_rows() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX], [3, 2, 1]],
+            UsageExpected::Error(
+                "The runtime reported too many cached tokens to record this measurement.",
+            ),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cancelled_batch_keeps_only_prior_finished_rows() {
+        usage_usage_case(vec![[3, 2, 0]; 2], UsageExpected::Cancel, true).await;
+    }
+
+    // Journal checkpoint, finish and replay retain exactly the completed trials.
+    // Final status metadata is supplied here; native run status selection is separate.
+    struct UsageJournalRoot(std::path::PathBuf);
+    impl UsageJournalRoot {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("aiolm-r64-journal-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn finish(self) -> Result<(), String> {
+            std::fs::remove_dir_all(&self.0).map_err(|e| e.to_string())
+        }
+    }
+    impl Drop for UsageJournalRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn usage_journal_bytes(root: &std::path::Path) -> Result<Vec<Vec<u8>>, String> {
+        let mut paths = std::fs::read_dir(root.join("runs"))
+            .map_err(|e| e.to_string())?
+            .map(|entry| entry.map(|e| e.path()).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.retain(|p| p.extension().is_some_and(|e| e == "jsonl"));
+        paths.sort();
+        paths
+            .iter()
+            .map(|p| std::fs::read(p).map_err(|e| e.to_string()))
+            .collect()
+    }
+    #[tokio::test]
+    async fn usage_usage_journal_retains_exact_prior_rows_on_trial_error() {
+        let root = UsageJournalRoot::new();
+        let request = PerformanceBenchRequest {
+            prompt_lengths: vec![3],
+            generation_length: 2,
+            batch_sizes: vec![2],
+            repetitions: 3,
+            ..request()
+        };
+        let mut result = failed(&request, &AppConfig::default(), "pending".into());
+        let journal = Arc::new(
+            crate::benchmark::store::RunJournal::begin(
+                &root.0,
+                usage_json!({"schemaVersion":1,"id":"test","createdAt":0,"model":"synthetic",
+                "backend":"synthetic","build":"synthetic","request":request,"result":result}),
+            )
+            .unwrap(),
+        );
+        let captured = journal.clone();
+        let checkpoint: Checkpoint = Arc::new(move |r| captured.checkpoint(r));
+        let progress: Progress = Arc::new(|_| {});
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, 2, 0]; 2],
+            1,
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: None,
+            },
+        )
+        .await;
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, 1, 0], [3, 2, 0]],
+            2,
+            UsageExpected::Row {
+                completion: 3,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+        )
+        .await;
+        let before = usage_journal_bytes(&root.0);
+        // Journal replay crosses the existing JSON serialization boundary.
+        // Compare every field in that persisted domain, including all counters.
+        let prior_rows: UsageValue =
+            serde_json::from_slice(&serde_json::to_vec(&result.rows).unwrap()).unwrap();
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
+            3,
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
+        )
+        .await;
+        let after = usage_journal_bytes(&root.0);
+        // Explicitly supplied metadata tests journal semantics only. The actual
+        // run finalizer's partial/failed selection is covered separately by the native run caller.
+        result.status = "partial";
+        result.message =
+            Some("The runtime reported too many output tokens to record this measurement.".into());
+        let finish = journal.finish(&result);
+        drop(checkpoint);
+        drop(journal);
+        let page = crate::benchmark::store::list(&root.0, 0, 10);
+        let cleanup = root.finish();
+        println!(
+            "USAGE_JOURNAL_RECEIPT {}",
+            usage_json!({"before":before,"after":after,"finish":finish,"page":page.as_ref().map(|p|&p.records),"cleanup":cleanup,"result":result})
+        );
+        // Native journal file/lock owners and the synthetic directory are gone.
+        assert!(cleanup.is_ok(), "journal cleanup {cleanup:?}");
+        assert_eq!(
+            before.unwrap(),
+            after.unwrap(),
+            "Err added no bytes/checkpoint/trial"
+        );
+        finish.unwrap();
+        let page = page.unwrap();
+        assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0]["result"]["rows"], prior_rows);
+        assert_eq!(
+            page.records[0]["result"],
+            serde_json::from_slice::<UsageValue>(&serde_json::to_vec(&result).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn metal_runtime_identity_keeps_core_and_plugin_versions_separate() {
+        let cfg = AppConfig {
+            active_provider: "vllm".into(),
+            active_backend: "vulkan".into(),
+            active_build: "stale-llama".into(),
+            ..Default::default()
+        };
+        let mut result = failed(&request(), &cfg, "pending".into());
+        result.record_runtime(&crate::providers::python_env::ProbeRecord {
+            variant: "vllm-metal".into(),
+            version: "0.30.0".into(),
+            metal_version: "0.30.1".into(),
+            accelerator: "metal".into(),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["provider"], "vllm");
+        assert_eq!(value["runtime_version"], "0.30.0");
+        assert_eq!(value["runtime_variant"], "vllm-metal");
+        assert_eq!(value["runtime_plugin_version"], "0.30.1");
+        assert_eq!(value["runtime_accelerator"], "metal");
+        result.runtime_plugin_version = None;
+        result.record_runtime(&crate::providers::python_env::ProbeRecord {
+            variant: "vllm-metal".into(),
+            version: "0.30.0".into(),
+            ..Default::default()
+        });
+        assert!(serde_json::to_value(&result)
+            .unwrap()
+            .get("runtime_plugin_version")
+            .is_none());
+        let mut legacy = failed(&request(), &cfg, "pending".into());
+        legacy.record_runtime(&crate::providers::python_env::ProbeRecord {
+            version: "0.31.0".into(),
+            accelerator: "cuda".into(),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(legacy).unwrap();
+        assert!(value.get("runtime_variant").is_none());
+        assert!(value.get("runtime_plugin_version").is_none());
+    }
+
+    #[test]
+    fn python_benchmarks_keep_the_selected_weight_format() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let root =
+            std::env::temp_dir().join(format!("aiolm-bench-format-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let mut header = b"GGUF".to_vec();
+        header.extend_from_slice(&3u32.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        let gguf = root.join("synthetic.gguf");
+        std::fs::write(&gguf, header).unwrap();
+        let cfg = |path: &std::path::Path| AppConfig {
+            active_provider: "vllm".into(),
+            active_model: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            failed(&request(), &cfg(&gguf), "pending".into()).model_format,
+            ArtifactFormat::Gguf
+        );
+        let snapshot = root.join("snapshot");
+        std::fs::create_dir(&snapshot).unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), b"synthetic weights").unwrap();
+        std::fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","architectures":["LlamaForCausalLM"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            failed(&request(), &cfg(&snapshot), "pending".into()).model_format,
+            ArtifactFormat::HfSafetensors
+        );
+        std::fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","quantization":{"bits":4,"group_size":64}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            failed(&request(), &cfg(&snapshot), "pending".into()).model_format,
+            ArtifactFormat::Mlx
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -953,6 +1984,7 @@ mod tests {
             }
         });
         let endpoint = protocol::Endpoint {
+            engine: None,
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             base,
             key: "test".into(),

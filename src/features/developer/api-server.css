@@ -39,6 +39,15 @@
 .api-example-toolbar .app-custom-select-container { width: 10rem; max-width: 100%; }
 .api-example-toolbar button { margin-inline-start: auto; }
 .api-code { margin: .85rem 0; padding: 1rem; max-height: 25rem; overflow: auto; border-radius: .6rem; border: 0; background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-size: var(--ui-text-support); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-height: 650px) {
+  /* Keep both ends of the focused log visible when Home/End scrolls it.
+     A fixed desktop-sized log otherwise extends beyond the outer viewport. */
+  [data-developer-section="diagnostics"] .api-server-content { height: 100%; display: flex; flex-direction: column; padding-bottom: 0; }
+  [data-developer-section="diagnostics"] .api-page-heading { flex-shrink: 0; }
+  [data-developer-section="diagnostics"] .developer-section--diagnostics { display: flex; flex-direction: column; flex: 1; min-height: 0; padding-bottom: 0; }
+  [data-developer-section="diagnostics"] .developer-section--diagnostics > :not(.api-code) { flex-shrink: 0; }
+  [data-developer-section="diagnostics"] .api-code { flex: 1; min-height: 6rem; margin-bottom: 0; }
+}
 .api-endpoints { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--ui-text-support); text-align: start; }
 .api-endpoints th, .api-endpoints td { padding: .6rem; border-bottom: 1px solid var(--ui-border); overflow-wrap: break-word; }
 .api-endpoints th { color: var(--ui-muted); font-weight: 500; }

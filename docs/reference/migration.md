@@ -44,6 +44,8 @@ AioLM keeps its data in one folder: `.aiolm` in the user's home folder (`%USERPR
 | `mcp-servers.json` | MCP servers |
 | `models` | Default model folder |
 | `runtimes` | Managed runtimes |
+| `runtimes/providers` | Python runtime registrations and isolated environments |
+| `media` | Immutable imported image, audio and video files referenced by chat history |
 | `verification.json`, `verification` | Numerical verification records and overrides, the canary model and its baseline |
 | `benchmarks` | Benchmark journals, model identities and download receipts |
 | `cli` | CLI server state and log |
@@ -73,6 +75,8 @@ Conversations keep the existing limits: the newest 100, each with its last 100 m
 An older release keeps reading the earlier locations. It shows the configuration as it was when the data folder was prepared, needs its runtimes installed again and does not see conversations moved into the data folder.
 
 ## Compatibility
+
+Configuration version 13 adds engine selection, Python runtime identities and separate option maps. Before upgrading an older configuration, AioLM writes its original bytes to `config.v<previous-version>-before-v13.json` beside `config.json` without replacing an existing backup. Existing profiles and session snapshots without an engine remain llama.cpp. New libraries have independent default profiles for llama.cpp, vLLM and mlx-vlm; repairing an older library preserves its existing llama.cpp default and creates only missing engine defaults. Each engine keeps its own recent profile and remembered model execution settings. Interpreter registrations and model bindings remain local execution choices when applying a portable profile.
 
 First-run setup uses `onboarding_completed` in `config.json`, independently of the application or configuration version. A missing configuration starts with `false`; an existing configuration without the field is treated as completed so upgrades skip setup. Explicit `false` survives saves and schema migrations until setup finishes. The completion flag is saved only after language and theme preferences have been persisted. Resetting appearance or other UI preferences does not reset this flag.
 

@@ -163,8 +163,20 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     fn string(&mut self) -> Result<String, String> {
+        let mut type_error = None;
+        self.string_with_budget(None, &mut type_error)
+    }
+
+    fn string_with_budget(
+        &mut self,
+        mut budget: Option<&mut StringBudget>,
+        type_error: &mut Option<String>,
+    ) -> Result<String, String> {
         self.account_strings(1)?;
         let length = self.u64()?;
+        if let Some(budget) = budget.as_mut() {
+            remember_budget_error(type_error, (**budget).account_entries(1));
+        }
         if length > MAX_KEY_BYTES {
             self.skip(length)?;
             return Ok(String::new());
@@ -176,12 +188,52 @@ impl<R: Read + Seek> Reader<R> {
         if self.strings > MAX_STRING_BUDGET {
             return Err("GGUF header declares implausible string data".into());
         }
+        if let Some(budget) = budget.as_mut() {
+            remember_budget_error(type_error, (**budget).account_payload(length));
+        }
         self.account(length)?;
         let mut buffer = vec![0u8; length as usize];
         self.inner
             .read_exact(&mut buffer)
             .map_err(|error| format!("unreadable GGUF header: {error}"))?;
-        Ok(String::from_utf8_lossy(&buffer).into_owned())
+        Ok(match String::from_utf8(buffer) {
+            Ok(value) => value,
+            Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct StringBudget {
+    strings: u64,
+    string_entries: u64,
+}
+
+impl StringBudget {
+    fn account_entries(&mut self, count: u64) -> Result<(), String> {
+        self.string_entries = self
+            .string_entries
+            .checked_add(count)
+            .filter(|count| *count <= MAX_STRING_ENTRIES)
+            .ok_or_else(|| "GGUF header exceeds its string entry budget".to_string())?;
+        Ok(())
+    }
+
+    fn account_payload(&mut self, count: u64) -> Result<(), String> {
+        self.strings = self
+            .strings
+            .checked_add(count)
+            .filter(|count| *count <= MAX_STRING_BUDGET)
+            .ok_or_else(|| "GGUF header declares implausible string data".to_string())?;
+        Ok(())
+    }
+}
+
+fn remember_budget_error(error: &mut Option<String>, result: Result<(), String>) {
+    if error.is_none() {
+        if let Err(message) = result {
+            *error = Some(message);
+        }
     }
 }
 
@@ -197,6 +249,16 @@ fn scalar_width(kind: u32) -> Option<u64> {
 }
 
 fn skip_value<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<(), String> {
+    let mut type_error = None;
+    skip_value_with_budget(reader, kind, None, &mut type_error)
+}
+
+fn skip_value_with_budget<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    kind: u32,
+    budget: Option<&mut StringBudget>,
+    type_error: &mut Option<String>,
+) -> Result<(), String> {
     if let Some(width) = scalar_width(kind) {
         return reader.skip(width);
     }
@@ -208,7 +270,7 @@ fn skip_value<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<(), S
         9 => {
             let element = reader.u32()?;
             let count = reader.u64()?;
-            skip_array_body(reader, element, count)
+            skip_array_body_with_budget(reader, element, count, budget, type_error)
         }
         _ => Err(format!("unsupported GGUF value type {kind}")),
     }
@@ -216,10 +278,12 @@ fn skip_value<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<(), S
 
 /// Steps over the elements of an array whose element type and count were
 /// already read.
-fn skip_array_body<R: Read + Seek>(
+fn skip_array_body_with_budget<R: Read + Seek>(
     reader: &mut Reader<R>,
     element: u32,
     count: u64,
+    budget: Option<&mut StringBudget>,
+    type_error: &mut Option<String>,
 ) -> Result<(), String> {
     if count > MAX_ARRAY_LEN {
         return Err("GGUF header declares an implausible array".into());
@@ -236,6 +300,9 @@ fn skip_array_body<R: Read + Seek>(
     // Strings are individually sized, so the only way past them is
     // through them.
     reader.account_strings(count)?;
+    if let Some(budget) = budget {
+        remember_budget_error(type_error, budget.account_entries(count));
+    }
     for _ in 0..count {
         let length = reader.u64()?;
         reader.skip(length)?;
@@ -274,6 +341,24 @@ fn open_header(path: &Path) -> Result<(Reader<BufReader<File>>, u64), String> {
 #[allow(clippy::type_complexity)]
 fn open_header_with_tensors(path: &Path) -> Result<(Reader<BufReader<File>>, u64, u64), String> {
     let file = File::open(path).map_err(|error| format!("cannot open the model: {error}"))?;
+    read_header(file)
+}
+
+#[allow(clippy::type_complexity)]
+fn open_header_with_tensors_and_len(
+    path: &Path,
+) -> Result<(Reader<BufReader<File>>, u64, u64, u64), String> {
+    let file = File::open(path).map_err(|error| format!("cannot open the model: {error}"))?;
+    let file_len = file
+        .metadata()
+        .map_err(|error| format!("cannot open the model: {error}"))?
+        .len();
+    let (reader, tensors, keys) = read_header(file)?;
+    Ok((reader, tensors, keys, file_len))
+}
+
+#[allow(clippy::type_complexity)]
+fn read_header(file: File) -> Result<(Reader<BufReader<File>>, u64, u64), String> {
     let mut reader = Reader {
         inner: BufReader::new(file),
         consumed: 0,
@@ -373,6 +458,38 @@ pub fn read_metadata(path: &Path) -> Result<ModelMetadata, String> {
             .copied();
     }
     Ok(metadata)
+}
+
+/// Input modalities a multimodal projector (`mmproj`) file encodes, as its own
+/// header states them. Keys are llama.cpp's `KEY_HAS_VISION_ENC` and
+/// `KEY_HAS_AUDIO_ENC` from `tools/mtmd/clip-impl.h`. `None` means the header
+/// does not say, which is not the same as `false`.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProjectorModalities {
+    pub vision: Option<bool>,
+    pub audio: Option<bool>,
+}
+
+pub fn read_projector_modalities(path: &Path) -> Result<ProjectorModalities, String> {
+    let (mut reader, keys) = open_header(path)?;
+    let mut modalities = ProjectorModalities::default();
+    for _ in 0..keys {
+        let key = reader.string()?;
+        let kind = reader.u32()?;
+        let slot = match key.as_str() {
+            "clip.has_vision_encoder" => Some(&mut modalities.vision),
+            "clip.has_audio_encoder" => Some(&mut modalities.audio),
+            _ => None,
+        };
+        match slot {
+            Some(slot) if kind == 7 => *slot = Some(reader.bytes::<1>()?[0] != 0),
+            _ => skip_value(&mut reader, kind)?,
+        }
+        if modalities.vision.is_some() && modalities.audio.is_some() {
+            break;
+        }
+    }
+    Ok(modalities)
 }
 
 fn read_string_array<R: Read + Seek>(
@@ -730,6 +847,16 @@ enum RawValue {
 /// Reads any integer or boolean scalar. Other types, and negative values,
 /// are stepped over and reported as absent.
 fn read_integer<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Option<u64>, String> {
+    let mut type_error = None;
+    read_integer_with_budget(reader, kind, None, &mut type_error)
+}
+
+fn read_integer_with_budget<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    kind: u32,
+    budget: Option<&mut StringBudget>,
+    type_error: &mut Option<String>,
+) -> Result<Option<u64>, String> {
     Ok(match kind {
         0 => Some(u64::from(reader.bytes::<1>()?[0])),
         1 => u64::try_from(i8::from_le_bytes(reader.bytes::<1>()?)).ok(),
@@ -741,21 +868,31 @@ fn read_integer<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Opt
         10 => Some(reader.u64()?),
         11 => u64::try_from(i64::from_le_bytes(reader.bytes::<8>()?)).ok(),
         _ => {
-            skip_value(reader, kind)?;
+            skip_value_with_budget(reader, kind, budget, type_error)?;
             None
         }
     })
 }
 
 fn read_raw<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Option<RawValue>, String> {
+    let mut type_error = None;
+    read_raw_with_budget(reader, kind, None, &mut type_error)
+}
+
+fn read_raw_with_budget<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    kind: u32,
+    budget: Option<&mut StringBudget>,
+    type_error: &mut Option<String>,
+) -> Result<Option<RawValue>, String> {
     if kind != 9 {
-        return Ok(read_integer(reader, kind)?.map(RawValue::Int));
+        return Ok(read_integer_with_budget(reader, kind, budget, type_error)?.map(RawValue::Int));
     }
     let element = reader.u32()?;
     let count = reader.u64()?;
     let integer = matches!(element, 0..=5 | 7 | 10 | 11);
     if !integer || count > MAX_MODEL_LAYERS as u64 {
-        skip_array_body(reader, element, count)?;
+        skip_array_body_with_budget(reader, element, count, budget, type_error)?;
         return Ok(None);
     }
     let mut values = Vec::with_capacity(count as usize);
@@ -836,6 +973,13 @@ fn classify_tensor(name: &str) -> TensorClass {
     }
 }
 
+struct TensorScan {
+    bytes: Option<TensorBytes>,
+    tensor_types: Option<TensorTypeResult>,
+}
+
+type TensorTypeResult = Result<Vec<(String, u32)>, String>;
+
 /// Walks the tensor info table and sizes every tensor from the gap to the
 /// next data offset (the last one runs to the end of the file). Sizes include
 /// alignment padding, at most `alignment - 1` bytes each, which keeps the
@@ -845,10 +989,21 @@ fn read_tensor_bytes<R: Read + Seek>(
     count: u64,
     alignment: u64,
     file_len: u64,
-) -> Result<Option<TensorBytes>, String> {
+    collect_tensor_types: bool,
+    mut type_budget: Option<&mut StringBudget>,
+    type_error: &mut Option<String>,
+) -> Result<TensorScan, String> {
     let mut summary = TensorBytes::default();
     let mut entries = Vec::new();
     let mut name = Vec::new();
+    let mut tensor_types =
+        (collect_tensor_types && type_error.is_none()).then(|| Vec::with_capacity(count as usize));
+    if collect_tensor_types && count == 0 {
+        if type_error.is_none() {
+            *type_error = Some("GGUF has an empty or implausible tensor table".into());
+        }
+        tensor_types = None;
+    }
     for _ in 0..count {
         let length = reader.u64()?;
         if length > MAX_TENSOR_NAME_BYTES {
@@ -860,28 +1015,57 @@ fn read_tensor_bytes<R: Read + Seek>(
             .inner
             .read_exact(&mut name)
             .map_err(|error| format!("unreadable GGUF header: {error}"))?;
+        if let Some(budget) = type_budget.as_mut() {
+            remember_budget_error(type_error, (**budget).account_entries(1));
+            if length <= MAX_KEY_BYTES {
+                remember_budget_error(type_error, (**budget).account_payload(length));
+            }
+        }
+        if type_error.is_some() {
+            tensor_types = None;
+        }
+        let tensor_name = String::from_utf8_lossy(&name);
         let dims = reader.u32()?;
         if dims > MAX_TENSOR_DIMS {
             return Err("GGUF tensor declares too many dimensions".into());
         }
         let mut shape = [1u64; MAX_TENSOR_DIMS as usize];
+        let mut has_empty_dimension = false;
         for dim in shape.iter_mut().take(dims as usize) {
             *dim = reader.u64()?;
+            has_empty_dimension |= *dim == 0;
         }
-        let _type = reader.u32()?;
+        let tensor_type = reader.u32()?;
         let offset = reader.u64()?;
-        let name = String::from_utf8_lossy(&name);
-        if name == "output.weight" {
+        if tensor_types.is_some() && type_error.is_none() {
+            *type_error =
+                if tensor_name.is_empty() || tensor_name.len() as u64 > MAX_TENSOR_NAME_BYTES {
+                    Some("GGUF tensor name is empty or implausibly long".into())
+                } else if dims == 0 {
+                    Some("GGUF tensor declares invalid dimensions".into())
+                } else if has_empty_dimension {
+                    Some("GGUF tensor declares an empty dimension".into())
+                } else {
+                    None
+                };
+            if type_error.is_some() {
+                tensor_types = None;
+            }
+        }
+        if tensor_name == "output.weight" {
             summary.has_output_weight = true;
         }
-        if (name == "token_embd.weight" || name == "output.weight") && dims >= 2 {
+        if (tensor_name == "token_embd.weight" || tensor_name == "output.weight") && dims >= 2 {
             summary.vocab.get_or_insert(shape[1]);
         }
         entries.push((
             offset,
-            classify_tensor(&name),
-            name == "per_layer_token_embd.weight",
+            classify_tensor(&tensor_name),
+            tensor_name == "per_layer_token_embd.weight",
         ));
+        if let Some(types) = tensor_types.as_mut().filter(|_| type_error.is_none()) {
+            types.push((tensor_name.into_owned(), tensor_type));
+        }
     }
     let data_start = reader
         .consumed
@@ -889,16 +1073,23 @@ fn read_tensor_bytes<R: Read + Seek>(
         .checked_mul(alignment)
         .ok_or_else(|| "GGUF header declares an implausible data offset".to_string())?;
     let Some(data_len) = file_len.checked_sub(data_start) else {
-        return Ok(None);
+        return Ok(TensorScan {
+            bytes: None,
+            tensor_types: collect_tensor_types.then(|| {
+                Err("GGUF tensor table extends beyond the file or has invalid offsets".into())
+            }),
+        });
     };
     entries.sort_by_key(|(offset, _, _)| *offset);
+    let mut valid_offsets = true;
     for index in 0..entries.len() {
         let offset = entries[index].0;
         let end = entries
             .get(index + 1)
             .map_or(data_len, |(next, _, _)| *next);
         if offset >= data_len || end <= offset {
-            return Ok(None);
+            valid_offsets = false;
+            break;
         }
         let bytes = end - offset;
         if entries[index].2 {
@@ -922,16 +1113,32 @@ fn read_tensor_bytes<R: Read + Seek>(
             }
         }
     }
-    Ok(Some(summary))
+    let bytes = valid_offsets.then_some(summary);
+    if !valid_offsets {
+        tensor_types = None;
+    }
+    let tensor_types = collect_tensor_types.then(|| {
+        if !valid_offsets {
+            Err("GGUF tensor table extends beyond the file or has invalid offsets".into())
+        } else if let Some(error) = type_error.take() {
+            Err(error)
+        } else {
+            Ok(tensor_types.expect("tensor type collection remains available without an error"))
+        }
+    });
+    Ok(TensorScan {
+        bytes,
+        tensor_types,
+    })
 }
 
-/// Reads the hyperparameters and tensor sizes that decide a model's memory,
-/// through the same bounded reader as [`read_metadata`].
-pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
-    let file_len = std::fs::metadata(path)
-        .map_err(|error| format!("cannot open the model: {error}"))?
-        .len();
-    let (mut reader, tensors, keys) = open_header_with_tensors(path)?;
+struct ModelScan {
+    facts: ModelFacts,
+    tensor_types: Option<TensorTypeResult>,
+}
+
+fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, String> {
+    let (mut reader, tensors, keys, file_len) = open_header_with_tensors_and_len(path)?;
     if tensors > MAX_TENSORS {
         return Err("GGUF header declares an implausible tensor count".into());
     }
@@ -939,29 +1146,58 @@ pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
     let mut alignment = DEFAULT_ALIGNMENT;
     let mut values = HashMap::new();
     let mut recurrent_prefixes = HashSet::new();
+    let mut type_budget = collect_tensor_types.then(StringBudget::default);
+    let mut type_error = None;
     for _ in 0..keys {
-        let key = reader.string()?;
+        let key = match type_budget.as_mut() {
+            Some(budget) => reader.string_with_budget(Some(budget), &mut type_error)?,
+            None => reader.string()?,
+        };
         let kind = reader.u32()?;
         match key.as_str() {
             "general.architecture" if kind == 8 => facts.architecture = Some(reader.string()?),
             "general.alignment" => {
-                if let Some(value) = read_integer(&mut reader, kind)? {
+                let value = match type_budget.as_mut() {
+                    Some(budget) => {
+                        read_integer_with_budget(&mut reader, kind, Some(budget), &mut type_error)?
+                    }
+                    None => read_integer(&mut reader, kind)?,
+                };
+                if let Some(value) = value {
                     alignment = value;
                 }
             }
-            "split.count" => facts.split_count = read_integer(&mut reader, kind)?,
+            "split.count" => {
+                facts.split_count = match type_budget.as_mut() {
+                    Some(budget) => {
+                        read_integer_with_budget(&mut reader, kind, Some(budget), &mut type_error)?
+                    }
+                    None => read_integer(&mut reader, kind)?,
+                };
+            }
             _ => {
                 let (prefix, rest) = key.split_once('.').unwrap_or((key.as_str(), ""));
                 if RECURRENT_KEYS.iter().any(|marker| rest.starts_with(marker)) {
                     recurrent_prefixes.insert(prefix.to_owned());
                 }
                 if FACT_SUFFIXES.contains(&rest) {
-                    if let Some(value) = read_raw(&mut reader, kind)? {
-                        values.insert(key.clone(), value);
+                    let value = match type_budget.as_mut() {
+                        Some(budget) => {
+                            read_raw_with_budget(&mut reader, kind, Some(budget), &mut type_error)?
+                        }
+                        None => read_raw(&mut reader, kind)?,
+                    };
+                    if let Some(value) = value {
+                        values.insert(key, value);
                     }
                     continue;
                 }
-                skip_value(&mut reader, kind)?;
+                match type_budget.as_mut() {
+                    Some(budget) => {
+                        skip_value_with_budget(&mut reader, kind, Some(budget), &mut type_error)?
+                    }
+                    None => skip_value(&mut reader, kind)?,
+                }
             }
         }
     }
@@ -969,20 +1205,27 @@ pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
     if alignment == 0 || !alignment.is_power_of_two() {
         return Err("GGUF header declares an invalid alignment".into());
     }
-    facts.tensors = read_tensor_bytes(&mut reader, tensors, alignment, file_len)?;
+    let tensor_scan = read_tensor_bytes(
+        &mut reader,
+        tensors,
+        alignment,
+        file_len,
+        collect_tensor_types,
+        type_budget.as_mut(),
+        &mut type_error,
+    )?;
+    facts.tensors = tensor_scan.bytes;
 
-    let Some(architecture) = facts.architecture.clone() else {
-        return Ok(facts);
+    let Some(architecture) = facts.architecture.as_deref() else {
+        return Ok(ModelScan {
+            facts,
+            tensor_types: tensor_scan.tensor_types,
+        });
     };
-    facts.recurrent_state = recurrent_prefixes.contains(&architecture);
+    facts.recurrent_state = recurrent_prefixes.contains(architecture);
     let value = |suffix: &str| values.get(&format!("{architecture}.{suffix}"));
     let int = |suffix: &str| match value(suffix) {
         Some(RawValue::Int(value)) => Some(*value),
-        _ => None,
-    };
-    let per_layer = |suffix: &str| match value(suffix) {
-        Some(RawValue::Int(value)) => Some(PerLayer::Uniform(*value)),
-        Some(RawValue::Ints(values)) => Some(PerLayer::Layers(values.clone())),
         _ => None,
     };
     facts.block_count = int("block_count");
@@ -990,17 +1233,11 @@ pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
     facts.context_length = int("context_length");
     facts.embedding_length = int("embedding_length");
     facts.vocab_size = int("vocab_size");
-    facts.feed_forward_length = per_layer("feed_forward_length");
-    facts.expert_feed_forward_length = per_layer("expert_feed_forward_length");
     facts.expert_shared_feed_forward_length = int("expert_shared_feed_forward_length");
-    facts.expert_used_count = per_layer("expert_used_count");
-    facts.head_count = per_layer("attention.head_count");
-    facts.head_count_kv = per_layer("attention.head_count_kv");
     facts.key_length = int("attention.key_length");
     facts.value_length = int("attention.value_length");
     facts.sliding_window = int("attention.sliding_window");
     facts.kv_lora_rank = int("attention.kv_lora_rank");
-    facts.recurrent_layers = per_layer("attention.recurrent_layers");
     facts.full_attention_interval = int("full_attention_interval");
     facts.ssm_conv_kernel = int("ssm.conv_kernel");
     facts.ssm_inner_size = int("ssm.inner_size");
@@ -1008,12 +1245,57 @@ pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
     facts.ssm_group_count = int("ssm.group_count");
     facts.indexer_key_length = int("attention.indexer.key_length");
     facts.hyper_connections = int("hyper_connection.count");
-    if let Some(RawValue::Ints(layers)) = value("ple.layers") {
-        facts.ple_layers = layers.clone();
-    }
     facts.ple_conv_kernel = int("ple.conv_kernel");
     facts.ple_ngram_size = int("ple.ngram_size");
-    Ok(facts)
+    // Read scalar metadata first so owned layer arrays can move into the facts.
+    let mut per_layer = |suffix: &str| match values.remove(&format!("{architecture}.{suffix}")) {
+        Some(RawValue::Int(value)) => Some(PerLayer::Uniform(value)),
+        Some(RawValue::Ints(values)) => Some(PerLayer::Layers(values)),
+        _ => None,
+    };
+    facts.feed_forward_length = per_layer("feed_forward_length");
+    facts.expert_feed_forward_length = per_layer("expert_feed_forward_length");
+    facts.expert_used_count = per_layer("expert_used_count");
+    facts.head_count = per_layer("attention.head_count");
+    facts.head_count_kv = per_layer("attention.head_count_kv");
+    facts.recurrent_layers = per_layer("attention.recurrent_layers");
+    if let Some(RawValue::Ints(layers)) = values.remove(&format!("{architecture}.ple.layers")) {
+        facts.ple_layers = layers;
+    }
+    Ok(ModelScan {
+        facts,
+        tensor_types: tensor_scan.tensor_types,
+    })
+}
+
+/// Reads the hyperparameters and tensor sizes that decide a model's memory,
+/// through the same bounded reader as [`read_metadata`].
+pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
+    Ok(scan_model(path, false)?.facts)
+}
+
+/// Reads facts and tensor type evidence in one bounded header scan. The inner
+/// result is deliberately deferred so Metal can preserve its companion/config
+/// validation before returning a tensor-table error.
+pub(crate) fn read_model_facts_and_tensor_types(
+    path: &Path,
+) -> Result<(ModelFacts, TensorTypeResult), String> {
+    let scan = scan_model(path, true)?;
+    match scan.tensor_types {
+        Some(tensor_types) => Ok((scan.facts, tensor_types)),
+        None => unreachable!("type collection was requested for the GGUF scan"),
+    }
+}
+
+/// Bounded per-tensor type evidence for loaders with a narrower GGUF scope.
+/// `general.file_type` names a predominant type and cannot prove that every
+/// tensor is usable. This reads only tensor descriptors, never weight data.
+pub fn read_tensor_types(path: &Path) -> Result<Vec<(String, u32)>, String> {
+    let (facts, tensor_types) = read_model_facts_and_tensor_types(path)?;
+    if facts.tensors.is_none() {
+        return Err("GGUF tensor table extends beyond the file or has invalid offsets".into());
+    }
+    tensor_types
 }
 
 /// Synthetic GGUF files for tests: metadata plus a tensor table whose data
@@ -1023,6 +1305,7 @@ pub(crate) mod fixture {
     pub(crate) enum Value {
         U32(u32),
         Str(&'static str),
+        String(String),
         U32s(Vec<u32>),
     }
 
@@ -1046,6 +1329,10 @@ pub(crate) mod fixture {
                     out.extend_from_slice(&value.to_le_bytes());
                 }
                 Value::Str(value) => {
+                    out.extend_from_slice(&8u32.to_le_bytes());
+                    string(&mut out, value);
+                }
+                Value::String(value) => {
                     out.extend_from_slice(&8u32.to_le_bytes());
                     string(&mut out, value);
                 }
@@ -1082,8 +1369,12 @@ mod tests {
     use std::io::{Cursor, Write};
 
     fn string(value: &str) -> Vec<u8> {
+        raw_string(value.as_bytes())
+    }
+
+    fn raw_string(value: &[u8]) -> Vec<u8> {
         let mut out = (value.len() as u64).to_le_bytes().to_vec();
-        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(value);
         out
     }
 
@@ -1094,6 +1385,19 @@ mod tests {
         out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
         for (key, kind, value) in entries {
             out.extend_from_slice(&string(key));
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(value);
+        }
+        out
+    }
+
+    fn raw_header(entries: &[(Vec<u8>, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut out = b"GGUF".to_vec();
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+        for (key, kind, value) in entries {
+            out.extend_from_slice(&raw_string(key));
             out.extend_from_slice(&kind.to_le_bytes());
             out.extend_from_slice(value);
         }
@@ -1154,6 +1458,47 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(metadata.context_length, Some(8_192));
+    }
+
+    #[test]
+    fn projector_modalities_come_from_the_clip_encoder_flags() {
+        let both = in_temporary_file(
+            &header(&[
+                ("general.architecture", 8, string("clip")),
+                ("clip.has_vision_encoder", 7, vec![1]),
+                ("clip.has_audio_encoder", 7, vec![1]),
+            ]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(
+            both,
+            ProjectorModalities {
+                vision: Some(true),
+                audio: Some(true)
+            }
+        );
+        let vision = in_temporary_file(
+            &header(&[
+                ("clip.has_vision_encoder", 7, vec![1]),
+                ("clip.has_audio_encoder", 7, vec![0]),
+            ]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(
+            vision,
+            ProjectorModalities {
+                vision: Some(true),
+                audio: Some(false)
+            }
+        );
+        let unstated = in_temporary_file(
+            &header(&[("general.architecture", 8, string("clip"))]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(unstated, ProjectorModalities::default());
     }
 
     #[test]
@@ -1228,6 +1573,53 @@ mod tests {
         );
         assert_eq!(metadata.expert_count, Some(128));
         assert_eq!(metadata.expert_used_count, Some(8));
+    }
+
+    #[test]
+    fn metadata_strings_preserve_ascii_unicode_and_lossy_bytes() {
+        let metadata = read(&raw_header(&[
+            (b"general.architecture".to_vec(), 8, raw_string(b"llama")),
+            (
+                b"general.organization".to_vec(),
+                8,
+                raw_string("Synthetic \u{D55C}\u{AE00}".as_bytes()),
+            ),
+            (
+                b"general.author".to_vec(),
+                8,
+                raw_string(&[b'A', 0xff, b'B', 0xc3]),
+            ),
+            (vec![0xff, b'k', 0xfe], 4, 7u32.to_le_bytes().to_vec()),
+        ]))
+        .unwrap();
+        assert_eq!(metadata.architecture.as_deref(), Some("llama"));
+        assert_eq!(
+            metadata.organization.as_deref(),
+            Some("Synthetic \u{D55C}\u{AE00}")
+        );
+        assert_eq!(metadata.author.as_deref(), Some("A\u{FFFD}B\u{FFFD}"));
+    }
+
+    #[test]
+    fn metadata_string_budget_accepts_exact_payload_and_rejects_one_more() {
+        fn entries(extra_key_bytes: usize) -> Vec<(String, fixture::Value)> {
+            let mut entries = (0..1_953)
+                .map(|index| {
+                    (
+                        format!("synthetic-{index:04}-{}", "k".repeat(1_009)),
+                        fixture::Value::U32(index as u32),
+                    )
+                })
+                .collect::<Vec<_>>();
+            entries.push(("x".repeat(128 + extra_key_bytes), fixture::Value::U32(0)));
+            entries
+        }
+
+        assert!(read(&fixture::file(&entries(0), &[])).is_ok());
+        assert_eq!(
+            read(&fixture::file(&entries(1), &[])).unwrap_err(),
+            "GGUF header declares implausible string data"
+        );
     }
 
     #[test]
@@ -1484,6 +1876,170 @@ mod tests {
                 .unwrap()
                 .tensors,
             None
+        );
+    }
+
+    #[test]
+    fn per_tensor_type_evidence_rejects_truncation_and_malformed_dimensions() {
+        let mut bytes = fixture::file(&[], &[("blk.0.attn_q.weight".into(), vec![32, 32], 4096)]);
+        let path =
+            std::env::temp_dir().join(format!("aiolm-tensor-types-{}.gguf", uuid::Uuid::new_v4()));
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            read_tensor_types(&path).unwrap(),
+            vec![("blk.0.attn_q.weight".into(), 0)]
+        );
+        let name = b"blk.0.attn_q.weight";
+        let start = bytes
+            .windows(name.len())
+            .position(|window| window == name)
+            .unwrap();
+        bytes[start + name.len()..start + name.len() + 4].copy_from_slice(&5u32.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(read_tensor_types(&path).is_err());
+        std::fs::write(&path, &bytes[..40]).unwrap();
+        assert!(read_tensor_types(&path).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn combined_facts_and_tensor_types_match_the_public_scans() {
+        use fixture::Value;
+        let values = vec![
+            ("qwen3.context_length".to_string(), Value::U32(32_768)),
+            (
+                "qwen3.feed_forward_length".to_string(),
+                Value::U32s(vec![8, 16]),
+            ),
+            (
+                "qwen3.expert_feed_forward_length".to_string(),
+                Value::U32s(vec![4, 12]),
+            ),
+            (
+                "qwen3.expert_used_count".to_string(),
+                Value::U32s(vec![2, 3]),
+            ),
+            (
+                "qwen3.attention.head_count".to_string(),
+                Value::U32s(vec![8, 12]),
+            ),
+            (
+                "qwen3.attention.head_count_kv".to_string(),
+                Value::U32s(vec![2, 4]),
+            ),
+            (
+                "qwen3.attention.recurrent_layers".to_string(),
+                Value::U32s(vec![0, 1]),
+            ),
+            ("qwen3.ple.layers".to_string(), Value::U32s(vec![1, 0])),
+            // Array-valued scalar metadata is absent, and other architecture
+            // prefixes must not replace the selected architecture's facts.
+            (
+                "qwen3.attention.key_length".to_string(),
+                Value::U32s(vec![64, 128]),
+            ),
+            (
+                "foreign.attention.head_count_kv".to_string(),
+                Value::U32s(vec![99]),
+            ),
+            ("general.architecture".to_string(), Value::Str("qwen3")),
+        ];
+        let tensors = vec![
+            tensor("token_embd.weight", &[256, 1_000], 4_096),
+            tensor("blk.0.attn_q.weight", &[256, 256], 1_024),
+            tensor("output_norm.weight", &[256], 32),
+        ];
+        in_temporary_file(&fixture::file(&values, &tensors), |path| {
+            let expected_facts = read_model_facts(path).unwrap();
+            assert_eq!(expected_facts.context_length, Some(32_768));
+            assert_eq!(
+                expected_facts.feed_forward_length,
+                Some(PerLayer::Layers(vec![8, 16]))
+            );
+            assert_eq!(
+                expected_facts.expert_feed_forward_length,
+                Some(PerLayer::Layers(vec![4, 12]))
+            );
+            assert_eq!(
+                expected_facts.expert_used_count,
+                Some(PerLayer::Layers(vec![2, 3]))
+            );
+            assert_eq!(
+                expected_facts.head_count,
+                Some(PerLayer::Layers(vec![8, 12]))
+            );
+            assert_eq!(
+                expected_facts.head_count_kv,
+                Some(PerLayer::Layers(vec![2, 4]))
+            );
+            assert_eq!(
+                expected_facts.recurrent_layers,
+                Some(PerLayer::Layers(vec![0, 1]))
+            );
+            assert_eq!(expected_facts.ple_layers, vec![1, 0]);
+            assert_eq!(expected_facts.key_length, None);
+            let expected_types = read_tensor_types(path).unwrap();
+            let (facts, tensor_types) = read_model_facts_and_tensor_types(path).unwrap();
+            assert_eq!(facts, expected_facts);
+            assert_eq!(tensor_types.unwrap(), expected_types);
+        });
+    }
+
+    #[test]
+    fn tensor_type_names_keep_the_strict_string_budget() {
+        let tensors = (0..9_000)
+            .map(|index| {
+                (
+                    format!("tensor-{index:05}-{}", "x".repeat(230)),
+                    vec![1],
+                    32,
+                )
+            })
+            .collect::<Vec<_>>();
+        let error =
+            in_temporary_file(&fixture::file(&[], &tensors), read_tensor_types).unwrap_err();
+        assert_eq!(error, "GGUF header declares implausible string data");
+    }
+
+    #[test]
+    fn strict_type_budget_does_not_count_skipped_string_values_as_tensor_names() {
+        use fixture::Value;
+        let long_value = "a".repeat(1_024);
+        let values = (0..1_900)
+            .map(|_| {
+                (
+                    "general.architecture".to_string(),
+                    Value::String(long_value.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let tensors = (0..400)
+            .map(|index| {
+                (
+                    format!("tensor-{index:03}-{}", "x".repeat(230)),
+                    vec![1],
+                    32,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(in_temporary_file(&fixture::file(&values, &tensors), read_tensor_types).is_ok());
+    }
+
+    #[test]
+    fn invalid_offsets_precede_deferred_strict_tensor_errors() {
+        let mut bytes = fixture::file(&[], &[("blk.0.attn_q.weight".into(), vec![1, 1], 64)]);
+        let name = b"blk.0.attn_q.weight";
+        let start = bytes
+            .windows(name.len())
+            .position(|window| window == name)
+            .unwrap();
+        let dimensions = start + name.len();
+        bytes[dimensions..dimensions + 4].copy_from_slice(&0u32.to_le_bytes());
+        bytes[dimensions + 4 + 8..dimensions + 4 + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+        let error = in_temporary_file(&bytes, read_tensor_types).unwrap_err();
+        assert_eq!(
+            error,
+            "GGUF tensor table extends beyond the file or has invalid offsets"
         );
     }
 }

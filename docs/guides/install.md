@@ -75,10 +75,12 @@ sudo apt install ./AioLM_*_amd64.deb
 
 Launch AioLM from the application menu. The DEB installs the launcher and icon. Remove it with `sudo apt remove aio-lm`; data in `~/.aiolm` (or `AIOLM_HOME`) remains.
 
-For AppImage, put the file in a permanent folder, verify its checksum, then make it executable. On Ubuntu 24.04+, install `libfuse2t64` if FUSE 2 is missing:
+The managed Linux llama.cpp CPU runtime requires GNU OpenMP (`libgomp.so.1`). The DEB installs `libgomp1` as a dependency.
+
+For AppImage, put the file in a permanent folder, verify its checksum, then make it executable. Install `libgomp1` for the managed CPU runtime and, on Ubuntu 24.04+, `libfuse2t64` if FUSE 2 is missing:
 
 ```bash
-sudo apt install libfuse2t64
+sudo apt install libgomp1 libfuse2t64
 chmod +x ./AioLM_*.AppImage
 ./AioLM_*.AppImage
 ```

@@ -15,6 +15,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RPC_LINE: usize = 1024 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
 const MAX_APPROVAL_DESCRIPTION_BYTES: usize = 4096;
+const APPROVAL_TRUNCATION_SUFFIX: &str = "\n…";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 /// An unanswered approval must not hold its MCP server open indefinitely.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -369,7 +370,7 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
             let Some(line) = read_bounded_line(reader).await? else {
                 return Err("MCP server closed stdout before responding".to_string());
             };
-            let message: Value = serde_json::from_str(&line)
+            let mut message: Value = serde_json::from_str(&line)
                 .map_err(|error| format!("MCP returned invalid JSON: {error}"))?;
             if message.get("id").and_then(Value::as_u64) != Some(id) {
                 continue;
@@ -377,7 +378,10 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
             if let Some(error) = message.get("error") {
                 return Err(format!("MCP request failed: {error}"));
             }
-            return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+            return Ok(message
+                .as_object_mut()
+                .and_then(|object| object.remove("result"))
+                .unwrap_or(Value::Null));
         }
     })
     .await
@@ -443,14 +447,17 @@ pub async fn tools(id: &str) -> Result<Vec<McpTool>, String> {
     let mut session = spawn_session(&server).await?;
     let result = send_tools_request(&mut session).await;
     close_session(session).await;
-    let result = result?;
+    let mut result = result?;
     let tools = result
-        .get("tools")
-        .and_then(Value::as_array)
+        .as_object_mut()
+        .and_then(|object| object.remove("tools"))
+        .and_then(|tools| match tools {
+            Value::Array(tools) => Some(tools),
+            _ => None,
+        })
         .ok_or_else(|| "MCP tools/list returned no tools array".to_string())?;
     tools
-        .iter()
-        .cloned()
+        .into_iter()
         .map(|tool| {
             serde_json::from_value(tool)
                 .map_err(|error| format!("invalid MCP tool metadata: {error}"))
@@ -505,28 +512,47 @@ fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), Stri
     Ok(())
 }
 
-fn tool_approval_description(server: &McpServer, name: &str, arguments: &Value) -> String {
-    let serialized = serde_json::to_string(arguments).unwrap_or_else(|_| "<unserializable>".into());
-    let description = format!(
-        "Server: {} ({})\nTool: {}\nArguments: {}\n\nAllow this one-time MCP tool call?",
-        server.name, server.id, name, serialized
-    );
-    if description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES {
+fn push_bounded(output: &mut String, value: &str, limit: usize) -> bool {
+    let remaining = limit.saturating_sub(output.len());
+    let take = value.floor_char_boundary(value.len().min(remaining));
+    output.push_str(&value[..take]);
+    take == value.len()
+}
+
+fn tool_approval_description(server: &McpServer, name: &str, serialized: &str) -> String {
+    let parts = [
+        "Server: ",
+        server.name.as_str(),
+        " (",
+        server.id.as_str(),
+        ")\nTool: ",
+        name,
+        "\nArguments: ",
+        serialized,
+        "\n\nAllow this one-time MCP tool call?",
+    ];
+    let full_len: usize = parts.iter().map(|part| part.len()).sum();
+    if full_len <= MAX_APPROVAL_DESCRIPTION_BYTES {
+        let mut description = String::with_capacity(full_len);
+        for part in parts {
+            description.push_str(part);
+        }
         return description;
     }
-    let mut bounded = description;
-    let limit = MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub("\n…".len());
-    bounded.truncate(bounded.floor_char_boundary(limit));
-    bounded.push_str("\n…");
+
+    let limit = MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub(APPROVAL_TRUNCATION_SUFFIX.len());
+    let mut bounded = String::with_capacity(MAX_APPROVAL_DESCRIPTION_BYTES);
+    for part in parts {
+        if !push_bounded(&mut bounded, part, limit) {
+            break;
+        }
+    }
+    bounded.push_str(APPROVAL_TRUNCATION_SUFFIX);
     bounded
 }
 
-async fn confirm_tool_call(
-    server: &McpServer,
-    name: &str,
-    arguments: &Value,
-) -> Result<(), String> {
-    let description = tool_approval_description(server, name, arguments);
+async fn confirm_tool_call(server: &McpServer, name: &str, serialized: &str) -> Result<(), String> {
+    let description = tool_approval_description(server, name, serialized);
     // Windows: the prompt belongs to this future, so a Stop, the approval
     // timeout or shutdown closes the dialog and ends its thread.
     #[cfg(windows)]
@@ -575,9 +601,9 @@ pub async fn call_tool_with_id(
     if !arguments.is_object() {
         return Err("MCP tool arguments must be a JSON object".into());
     }
-    let argument_bytes = serde_json::to_vec(&arguments)
+    let serialized_arguments = serde_json::to_string(&arguments)
         .map_err(|error| format!("cannot encode MCP tool arguments: {error}"))?;
-    if argument_bytes.len() > MAX_TOOL_ARGUMENT_BYTES {
+    if serialized_arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
         return Err("MCP tool arguments exceed the 256 KiB safety limit".into());
     }
     let server = cancel
@@ -591,7 +617,7 @@ pub async fn call_tool_with_id(
         name,
         &arguments,
         cancel,
-        || confirm_tool_call(&server, name, &arguments),
+        || confirm_tool_call(&server, name, &serialized_arguments),
         APPROVAL_TIMEOUT,
     )
     .await
@@ -1139,6 +1165,421 @@ input.on('line', line => {
         crate::procutil::ProcessExitProbe::open(pid).expect("fixture server must be running")
     }
 
+    /// A synthetic MCP server that records every request line, answers
+    /// `initialize`, and answers `tools/list` with the exact bytes of
+    /// `reply.bin`. Ending the reply with end of output exits the server,
+    /// because Node never closes an inherited stdout pipe on its own.
+    #[cfg(any(windows, unix))]
+    fn scripted_reply_fixture(root: &std::path::Path, reply: &[u8], end_output: bool) -> McpServer {
+        std::fs::write(root.join("reply.bin"), reply).unwrap();
+        if end_output {
+            std::fs::write(root.join("end-output"), "").unwrap();
+        }
+        let script = r#"import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+record('server.pid', process.pid);
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', line => {
+    appendFileSync(join(root, 'requests.jsonl'), line + '\n');
+    const message = JSON.parse(line);
+    if (message.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\n');
+    else if (message.method === 'tools/list') process.stdout.write(readFileSync(join(root, 'reply.bin')), () => {
+        if (existsSync(join(root, 'end-output'))) process.exit(0);
+    });
+});
+"#;
+        node_fixture(root, script)
+    }
+
+    #[cfg(any(windows, unix))]
+    fn tools_list_reply(result: Value) -> Vec<u8> {
+        let mut line =
+            serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": 2, "result": result})).unwrap();
+        line.push(b'\n');
+        line
+    }
+
+    #[cfg(any(windows, unix))]
+    fn recorded_requests(root: &std::path::Path) -> Vec<Value> {
+        std::fs::read_to_string(root.join("requests.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[cfg(any(windows, unix))]
+    fn handshake_requests() -> [Value; 3] {
+        [
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "aiolm", "version": env!("CARGO_PKG_VERSION")}
+            }}),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+        ]
+    }
+
+    #[cfg(any(windows, unix))]
+    #[tokio::test]
+    async fn responses_keep_numeric_id_error_precedence_null_and_line_limits() {
+        let ok = |result: Value| Ok::<Value, String>(result);
+        let string_line = |padding: usize| {
+            let mut line = br#"{"id":2,"result":""#.to_vec();
+            line.resize(line.len() + padding, b'x');
+            line.extend_from_slice(b"\"}\n");
+            line
+        };
+        let framing = string_line(0).len();
+        let utf8_prefix = br#"{"id":2,"result":""#;
+        let mut invalid_utf8 = utf8_prefix.to_vec();
+        invalid_utf8.extend_from_slice(b"\xff\"}\n");
+        let cases: Vec<(&str, Vec<u8>, Result<Value, String>)> = vec![
+            (
+                "object",
+                tools_list_reply(json!({"tools": [], "nested": {"list": [1, "가"]}})),
+                ok(json!({"tools": [], "nested": {"list": [1, "가"]}})),
+            ),
+            (
+                "array",
+                tools_list_reply(json!([1, {"two": 2}])),
+                ok(json!([1, {"two": 2}])),
+            ),
+            (
+                "string",
+                tools_list_reply(json!("🦙 text")),
+                ok(json!("🦙 text")),
+            ),
+            (
+                "explicit null",
+                tools_list_reply(Value::Null),
+                ok(Value::Null),
+            ),
+            (
+                "missing result",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2}\n".to_vec(),
+                ok(Value::Null),
+            ),
+            (
+                "only the numeric matching id is accepted",
+                concat!(
+                    "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"result\":\"string id\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"result\":\"missing id\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":1,\"message\":\"other\"}}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"stale\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":2.0,\"result\":\"float id\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":-2,\"result\":\"negative id\"}\n",
+                    "[\"id\",2]\n",
+                    "\"text\"\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"accepted\":true}}\n",
+                )
+                .as_bytes()
+                .to_vec(),
+                ok(json!({"accepted": true})),
+            ),
+            (
+                "ignored ids then end of output",
+                concat!(
+                    "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"result\":\"string id\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":\"other\"}\n",
+                )
+                .as_bytes()
+                .to_vec(),
+                Err("MCP server closed stdout before responding".into()),
+            ),
+            (
+                "error wins over result",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32601,\"message\":\"no tools\"},\"result\":{\"tools\":[]}}\n".to_vec(),
+                Err(r#"MCP request failed: {"code":-32601,"message":"no tools"}"#.into()),
+            ),
+            (
+                "explicit null error wins over result",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":null,\"result\":\"ignored\"}\n".to_vec(),
+                Err("MCP request failed: null".into()),
+            ),
+            (
+                "CRLF",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"crlf\":true}}\r\n".to_vec(),
+                ok(json!({"crlf": true})),
+            ),
+            (
+                "final line without LF",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":\"no newline\"}".to_vec(),
+                ok(json!("no newline")),
+            ),
+            (
+                "exactly 1 MiB including LF",
+                string_line(MAX_RPC_LINE - framing),
+                ok(Value::String("x".repeat(MAX_RPC_LINE - framing))),
+            ),
+            (
+                "one byte over 1 MiB",
+                string_line(MAX_RPC_LINE - framing + 1),
+                Err("MCP response exceeded the 1 MiB safety limit".into()),
+            ),
+            (
+                "invalid UTF-8",
+                invalid_utf8,
+                Err(format!(
+                    "MCP response was not UTF-8: invalid utf-8 sequence of 1 bytes from index {}",
+                    utf8_prefix.len()
+                )),
+            ),
+            (
+                "invalid JSON",
+                b"x\n".to_vec(),
+                Err("MCP returned invalid JSON: expected value at line 1 column 1".into()),
+            ),
+        ];
+        for (case, reply, expected) in cases {
+            let fixture = LifecycleFixture::new();
+            let end_output = matches!(
+                case,
+                "ignored ids then end of output" | "final line without LF"
+            );
+            let candidate = scripted_reply_fixture(&fixture.0, &reply, end_output);
+            let mut session = spawn_session(&candidate).await.unwrap();
+            #[cfg(windows)]
+            let exit = open_server_probe(&fixture.0);
+            let result = send_tools_request(&mut session).await;
+            close_session(session).await;
+            assert_eq!(result, expected, "{case}");
+            assert_eq!(
+                recorded_requests(&fixture.0),
+                handshake_requests(),
+                "{case}"
+            );
+            #[cfg(windows)]
+            assert!(exit.exited(), "{case}: the MCP server must be reclaimed");
+        }
+
+        // An approved call returns the server's own result, not its input.
+        let fixture = LifecycleFixture::new();
+        let candidate = node_fixture(
+            &fixture.0,
+            r#"import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+record('server.pid', process.pid);
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', line => {
+    appendFileSync(join(root, 'requests.jsonl'), line + '\n');
+    const message = JSON.parse(line);
+    let result;
+    if (message.method === 'initialize') result = {};
+    else if (message.method === 'tools/list') result = { tools: [{ name: 'shout', inputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } }] };
+    else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: message.params.arguments.text.toUpperCase() }], structuredContent: { characters: [...message.params.arguments.text].length } };
+    if (result !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\n');
+});
+"#,
+        );
+        let arguments = json!({"text": "llama 가🦙"});
+        #[cfg(windows)]
+        let exit = std::cell::RefCell::new(None);
+        let result = run_tool_call(
+            &candidate,
+            "shout",
+            &arguments,
+            CallCancel(None),
+            || {
+                #[cfg(windows)]
+                {
+                    *exit.borrow_mut() = Some(open_server_probe(&fixture.0));
+                }
+                async { Ok(()) }
+            },
+            Duration::from_secs(60),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Ok(json!({
+                "content": [{"type": "text", "text": "LLAMA 가🦙"}],
+                "structuredContent": {"characters": 8}
+            }))
+        );
+        let [initialize, initialized, tools_list] = handshake_requests();
+        assert_eq!(
+            recorded_requests(&fixture.0),
+            [
+                initialize,
+                initialized,
+                tools_list,
+                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                    "name": "shout",
+                    "arguments": {"text": "llama 가🦙"}
+                }}),
+            ]
+        );
+        #[cfg(windows)]
+        assert!(exit
+            .into_inner()
+            .expect("the call must reach approval")
+            .exited());
+    }
+
+    const PUBLIC_TOOLS_CHILD: &str = "AIOLM_MCP_PUBLIC_TOOLS_CHILD";
+
+    /// `tools` reads the process-wide `AIOLM_HOME`, so the public calls run in
+    /// a child test process with its own data folder; this process and the
+    /// user's configuration are never touched.
+    #[cfg(any(windows, unix))]
+    #[tokio::test]
+    async fn public_tools_keep_order_metadata_and_errors_in_an_isolated_home() {
+        if std::env::var_os(PUBLIC_TOOLS_CHILD).is_some() {
+            public_tools_in_isolated_home().await;
+            return;
+        }
+        let parent_home = std::env::var_os("AIOLM_HOME");
+        let home = LifecycleFixture::new();
+        let output = crate::procutil::tokio_command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "mcp::tests::public_tools_keep_order_metadata_and_errors_in_an_isolated_home",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("AIOLM_HOME", &home.0)
+            .env(PUBLIC_TOOLS_CHILD, "1")
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            std::env::var_os("AIOLM_HOME"),
+            parent_home,
+            "the parent environment must remain unchanged"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "isolated tools() child failed ({:?}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
+        assert!(
+            stdout.contains("MCP_PUBLIC_TOOLS_CHILD_DONE")
+                && stdout.contains("test result: ok. 1 passed"),
+            "the exact child filter must run the whole fixture:\n{stdout}"
+        );
+    }
+
+    #[cfg(any(windows, unix))]
+    async fn public_tools_in_isolated_home() {
+        let home = crate::home::resolve_aiolm_home().unwrap();
+        assert!(home
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("aiolm-mcp-lifecycle-")));
+        assert!(list().await.unwrap().is_empty());
+        assert_eq!(
+            tools("absent").await.unwrap_err(),
+            "MCP server was not found"
+        );
+        let schema = json!({
+            "type": "object",
+            "properties": {"q": {"type": "string", "enum": ["가", "🦙"]}},
+            "required": ["q"]
+        });
+        let nested = json!({
+            "type": "object",
+            "properties": {"deep": {"type": "array", "items": {"type": "integer"}}}
+        });
+        let no_tools_array =
+            || Err::<Value, String>("MCP tools/list returned no tools array".into());
+        let cases: Vec<(&str, Vec<u8>, Result<Value, String>)> = vec![
+            (
+                "ordered metadata",
+                tools_list_reply(json!({
+                    "tools": [
+                        {"name": "alpha", "description": "", "inputSchema": schema},
+                        {"name": "검색", "description": "🦙 설명", "inputSchema": nested},
+                        {"name": "bare", "annotations": {"readOnlyHint": true}}
+                    ],
+                    "nextCursor": "ignored"
+                })),
+                Ok(json!([
+                    {"name": "alpha", "description": "", "inputSchema": schema},
+                    {"name": "검색", "description": "🦙 설명", "inputSchema": nested},
+                    {"name": "bare", "description": null, "inputSchema": null}
+                ])),
+            ),
+            (
+                "empty",
+                tools_list_reply(json!({"tools": []})),
+                Ok(json!([])),
+            ),
+            (
+                "missing tools",
+                tools_list_reply(json!({})),
+                no_tools_array(),
+            ),
+            (
+                "object tools",
+                tools_list_reply(json!({"tools": {"name": "x"}})),
+                no_tools_array(),
+            ),
+            (
+                "array result",
+                tools_list_reply(json!([{"name": "x"}])),
+                no_tools_array(),
+            ),
+            (
+                "null result",
+                tools_list_reply(Value::Null),
+                no_tools_array(),
+            ),
+            (
+                "missing result",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2}\n".to_vec(),
+                no_tools_array(),
+            ),
+            (
+                "wrong name type",
+                tools_list_reply(json!({"tools": [{"name": "ok"}, {"name": 5}]})),
+                Err(
+                    "invalid MCP tool metadata: invalid type: integer `5`, expected a string"
+                        .into(),
+                ),
+            ),
+            (
+                "missing name",
+                tools_list_reply(json!({"tools": [{"description": "x"}]})),
+                Err("invalid MCP tool metadata: missing field `name`".into()),
+            ),
+            (
+                "server error",
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32601,\"message\":\"no tools\"},\"result\":{\"tools\":[]}}\n".to_vec(),
+                Err(r#"MCP request failed: {"code":-32601,"message":"no tools"}"#.into()),
+            ),
+        ];
+        for (case, reply, expected) in cases {
+            let fixture = LifecycleFixture::new();
+            let server = scripted_reply_fixture(&fixture.0, &reply, false);
+            std::fs::write(home.join(MCP_FILE), serde_json::to_vec(&[server]).unwrap()).unwrap();
+            let result = tools("test-server")
+                .await
+                .map(|tools| serde_json::to_value(tools).unwrap());
+            assert_eq!(result, expected, "{case}");
+            assert_eq!(
+                recorded_requests(&fixture.0),
+                handshake_requests(),
+                "{case}"
+            );
+            #[cfg(windows)]
+            {
+                let pid = std::fs::read_to_string(fixture.0.join("server.pid"))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if let Some(exit) = crate::procutil::ProcessExitProbe::open(pid) {
+                    assert!(exit.exited(), "{case}: tools() must reclaim the MCP server");
+                }
+            }
+        }
+        std::fs::remove_file(home.join(MCP_FILE)).unwrap();
+        println!("MCP_PUBLIC_TOOLS_CHILD_DONE");
+    }
+
     #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread")]
     async fn stop_closes_the_native_approval_dialog_and_never_sends_tools_call() {
@@ -1508,8 +1949,9 @@ input.on('line', line => {
 
     #[test]
     fn approval_description_is_bounded_and_binds_server_and_tool_identity() {
-        let description =
-            tool_approval_description(&server("npx"), "search", &json!({"query": "llama"}));
+        let arguments = json!({"query": "llama"});
+        let serialized = serde_json::to_string(&arguments).unwrap();
+        let description = tool_approval_description(&server("npx"), "search", &serialized);
         assert!(description.contains("Test server"));
         assert!(description.contains("search"));
         assert!(description.contains("llama"));
@@ -1517,7 +1959,7 @@ input.on('line', line => {
     }
 
     #[test]
-    fn approval_description_truncates_multibyte_arguments_on_utf8_boundaries() {
+    fn approval_description_matches_full_text_truncation_at_utf8_boundaries() {
         let mut candidate = server("npx");
         candidate.name = "한글 서버".into();
         for character in ["é", "가", "🦙"] {
@@ -1527,13 +1969,26 @@ input.on('line', line => {
                     "x".repeat(padding),
                     character.repeat(MAX_APPROVAL_DESCRIPTION_BYTES)
                 );
-                let description =
-                    tool_approval_description(&candidate, "문서검색", &json!({"query": query}));
-                assert!(
-                    description.starts_with("Server: 한글 서버 (test-server)\nTool: 문서검색\n")
+                let arguments = json!({"query": query});
+                let serialized = serde_json::to_string(&arguments).unwrap();
+                let full = format!(
+                    "Server: {} ({})\nTool: {}\nArguments: {}\n\nAllow this one-time MCP tool call?",
+                    candidate.name, candidate.id, "문서검색", serialized
                 );
-                assert!(description.ends_with("\n…"));
-                assert!(description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES);
+                let expected = if full.len() <= MAX_APPROVAL_DESCRIPTION_BYTES {
+                    full
+                } else {
+                    let mut bounded = full;
+                    let limit = MAX_APPROVAL_DESCRIPTION_BYTES
+                        .saturating_sub(APPROVAL_TRUNCATION_SUFFIX.len());
+                    bounded.truncate(bounded.floor_char_boundary(limit));
+                    bounded.push_str(APPROVAL_TRUNCATION_SUFFIX);
+                    bounded
+                };
+                assert_eq!(
+                    tool_approval_description(&candidate, "문서검색", &serialized),
+                    expected
+                );
             }
         }
     }

@@ -63,6 +63,75 @@ describe("shared vector ranking", () => {
     expect(result.retrievalSources).toEqual(["notes.md @ 6 (1.00)"]);
     expect(result.retrievalCitations).toEqual([{ name: "notes.md", path: "/documents/notes.md", offset: 6, score: 1 }]);
     expect(coordinateRead).toHaveBeenCalledTimes(onePassReads);
+
+
+    const forwardContext = "\n\nRelevant vector-retrieved context:\n[Attached document: notes.md @ 0]\nfirst \n[/Attached document]\n[Attached document: notes.md @ 6]\nsecond\n[/Attached document]";
+    const reverseContext = "\n\nRelevant vector-retrieved context:\n[Attached document: notes.md @ 6]\nsecond\n[/Attached document]\n[Attached document: notes.md @ 0]\nfirst \n[/Attached document]";
+    const mixedVectors = [[1], [0, 1], [1, 2]];
+    const mixedBefore = structuredClone(mixedVectors);
+    expect(buildVectorDocumentRetrieval(chunks, mixedVectors, 2)).toEqual({
+      documentContext: forwardContext,
+      retrievalSources: ["notes.md @ 0 (1.00)", "notes.md @ 6 (0.89)"],
+      retrievalCitations: [
+        { name: "notes.md", path: "/documents/notes.md", offset: 0, score: 1 },
+        { name: "notes.md", path: "/documents/notes.md", offset: 6, score: 0.8944 },
+      ],
+    });
+    expect(mixedVectors).toEqual(mixedBefore);
+    mixedVectors[2][0] = 0;
+    mixedVectors[2][1] = 1;
+    expect(buildVectorDocumentRetrieval(chunks, mixedVectors, 2)).toEqual({
+      documentContext: reverseContext,
+      retrievalSources: ["notes.md @ 6 (1.00)", "notes.md @ 0 (0.00)"],
+      retrievalCitations: [
+        { name: "notes.md", path: "/documents/notes.md", offset: 6, score: 1 },
+        { name: "notes.md", path: "/documents/notes.md", offset: 0, score: 0 },
+      ],
+    });
+    for (const edgeVectors of [
+      [[1, 0], [0, 1], [0, 0]],
+      [[Number.MAX_VALUE, 0], [0, Number.MAX_VALUE], [1, 1]],
+      [[1, 0], [0, 1], [Number.NaN, 1]],
+    ]) {
+      expect(buildVectorDocumentRetrieval(chunks, edgeVectors, 2)).toEqual({
+        documentContext: forwardContext,
+        retrievalSources: ["notes.md @ 0 (0.00)", "notes.md @ 6 (0.00)"],
+        retrievalCitations: [
+          { name: "notes.md", path: "/documents/notes.md", offset: 0, score: 0 },
+          { name: "notes.md", path: "/documents/notes.md", offset: 6, score: 0 },
+        ],
+      });
+    }
+    expect(buildVectorDocumentRetrieval(chunks, [[Infinity, 0], [0, 1], [1, 1]], 2)).toEqual({
+      documentContext: "\n\nRelevant vector-retrieved context:\n[Attached document: notes.md @ 6]\nsecond\n[/Attached document]",
+      retrievalSources: ["notes.md @ 6 (0.71)"],
+      retrievalCitations: [{ name: "notes.md", path: "/documents/notes.md", offset: 6, score: 0.7071 }],
+    });
+
+    const costChunks = splitDocumentChunks([
+      { name: "cost.md", path: "/documents/cost.md", text: "x".repeat(MAX_SEARCHABLE_DOCUMENT_CHUNKS) },
+    ], 1);
+    const costVectors = costChunks.map(() => [1, 0, 0, 0]);
+    const costBefore = structuredClone(costVectors);
+    for (const vector of costVectors) Object.freeze(vector);
+    const queryValues = [1, 0, 0, 0];
+    Object.freeze(queryValues);
+    let queryReads = 0;
+    const query = new Proxy(queryValues, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) queryReads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(buildVectorDocumentRetrieval(costChunks, [...costVectors, query], costChunks.length, 1, 1)).toEqual({
+      documentContext: "\n\nRelevant vector-retrieved context:\n[Attached document: cost.md @ 0]\nx\n[/Attached document]",
+      retrievalSources: ["cost.md @ 0 (1.00)"],
+      retrievalCitations: [{ name: "cost.md", path: "/documents/cost.md", offset: 0, score: 1 }],
+    });
+    expect(costVectors).toEqual(costBefore);
+    expect(queryValues).toEqual([1, 0, 0, 0]);
+    // Each chunk reads the query for its dot product; its shared norm is read once.
+    expect(queryReads).toBe((MAX_SEARCHABLE_DOCUMENT_CHUNKS + 1) * queryValues.length);
   });
 
   it("preserves empty results when query vectors are unavailable", () => {
@@ -99,7 +168,7 @@ describe("document retrieval", () => {
     vi.mocked(embedText).mockResolvedValue([[0, 1]]);
 
     const result = await retrieveDocumentContext([document], "question", "model", "test-key", "http://127.0.0.1:8080");
-    expect(embedText).toHaveBeenCalledWith("http://127.0.0.1:8080", "test-key", "model", ["question"]);
+    expect(embedText).toHaveBeenCalledWith("http://127.0.0.1:8080", "test-key", "model", ["question"], undefined);
     expect(saveDocumentVectors).not.toHaveBeenCalled();
     expect(lexicalContext).not.toHaveBeenCalled();
     expect(result.retrievalSources[0]).toBe("notes.md @ 1800 (1.00)");
@@ -117,5 +186,33 @@ describe("document retrieval", () => {
       retrievalCitations: [{ name: "notes.md", path: "/documents/notes.md", offset: 0 }],
       documentChunksTruncated: false,
     });
+  });
+
+  it.each([false, true])("cancels an in-flight embedding request with cached vectors=%s without lexical fallback", async cached => {
+    const document = { name: 'notes.md', path: '/documents/notes.md', text: 'Document content' };
+    const controller = new AbortController();
+    if (cached) vi.mocked(loadDocumentVectors).mockResolvedValue([[1, 0]]);
+    vi.mocked(embedText).mockImplementation((_url, _key, _model, _input, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')), { once: true });
+    }));
+    const pending = retrieveDocumentContext([document], 'question', 'model', 'test-key', 'http://127.0.0.1:8080', 'synthetic', controller.signal);
+    await Promise.resolve();
+    expect(embedText).toHaveBeenCalledOnce();
+    expect(vi.mocked(embedText).mock.calls[0][4]).toBe(controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(saveDocumentVectors).not.toHaveBeenCalled();
+  });
+
+  it("does not start embeddings when document cache loading outlives cancellation", async () => {
+    const document = { name: 'notes.md', path: '/documents/notes.md', text: 'Document content' };
+    const controller = new AbortController();
+    let loaded!: (value: null) => void;
+    vi.mocked(loadDocumentVectors).mockImplementation(() => new Promise(resolve => { loaded = resolve; }));
+    const pending = retrieveDocumentContext([document], 'question', 'model', 'test-key', 'http://127.0.0.1:8080', 'synthetic', controller.signal);
+    controller.abort();
+    loaded(null);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(embedText).not.toHaveBeenCalled();
   });
 });

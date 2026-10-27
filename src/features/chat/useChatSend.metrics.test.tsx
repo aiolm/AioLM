@@ -64,6 +64,40 @@ function controlledStream() {
 }
 
 describe("request-scoped response metrics", () => {
+  it("preserves the output limit reason across trailing usage frames and resets it for the next answer", async () => {
+    const stream = controlledStream();
+    const { result } = setup({ input: "Question" });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ content: "Partial answer", finish_reason: "length" });
+    stream.emit({ finish_reason: null, usage: { completion_tokens: 128 } });
+    await stream.finish("Partial answer");
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Partial answer", finishReason: "length", metrics: { tg: { tokens: 128 } } });
+    expect(result.current.error).toBeNull();
+    expect(result.current.pendingToolCall).toBeNull();
+    const next = controlledStream();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledTimes(2));
+    next.emit({ content: "Complete answer", finish_reason: "stop" });
+    await next.finish("Complete answer");
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Complete answer", finishReason: "stop" });
+    expect(sessionHasActivity("metrics-session")).toBe(false);
+  });
+
+  it("does not request approval for a tool response cut off by the output limit", async () => {
+    const stream = controlledStream();
+    const { result } = setup({ mcpEntryByFunctionName: new Map([['lookup', {
+      serverId: 'synthetic', serverName: 'Synthetic', tool: { name: 'lookup', input_schema: {} },
+    }]]) });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ content: "Partial tool request", tool_calls: [{ index: 0, id: 'call-limit', name: 'lookup', arguments: '{}' }], finish_reason: "length" });
+    await stream.finish("Partial tool request");
+    expect(result.current.pendingToolCall).toBeNull();
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Partial tool request", finishReason: "length" });
+    expect(sessionHasActivity("metrics-session")).toBe(false);
+  });
+
   it("retains the request model when the selected model changes during generation", async () => {
     const stream = controlledStream();
     const options = { model: "Qwen-example.gguf" };
@@ -88,6 +122,26 @@ describe("request-scoped response metrics", () => {
     vi.mocked(api.serverActivity).mockResolvedValue(undefined);
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { reasoning: "Reasoning before the final answer" },
+    { tool_calls: [{ index: 0, id: "call-progress", name: "lookup", arguments: "{" }] },
+  ])("leaves first-token waiting when a reasoning or tool token arrives", async delta => {
+    const stream = controlledStream();
+    const { result } = setup();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ usage: { prompt_tokens: 12 } });
+    expect(result.current.phase).toBe("thinking");
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
+    now = 1200;
+    stream.emit(delta);
+    expect(result.current.phase).toBe("streaming");
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBe(200);
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("idle"));
+    expect(result.current.pendingToolCall).toBeNull();
+  });
 
   it("separates preparation and TTFT from server PP/TG durations and updates only the draft", async () => {
     vi.mocked(api.serverActivity).mockImplementationOnce(async () => { now = 5000; });
@@ -133,6 +187,44 @@ describe("request-scoped response metrics", () => {
     expect(result.current.msgs.at(-1)).toMatchObject({ content: "Buffered answer", metrics: { tg: { tokens: 4 } } });
   });
 
+  it("retains vLLM's final telemetry frame after the finish reason and persists decode metrics", async () => {
+    const stream = controlledStream();
+    const { result } = setup();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    now = 1300;
+    stream.emit({ content: "Answer" });
+    now = 1400;
+    stream.emit({ finish_reason: "stop" });
+    stream.emit({
+      usage: { prompt_tokens: 100, completion_tokens: 6, prompt_tokens_details: { cached_tokens: 20 } },
+      metrics: { generation_time_ms: 100, time_to_first_token_ms: 250, tokens_per_second: 17.14 },
+    });
+    await stream.finish("Answer");
+    expect(result.current.msgs.at(-1)?.metrics).toEqual({
+      pp: { tokens: 80 }, tg: { tokens: 6, durationMs: 100, tokensPerSecond: 50 },
+      cachedTokens: 20, firstTokenMs: 300, preparationMs: 0, requestMs: 400,
+    });
+  });
+
+  it("accepts backend telemetry when text rendering is buffered", async () => {
+    const preferences = defaultPreferences();
+    preferences.chat.streamResponses = false;
+    const stream = controlledStream();
+    const { result } = setup({ preferences });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    now = 1200;
+    stream.emit({ content: "Buffered answer", usage: { completion_tokens: 3 } });
+    now = 1300;
+    stream.emit({ metrics: { generation_time_ms: 100 } });
+    expect(result.current.streamingDraft).toMatchObject({
+      content: "", metrics: { tg: { tokens: 3, durationMs: 100, tokensPerSecond: 20 } },
+    });
+    await stream.finish("Buffered answer");
+    expect(result.current.msgs.at(-1)?.metrics?.tg).toEqual({ tokens: 3, durationMs: 100, tokensPerSecond: 20 });
+  });
+
   it.each(["abort", "error"] as const)("saves partial %s metrics and starts a retry without stale statistics", async (ending) => {
     const stream = controlledStream();
     const { result } = setup();
@@ -161,16 +253,22 @@ describe("request-scoped response metrics", () => {
     expect(result.current.msgs.at(-1)?.failed).toBeUndefined();
   });
 
-  it("removes an empty cancelled response even if statistics have arrived", async () => {
+  it("keeps an issued response cancelled before any output for Retry, with only the statistics the engine reported", async () => {
     const stream = controlledStream();
     const { result } = setup();
     act(() => { void result.current.send(); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
     stream.emit({ timings: { prompt_n: 100, prompt_ms: 300 } });
     await act(async () => result.current.stop());
-    expect(result.current.msgs).toEqual([expect.objectContaining({ role: "user" })]);
+    expect(result.current.msgs).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant", content: "", reasoning: "", interrupted: true }),
+    ]);
+    const metrics = result.current.msgs[1].metrics;
+    expect(metrics?.pp).toMatchObject({ tokens: 100, durationMs: 300 });
+    expect(metrics?.tg.tokens).toBeUndefined();
     expect(result.current.streamingDraft).toBeNull();
-    expect(result.current.failedRef.current).toBeNull();
+    expect(result.current.failedRef.current).not.toBeNull();
   });
 
   it("cancels during preparation without starting metrics or releasing the session lock early", async () => {

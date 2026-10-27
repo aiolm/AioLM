@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import { emptyGpuPlacement } from '../runtime/sessionUtils';
-import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey } from './settingsProfiles';
+import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey } from './settingsProfiles';
 import { migrateProfileLibrary } from './profileMigration';
 import { applyDefaultProfile } from './profileAssignments';
 
@@ -14,6 +14,16 @@ const server = { id: 'server-a', name: 'Shared name', backend: 'cpu', build: 'b1
 const generation = { id: 'generation-a', name: 'Shared name', temperature: 0.3, system_prompt: '  Saved prompt.\n', chat_options: { stop: ['stale'], seed: 5 }, stop_strings: [' end ', '\n\n'] };
 
 describe('profile library migration', () => {
+  it('preserves provider-scoped remembered execution without creating a model whose path contains a provider key', () => {
+    const storage = storageWith({ 'aiolm-model-execution': { version: 1, models: {
+      'provider:vllm:model:/synthetic/models/encoder': { provider_options: { vllm: { runner: 'pooling' } } },
+    } } });
+    const library = migrateProfileLibrary({ ...testConfig, active_provider: 'vllm', active_model: '/synthetic/models/chat' }, storage);
+    expect(library.applied['provider:vllm:model:/synthetic/models/encoder']).toMatchObject({ provider: 'vllm', model: '/synthetic/models/encoder', settings: { provider_options: { vllm: { runner: 'pooling' } } } });
+    expect(Object.values(library.applied).some(application => application.model.startsWith('provider:'))).toBe(false);
+    expect(library.applied['model:/synthetic/models/chat']).toBeUndefined();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
   it.each([2, 3, 4])('preserves every version %s profile without cross-product expansion or renaming', version => {
     const loading = Array.from({ length: 24 }, (_, index) => ({ id: `load-${index}`, name: `Loading ${index}`, backend: 'cpu', build: 'b100', active_model: `missing-${index}.gguf`, mmproj: '', ctx_size: 4096, ngl: 0, threads: 4, flash_attn: 'auto' }));
     const storage = storageWith({
@@ -25,14 +35,14 @@ describe('profile library migration', () => {
     const first = migrateProfileLibrary({ ...testConfig, active_model: 'models/a.gguf' }, storage);
     const again = migrateProfileLibrary({ ...testConfig, active_model: 'models/a.gguf' }, storage);
     expect(first).toEqual(again);
-    expect(first.entries.filter(entry => entry.legacy)).toHaveLength(28);
-    expect(first.entries.slice(0, 4).map(entry => entry.name)).toEqual(['Shared name', 'Shared name', 'Shared name', 'Shared name']);
-    expect(first.entries[1].settings.ctx_size).toBe(65536);
-    expect(first.entries[3]).toMatchObject({ model_key: profileTargetKey('missing.gguf'), scope: 'model', settings: { temperature: 1.2 } });
-    expect(first.entries[27]).toMatchObject({ model_key: profileTargetKey('missing-23.gguf'), settings: { threads: 4 } });
-    expect(first.entries[0]).toMatchObject({ scope: 'global', legacy: true });
-    expect(first.entries[0].settings).not.toHaveProperty('temperature');
-    expect(first.entries[2].settings).not.toHaveProperty('ctx_size');
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').filter(entry => entry.id.startsWith('legacy-'))).toHaveLength(28);
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').slice(0, 4).map(entry => entry.name)).toEqual(['Shared name', 'Shared name', 'Shared name', 'Shared name']);
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].settings.ctx_size).toBe(65536);
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[3]).toMatchObject({ scope: 'global', settings: { temperature: 1.2 } });
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[27]).toMatchObject({ scope: 'global', settings: { threads: 4 } });
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ scope: 'global', legacy: true });
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('temperature');
+    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[2].settings).not.toHaveProperty('ctx_size');
     expect(first.revision).toBe(0);
     expect(first.legacy_imported).toBe(true);
     expect(storage.setItem).not.toHaveBeenCalled();
@@ -92,7 +102,8 @@ describe('profile library migration', () => {
   it('retains incomplete legacy runtime metadata without applying it to the current runtime', () => {
     const storage = storageWith({ [key]: { version: 4, server: [{ id: 'old', name: 'Old', backend: 'vulkan', ctx_size: 8192 }], model: [] } });
     const [profile] = migrateProfileLibrary(testConfig, storage).entries;
-    expect(profile.settings.active_backend).toBe('vulkan');
+    expect(profile.legacy_runtime?.active_backend).toBe('vulkan');
+    expect(profile.settings).not.toHaveProperty('active_backend');
     expect(profile.coverage).not.toContain('active_backend');
     expect(applySettingsProfile(testConfig, profile)).toMatchObject({ active_backend: testConfig.active_backend, active_build: testConfig.active_build, ctx_size: 8192 });
     expect(profile.settings).not.toHaveProperty('temperature');
@@ -104,8 +115,8 @@ describe('profile library migration', () => {
       'aiolm-model-execution': { version: 1, models: { 'other.gguf': { server_args: ['--threads', '6'] } } },
     });
     const library = migrateProfileLibrary(testConfig, storage);
-    expect(library.entries[0].settings).toMatchObject({ threads: 4, ctx_size: 8192, spec_draft_model: 'draft.gguf', reasoning_preserve: 'on', server_args: ['--seed', '5'] });
-    expect(library.entries[0].coverage).toContain('ctx_size');
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).toMatchObject({ threads: 4, ctx_size: 8192, spec_draft_model: 'draft.gguf', reasoning_preserve: 'on', server_args: ['--seed', '5'] });
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).toContain('ctx_size');
     expect(library.applied[profileTargetKey('other.gguf')].settings).toMatchObject({ threads: 6, server_args: [] });
     expect(storage.original[key]).toContain('synthetic-secret');
   });
@@ -117,9 +128,9 @@ describe('profile library migration', () => {
     const storage = storageWith({ [key]: { version: 4, server: [server], model: [generation] } });
     const migrated = migrateProfileLibrary({ ...testConfig, settings_profiles: saved }, storage);
     expect(migrated.revision).toBe(8);
-    expect(migrated.entries).toHaveLength(3);
+    expect(migrated.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(3);
     expect(migrated.applied[profileTargetKey(testConfig.active_model)]).toEqual(application);
-    expect(saved.entries).toHaveLength(1);
+    expect(saved.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
     expect(migrateProfileLibrary({ ...testConfig, settings_profiles: { ...migrated, legacy_imported: false } }, storage)).toEqual(migrated);
     storage.getItem.mockImplementation(() => { throw new Error('Storage denied'); });
     expect(migrateProfileLibrary({ ...testConfig, settings_profiles: migrated }, storage)).toEqual(migrated);
@@ -127,10 +138,10 @@ describe('profile library migration', () => {
 
   it('initializes a clean installation with only Default and preserves existing duplicate source IDs', () => {
     const blank = { ...testConfig, active_model: '' };
-    expect(migrateProfileLibrary(blank, storageWith())).toEqual({ ...emptyProfileLibrary(), entries: [defaultSettingsProfile()], default_profile_id: defaultSettingsProfile().id,
+    expect(migrateProfileLibrary(blank, storageWith())).toEqual({ ...ensureProfileLibrary(emptyProfileLibrary()),
       applied: { 'model:': applyDefaultProfile(blank, emptyProfileLibrary()).application }, legacy_imported: true });
     const library = migrateProfileLibrary(testConfig, storageWith({ [key]: { version: 4, server: [server, server], model: [generation, generation] } }));
-    expect(new Set(library.entries.filter(entry => entry.legacy).map(entry => entry.id)).size).toBe(4);
+    expect(new Set(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').filter(entry => entry.id.startsWith('legacy-')).map(entry => entry.id)).size).toBe(4);
   });
 
   it('repairs an empty imported library and names preserved snapshots without importing again', () => {
@@ -138,13 +149,13 @@ describe('profile library migration', () => {
     const library = { ...emptyProfileLibrary(), revision: 12, legacy_imported: true, applied: { saved: application } };
     const storage = { getItem: vi.fn(() => { throw new Error('Legacy storage must not be read'); }) };
     const repaired = migrateProfileLibrary({ ...testConfig, temperature: 1.7, settings_profiles: library }, storage);
-    expect(repaired.entries[0]).toEqual(defaultSettingsProfile());
+    expect(repaired.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(defaultSettingsProfile());
     expect(repaired.applied.saved).toMatchObject(application);
     expect(repaired.applied.saved.profile_id).toBeTruthy();
     const recovered = repaired.entries.find(entry => entry.id === repaired.applied.saved.profile_id);
-    expect(recovered).toMatchObject({ scope: 'model', settings: { temperature: testConfig.temperature }, system_prompt: 'Saved prompt' });
+    expect(recovered).toMatchObject({ scope: 'global', settings: { temperature: testConfig.temperature }, system_prompt: 'Saved prompt' });
     expect(repaired.revision).toBe(12);
-    expect(library.entries).toEqual([]);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([]);
     expect(storage.getItem).not.toHaveBeenCalled();
   });
 

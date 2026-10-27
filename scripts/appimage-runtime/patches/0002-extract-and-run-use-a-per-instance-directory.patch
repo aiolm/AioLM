@@ -1,0 +1,27 @@
+diff --git a/src/runtime/runtime.c b/src/runtime/runtime.c
+index b0f0d45..094f41c 100644
+--- a/src/runtime/runtime.c
++++ b/src/runtime/runtime.c
+@@ -1609,12 +1609,21 @@ int main(int argc, char* argv[]) {
+             hexlified_digest = appimage_hexlify((const char*)digest.bytes, sizeof(digest.bytes));
+         }
+
+-        char* prefix = malloc(strlen(temp_base) + 20 + strlen(hexlified_digest) + 2);
++        // Each instance extracts into a directory of its own. A shared content-addressed directory is removed by
++        // whichever instance exits first, while the others still run from it; mkdtemp() also never reuses a
++        // directory that already exists.
++        char* prefix = malloc(strlen(temp_base) + 20 + strlen(hexlified_digest) + 7 + 2);
+         strcpy(prefix, temp_base);
+         strcat(prefix, "/appimage_extracted_");
+         strcat(prefix, hexlified_digest);
++        strcat(prefix, "_XXXXXX");
+         free(hexlified_digest);
+
++        if (mkdtemp(prefix) == NULL) {
++            perror("Failed to create a directory for extraction");
++            exit(EXIT_EXECERROR);
++        }
++
+         if (!extract_appimage(appimage_path, prefix, NULL, false, verbose)) {
+             fprintf(stderr, "Failed to extract AppImage\n");
+             exit(EXIT_EXECERROR);

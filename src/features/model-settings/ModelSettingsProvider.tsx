@@ -1,4 +1,6 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { providerOf } from '../../shared/api/providers';
+import { mergeProviderRequestSettings } from '../../shared/config/providerRequestSettings';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import { executionChanges, executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, settingsForSession, ExecutionConflictError } from '../../shared/config/executionSettings';
@@ -13,33 +15,30 @@ import { applyProfile } from './profileWorkspaceState';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
+import { modelSettingsContext as Context, type ModelSettingsRequest } from './modelSettingsContext';
+
+export { MANAGE_MODEL_RUNTIMES, useModelSettings } from './modelSettingsContext';
+export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from './modelSettingsContext';
 
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
-export const MANAGE_MODEL_RUNTIMES = 'aiolm:manage-model-runtimes';
-export type ExecutionTarget = { kind: 'default' } | { kind: 'session'; sessionId: string } | { kind: 'benchmark' | 'project'; id: string };
-export interface ModelSettingsRequest {
-  target: ExecutionTarget;
-  config?: api.AppConfig;
-  definition?: api.SessionDefinition;
-  section?: string;
-  systemPrompt?: string;
-  application?: ProfileApplication;
-  onApply?: (cfg: api.AppConfig, application?: ProfileApplication) => Promise<void> | void;
-}
-export interface ModelSettingsContext {
-  open: (request: ModelSettingsRequest) => void;
-  suspended: boolean;
-  resume: () => void;
-  getRequestConfig: (sessionId: string, fallback: api.AppConfig, status?: api.ServerStatus | api.SessionStatus) => api.AppConfig;
-  getRequestProfile: (sessionId: string, cfg: api.AppConfig) => ModelProfile | null;
-}
-const Context = createContext<ModelSettingsContext | null>(null);
-export const useModelSettings = () => useContext(Context);
+const RuntimesPanel = lazy(() => import('../runtimes/Runtimes'));
+
+interface LaunchCancellation { editorKey: number; cancel: () => void }
 
 function assignedTarget(config: api.AppConfig, application?: ProfileApplication, sessionId = 'default'): ProfileCommitResult {
   const library = application?.profile_id && config.settings_profiles ? ensureProfileLibrary(config.settings_profiles) : profileLibrary(config);
-  const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId));
+  const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId, providerOf(config)));
   return { config: { ...executionConfig(config, resolved.application.settings), settings_profiles: resolved.library }, application: resolved.application };
+}
+// Only these session fields reach the editor. Poll deliveries that differ in
+// usage telemetry alone must not re-render the provider and every reader below
+// it. Compare every session so switching targets cannot surface a value that
+// was never committed while the editor was open on another one.
+function sessionRefreshKey(list: api.SessionStatus[]): string {
+  // Object fields keep a native null PID distinct from an omitted one: the
+  // live-profile cache compares process identities with strict equality.
+  return JSON.stringify(list.map(({ id, state, pid, model, execution }) => ({ id, state, pid, model, execution })));
 }
 const messages = {
   en: { default: 'Default execution', session: 'Session', benchmark: 'Benchmark target', project: 'Project settings', busy: 'Wait for the current model operation to finish.', activity: 'Stop the current response before changing its model.', conflict: 'These settings changed elsewhere. Close and reopen settings to review the latest values: ', loading: 'Loading model settings…', stopOthers: 'Starting this model will stop other model sessions according to your load policy.', live: 'Saving server settings keeps the current model running. Reload to use the new settings.', resume: 'Return to model settings', missing: 'The selected session was removed. Reopen settings to choose a session.' },
@@ -56,14 +55,34 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const [editor, setEditor] = useState<{ request: ModelSettingsRequest; base: api.AppConfig; baseDefinition?: api.SessionDefinition; initial: api.AppConfig; key: number; existingSession: boolean } | null>(null);
   const [suspended, setSuspended] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [launching, setLaunching] = useState(false);
+  const [launching, setLaunching] = useState<LaunchCancellation | null>(null);
+  const [preflightState, setPreflightState] = useState<'checking' | 'cancelling' | null>(null);
+  const preflightOwner = useRef<{ id: string; cancelled: boolean } | null>(null);
   const [error, setError] = useState('');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const lastSessionsKey = useRef<string | null>(null);
+  const applySessionData = useCallback((next: api.SessionStatus[]) => {
+    const key = sessionRefreshKey(next);
+    if (key === lastSessionsKey.current) return;
+    lastSessionsKey.current = key;
+    // A delivery may reuse its array after updating a session in place.
+    setSessions([...next]);
+  }, []);
   const lock = useRef(false);
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
+  const runningProfile = useRef<{ key: string; application?: ProfileApplication }>(undefined);
+  const cancelPreflight = () => {
+    const owner = preflightOwner.current;
+    if (!owner || owner.cancelled) return;
+    owner.cancelled = true;
+    setPreflightState('cancelling');
+    void api.cancelLaunchPreflight(owner.id).catch(cause => {
+      if (preflightOwner.current === owner) setError(String(cause));
+    });
+  };
   const requestFallback = useCallback((id: string, model: string) => {
-    const key = profileTargetKey(model, id);
+    const key = profileTargetKey(model, id, providerOf(latest.current.getConfig() ?? {}));
     const fallback = deletedProfileFallbacks.current.get(key);
     if (!fallback || profileTargetKey(fallback.model) !== profileTargetKey(model)) return undefined;
     const current = latest.current.getConfig()?.settings_profiles?.applied[key];
@@ -81,37 +100,61 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (request.target.kind === 'session' && !definition) { setError(copy.missing); return; }
     let base = definition ? sessionConfig(cfg, definition) : request.target.kind === 'default' ? cfg : request.config ? executionConfig(cfg, executionSettings(request.config)) : cfg;
     const status = latest.current.status;
-    let initial = request.config ? executionConfig(cfg, executionSettings(request.config)) : (target.kind === 'default' && status.state === 'running' && status.model !== cfg.active_model
-      ? { ...executionConfig(cfg, status.execution ?? {}), active_model: status.model ?? '' }
+    const loadedModel = loadedModelPath(status);
+    let initial = request.config ? executionConfig(cfg, executionSettings(request.config)) : (target.kind === 'default' && status.state === 'running' && loadedModel !== cfg.active_model
+      ? { ...executionConfig(cfg, status.execution ?? {}), active_model: loadedModel }
       : base);
     const id = target.kind === 'session' ? target.sessionId : 'default';
     const external = target.kind === 'project' || target.kind === 'benchmark';
-    const reference = request.application ?? (external && request.config
-      ? { model: initial.active_model, settings: profileSettingsSnapshot(initial), system_prompt: request.systemPrompt ?? '' }
-      : appliedProfile({ ...cfg, active_model: initial.active_model }, id));
+    let reference = request.application;
+    if (!reference) {
+      if (external && request.config) reference = { model: initial.active_model, settings: profileSettingsSnapshot(initial), system_prompt: request.systemPrompt ?? '' };
+      else if (target.kind === 'default' && providerOf(initial) !== providerOf(cfg)) {
+        // Look up the saved target before repairing assignments from the draft:
+        // a new provider without an assignment starts from its designated default.
+        const library = cfg.settings_profiles ? ensureProfileLibrary(cfg.settings_profiles, providerOf(initial)) : profileLibrary(cfg);
+        const application = library.applied[profileTargetKey(initial.active_model, id, providerOf(initial))];
+        reference = application && profileTargetKey(application.model) === profileTargetKey(initial.active_model)
+          ? application : applyDefaultProfile(initial, library).application;
+      } else reference = appliedProfile({ ...cfg, active_model: initial.active_model }, id);
+    }
     const assigned = assignedTarget(initial, reference, id);
     initial = assigned.config;
+    if (target.kind === 'default') {
+      const library = initial.settings_profiles!;
+      const key = profileTargetKey(initial.active_model, id, providerOf(initial));
+      // Keep the resolved identity and prompt when the editor repairs this new
+      // target, rather than creating an anonymous recovery profile alongside it.
+      if (!library.applied[key]) initial = { ...initial, settings_profiles: { ...library, applied: { ...library.applied, [key]: assigned.application } } };
+    }
     if (external) base = assigned.config;
     request = { ...request, application: assigned.application, systemPrompt: assigned.application.system_prompt };
     setEditor({ request, base: structuredClone(base), baseDefinition: definition ? structuredClone(definition) : undefined, initial: structuredClone(initial), key: ++counter.current,
       existingSession: !!definition && !!cfg.sessions?.some(item => item.id === definition.id) });
     setSuspended(false); setError('');
   }, [copy.missing]);
+  const pollingActive = editor !== null && !suspended && api.isNativeRuntimeAvailable();
   useSessionPolling({
-    active: editor !== null && !suspended && api.isNativeRuntimeAvailable(),
+    active: pollingActive,
     details: true,
-    onData: setSessions,
+    onData: applySessionData,
     intervalMs: 1500,
   });
+  useEffect(() => {
+    // The poller unsubscribes before this effect, so a pending IPC cannot
+    // repopulate the extra fingerprint while this editor is inactive.
+    if (!pollingActive) lastSessionsKey.current = null;
+  }, [pollingActive]);
   const getRequestConfig = useCallback((id: string, fallback: api.AppConfig, status?: api.ServerStatus | api.SessionStatus) => {
     const cached = liveProfiles.current.get(id);
     if (cached && status?.pid !== undefined && cached.pid !== status.pid) liveProfiles.current.delete(id);
     const live = status?.execution;
     const cfg = executionConfig(fallback, live ?? {});
-    if (status?.model) cfg.active_model = status.model;
+    cfg.active_model = loadedModelPath(status, cfg.active_model);
     if (status?.mmproj !== undefined) cfg.mmproj = status.mmproj;
     const replacement = requestFallback(id, cfg.active_model);
-    if (replacement) {
+    if (replacement && (replacement.provider ?? 'llama.cpp') === providerOf(cfg)) {
+      cfg.provider_options = mergeProviderRequestSettings(cfg, replacement.settings.provider_options, status?.engine?.request_option_keys);
       Object.assign(cfg, Object.fromEntries(REQUEST_KEYS.filter(key => replacement.settings[key] !== undefined).map(key => [key, structuredClone(replacement.settings[key])])));
       const requestKeys: readonly string[] = REQUEST_KEYS;
       cfg.runtime_defaults = [...(cfg.runtime_defaults ?? []).filter(key => !requestKeys.includes(key)), ...(replacement.settings.runtime_defaults ?? []).filter(key => requestKeys.includes(key))];
@@ -173,9 +216,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     lock.current = true; setBusy(true);
     let persisted: api.AppConfig | undefined;
     let application = profile.application;
-    // Set once the launch has been issued and left to finish on its own, so the
-    // shared cleanup below does not cancel the state that tracks it.
-    let handedOff = false;
+    let launchOwner: LaunchCancellation | undefined;
     try {
       const current = latest.current.getConfig();
       if (!current) throw new Error(copy.loading);
@@ -185,7 +226,13 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         const externalApplication = target.kind === 'project' || target.kind === 'benchmark'
           ? savedTarget(current, draft.active_model).application : undefined;
         const saved = await latest.current.updateConfig(latestCfg => profileLibraryConfigPatch(latestCfg, { ...profile, saveMode: undefined }));
-        const removed = new Set((previousLibrary?.entries ?? []).filter(entry => !saved.settings_profiles?.entries.some(next => next.id === entry.id)).map(entry => entry.id));
+        const removed = new Set((previousLibrary?.entries ?? []).map(entry => entry.id));
+        if (removed.size && saved.settings_profiles) {
+          for (const entry of saved.settings_profiles.entries) {
+            removed.delete(entry.id);
+            if (!removed.size) break;
+          }
+        }
         for (const [key, previous] of Object.entries(previousLibrary?.applied ?? {})) {
           const replacement = saved.settings_profiles?.applied[key];
           if (previous.profile_id && removed.has(previous.profile_id) && replacement) deletedProfileFallbacks.current.set(key, structuredClone(replacement));
@@ -247,8 +294,18 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       const requestOnly = status?.state === 'running' && !serverSettingsChanged(live, next);
       if (intent === 'start' && (sessionHasActivity(id) || (status?.active_requests ?? 0) > 0 || (current.stop_existing_sessions_on_load !== false && (anySessionActivity() || list.some(session => (session.active_requests ?? 0) > 0))))) throw new Error(copy.activity);
       if (status?.state === 'running' && !liveProfiles.current.has(id)) liveProfiles.current.set(id, { model: live.active_model, pid: status.pid,
-        application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id)).application) });
-      if (intent === 'start') next = await api.preflightLaunch(next);
+        application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id, providerOf(live))).application) });
+      if (intent === 'start') {
+        const owner = { id: crypto.randomUUID(), cancelled: false };
+        preflightOwner.current = owner;
+        setPreflightState('checking');
+        try {
+          next = await api.preflightLaunch(next, owner.id);
+          if (owner.cancelled) throw new Error('server start cancelled');
+        } finally {
+          if (preflightOwner.current === owner) { preflightOwner.current = null; setPreflightState(null); }
+        }
+      }
       application = { ...profile.application, model: next.active_model, settings: profileSettingsSnapshot(next) };
       const edit = { ...profile, application };
       let saved: api.AppConfig;
@@ -280,14 +337,16 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         });
       }
       application = appliedProfile(saved, id) ?? { ...application, settings: profileSettingsSnapshot(saved) };
-      deletedProfileFallbacks.current.delete(profileTargetKey(saved.active_model, id));
+      deletedProfileFallbacks.current.delete(profileTargetKey(saved.active_model, id, providerOf(saved)));
       persisted = saved;
       // A successful save is retained if a subsequent launch fails or is cancelled.
       const result = { config: saved, application };
       rebase(result);
       if (intent === 'start') {
-        setLaunching(true);
-        handedOff = true;
+        const owner: LaunchCancellation = { editorKey: editor.key, cancel: () => {
+          void (target.kind === 'session' ? api.sessionStop(id) : latest.current.stop()).catch(cause => setError(String(cause)));
+        } };
+        launchOwner = owner; setLaunching(owner);
         liveProfiles.current.set(id, { model: saved.active_model, application: structuredClone(application) });
         // Reading a model into VRAM takes minutes. Awaiting it here held a modal
         // dialog over the whole app and kept the lock that gates reopening it, so
@@ -298,7 +357,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         void (target.kind === 'session'
           ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => setError(String(cause)))
           : latest.current.start(saved, status?.state === 'running').catch(() => undefined))
-          .finally(() => { setLaunching(false); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
+          .finally(() => { setLaunching(current => current === owner ? null : current); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
       } else if (requestOnly) {
         await api.applyRequestSettings(saved, id);
         liveProfiles.current.set(id, { model: saved.active_model, pid: status?.pid, application: structuredClone(application) });
@@ -310,7 +369,12 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     } catch (cause) {
       if (persisted) throw new SettingsDeliveryError(String(cause), persisted, application);
       throw cause;
-    } finally { lock.current = false; setBusy(false); if (!handedOff) setLaunching(false); }
+    } finally {
+      lock.current = false; setBusy(false);
+      // Only this active launch can supply the editor's cancellation action.
+      // Its handed-off load continues after closing or editing another target.
+      if (launchOwner) setLaunching(current => current === launchOwner ? null : current);
+    }
   };
   const apply = async (draft: api.AppConfig, intent: 'save' | 'start', profile: ProfileEditorResult) => {
     await persist(draft, intent, { ...profile, saveMode: editor?.request.target.kind === 'benchmark' ? 'benchmark' : 'all' }, true);
@@ -321,8 +385,24 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const liveStatus = target?.kind === 'session' ? sessions.find(item => item.id === id) : target?.kind === 'default' ? store.status : undefined;
   const liveState = liveStatus?.state ?? (target?.kind === 'session' ? 'stopped' : undefined);
   const cachedApplication = liveProfiles.current.get(id);
-  const liveApplication = cachedApplication && cachedApplication.pid === liveStatus?.pid && cachedApplication.model === liveStatus?.model
-    ? cachedApplication.application : store.cfg && liveStatus?.model ? appliedProfile({ ...store.cfg, active_model: liveStatus.model }, id) : undefined;
+  const liveModel = loadedModelPath(liveStatus);
+  // Relevant session changes refresh an open editor after polling. Resolving the saved
+  // profile copies and serializes the whole library, so the result is reused
+  // while the configuration content is unchanged. Content, not the reference,
+  // is the key because a configuration can be updated in place. A library
+  // migrated from browser storage is resolved again on every render. The entry
+  // is kept only by a render that resolves a stored library, so a closed editor,
+  // a live cache hit or a migrated library releases the copied configuration.
+  const previousRunningProfile = runningProfile.current;
+  runningProfile.current = undefined;
+  const savedRunningProfile = (cfg: api.AppConfig, sessionId: string) => {
+    if (!cfg.settings_profiles) return appliedProfile(cfg, sessionId);
+    const key = JSON.stringify([sessionId, cfg]);
+    runningProfile.current = previousRunningProfile?.key === key ? previousRunningProfile : { key, application: appliedProfile(cfg, sessionId) };
+    return runningProfile.current.application;
+  };
+  const liveApplication = cachedApplication && cachedApplication.pid === liveStatus?.pid && cachedApplication.model === liveModel
+    ? cachedApplication.application : store.cfg && liveModel ? savedRunningProfile({ ...store.cfg, active_model: liveModel }, id) : undefined;
   const stopsOtherSessions = (target?.kind === 'session' || target?.kind === 'default') && store.cfg?.stop_existing_sessions_on_load !== false
     && (sessions.some(session => session.id !== id && ['running', 'starting', 'stopping'].includes(session.state))
       || (target.kind === 'session' && ['running', 'starting', 'stopping'].includes(store.status.state)));
@@ -342,7 +422,8 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         ? assignedTarget(editor.initial, { model: editor.initial.active_model, settings: profileSettingsSnapshot(editor.initial), system_prompt: editor.request.systemPrompt ?? '' }).application : appliedProfile(editor.initial, id))}
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
-      onCancelStart={launching ? stopTarget : undefined} onStop={stopTarget}
-      onManageRuntimes={() => { setSuspended(true); window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES)); }} /></Suspense>}
+      preflightState={preflightState ?? undefined}
+      onCancelStart={preflightState ? cancelPreflight : launching?.editorKey === editor.key ? launching.cancel : undefined} onStop={stopTarget}
+      renderRuntimeManager={({ config, revision, active, onBusyChange }) => <RuntimesPanel store={store} active={active} engineRequest={{ provider: providerOf(config), revision }} onBusyChange={onBusyChange} />} /></Suspense>}
   </Context.Provider>;
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { describeServerOption, getOptionOccurrences, managedServerOption, parseRuntimeHelp, replaceServerOption, runtimeServerOptions, SERVER_OPTIONS, serverArgsFromText, serverArgsToText, serverOptionChoices, serverOptionMatches } from './serverOptions';
 
@@ -71,6 +72,18 @@ describe('runtime server option catalog', () => {
     expect(serverArgsFromText('--future-pr-option 7\n--future-pr-switch', options)).toEqual(['--future-pr-option', '7', '--future-pr-switch']);
     expect(serverArgsToText(['--future-pr-option', '7', '--future-pr-switch'], options)).toBe('--future-pr-option 7\n--future-pr-switch');
   });
+  it('keeps the first alias definition and reads changed help on the next conversion', () => {
+    const options = [option('--shared'), option('--shared VALUE'), option('--custom-path FILE')];
+    const text = '--shared\n--custom-path 한글 경로/cache.bin';
+    const args = ['--shared', '--custom-path', '한글 경로/cache.bin'];
+    expect(serverArgsFromText(text, options)).toEqual(args);
+    expect(serverArgsToText(args, options)).toBe(text);
+    options[0].arity = 1;
+    expect(() => serverArgsFromText(text, options)).toThrow('needs 1 value(s)');
+    options[0].flags = ['--new-flag'];
+    const changed = '--shared -1\n--custom-path 한글 경로/cache.bin';
+    expect(serverArgsToText(serverArgsFromText(changed, options), options)).toBe(changed);
+  });
   it('replaces both sides of a toggle and restores inheritance without affecting adjacent args', () => {
     const mmap = option('--mmap, --no-mmap');
     const args = ['--mmap', '--cache-ram', '-1', '--no-mmap', '--jinja'];
@@ -94,5 +107,38 @@ describe('runtime server option catalog', () => {
     expect(managedServerOption(option('-dev, --device DEVICE'))).toBe('--device');
     expect(() => replaceServerOption([], option('--host HOST'), [{ flag: '--host', values: ['0.0.0.0'] }])).toThrow('app-managed');
     for (const value of ['', 'a\nb', 'a\0b']) expect(() => replaceServerOption([], option('--cache-ram N'), [{ flag: '--cache-ram', values: [value] }])).toThrow();
+  });
+});
+
+describe('runtime help within retained probe output', () => {
+  const row = { id: '-x', signature: '-x', description: '', group: 'Runtime', flags: ['-x'], arity: 0, argument: '', choices: [] };
+
+  it('preserves every short option line within the two captured output channels', () => {
+    const count = 150_000;
+    const stdout = '-x\n'.repeat(count / 2);
+    const stderr = '-x\n'.repeat(count / 2);
+    expect(Buffer.byteLength(stdout)).toBeLessThanOrEqual(256 * 1024);
+    expect(Buffer.byteLength(stderr)).toBeLessThanOrEqual(256 * 1024);
+    const help = `${stdout}\n${stderr.trim()}`;
+    const parsed = parseRuntimeHelp(help);
+    const literal = JSON.stringify(row);
+    const expected = `[${`${literal},`.repeat(count - 1)}${literal}]`;
+    const actual = JSON.stringify(parsed);
+    const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+    expect(parsed).toHaveLength(count);
+    expect(parsed[0]).toEqual(row);
+    expect(parsed.at(-1)).toEqual(row);
+    // Compare every row and field without a large assertion-failure diff.
+    expect(digest(actual)).toBe(digest(expected));
+  });
+
+  it('keeps indentation, continuation prose, repeated aliases and empty fallback unchanged', () => {
+    const help = '  -x  first switch\n      continuation mentions --not-an-option\n  -x  second occurrence';
+    expect(parseRuntimeHelp(help)).toEqual([
+      { ...row, description: 'first switch\ncontinuation mentions --not-an-option' },
+      { ...row, description: 'second occurrence' },
+    ]);
+    expect(parseRuntimeHelp('')).toEqual([]);
+    expect(runtimeServerOptions('plain unavailable text')).toBe(SERVER_OPTIONS);
   });
 });

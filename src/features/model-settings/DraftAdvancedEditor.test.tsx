@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nProvider, useI18n, type Locale } from '../../shared/i18n/i18n';
 import { describeServerOption } from '../../shared/config/serverOptions';
 import { testConfig } from '../../testing/appStore';
 import DraftAdvancedEditor from './DraftAdvancedEditor';
+import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 import { advancedSettingsHelp } from './advancedSettingsHelp';
 import { serverOptionDescription } from '../../shared/i18n/serverOptionDescriptions';
+import type { AppConfig } from '../../shared/api/types';
 
 const options = [
   describeServerOption('--repeat-penalty N', 'Penalize repeated tokens.')!,
@@ -31,6 +34,35 @@ function mount(locale: Locale = 'en', benchmark = false, server_args: string[] =
 const manyOptions = Array.from({ length: 120 }, (_, index) =>
   describeServerOption(`--generated-${index} N`, `Generated option ${index}.`)!);
 
+describe('exclusive option editing', () => {
+  it('starts with guided controls and preserves unknown repeated arguments when switching modes', () => {
+    function Harness() {
+      const [cfg, setCfg] = useState<AppConfig>({ ...testConfig, server_args: ['--custom-mode', '한글 경로', '--future-flag', 'one', '--future-flag', 'two'], chat_options: { min_p: 0.2 } });
+      return <DraftAdvancedEditor cfg={cfg} options={options} disabled={false} benchmark={false}
+        onChange={patch => setCfg(current => ({ ...current, ...patch }))} onInvalid={vi.fn()} />;
+    }
+    render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
+    expect(screen.queryByLabelText('Extra request JSON')).not.toBeInTheDocument();
+    expect(screen.getByRole('searchbox')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    const args = screen.getByLabelText('Extra server arguments (one per line)');
+    const original = (args as HTMLTextAreaElement).value;
+    expect(original).toContain('한글 경로');
+    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    expect(screen.getByRole('button', { name: controlChoiceCopy.en.guided })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent(controlChoiceCopy.en.fixBeforeSwitch);
+    fireEvent.change(args, { target: { value: original } });
+    expect(screen.getByRole('button', { name: controlChoiceCopy.en.guided })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{"min_p":0.4}' } });
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.guided }));
+    expect(screen.queryByLabelText('Extra request JSON')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue(original);
+    expect(JSON.parse((screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement).value)).toEqual({ min_p: 0.4 });
+  });
+});
+
 describe('advanced options list size', () => {
   it('puts a bounded number of rows on screen and says how many matched', () => {
     // Every option rendered at once built a subtree of several thousand nodes
@@ -55,11 +87,13 @@ describe('advanced options list size', () => {
 describe('advanced settings explanations', () => {
   it.each<Locale>(['en', 'ko', 'ja', 'zh'])('associates raw editors with format and precedence help in %s', locale => {
     mount(locale);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy[locale].direct }));
     const [args, chat] = screen.getAllByRole('textbox');
     expect(args).toHaveAccessibleDescription(advancedSettingsHelp[locale].args);
     expect(chat).toHaveAccessibleDescription(advancedSettingsHelp[locale].chat);
     expect(screen.getByText(advancedSettingsHelp[locale].args)).toBeVisible();
     expect(screen.getByText(advancedSettingsHelp[locale].chat)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy[locale].guided }));
     expect(screen.getByRole('searchbox')).toHaveAccessibleDescription(advancedSettingsHelp[locale].search);
   });
 
@@ -113,11 +147,13 @@ describe('advanced settings explanations', () => {
     mount();
     const description = screen.getByText('Keep model weights in RAM.');
     fireEvent.click(description.closest('.model-settings-option')!.querySelector('summary')!);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{"min_p":0.15}' } });
     fireEvent.click(screen.getByRole('button', { name: 'Switch language' }));
     expect(screen.queryByText('Keep model weights in RAM.')).not.toBeInTheDocument();
-    expect(screen.getByText(serverOptionDescription(options[1], 'ko'))).toBeVisible();
     expect(screen.getByLabelText('추가 요청 JSON')).toHaveValue('{"min_p":0.15}');
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.ko.guided }));
+    expect(screen.getByText(serverOptionDescription(options[1], 'ko'))).toBeVisible();
   });
 
   it('prompts for the value alone and suggests the modes --load-mode documents in prose', () => {
@@ -165,6 +201,7 @@ describe('advanced settings explanations', () => {
 
   it('shows a saved flag and its value on one raw line and splits an edited line back into argv', () => {
     const { onChange, onInvalid } = mount('en', false, ['--jinja', '--load-mode', 'none']);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
     const [args] = screen.getAllByRole('textbox');
     expect(args).toHaveValue('--jinja\n--load-mode none');
     // Everything after the flag is one value, so a path keeps its spaces.
@@ -176,6 +213,7 @@ describe('advanced settings explanations', () => {
 
   it('keeps request JSON hidden in benchmark settings', () => {
     mount('en', true);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
     expect(document.querySelectorAll('textarea')).toHaveLength(1);
     expect(screen.queryByText(advancedSettingsHelp.en.chat)).not.toBeInTheDocument();
     expect(screen.getByText(advancedSettingsHelp.en.args)).toBeVisible();

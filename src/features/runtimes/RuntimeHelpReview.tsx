@@ -1,0 +1,209 @@
+import { useEffect, useId, useRef, useState } from 'react';
+import type { AppConfig } from '../../shared/api/types';
+import {
+  runtimeHelpAccept,
+  runtimeHelpCancelSelected,
+  runtimeHelpDiscoverSelected,
+  runtimeHelpTarget,
+  pickRuntimePath,
+  type EffectiveSchema,
+  type HelpReport,
+  type HelpRequest,
+  type HelpTarget,
+  type RuntimeDescriptor,
+} from '../../shared/api';
+import { useI18n } from '../../shared/i18n/i18n';
+import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
+import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
+import { helpSummary } from './helpSummary';
+import RuntimeArgumentList from './RuntimeArgumentList';
+import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
+import RuntimeSchemaChanges from './RuntimeSchemaChanges';
+import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
+import { sensitiveStaticIndices } from './sensitiveEntryTokens';
+
+/** Discover, review and accept the selected runtime's help. Help runs only on
+ * the explicit button; acceptance pins this exact runtime build. */
+export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted, draftPrefixSecrets }: {
+  cfg: AppConfig;
+  effective: EffectiveSchema;
+  disabled: boolean;
+  onAccepted: () => void;
+  /** Unsaved draft secret prefix indices from the positional layout sibling.
+   * Display-only, same sourced rule; never persisted or applied to launch. */
+  draftPrefixSecrets?: Iterable<number>;
+}) {
+  const { locale } = useI18n();
+  const copy = runtimeOptionsCopy[locale];
+  const id = useId();
+  const taskId = `runtime-help-review-${id}`;
+  const [target, setTarget] = useState<HelpTarget | null>(null);
+  const [extra, setExtra] = useState<string[]>([]);
+  const [workingDirectory, setWorkingDirectory] = useState('');
+  const [textChoice, setTextChoice] = useState<HelpTextChoice>({});
+  const [busy, setBusy] = useState(false);
+  const [accepting, setAccepting] = useState(false);
+  const [error, setError] = useState('');
+  const [found, setFound] = useState<[HelpReport, RuntimeDescriptor] | null>(null);
+  const [request, setRequest] = useState<HelpRequest | null>(null);
+  const generation = useRef(0);
+  const pending = useRef<AppConfig | null>(null);
+  const cancelRequested = useRef(false);
+  useEffect(() => {
+    let active = true;
+    setTarget(null); setFound(null); setError(''); setBusy(false); setAccepting(false); setRequest(null);
+    void runtimeHelpTarget(cfg).then(next => {
+      if (!active) return;
+      setTarget(next);
+      setExtra(next.request.args.slice(next.prefix.length));
+      setWorkingDirectory(next.request.working_directory ?? next.accepted?.working_directory ?? '');
+      setTextChoice({ ...(next.request.encoding ? { encoding: next.request.encoding } : {}),
+        ...(next.request.locale ? { locale: next.request.locale } : {}) });
+    }).catch(cause => { if (active) setError(String(cause)); });
+    return () => {
+      active = false;
+      generation.current += 1;
+      if (pending.current) void runtimeHelpCancelSelected(pending.current).catch(() => undefined);
+      pending.current = null;
+      finishTask(taskId, 'cancelled');
+    };
+    // The target depends only on the selected runtime identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build]);
+  const state = effective.help_state;
+  const status = state === 'current' ? copy.helpCurrent : state === 'stale' ? copy.helpStale : state === 'unchecked' ? copy.helpUnchecked : copy.helpNone;
+  const discover = async () => {
+    if (!target || busy || accepting) return;
+    const next: HelpRequest = target.fixed ? { ...target.request } : {
+      ...target.request,
+      program: target.request.program ?? null,
+      args: [...target.prefix, ...extra],
+      scope: target.request.scope,
+    };
+    delete next.encoding; delete next.locale;
+    Object.assign(next, textChoice);
+    if (workingDirectory.trim()) next.working_directory = workingDirectory.trim();
+    else delete next.working_directory;
+    const ownGeneration = ++generation.current;
+    cancelRequested.current = false;
+    pending.current = cfg;
+    const current = () => ownGeneration === generation.current;
+    setBusy(true); setError(''); setFound(null); setRequest(next);
+    registerTask({ id: taskId, kind: 'runtime', label: copy.helpTitle, interruptible: true, cancel: () => { cancelRequested.current = true; void runtimeHelpCancelSelected(cfg); } });
+    try {
+      const result = await runtimeHelpDiscoverSelected(cfg, next);
+      if (!current()) return;
+      if (!cancelRequested.current) setFound(result);
+      finishTask(taskId, cancelRequested.current ? 'cancelled' : 'completed');
+    } catch (cause) {
+      if (!current()) return;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // Captured stderr may itself mention cancellation; only the owned user
+      // request or the native cancellation result makes this task cancelled.
+      const cancelled = cancelRequested.current || message === 'help discovery cancelled';
+      if (!cancelled) setError(message);
+      finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
+    } finally {
+      if (current()) { pending.current = null; setBusy(false); }
+    }
+  };
+  const accept = async () => {
+    if (!found || !request || busy || accepting) return;
+    const ownGeneration = ++generation.current;
+    setAccepting(true);
+    setError('');
+    try {
+      const accepted = await runtimeHelpAccept(cfg, found[1].fingerprint, request);
+      if (ownGeneration !== generation.current) return;
+      setFound(null);
+      if (accepted?.working_directory) setWorkingDirectory(accepted.working_directory);
+      onAccepted();
+    } catch (cause) {
+      if (ownGeneration === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (ownGeneration === generation.current) setAccepting(false);
+    }
+  };
+  const summary = found ? helpSummary(found[1]) : null;
+  // Entry prefix tokens a known-sensitive positional slot holds (explicit
+  // static role, current or stale supplement, plus unsaved sibling draft
+  // roles) stay hidden here exactly as in the positional layout. The program
+  // is not a prefix index and is shown.
+  const secretPrefix = sensitiveStaticIndices(effective);
+  if (draftPrefixSecrets) {
+    for (const index of draftPrefixSecrets) {
+      if (Number.isInteger(index) && (index as number) >= 0) secretPrefix.add(index as number);
+    }
+  }
+  const commandTokens = target
+    ? [target.program, ...target.prefix.map((token, index) => (secretPrefix.has(index) ? '•••' : token))]
+    : [];
+  return (
+    <section className="app-card app-card--tight mt-3" aria-labelledby={`${id}-title`}>
+      <h4 id={`${id}-title`}>{copy.helpTitle}</h4>
+      <p role="status">{status}</p>
+      {state === 'stale' && effective.help_detail && <FeedbackBanner tone="warning">{effective.help_detail}</FeedbackBanner>}
+      {target && (
+        <p className="app-section-hint">
+          {copy.command}: {commandTokens.map(token => JSON.stringify(token)).join(' ')}
+        </p>
+      )}
+      {target && !target.fixed && (
+        <RuntimeArgumentList label={entrypointCopy[locale].helpArgs} tokens={extra} disabled={disabled || busy || accepting}
+          onChange={next => { setExtra(next); setFound(null); setRequest(null); }} />
+      )}
+      {target && <div className="mt-3">
+        <label htmlFor={`${id}-cwd`}>{copy.workingDirectory}</label>
+        <div className="entrypoint-path mt-2">
+          <input id={`${id}-cwd`} name="execution-directory" className="app-input" value={workingDirectory}
+            disabled={disabled || busy || accepting} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+            aria-describedby={`${id}-cwd-hint`} onChange={event => {
+              generation.current += 1;
+              setWorkingDirectory(event.target.value); setFound(null); setRequest(null); setError('');
+            }} />
+          <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting}
+            onClick={() => {
+              const ownGeneration = ++generation.current;
+              void pickRuntimePath('folder').then(path => {
+                if (generation.current !== ownGeneration || !path) return;
+                setWorkingDirectory(path); setFound(null); setRequest(null); setError('');
+              }).catch(cause => { if (generation.current === ownGeneration) setError(String(cause)); });
+            }}>{copy.chooseDirectory}</button>
+        </div>
+        <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
+      </div>}
+      {target && <HelpTextSettings value={textChoice} disabled={disabled || busy || accepting} onChange={next => {
+        generation.current += 1;
+        setTextChoice(next); setFound(null); setRequest(null); setError('');
+      }} />}
+      <div className="app-page-actions mt-3">
+        <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting || !target} onClick={() => void discover()}>{copy.discover}</button>
+        {busy && (
+          <LocalTaskCancelButton taskId={taskId} onClick={() => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); void runtimeHelpCancelSelected(cfg).catch(cause => setError(String(cause))); }}>
+            {copy.cancel}
+          </LocalTaskCancelButton>
+        )}
+      </div>
+      {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+      {found && summary && (
+        <div className="mt-3">
+          <p>{copy.discovered}: {summary.total} {copy.options}</p>
+          {summary.uncertain.length > 0 && <p>{copy.uncertain}: {summary.uncertain.length} ({summary.uncertain.slice(0, 20).join(', ')}{summary.uncertain.length > 20 ? ', …' : ''})</p>}
+          <RuntimeSchemaChanges descriptor={found[1]} />
+          <details>
+            <summary>{copy.rawHelp}</summary>
+            <pre className="overflow-auto whitespace-pre-wrap">{[found[0].stdout.clean_text, found[0].stderr.clean_text].filter(Boolean).join('\n')}</pre>
+          </details>
+          {found[1].help_complete ? (
+            <>
+              <p className="app-section-hint">{copy.acceptHint}</p>
+              <button type="button" className="app-button app-button--primary" disabled={disabled || busy || accepting} onClick={() => void accept()}>{copy.accept}</button>
+            </>
+          ) : <FeedbackBanner tone="error">{copy.incomplete}</FeedbackBanner>}
+        </div>
+      )}
+    </section>
+  );
+}

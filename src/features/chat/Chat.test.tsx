@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { createElement } from "react";
 import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
+import { chatText } from "../../shared/i18n/chatI18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT, sessionConfig } from "../../shared/runtime/sessionUtils";
@@ -11,20 +12,25 @@ import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { createTestStore } from "../../testing/appStore";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
+import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
+import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatRetrySnapshot } from "./chatHistory";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
-vi.mock("../../shared/api/index", () => ({
+vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return ({
+  isNativeRuntimeAvailable: vi.fn(() => false),
   pickAttachment: vi.fn(),
   readDocumentText: vi.fn(),
   readDocumentBinding: vi.fn(),
-  readImageData: vi.fn(),
+  readImageData,
+  importMedia: vi.fn(async (path: string) => ({ name: path.split(/[\\/]/).pop(), dataUrl: await readImageData(path), kind: 'image' })),
   embedText: vi.fn(),
   chatStream: vi.fn(),
   serverActivity: vi.fn(async () => undefined),
   mcpListServers: vi.fn(),
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
+  mcpCancelToolCall: vi.fn(async () => undefined),
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
@@ -32,7 +38,7 @@ vi.mock("../../shared/api/index", () => ({
   apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
-}));
+}); });
 
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
@@ -121,6 +127,7 @@ async function attachDocument(name: string, text: string) {
   mocked.readDocumentText.mockResolvedValue(text);
   fireEvent.click(await screen.findByRole("button", { name: "Attach file" }));
   await screen.findByText(name);
+  await screen.findByText("Attachment ready");
 }
 
 function respondWithText(text: string) {
@@ -158,6 +165,109 @@ describe("ChatPanel unified attachments", () => {
     vi.clearAllMocks();
     vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it('restores saved tool requests as incomplete without silently executing a tool', async () => {
+    const thread = { ...createChatThread(1, 'tool-request-history'), title: 'Synthetic incomplete tool turn', messages: [
+      { role: 'user' as const, content: 'Synthetic tool question' },
+      { role: 'assistant' as const, content: '', finishReason: 'tool_calls', model: 'synthetic-model', metrics: { pp: { tokens: 20 }, tg: { tokens: 6 } } },
+    ] };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('MCP response incomplete');
+    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('Response complete');
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
+    expect(mocked.mcpCallTool).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  });
+
+  it.each([
+    ['ko', '새 대화'], ['ja', '新しい会話'], ['zh', '新对话'],
+  ] as const)("localizes the generated conversation title in %s without changing saved titles", async (locale, title) => {
+    const thread = { ...createChatThread(1, 'localized-draft'), systemPrompt: 'Synthetic conversation instructions.' };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    const copy = chatText[locale];
+    render(createElement(I18nProvider, { initialLocale: locale, children: createElement(ChatPanel, { store }) }));
+    const heading = await screen.findByRole('heading', { name: title });
+    expect(heading).toHaveAttribute('title', title);
+    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+
+    fireEvent.click(screen.getByText(copy.conversationSettings));
+    const titleInput = screen.getByLabelText(copy.title);
+    expect(titleInput).toHaveValue('');
+    expect(titleInput).toHaveAttribute('placeholder', title);
+    fireEvent.click(screen.getByRole('button', { name: copy.conversations }));
+    const search = screen.getByLabelText(copy.search);
+    fireEvent.change(search, { target: { value: ` ${title} ` } });
+    expect(screen.getByRole('button', { name: title })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `${copy.delete}: ${title}` }));
+    const dialog = await screen.findByRole('dialog', { name: copy.deleteTitle });
+    expect(dialog).toHaveTextContent(title);
+    expect(dialog).not.toHaveTextContent('New conversation');
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+
+    fireEvent.change(search, { target: { value: '' } });
+    fireEvent.change(titleInput, { target: { value: 'Synthetic custom title' } });
+    await screen.findByRole('heading', { name: 'Synthetic custom title' });
+    respondWithText('Synthetic reply');
+    fireEvent.change(screen.getByLabelText(copy.chatMessage), { target: { value: 'Synthetic first question' } });
+    fireEvent.click(screen.getByRole('button', { name: copy.send }));
+    await screen.findByText('Synthetic reply', { exact: true });
+    expect(screen.getByRole('heading', { name: 'Synthetic custom title' })).toBeInTheDocument();
+    await waitFor(() => expect(loadChatWorkspace().threads[0].title).toBe('Synthetic custom title'));
+  });
+
+  it("preserves an unsent message and document when reselecting the current conversation", async () => {
+    const first = { ...createChatThread(1, "draft-first"), title: "First stored conversation",
+      messages: [{ role: "user" as const, content: "Earlier first question" }] };
+    const second = { ...createChatThread(2, "draft-second"), title: "Second stored conversation",
+      messages: [{ role: "user" as const, content: "Earlier second question" }] };
+    saveChatWorkspace({ activeThreadId: first.id, threads: [first, second] });
+    renderPanel();
+    await screen.findByRole("heading", { name: first.title });
+    await attachDocument("draft-notes.txt", "Synthetic draft document.");
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Unsent follow-up" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: first.title }));
+    expect(screen.getByLabelText("Chat message")).toHaveValue("Unsent follow-up");
+    expect(screen.getByRole("button", { name: "Remove attachment: draft-notes.txt" })).toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+
+    // A different conversation still starts with its own clean composer.
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: second.title }));
+    expect(screen.getByRole("heading", { name: second.title })).toBeInTheDocument();
+    expect(screen.getByLabelText("Chat message")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "Remove attachment: draft-notes.txt" })).not.toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'Use the project citation'])("reapplies project documents after new chat with prompt %j", async (prompt) => {
+    const project = projectFromConfig('Document workspace', prompt, cfg,
+      [{ name: 'project-notes.txt', path: 'C:/synthetic/project-notes.txt' }]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    mocked.readDocumentBinding.mockResolvedValue('Acceptance code ORBIT-73.');
+    renderPanel();
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    respondWithText('First reply');
+    await sendMessage('First question');
+    await screen.findByText('First reply', { exact: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    respondWithText('ORBIT-73');
+    await sendMessage('What is the acceptance code?');
+    await screen.findByText('ORBIT-73', { exact: true });
+    const messages = mocked.chatStream.mock.calls.at(-1)![3];
+    if (prompt) expect(JSON.stringify(messages)).toContain(prompt);
+    expect(JSON.stringify(messages)).toContain('Acceptance code ORBIT-73.');
   });
 
   it("sends the original model identifier for a sharded model", async () => {
@@ -215,7 +325,7 @@ describe("ChatPanel unified attachments", () => {
     renderPanel();
     mocked.pickAttachment.mockResolvedValue("C:/images/photo.png");
     fireEvent.click(await screen.findByRole("button", { name: "Attach file" }));
-    const error = await screen.findByText(/Select an mmproj vision sidecar/);
+    const error = await screen.findByText(/does not support image input/);
     expect(mocked.readImageData).not.toHaveBeenCalled();
     expect(mocked.readDocumentText).not.toHaveBeenCalled();
 
@@ -254,6 +364,7 @@ describe("ChatPanel unified attachments", () => {
       mocked.readImageData.mockResolvedValue(`data:image/png;base64,${btoa(`photo-${index}`)}`);
       fireEvent.click(attachButton);
       await screen.findByRole("img", { name: `photo-${index}.png` });
+      await screen.findByText("Attachment ready");
     }
     expect(attachButton).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Remove attachment: notes-0.txt" }));
@@ -273,7 +384,7 @@ describe("ChatPanel document context warning", () => {
     mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1]));
   });
 
-  it("lets the user target a running independent session", async () => {
+  it.each([undefined, 8091])("lets the user target a running independent session with reported port %s", async (port) => {
     mocked.sessionList.mockResolvedValue([{
       id: "vision-session",
       name: "Vision",
@@ -281,16 +392,31 @@ describe("ChatPanel document context warning", () => {
       url: "http://127.0.0.1:8091",
       api_key: "session-key",
       model: "C:/models/vision.gguf",
-      port: 8091,
+      port,
     }]);
     mocked.normalizeSessionList.mockImplementation((value: unknown) => value);
 
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
-    fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · running" });
-    fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · running" }));
-    expect(selector).toHaveTextContent("Vision · 8091 · running");
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · Running" });
+    fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · Running" }));
+    expect(selector).toHaveTextContent("Vision · 8091 · Running");
+  });
+
+  it('translates session states while keeping transition locks and session routing unchanged', async () => {
+    mocked.sessionList.mockResolvedValue([
+      { id: 'work', name: 'Synthetic work', state: 'running', port: 8091, model: 'work.gguf' },
+      { id: 'closing', name: 'Synthetic closing', state: 'stopping', port: 8092, model: 'closing.gguf' },
+    ]);
+    render(<I18nProvider initialLocale="ko"><ChatPanel store={store} /></I18nProvider>);
+    const picker = await screen.findByLabelText('로드된 세션');
+    fireEvent.click(picker);
+    expect(await screen.findByRole('option', { name: 'Synthetic closing · 8092 · 중지 중' })).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('option', { name: 'Synthetic work · 8091 · 실행 중' }));
+    expect(picker).toHaveTextContent('Synthetic work · 8091 · 실행 중');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
   });
 
   it("uses the selected session's live request settings and activity identity", async () => {
@@ -300,7 +426,7 @@ describe("ChatPanel document context warning", () => {
     }]);
     renderPanel();
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · Running" }));
     expect(screen.getByText('work.gguf')).toBeInTheDocument();
     respondWithText("Session answer");
     await sendMessage("Hello");
@@ -312,16 +438,48 @@ describe("ChatPanel document context warning", () => {
     expect(sessionHasActivity("work")).toBe(false);
   });
 
-  it('opens the model picker when the default session is stopped despite a saved model', async () => {
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('opens common model settings for a stopped %s session despite a saved model', async provider => {
     const open = vi.fn();
     const start = vi.fn();
     vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
-    renderPanel({ ...store, status: { state: 'stopped', model: cfg.active_model }, start });
+    const selected = { ...cfg, active_provider: provider, active_model: provider === 'llama.cpp' ? 'models/synthetic.gguf' : 'models/snapshots/synthetic-instruct' };
+    renderPanel({ ...store, cfg: selected, status: { state: 'stopped', model: selected.active_model }, start });
+    expect(screen.getByText('Open Model & settings to load a model before sending a message.')).toBeInTheDocument();
     expect(screen.queryByText('Model ready')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Model & settings' }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' } }));
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { state: 'starting' as const, busy: false },
+    { state: 'stopped' as const, busy: true },
+  ])('waits for the selected runtime during $state with busy=$busy without claiming a model is missing', ({ state, busy }) => {
+    vi.mocked(useModelSettings).mockReturnValue({ open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+    const selected = { ...cfg, active_provider: 'vllm' as const, active_model: 'models/snapshots/synthetic-instruct' };
+    renderPanel({ ...store, cfg: selected, status: { state, model: selected.active_model }, busy });
+    expect(screen.getByRole('heading', { name: 'Loading model' })).toBeInTheDocument();
+    expect(screen.getByText('Wait for the model to finish loading, then try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Open Model & settings to load a model before sending a message.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Model & settings' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'Loading model');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  });
+
+  it.each(['failed', 'crashed'] as const)('keeps %s diagnostics ahead of a pending model command', state => {
+    const diagnostics = vi.fn();
+    render(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ChatPanel, {
+      store: { ...store, status: { state, model: cfg.active_model }, busy: true }, onOpenDiagnostics: diagnostics,
+    }) }));
+    expect(screen.getByRole('heading', { name: 'Request failed' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Loading model' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'No model loaded — select a model and load it');
+    fireEvent.click(screen.getByRole('button', { name: 'Open diagnostics' }));
+    expect(diagnostics).toHaveBeenCalledOnce();
   });
 
   it("keeps a conversation and offers no settings action of its own once its server stops", async () => {
@@ -357,7 +515,7 @@ describe("ChatPanel document context warning", () => {
     const panelStore = createTestStore({ ...cfg, sessions: [definition], stop_existing_sessions_on_load: false });
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/work.gguf", ctx_size: 8192, temperature: 0.2 }), false));
     expect(panelStore.start).not.toHaveBeenCalled();
@@ -369,13 +527,13 @@ describe("ChatPanel document context warning", () => {
     const entries = structuredClone(panelStore.cfg!.settings_profiles!.entries);
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
       active_model: "models/work.gguf", ctx_size: 16384, temperature: 0.5, ngl: 17,
     }), false));
     const library = panelStore.getConfig()!.settings_profiles!;
-    expect(library.entries).toEqual(entries);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(library.applied["session:work"]).toMatchObject({ profile_id: selected.id, profile_revision: 2, system_prompt: "Latest instruction" });
     expect(library.applied[profileTargetKey(cfg.active_model)]).toEqual(defaultApplication);
     expect(panelStore.cfg!.sessions![0]).toMatchObject({ id: "work", name: "Work", enabled: false, execution: { ctx_size: 16384, temperature: 0.5 } });
@@ -390,7 +548,7 @@ describe("ChatPanel document context warning", () => {
     vi.mocked(panelStore.updateConfig).mockRejectedValueOnce(new Error("Profile save failed"));
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     expect(await screen.findByText(/Profile save failed/)).toBeInTheDocument();
     expect(mocked.sessionStart).not.toHaveBeenCalled();
@@ -406,9 +564,9 @@ describe("ChatPanel document context warning", () => {
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Keep this draft" } });
     const picker = screen.getByLabelText("Loaded sessions");
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · Running" }));
 
-    expect(picker).toHaveTextContent("Work · 8091 · running");
+    expect(picker).toHaveTextContent("Work · 8091 · Running");
     expect(screen.getByLabelText("Chat message")).toHaveValue("Keep this draft");
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
@@ -507,6 +665,55 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
   });
 
+  it('bounds only the rendered preview of a very long title while preserving editing, tail search and reload', async () => {
+    const title = `Synthetic long conversation prefix. ${'long title '.repeat(4100)}ONLYINTITLETAIL`;
+    const thread = { ...createChatThread(1, 'long-title'), title,
+      messages: [{ role: 'user' as const, content: 'Synthetic stored message.' }] };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    const first = renderPanel();
+    let heading = await screen.findByRole('heading', { name: title });
+    expect(heading).toHaveAttribute('title', title);
+    expect(heading.textContent).toMatch(/^Synthetic long conversation prefix\./);
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(heading.textContent).toMatch(/…$/);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+
+    fireEvent.click(screen.getByText(chatText.en.conversationSettings));
+    expect(screen.getByLabelText(chatText.en.title)).toHaveValue(title);
+    fireEvent.click(screen.getByRole('button', { name: chatText.en.conversations }));
+    fireEvent.change(screen.getByLabelText(chatText.en.search), { target: { value: 'ONLYINTITLETAIL' } });
+    const entry = screen.getByRole('button', { name: title });
+    const preview = entry.querySelector('.chat-thread-title')!;
+    expect(preview).toHaveAttribute('title', title);
+    expect(preview.textContent).toMatch(/^Synthetic long conversation prefix\./);
+    expect(preview.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(preview.textContent).toMatch(/…$/);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    first.unmount();
+
+    renderPanel();
+    heading = await screen.findByRole('heading', { name: title });
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(heading).toHaveAttribute('title', title);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  });
+
+  it('bounds the combined conversation and project heading while retaining both full labels', async () => {
+    const title = `Synthetic conversation prefix. ${'x'.repeat(989)}`;
+    const project = projectFromConfig('Synthetic project context', '', cfg, []);
+    writeProjects([project]); setActiveProjectId(project.id);
+    const thread = { ...createChatThread(1, 'project-title'), title };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    const fullHeading = `${title} · ${project.name}`;
+    const heading = await screen.findByRole('heading', { name: fullHeading });
+    expect(heading).toHaveAttribute('title', fullHeading);
+    expect(heading.textContent).toMatch(/^Synthetic conversation prefix\./);
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+  });
+
   it("locks the composer while preparing a request and lets Stop cancel before generation", async () => {
     let release!: () => void;
     mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
@@ -551,12 +758,12 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
-    fireEvent.click(selector); await screen.findByRole("option", { name: "Worker · 8092 · running" });
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Worker · 8092 · Running" });
 
     mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
 
-    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).not.toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · Crashed" })).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("shares one session list request with other open session views", async () => {
@@ -579,7 +786,7 @@ describe("ChatPanel document context warning", () => {
     try {
       renderPanel();
       fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-      await screen.findByRole("option", { name: "Worker · 8092 · running" });
+      await screen.findByRole("option", { name: "Worker · 8092 · Running" });
       const calls = mocked.sessionList.mock.calls.length;
 
       visibility.mockReturnValue("hidden");
@@ -588,7 +795,7 @@ describe("ChatPanel document context warning", () => {
       visibility.mockReturnValue("visible");
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
-      await screen.findByRole("option", { name: "Worker · 8092 · crashed" });
+      await screen.findByRole("option", { name: "Worker · 8092 · Crashed" });
       expect(mocked.sessionList).toHaveBeenCalledTimes(calls + 1);
     } finally {
       visibility.mockRestore();
@@ -691,5 +898,392 @@ describe("ChatPanel document context warning", () => {
     expect(mocked.chatStream.mock.calls[1][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
     expect(sessionHasActivity("default")).toBe(false);
     expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "default");
+  });
+});
+
+describe('ChatPanel completion-only models', () => {
+  it('explains missing templates, preserves the input and enables sending after choosing a chat model', async () => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.mcpListServers.mockResolvedValue([]);
+    mocked.mcpListTools.mockResolvedValue([]);
+    const panelStore = createTestStore({ ...cfg, active_provider: 'vllm' });
+    panelStore.status = { ...store.status, engine: { provider: 'vllm', runtime_id: 'synthetic', upstream_model: 'base-model',
+      modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {}, chat_supported: false } };
+    const view = renderPanel(panelStore);
+    const input = screen.getByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(input, { target: { value: 'hello' } });
+    expect(screen.getByText(/This model has no chat template/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(input).toHaveValue('hello');
+    panelStore.status = { ...panelStore.status, engine: { ...panelStore.status.engine!, chat_supported: true } };
+    view.rerender(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ChatPanel, { store: panelStore }) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    respondWithText('Ready');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await screen.findByText('Ready');
+    expect(mocked.chatStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatPanel retry recovery', () => {
+  const savedRequest: api.ChatMessage[] = [
+    { role: 'system', content: 'Synthetic saved system prompt' },
+    { role: 'user', content: 'Saved synthetic question' },
+  ];
+  const interruptedThread = (id: string, createdAt: number, retry?: ChatRetrySnapshot) => ({
+    ...createChatThread(createdAt, id), title: `Interrupted ${id}`,
+    messages: [
+      { role: 'user' as const, content: 'Saved synthetic question' },
+      { role: 'assistant' as const, content: '', reasoning: 'Saved reasoning', interrupted: true, model: cfg.active_model,
+        ...(retry === undefined ? {} : { retry }) },
+    ],
+  });
+  const snapshot: ChatRetrySnapshot = { version: 1, text: 'Saved synthetic question', images: [], documents: [], history: savedRequest };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mocked.chatStream.mockReset();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it('offers Retry for an interrupted reply restored after a restart and resends its saved request once', async () => {
+    const thread = interruptedThread('restored', 1, snapshot);
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    respondWithText('Recovered synthetic answer');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Recovered synthetic answer');
+    expect(mocked.chatStream).toHaveBeenCalledOnce();
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+    expect(mocked.chatStream.mock.calls[0][1]).toBe('test-key');
+    await waitFor(() => expect(loadChatWorkspace().threads[0].messages.map(message => [message.role, message.content]))
+      .toEqual([['user', 'Saved synthetic question'], ['assistant', 'Recovered synthetic answer']]));
+    expect(loadChatWorkspace().threads[0].messages[1].retry).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+  });
+
+  it('explains instead of promising an exact retry for an interrupted reply saved without a snapshot', async () => {
+    const thread = interruptedThread('legacy', 1);
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(await screen.findByText(/saved without the exact original request/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the retry of each conversation with that conversation across switches', async () => {
+    const interrupted = interruptedThread('switch-a', 1, snapshot);
+    const complete = { ...createChatThread(2, 'switch-b'), title: 'Complete conversation', messages: [
+      { role: 'user' as const, content: 'Other question' }, { role: 'assistant' as const, content: 'Other answer', finishReason: 'stop' },
+    ] };
+    saveChatWorkspace({ activeThreadId: complete.id, threads: [complete, interrupted] });
+    renderPanel();
+    await screen.findByRole('heading', { name: complete.title });
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: interrupted.title }));
+    await screen.findByRole('heading', { name: interrupted.title });
+    respondWithText('Answer for the interrupted conversation');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Answer for the interrupted conversation');
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: complete.title }));
+    await screen.findByRole('heading', { name: complete.title });
+    await waitFor(() => expect(loadChatWorkspace().threads.find(thread => thread.id === complete.id)?.messages).toEqual(complete.messages));
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+  });
+
+  it('offers Retry after Stop cancels an approved MCP tool call', async () => {
+    mocked.mcpListServers.mockResolvedValue([{ id: 'srv1', name: 'Test Server', command: 'node', args: [], enabled: true }]);
+    mocked.mcpListTools.mockResolvedValue([{ name: 'test_tool', description: 'A test tool.', input_schema: { type: 'object', properties: {} } }]);
+    let cancelCall!: (error: Error) => void;
+    mocked.mcpCallTool.mockImplementation(() => new Promise((_resolve, reject) => { cancelCall = reject; }));
+    mocked.mcpCancelToolCall.mockImplementation(async () => cancelCall(new Error('MCP tool call cancelled')));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Load MCP tools' }));
+    await screen.findByText(/Test Server/);
+    mocked.chatStream.mockImplementationOnce(async (_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: (delta: { tool_calls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>; finish_reason?: string }) => void) => {
+      onDelta({ tool_calls: [{ index: 0, id: 'call-1', name: 'srv1__test_tool', arguments: '{}' }], finish_reason: 'tool_calls' });
+      return '';
+    });
+    await sendMessage('Use the synthetic tool.');
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledOnce());
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve once' }));
+    await waitFor(() => expect(mocked.mcpCallTool).toHaveBeenCalledOnce());
+    // Waiting for the native approval is not a recoverable turn yet.
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop generation' }));
+    const retry = await screen.findByRole('button', { name: 'Retry last message' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(mocked.mcpCancelToolCall).toHaveBeenCalledOnce();
+
+    respondWithText('Answer after retrying');
+    fireEvent.click(retry);
+    await screen.findByText('Answer after retrying');
+    expect(mocked.chatStream.mock.calls[1][3]).toEqual(mocked.chatStream.mock.calls[0][3]);
+    expect(mocked.mcpCallTool).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ChatPanel recovery of replies without output and non-chat sessions', () => {
+  const savedRequest: api.ChatMessage[] = [{ role: 'user', content: 'Saved synthetic question' }];
+  const snapshot: ChatRetrySnapshot = { version: 1, text: 'Saved synthetic question', images: [], documents: [], history: savedRequest };
+  const savedThread = (reply: Record<string, unknown>) => ({
+    ...createChatThread(1, 'without-output'), title: 'Reply without output',
+    messages: [{ role: 'user' as const, content: 'Saved synthetic question' }, { role: 'assistant' as const, content: '', ...reply }],
+  });
+  const sessionStore = (tasks: string[]) => {
+    const panelStore = createTestStore({ ...cfg, active_provider: 'llama.cpp' });
+    panelStore.status = { ...store.status, engine: { provider: 'llama.cpp', runtime_id: 'synthetic', upstream_model: 'synthetic-model',
+      modalities: { text: true, image: false, audio: tasks.includes('transcription'), video: false }, tasks, request_fields: {}, chat_supported: false } };
+    return panelStore;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mocked.chatStream.mockReset();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it('says a reply stopped before any output instead of claiming a preserved partial response, and offers Retry', async () => {
+    const thread = savedThread({ reasoning: '', interrupted: true, model: cfg.active_model, retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    const log = within(screen.getByRole('log', { name: 'Conversation' }));
+    expect(log.getByText('Generation stopped before any output.')).toBeInTheDocument();
+    expect(screen.queryByText(/partial response preserved/)).not.toBeInTheDocument();
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('Generation stopped before any output.');
+    respondWithText('Answer after the empty stop');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Answer after the empty stop');
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+  });
+
+  it('restores a stopped MCP round reported without a tool_calls finish reason as incomplete, and never retries it without the tools an earlier version did not save', async () => {
+    const thread = savedThread({ model: cfg.active_model, toolRound: 'cancelled', retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(screen.getByText('The MCP tool call was stopped; its result was not used.')).toBeInTheDocument();
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('MCP response incomplete');
+    expect(await screen.findByText(/this reply depends on MCP tools, but an earlier version saved it without recording which ones/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(mocked.mcpCallTool).not.toHaveBeenCalled();
+    expect(loadChatWorkspace().threads[0].messages[1]).toMatchObject({ toolRound: 'cancelled' });
+    expect(loadChatWorkspace().threads[0].messages[1].finishReason).toBeUndefined();
+  });
+
+  it.each([
+    [['embed'], 'This session provides embeddings only, not chat or text generation.'],
+    [['transcription'], 'This session provides speech transcription only, not chat or text generation.'],
+  ] as const)('explains a %j session by its tasks instead of a missing chat template', async (tasks, explanation) => {
+    const thread = savedThread({ reasoning: '', interrupted: true, model: cfg.active_model, retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel(sessionStore([...tasks]));
+    await screen.findByRole('heading', { name: thread.title });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), { target: { value: 'hello' } });
+    expect(screen.getByText(new RegExp(explanation.replace(/[.]/g, '\\.')))).toBeInTheDocument();
+    expect(screen.queryByText(/no chat template/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Text completions remain available/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    // Retry cannot reach a session that does not generate.
+    expect(screen.getByRole('button', { name: 'Retry last message' })).toBeDisabled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the missing-template advice for a generation session without a chat template', async () => {
+    renderPanel(sessionStore(['generate', 'embed']));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), { target: { value: 'hello' } });
+    expect(screen.getByText(/This model has no chat template/)).toBeInTheDocument();
+    expect(screen.queryByText(/not chat or text generation/)).not.toBeInTheDocument();
+  });
+});
+
+describe('saved names for running chat targets', () => {
+  const definition = (id: string, name: string): api.SessionDefinition => ({
+    id, name, enabled: true, models: { primary_model: `models/${id}.gguf`, mmproj: '', draft_model: '' },
+    gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null },
+  });
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+    mocked.chatStream.mockReset();
+    mocked.mcpListServers.mockResolvedValue([]);
+    mocked.mcpListTools.mockResolvedValue([]);
+    mocked.serverActivity.mockResolvedValue(undefined);
+    mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1, 0]));
+    setActiveProjectId(null);
+  });
+
+  it('routes an answer through the running session chosen by its saved name', async () => {
+    const saved = definition('work', 'My answer engine');
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'runtime-generated-name', state: 'running', port: 8091,
+      model: saved.models.primary_model, url: 'http://127.0.0.1:8091', api_key: 'synthetic-answer-key' }]);
+    renderPanel(createTestStore({ ...cfg, sessions: [saved] }));
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Loaded sessions');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · 8091 · Running' }));
+    respondWithText('Named engine answer');
+    await sendMessage('Use my selected engine');
+    await screen.findByText('Named engine answer', { exact: true });
+    expect(mocked.chatStream.mock.calls.at(-1)?.slice(0, 3)).toEqual(['http://127.0.0.1:8091', 'synthetic-answer-key', saved.models.primary_model]);
+  });
+
+  it('uses the embedding endpoint selected by its saved session name', async () => {
+    const saved = definition('documents', 'My document index');
+    mocked.sessionList.mockResolvedValue([{ id: saved.id, name: 'runtime-embedding-file', state: 'running', port: 8092,
+      model: saved.models.primary_model, url: 'http://127.0.0.1:8092', api_key: 'synthetic-embedding-key',
+      engine: { provider: 'custom.documents', runtime_id: 'synthetic-build', upstream_model: 'native-embedding-model',
+        modalities: { text: true, image: false, audio: false, video: false }, tasks: ['embed'], request_fields: {},
+        embedding_model: 'native-embedding-model', embedding_namespace: 'synthetic/d80' } }]);
+    renderPanel({ ...createTestStore({ ...cfg, sessions: [saved] }), status: { ...store.status } });
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Document search embedding model');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My document index · native-embedding-model · documents' }));
+    await attachDocument('routing-notes.txt', SMALL_DOCUMENT);
+    respondWithText('Document answer');
+    await sendMessage('Search my notes');
+    await screen.findByText('Document answer', { exact: true });
+    expect(mocked.embedText.mock.calls.at(-1)?.slice(0, 3)).toEqual(['http://127.0.0.1:8092', 'synthetic-embedding-key', 'native-embedding-model']);
+  });
+
+  it('distinguishes an unavailable selected embedding session from keyword search after a session refresh', async () => {
+    const saved = [definition('documents-α', 'My document index'), definition('documents-β', 'Other index')];
+    const candidates: api.SessionStatus[] = saved.map(item => ({ id: item.id, name: item.name, state: 'running',
+      model: item.models.primary_model, url: 'http://127.0.0.1:8092',
+      engine: { provider: 'custom.documents', runtime_id: 'synthetic-build', upstream_model: 'encoder',
+        modalities: { text: true, image: false, audio: false, video: false }, tasks: ['embed'], request_fields: {}, embedding_model: 'encoder' } }));
+    mocked.sessionList.mockResolvedValue(candidates);
+    renderPanel({ ...createTestStore({ ...cfg, sessions: saved }), status: { ...store.status } });
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Document search embedding model');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My document index · encoder · documents-α' }));
+
+    mocked.sessionList.mockResolvedValue([candidates[1]]);
+    await act(async () => { window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT)); });
+    await waitFor(() => expect(picker).toHaveTextContent('Unavailable session · documents-α'));
+    fireEvent.click(picker);
+    expect(screen.getByRole('option', { name: 'Unavailable session · documents-α' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('option', { name: 'Keyword search' })).toHaveLength(1);
+    expect(mocked.embedText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('option', { name: 'Keyword search' }));
+    expect(picker).toHaveTextContent('Keyword search');
+  });
+
+  it('identifies a transcription target by the saved name while retaining its native model label', async () => {
+    const saved = definition('speech', 'My local speech engine');
+    mocked.sessionList.mockResolvedValue([{ id: saved.id, name: 'runtime-speech-file', state: 'running', port: 8093,
+      model: 'native-speech-model', url: 'http://127.0.0.1:8093', api_key: 'synthetic-speech-key',
+      engine: { provider: 'custom.speech', runtime_id: 'synthetic-build', upstream_model: 'native-speech-model',
+        modalities: { text: false, image: false, audio: false, video: false }, tasks: ['transcription'], request_fields: {} } }]);
+    renderPanel(createTestStore({ ...cfg, sessions: [saved] }));
+    fireEvent.click(screen.getByText("How to send audio and video"));
+    const picker = await screen.findByLabelText("Session for converting audio to text");
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My local speech engine · native-speech-model' }));
+    expect(picker).toHaveTextContent('My local speech engine · native-speech-model');
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it.each(['openai/whisper-large-v3', 'acme/voice.gguf', 'acme/voice.bin', 'https://example.invalid/models/voice.bin'])(
+    'shortens explicit transcription paths while retaining native identifier %s', async modelId => {
+    const localSaved = definition('speech-local', 'My local speech engine');
+    const orgSaved = definition('speech-org', 'Cloud speech engine');
+    mocked.sessionList.mockResolvedValue([
+      {
+        id: localSaved.id,
+        name: 'runtime-speech-file',
+        state: 'running',
+        port: 8093,
+        model: 'C:/models/whisper-large-v3.gguf',
+        url: 'http://127.0.0.1:8093',
+        api_key: 'synthetic-speech-key',
+        engine: {
+          provider: 'custom.speech',
+          runtime_id: 'synthetic-build',
+          upstream_model: 'C:/models/whisper-large-v3.gguf',
+          modalities: { text: false, image: false, audio: false, video: false },
+          tasks: ['transcription'],
+          request_fields: {},
+        },
+      },
+      {
+        id: orgSaved.id,
+        name: 'runtime-speech-org',
+        state: 'running',
+        port: 8094,
+        model: modelId,
+        url: 'http://127.0.0.1:8094',
+        api_key: 'synthetic-speech-key-2',
+        engine: {
+          provider: 'custom.speech',
+          runtime_id: 'synthetic-build',
+          upstream_model: modelId,
+          modalities: { text: false, image: false, audio: false, video: false },
+          tasks: ['transcription'],
+          request_fields: {},
+        },
+      },
+    ]);
+    renderPanel(createTestStore({ ...cfg, sessions: [localSaved, orgSaved] }));
+    fireEvent.click(screen.getByText("How to send audio and video"));
+    const picker = await screen.findByLabelText("Session for converting audio to text");
+    fireEvent.click(picker);
+    const fileOption = await screen.findByRole('option', { name: 'My local speech engine · whisper-large-v3.gguf' });
+    expect(fileOption).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
+    const orgOption = await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` });
+    expect(orgOption).toBeInTheDocument();
+    fireEvent.click(fileOption);
+    expect(picker).toHaveTextContent('My local speech engine · whisper-large-v3.gguf');
+    expect(picker).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` }));
+    expect(picker).toHaveTextContent(`Cloud speech engine · ${modelId}`);
+    expect(picker).not.toHaveAttribute('title');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('localizes the loaded MCP tool count badge in Korean', async () => {
+    mocked.mcpListServers.mockResolvedValue([{ id: 'srv1', name: 'Test Server', command: 'node', args: [], enabled: true }]);
+    mocked.mcpListTools.mockResolvedValue([{ name: 'test_tool', description: 'A test tool.', input_schema: { type: 'object', properties: {} } }]);
+    render(createElement(I18nProvider, { initialLocale: 'ko', children: createElement(ChatPanel, { store }) }));
+    fireEvent.click(screen.getByText('MCP 도구'));
+    fireEvent.click(await screen.findByRole('button', { name: 'MCP 도구 불러오기' }));
+    const checkbox = await screen.findByRole('checkbox', { name: /Test Server · test_tool/ });
+    expect(checkbox).toBeChecked();
+    expect(await screen.findByText(/도구 1개 ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 tools/)).not.toBeInTheDocument();
+  });
+
+  it.each(['missing', 'blank'] as const)('retains the runtime name when the saved name is %s', async kind => {
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'Runtime fallback', state: 'running', port: 8091,
+      model: 'models/work.gguf', url: 'http://127.0.0.1:8091', api_key: 'synthetic-answer-key' }]);
+    renderPanel(createTestStore({ ...cfg, sessions: kind === 'missing' ? [] : [definition('work', '   ')] }));
+    fireEvent.click(screen.getByText('Conversation settings'));
+    fireEvent.click(await screen.findByLabelText('Loaded sessions'));
+    expect(await screen.findByRole('option', { name: 'Runtime fallback · 8091 · Running' })).toBeInTheDocument();
   });
 });

@@ -12,6 +12,11 @@ import * as api from "../../shared/api/index";
 // a hand-written `app-*` class, or never generates a competing rule.
 
 vi.mock("../../shared/api/index", () => ({
+  PROVIDERS: ['llama.cpp', 'vllm', 'mlx-vlm'],
+  registeredProviderIds: () => ['llama.cpp', 'vllm', 'mlx-vlm'],
+  providerDisplayName: (id: string) => id,
+  providerOf: (cfg: Partial<AppConfig>) => cfg.active_provider ?? 'llama.cpp',
+  modelLoadable: (model: { is_vision: boolean }, provider: string) => provider === 'llama.cpp' && !model.is_vision,
   isNativeRuntimeAvailable: () => false,
   listModels: vi.fn(),
   deleteModel: vi.fn(),
@@ -71,6 +76,7 @@ const baseCfg = {
 function storeFor(cfg: AppConfig): AppStore {
   return {
     cfg,
+    getConfig: () => cfg,
     status: { state: "stopped" },
     busy: false,
     updateConfig: async () => cfg,
@@ -80,6 +86,15 @@ function storeFor(cfg: AppConfig): AppStore {
 }
 
 describe("ModelsPanel CSS cascade", () => {
+  it('rescans compatibility using the selected vLLM installation when the runtime changes', async () => {
+    localStorage.clear();
+    mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
+    const cfg: AppConfig = { ...baseCfg, models_dir: 'synthetic/models', active_provider: 'vllm', active_runtime: 'metal-one' };
+    const view = render(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ModelsPanel, { store: storeFor(cfg) }) }));
+    await waitFor(() => expect(mocked.listModels).toHaveBeenCalledWith('synthetic/models', expect.any(String), { provider: 'vllm', runtime: 'metal-one' }));
+    view.rerender(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ModelsPanel, { store: storeFor({ ...cfg, active_runtime: 'metal-two' }) }) }));
+    await waitFor(() => expect(mocked.listModels).toHaveBeenLastCalledWith('synthetic/models', expect.any(String), { provider: 'vllm', runtime: 'metal-two' }));
+  });
   it("preserves current execution settings when a legacy profile has an incomplete runtime", async () => {
     localStorage.clear();
     localStorage.setItem("aiolm-model-profiles", JSON.stringify({
@@ -144,7 +159,7 @@ describe("ModelsPanel CSS cascade", () => {
     const model = { name: "large.gguf", path: files[0], size_mb: 300, is_vision: false, shards: { files, total: 2, missing: [] } };
     mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
     mocked.deleteModel.mockReset().mockResolvedValue(undefined);
-    const cfg = { ...baseCfg, models_dir: "C:/models" };
+    const cfg = { ...baseCfg, models_dir: "C:/models", active_model: "C:/models/other.gguf" };
     const store = storeFor(cfg);
     store.updateConfig = vi.fn().mockResolvedValue(cfg);
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
@@ -160,6 +175,9 @@ describe("ModelsPanel CSS cascade", () => {
     expect(mocked.deleteModel).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Delete model" }));
     await waitFor(() => expect(mocked.deleteModel).toHaveBeenCalledWith(files[0], files));
+    expect(await screen.findByText("Deleted: large.gguf")).toBeVisible();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(store.cfg?.active_model).toBe("C:/models/other.gguf");
   });
 
   it("shows incomplete shards without allowing selection or launch", async () => {
@@ -177,7 +195,7 @@ describe("ModelsPanel CSS cascade", () => {
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models", active_backend: "", active_build: "" }) }) }));
     expect(await screen.findByText("No runtime is selected.")).toBeVisible();
     // Without a provider the panel still offers the way to the runtime list.
-    expect(screen.getByRole("button", { name: "Manage runtimes" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Inference engines" })).toBeVisible();
     expect(await screen.findByRole("button", { name: "Start: ready.gguf" })).toBeDisabled();
   });
 
@@ -211,7 +229,7 @@ describe("ModelsPanel CSS cascade", () => {
       initialLocale: "en",
       children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models" }) }),
     }));
-    await screen.findByRole("heading", { name: "No GGUF models found" });
+    await screen.findByRole("heading", { name: "No models found" });
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Browse" })).toBeVisible();
     expect(view.container.querySelector("details.models-folder")).toBeNull();

@@ -6,21 +6,64 @@ import {
 } from './settingsProfiles';
 
 describe('settings profiles', () => {
+  it('keeps native runtime options through profile capture and application without other engines or an empty legacy map', () => {
+    expect(captureProfile(testConfig, 'Legacy', 'global', '').settings.provider_options).toBeUndefined();
+    const cfg = { ...testConfig, provider_options: { 'llama.cpp': { fresh: '한글 value' }, vllm: { max_model_len: 8192 } } };
+    const profile = captureProfile(cfg, 'Native', 'global', '');
+    expect(profile.settings.provider_options).toEqual({ 'llama.cpp': { fresh: '한글 value' } });
+    const restored = applySettingsProfile(testConfig, profile);
+    expect(restored.provider_options).toEqual({ 'llama.cpp': { fresh: '한글 value' } });
+  });
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('promotes legacy %s model profiles without changing saved values or application revisions', provider => {
+    const cfg = { ...testConfig, active_provider: provider, active_model: '/synthetic/old-model', active_runtime: 'runtime-current',
+      provider_options: { [provider]: { temperature: 0.23 } } };
+    const captured = captureProfile(cfg, 'Saved model profile', 'global', 'Keep this prompt');
+    const legacy: SettingsProfile = { ...captured, scope: 'model', model_key: profileTargetKey(cfg.active_model),
+      source_id: 'former-source', source_scope: 'global', revision: 8 };
+    const application = materializeProfileApplication(cfg, 'Saved application prompt', legacy);
+    const source = { ...emptyProfileLibrary(), revision: 12, entries: [legacy], applied: { [profileTargetKey(cfg.active_model, 'default', provider)]: application } };
+    const before = structuredClone(source);
+    const library = ensureProfileLibrary(source);
+    const promoted = library.entries.find(entry => entry.id === legacy.id)!;
+    expect(promoted).toMatchObject({ id: legacy.id, name: legacy.name, provider, scope: 'global', revision: 8,
+      settings: legacy.settings, system_prompt: legacy.system_prompt });
+    for (const key of ['model_key', 'source_id', 'source_scope']) expect(promoted).not.toHaveProperty(key);
+    expect(library.applied).toEqual(before.applied);
+    expect(library.revision).toBe(12);
+    expect(source).toEqual(before);
+    expect(ensureProfileLibrary(library)).toBe(library);
+    const next = { ...cfg, active_model: '/synthetic/new-model', active_runtime: 'runtime-other' };
+    expect(applySettingsProfile(next, promoted)).toMatchObject({ active_model: next.active_model, active_runtime: next.active_runtime });
+    const foreign = provider === 'vllm' ? 'mlx-vlm' : 'vllm';
+    expect(() => applySettingsProfile({ ...next, active_provider: foreign }, promoted)).toThrow('another runtime provider');
+  });
+  it('repairs independent defaults when a Python-only library occupies the legacy default id', () => {
+    const python: SettingsProfile = { id: 'profile-default', provider: 'vllm', name: 'Saved engine profile', scope: 'global', revision: 7,
+      settings: { provider_options: { vllm: { max_model_len: 8192 } } }, system_prompt: 'Keep this prompt' };
+    const source = { ...emptyProfileLibrary(), entries: [python], default_profile_id: python.id, provider_defaults: { vllm: python.id } };
+    const normalized = ensureProfileLibrary(source);
+    expect(defaultSettingsProfileEntry(normalized, 'vllm')).toEqual(python);
+    expect(defaultSettingsProfileEntry(normalized, 'llama.cpp')).toMatchObject({ provider: 'llama.cpp', id: 'profile-default-2' });
+    expect(defaultSettingsProfileEntry(normalized, 'mlx-vlm').provider).toBe('mlx-vlm');
+    expect(normalized.default_profile_id).toBe('profile-default-2');
+    expect(source.entries).toEqual([python]);
+    expect(ensureProfileLibrary(normalized)).toBe(normalized);
+  });
   it('keeps an empty migration container and normalizes model identities independently of session identities', () => {
     expect(emptyProfileLibrary()).toEqual({ version: 1, revision: 0, entries: [], applied: {}, legacy_imported: false });
     expect(profileTargetKey('C:\\Models\\Example.gguf')).toBe('model:c:/models/example.gguf');
     expect(profileTargetKey('models/a.gguf', 'saved-session')).toBe('session:saved-session');
-    expect(emptyProfileLibrary().entries).not.toBe(emptyProfileLibrary().entries);
+    expect(emptyProfileLibrary().entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).not.toBe(emptyProfileLibrary().entries);
   });
 
   it('initializes one independent Default profile using only runtime defaults', () => {
     const seeded = ensureProfileLibrary(emptyProfileLibrary());
-    expect(seeded.entries).toEqual([defaultSettingsProfile()]);
+    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile()]);
     expect(seeded.default_profile_id).toBe(defaultSettingsProfile().id);
-    expect(seeded.entries[0].settings.runtime_defaults).toContain('temperature');
-    expect(seeded.entries[0].settings).not.toHaveProperty('active_model');
-    expect(seeded.entries[0].settings).not.toHaveProperty('active_build');
-    expect(seeded.entries[0].settings).not.toHaveProperty('gpu');
+    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings.runtime_defaults).toContain('temperature');
+    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('active_model');
+    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('active_build');
+    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('gpu');
     expect(ensureProfileLibrary(seeded)).toBe(seeded);
     seeded.entries[0].settings.runtime_defaults!.push('synthetic');
     expect(defaultSettingsProfile().settings.runtime_defaults).not.toContain('synthetic');
@@ -43,7 +86,7 @@ describe('settings profiles', () => {
     const before = structuredClone(source);
     const migrated = ensureProfileLibrary(source);
     expect(migrated.applied).toEqual({ 'model:/models/Example.gguf': application, 'session:kept': application });
-    expect(migrated.entries[1]).toEqual(profile);
+    expect(migrated.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toEqual(profile);
     expect(migrated.revision).toBe(7);
     expect(ensureProfileLibrary(migrated)).toBe(migrated);
     expect(source).toEqual(before);
@@ -68,7 +111,7 @@ describe('settings profiles', () => {
     expect(canDeleteSettingsProfile(library, source.id)).toBe(false);
     expect(() => deleteSettingsProfile(library, source.id)).toThrow('default profile cannot be deleted');
     expect(canDeleteSettingsProfile(library, copy.id)).toBe(true);
-    expect(library.entries).toEqual([source, copy]);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([source, copy]);
     expect(canDeleteSettingsProfile(library, 'missing')).toBe(false);
   });
 
@@ -83,15 +126,106 @@ describe('settings profiles', () => {
     expect(canDeleteSettingsProfile(library, source.id)).toBe(true);
     expect(canDeleteSettingsProfile(library, copy.id)).toBe(true);
     const next = deleteSettingsProfile(library, source.id);
-    expect(next.entries).toEqual([other]);
-    expect(next.applied.current.profile_id).toBe(other.id);
-    expect(next.applied.current).toMatchObject({ settings: { temperature: 0.25 }, system_prompt: 'Default prompt' });
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual([copy.id, other.id]);
+    expect(next.applied.current).toEqual(application);
     expect(next.applied['session:saved']).toMatchObject({ model: 'other.gguf', profile_id: other.id, system_prompt: 'Default prompt',
-      settings: { temperature: 0.25, mmproj: 'session-projector.gguf' } });
+      settings: { temperature: 0.25, mmproj: other.settings.mmproj } });
     expect(next.applied.untouched).toEqual(library.applied.untouched);
     expect(library.applied.current).toEqual(application);
-    expect(library.entries).toHaveLength(3);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(3);
     expect(canDeleteSettingsProfile(next, other.id)).toBe(false);
+  });
+
+  const deletionFixture = (provider: 'llama.cpp' | 'vllm' | 'custom.synthetic') => {
+    const fallbackOptions = { synthetic_extra: { items: ['끝', 'first', '끝'], enabled: false, count: 0 } };
+    const fallback: SettingsProfile = { provider, id: 'synthetic-fallback', name: 'Fallback', scope: 'global', revision: 7,
+      legacy: true, coverage: ['provider_options', 'request_timeout_seconds', 'sleep_idle_seconds'],
+      legacy_runtime: { active_runtime: 'synthetic-history', synthetic_extra: { retained: ['second', 'first'] } },
+      settings: { provider_options: { [provider]: fallbackOptions }, request_timeout_seconds: 17, sleep_idle_seconds: 0 },
+      system_prompt: '  Fallback prompt\n' };
+    const discarded: SettingsProfile = { ...fallback, id: 'synthetic-discarded', name: 'Discarded', revision: 3 };
+    const cfg = { ...structuredClone(testConfig), active_provider: provider, runtime_defaults: [],
+      gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none' as const, tensor_split: [], draft_gpu_id: null },
+      provider_options: { [provider]: { synthetic_extra: { items: ['old'] } } } };
+    const affected = [profileTargetKey('/synthetic/model-0', 'default', provider), 'session:first',
+      profileTargetKey('/synthetic/model-2', 'default', provider), 'session:second'];
+    const applications = Object.fromEntries(affected.map((key, index) => [key,
+      materializeProfileApplication({ ...cfg, active_model: `/synthetic/model-${index}` }, `Saved prompt ${index}`, discarded)]));
+    const library = ensureProfileLibrary({ ...emptyProfileLibrary(), revision: 11,
+      entries: provider === 'llama.cpp' ? [discarded, fallback] : [discarded, defaultSettingsProfile(), fallback],
+      default_profile_id: provider === 'llama.cpp' ? fallback.id : defaultSettingsProfile().id,
+      provider_defaults: { [provider]: fallback.id }, provider_recent: { [provider]: discarded.id },
+      applied: { ...applications, untouched: materializeProfileApplication(cfg, 'Keep prompt', fallback) } });
+    return { provider, library, discarded, fallback, fallbackOptions, affected };
+  };
+
+  it.each(['llama.cpp', 'vllm', 'custom.synthetic'] as const)('preserves complete %s deletion results and independent target snapshots', provider => {
+    const { library, discarded, fallback, fallbackOptions, affected } = deletionFixture(provider);
+    const before = structuredClone(library);
+    const expectedApplications = Object.fromEntries(Object.entries(before.applied).map(([key, application]) => affected.includes(key)
+      ? [key, { model: application.model, provider, profile_id: fallback.id, profile_name: fallback.name, profile_revision: fallback.revision,
+        settings: { ...application.settings, provider_options: { [provider]: fallbackOptions }, request_timeout_seconds: 17, sleep_idle_seconds: 0 },
+        system_prompt: '  Fallback prompt\n' }]
+      : [key, application]));
+    const next = deleteSettingsProfile(library, discarded.id);
+    expect(next).toEqual({ ...before, entries: before.entries.filter(entry => entry.id !== discarded.id),
+      applied: expectedApplications, provider_recent: {} });
+    expect(Object.keys(next.applied)).toEqual(Object.keys(before.applied));
+    expect(next.entries.map(entry => entry.id)).toEqual(before.entries.filter(entry => entry.id !== discarded.id).map(entry => entry.id));
+    expect(library).toEqual(before);
+    expect(next.applied.untouched).toBe(library.applied.untouched);
+    const first = next.applied[affected[0]].settings.provider_options![provider] as typeof fallbackOptions;
+    const second = next.applied[affected[1]].settings.provider_options![provider] as typeof fallbackOptions;
+    expect(first).not.toBe(second);
+    first.synthetic_extra.items.push('output-only');
+    expect(second).toEqual(fallbackOptions);
+    expect(library).toEqual(before);
+
+    const latestFallback = library.entries.find(entry => entry.id === fallback.id)!;
+    const latestOptions = latestFallback.settings.provider_options![provider] as typeof fallbackOptions;
+    latestOptions.synthetic_extra.items.push('fresh-input');
+    latestFallback.revision += 1;
+    latestFallback.system_prompt = 'Fresh prompt';
+    const fresh = deleteSettingsProfile(library, discarded.id);
+    expect(fresh.applied[affected[0]]).toMatchObject({ profile_revision: 8, system_prompt: 'Fresh prompt',
+      settings: { provider_options: { [provider]: { synthetic_extra: { items: ['끝', 'first', '끝', 'fresh-input'] } } } } });
+  });
+
+  it('keeps per-provider fallback synthesis for plain legacy applications whose provider has no entries', () => {
+    const { library, discarded } = deletionFixture('llama.cpp');
+    const provider = 'custom.missing' as const;
+    const saved = { provider, model: '/synthetic/missing', profile_id: discarded.id, profile_name: discarded.name,
+      profile_revision: discarded.revision, system_prompt: 'Saved prompt',
+      settings: { provider_options: { [provider]: { synthetic_extra: ['old'] } }, request_timeout_seconds: 31, sleep_idle_seconds: -1 } };
+    library.applied['session:missing-first'] = saved;
+    library.applied['session:missing-second'] = { ...structuredClone(saved), model: '/synthetic/missing-second' };
+    library.applied.anonymous = { ...structuredClone(saved), profile_id: undefined };
+    const before = structuredClone(library);
+    const next = deleteSettingsProfile(library, discarded.id);
+    for (const key of ['session:missing-first', 'session:missing-second']) {
+      expect(next.applied[key]).toEqual({ model: before.applied[key].model, provider,
+        profile_id: 'profile-default-custom.missing', profile_name: 'Default', profile_revision: 1,
+        settings: { provider_options: { [provider]: {} }, request_timeout_seconds: 31, sleep_idle_seconds: -1 }, system_prompt: '' });
+    }
+    expect(next.entries.some(entry => entry.provider === provider)).toBe(false);
+    expect(next.applied.anonymous).toBe(library.applied.anonymous);
+    expect(next.applied['session:missing-first'].settings.provider_options![provider])
+      .not.toBe(next.applied['session:missing-second'].settings.provider_options![provider]);
+    expect(library).toEqual(before);
+  });
+
+  it('retains migration failure priority before default and missing-profile deletion errors', () => {
+    const { library, discarded, fallback } = deletionFixture('llama.cpp');
+    expect(() => deleteSettingsProfile(library, fallback.id)).toThrow('The default profile cannot be deleted. Choose another default profile first.');
+    expect(() => deleteSettingsProfile(library, 'missing')).toThrow('This profile is no longer available.');
+    const application = { ...library.applied['session:first'], model: '/synthetic/Case.gguf' };
+    const conflicting = { ...library, applied: { 'model:/synthetic/case.gguf': application,
+      'model:/synthetic/Case.gguf': { ...application, system_prompt: 'Conflicting prompt' } } };
+    const before = structuredClone(conflicting);
+    for (const id of [fallback.id, discarded.id, 'missing']) {
+      expect(() => deleteSettingsProfile(conflicting, id)).toThrow('Conflicting saved settings for the same model path.');
+    }
+    expect(conflicting).toEqual(before);
   });
 
   it('promotes a model profile in place when designated as default and detaches it from its source', () => {
@@ -107,25 +241,26 @@ describe('settings profiles', () => {
     expect(promoted).not.toHaveProperty('source_id');
     expect(promoted).not.toHaveProperty('source_scope');
     expect(selected.revision).toBe(8);
-    expect(selected.entries.map(entry => entry.name)).toEqual(['Chosen', 'Chosen']);
+    expect(selected.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(entry => entry.name)).toEqual(['Chosen', 'Chosen']);
     expect(applySettingsProfile({ ...testConfig, active_model: 'another.gguf' }, promoted)).toMatchObject({ ngl: 17, temperature: 0.2 });
-    expect(deleteSettingsProfile(selected, source.id).entries).toEqual([promoted]);
-    expect(library.entries[1]).toEqual(copy);
+    expect(deleteSettingsProfile(selected, source.id).entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([promoted]);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toEqual(copy);
   });
 
   it('repairs missing default designations deterministically and preserves partial model coverage on promotion', () => {
-    const model = { ...captureProfile(testConfig, 'Partial', 'model', ''), legacy: true, coverage: ['temperature'], settings: { temperature: 0.3 } };
+    const model = { ...captureProfile(testConfig, 'Partial', 'model', ''), scope: 'model' as const, model_key: profileTargetKey(testConfig.active_model), legacy: true, coverage: ['temperature'], settings: { temperature: 0.3 } };
     const portable = captureProfile(testConfig, 'Portable', 'global', '');
-    expect(defaultSettingsProfileEntry({ ...emptyProfileLibrary(), entries: [model, portable] })).toEqual(portable);
+    expect(defaultSettingsProfileEntry({ ...emptyProfileLibrary(), entries: [model, portable], default_profile_id: portable.id })).toEqual(portable);
     const onlyModel = ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [model], default_profile_id: 'missing' });
     expect(defaultSettingsProfileEntry(onlyModel)).toMatchObject({ id: model.id, scope: 'global', coverage: ['temperature'], settings: model.settings });
     expect(ensureProfileLibrary(onlyModel)).toBe(onlyModel);
   });
 
-  it('captures model settings with an independent identity and preserves the prompt exactly', () => {
+  it('captures shared settings with an independent identity and preserves the prompt exactly', () => {
     const cfg = { ...structuredClone(testConfig), chat_options: { stop: [' end ', '\n\n'] } };
     const profile = captureProfile(cfg, '  Writing  ', 'model', '  Keep line breaks.\n');
-    expect(profile).toMatchObject({ name: 'Writing', scope: 'model', revision: 1, model_key: profileTargetKey(cfg.active_model), system_prompt: '  Keep line breaks.\n' });
+    expect(profile).toMatchObject({ name: 'Writing', scope: 'global', revision: 1, system_prompt: '  Keep line breaks.\n' });
+    expect(profile).not.toHaveProperty('model_key');
     expect(profile.settings).not.toHaveProperty('active_model');
     expect(profile.settings).not.toHaveProperty('port');
     expect(profile.settings).not.toHaveProperty('models_dir');
@@ -136,22 +271,17 @@ describe('settings profiles', () => {
     expect(captureProfile(testConfig, 'Writing', 'model', '').id).not.toBe(profile.id);
   });
 
-  it('launches on the runtime its profile names instead of the one the configuration carries', () => {
-    // A profile that did not own the runtime left it at whatever was already
-    // selected, so a model ran on the last runtime chosen anywhere. Every scope
-    // owns the pair now, which is what makes the profile the only place it is set.
+  it('preserves the selected runtime when applying named and default profiles', () => {
     const pinned = captureProfile({ ...testConfig, active_backend: 'cuda', active_build: 'b6215' }, 'Pinned', 'global', '');
     const elsewhere = { ...testConfig, active_backend: 'vulkan', active_build: 'b11035' };
 
-    expect(applySettingsProfile(elsewhere, pinned)).toMatchObject({ active_backend: 'cuda', active_build: 'b6215' });
+    expect(applySettingsProfile(elsewhere, pinned)).toMatchObject({ active_backend: elsewhere.active_backend, active_build: elsewhere.active_build });
 
-    // A profile naming no runtime leaves none behind either: an unset runtime is
-    // reported as a setup gap rather than silently filled from somewhere else.
     const unset = defaultSettingsProfile();
-    expect(applySettingsProfile(elsewhere, unset)).toMatchObject({ active_backend: '', active_build: '' });
+    expect(applySettingsProfile(elsewhere, unset)).toMatchObject({ active_backend: elsewhere.active_backend, active_build: elsewhere.active_build });
   });
 
-  it('keeps global profiles portable and leaves model-specific settings intact when applied', () => {
+  it('shares all engine options across models while preserving model and runtime identity', () => {
     const source = { ...testConfig, threads: 6, ctx_size: 8192, ngl: 99, spec_type: 'draft', spec_draft_model: 'draft.gguf',
       mmproj: 'vision.gguf', runtime_defaults: ['temperature', 'ngl', 'spec_draft_n_max'],
       server_args: ['--seed', '7'], gpu: { gpu_ids: ['runtime:vulkan:Vulkan0'], split_mode: 'none' as const, tensor_split: [] },
@@ -159,27 +289,25 @@ describe('settings profiles', () => {
     };
     const profile = captureProfile(source, 'Portable', 'global', 'Write clearly.');
     for (const field of ['gpu', 'ngl', 'n_cpu_moe', 'spec_type', 'spec_draft_n_max', 'spec_draft_model', 'mmproj', 'lora_adapters', 'server_args']) {
-      expect(profile.settings).not.toHaveProperty(field);
+      expect(profile.settings).toHaveProperty(field);
     }
-    // The runtime travels with the profile: it is what the profile launches on,
-    // not something the model it is applied to brings along.
-    expect(profile.settings.active_backend).toBe(source.active_backend);
-    expect(profile.settings.active_build).toBe(source.active_build);
-    expect(profile.settings.runtime_defaults).toEqual(['temperature']);
+    expect(profile.settings).not.toHaveProperty('active_backend');
+    expect(profile.settings).not.toHaveProperty('active_build');
+    expect(profile.settings.runtime_defaults).toEqual(['ngl', 'spec_draft_n_max', 'temperature']);
     const target = { ...testConfig, active_model: 'second.gguf', mmproj: 'second-projector.gguf', runtime_defaults: ['ngl', 'ctx_size'] };
     const applied = applySettingsProfile(target, profile);
-    expect(applied).toMatchObject({ active_model: target.active_model, active_backend: profile.settings.active_backend, active_build: profile.settings.active_build,
-      ngl: target.ngl, mmproj: target.mmproj, threads: 6, ctx_size: 8192, server_args: target.server_args });
-    expect(applied.runtime_defaults).toEqual(['ngl', 'temperature']);
+    expect(applied).toMatchObject({ active_model: target.active_model, active_backend: target.active_backend, active_build: target.active_build,
+      ngl: source.ngl, mmproj: source.mmproj, threads: 6, ctx_size: 8192, server_args: source.server_args });
+    expect(applied.runtime_defaults).toEqual(['ngl', 'spec_draft_n_max', 'temperature']);
     expect(profileMatches(profile, applied, 'Write clearly.')).toBe(true);
   });
 
-  it('rejects applying another model profile and invalid names without changing configuration', () => {
+  it('allows reuse and creation without a model while rejecting blank names', () => {
     const profile = captureProfile(testConfig, 'Model', 'model', '');
-    expect(() => applySettingsProfile({ ...testConfig, active_model: 'another.gguf' }, profile)).toThrow('different model');
-    expect(profileMatches(profile, { ...testConfig, active_model: 'another.gguf' }, '')).toBe(false);
+    expect(applySettingsProfile({ ...testConfig, active_model: 'another.gguf' }, profile).active_model).toBe('another.gguf');
+    expect(profileMatches(profile, { ...testConfig, active_model: 'another.gguf' }, '')).toBe(true);
     expect(() => captureProfile(testConfig, ' ', 'global', '')).toThrow('name');
-    expect(() => captureProfile({ ...testConfig, active_model: '' }, 'Named', 'model', '')).toThrow('Choose a model');
+    expect(captureProfile({ ...testConfig, active_model: '' }, 'Named', 'model', '')).toMatchObject({ name: 'Named', scope: 'global' });
   });
 
   it('resets missing owned fields to defaults while legacy coverage only changes saved fields', () => {
@@ -332,5 +460,36 @@ describe('settings a save would rewrite', () => {
   it('lists an added setting and a removed one alike', () => {
     const changes = changedSettings({ top_k: 40 }, { top_p: 0.9 });
     expect(changes.map(change => change.key).sort()).toEqual(['top_k', 'top_p']);
+  });
+  it('creates an external engine default without rewriting built-in profiles or source data', () => {
+    const source = ensureProfileLibrary(emptyProfileLibrary());
+    const before = structuredClone(source);
+    const expanded = ensureProfileLibrary(source, 'custom.personal');
+    expect(expanded.entries.filter(entry => entry.provider !== 'custom.personal')).toEqual(source.entries);
+    expect(defaultSettingsProfileEntry(expanded, 'custom.personal')).toMatchObject({ provider: 'custom.personal', settings: { provider_options: { 'custom.personal': {} } } });
+    expect(ensureProfileLibrary(expanded, 'custom.personal')).toBe(expanded);
+    expect(source).toEqual(before);
+  });
+});
+
+describe('settings object key ordering', () => {
+  const composed = '\u00e9';
+  const decomposed = 'e\u0301';
+  const left = { chat_options: { [composed]: 'composed-key value', [decomposed]: 'decomposed-key value' } };
+  const right = { chat_options: { [decomposed]: 'decomposed-key value', [composed]: 'composed-key value' } };
+
+  it('ignores insertion order for distinct literal keys with equal collation rank', () => {
+    expect(composed).not.toBe(decomposed);
+    expect(changedSettings(left, right)).toEqual([]);
+    expect(settingsEqual(left, right)).toBe(true);
+  });
+
+  it('preserves changed literal keys and values while retaining meaningful array order', () => {
+    const changed = { chat_options: { [decomposed]: 'changed literal value', [composed]: 'composed-key value' } };
+    expect(settingsEqual(left, changed)).toBe(false);
+    expect(changedSettings(left, changed)).toEqual([{ key: `chat_options.${decomposed}`, path: ['chat_options', decomposed],
+      before: 'decomposed-key value', after: 'changed literal value' }]);
+    expect(settingsEqual({ chat_options: { [composed]: 1 } }, { chat_options: { [decomposed]: 1 } })).toBe(false);
+    expect(settingsEqual({ chat_options: { stop: ['a', 'b'] } }, { chat_options: { stop: ['b', 'a'] } })).toBe(false);
   });
 });

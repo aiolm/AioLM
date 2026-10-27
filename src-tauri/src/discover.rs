@@ -1,9 +1,11 @@
 // Hugging Face Discover/search/download support.
+mod snapshots;
 use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+pub use snapshots::{download_snapshot, installed_snapshots};
+pub(crate) use snapshots::{read_snapshot_manifest, snapshot_path};
 use std::fs;
-use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -61,6 +63,7 @@ pub struct HfFile {
     pub oid: Option<String>,
     pub is_mmproj: bool,
     pub download_url: String,
+    pub companions_available: bool,
 }
 
 /// A repository file that is already present at its download destination.
@@ -274,8 +277,15 @@ fn is_mmproj(file_path: &str) -> bool {
         .starts_with("mmproj")
 }
 
-fn download_url(repo_id: &str, file_path: &str) -> String {
-    format!("https://huggingface.co/{repo_id}/resolve/main/{file_path}?download=true")
+fn download_url_at(repo_id: &str, file_path: &str, revision: &str) -> String {
+    let mut url = reqwest::Url::parse("https://huggingface.co").expect("static hub URL");
+    url.path_segments_mut()
+        .expect("hub URL supports path segments")
+        .extend(repo_id.split('/'))
+        .extend(["resolve", revision])
+        .extend(file_path.split('/'));
+    url.query_pairs_mut().append_pair("download", "true");
+    url.into()
 }
 
 fn repo_directory(repo_id: &str) -> PathBuf {
@@ -414,12 +424,20 @@ async fn activate_download(part: &Path, target: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot clean up staged model download: {error}"))
 }
 
-/// List GGUF repositories in the requested order.
+/// List GGUF or safetensors repositories in the requested order.
 ///
 /// An empty query is not an error: Discover opens on the catalog itself, and
 /// the `search` parameter is then left off so the API returns its ranked list
 /// rather than the result of matching an empty term.
-pub async fn search(query: &str, limit: u32, sort: &str) -> Result<Vec<HfModel>, String> {
+pub async fn search_format(
+    query: &str,
+    limit: u32,
+    sort: &str,
+    format: &str,
+) -> Result<Vec<HfModel>, String> {
+    if !["gguf", "safetensors", "mlx"].contains(&format) {
+        return Err("unsupported model format".into());
+    }
     let query = query.trim();
     if query.len() > MAX_QUERY_LENGTH || query.chars().any(char::is_control) {
         return Err("model search query is invalid or too long".into());
@@ -429,11 +447,21 @@ pub async fn search(query: &str, limit: u32, sort: &str) -> Result<Vec<HfModel>,
     }
     let limit = limit.clamp(1, 50).to_string();
     let mut params = vec![
-        ("filter", "gguf"),
+        (
+            "filter",
+            if format == "mlx" {
+                "safetensors"
+            } else {
+                format
+            },
+        ),
         ("sort", sort),
         ("direction", "-1"),
         ("limit", limit.as_str()),
     ];
+    if format == "mlx" {
+        params.push(("filter", "mlx"));
+    }
     for field in EXPAND_FIELDS {
         params.push(("expand[]", field));
     }
@@ -464,46 +492,162 @@ pub async fn search(query: &str, limit: u32, sort: &str) -> Result<Vec<HfModel>,
 }
 
 pub async fn files(repo_id: &str) -> Result<Vec<HfFile>, String> {
-    validate_repo_id(repo_id)?;
-    let response = client()?
-        .get(format!("{HF_API}/models/{repo_id}/tree/main"))
-        .query(&[("recursive", "true"), ("expand", "false")])
-        .send()
-        .await
-        .map_err(|error| format!("Hugging Face file listing failed: {error}"))?;
+    files_at(repo_id, "main", &AtomicBool::new(false)).await
+}
+
+async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, String> {
+    let response = tokio::select! {
+        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        response = client()?.get(format!("{HF_API}/models/{repo}/revision/main")).send() => response.map_err(|error| error.to_string())?
+    };
     validate_response_url(&response)?;
-    let entries: Vec<ApiTreeEntry> = decode_json(response).await?;
-    if entries.len() > MAX_TREE_ENTRIES {
-        return Err("Hugging Face repository tree is too large to inspect safely".into());
+    let metadata: serde_json::Value = tokio::select! {
+        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        metadata = decode_json(response) => metadata?
+    };
+    let revision = metadata
+        .get("sha")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("repository did not return an immutable revision")?;
+    if revision.len() != 40 || !revision.bytes().all(|value| value.is_ascii_hexdigit()) {
+        return Err("invalid repository revision".into());
+    }
+    Ok(revision.into())
+}
+
+fn tree_next_page(
+    headers: &reqwest::header::HeaderMap,
+    repo: &str,
+    revision: &str,
+) -> Result<Option<String>, String> {
+    let next = headers
+        .get("link")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').find(|link| link.contains("rel=\"next\"")))
+        .and_then(|link| link.trim().strip_prefix('<')?.split('>').next())
+        .map(str::to_owned);
+    if let Some(url) = &next {
+        let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
+        if parsed.scheme() != "https"
+            || parsed.host_str() != Some("huggingface.co")
+            || parsed.path() != format!("/api/models/{repo}/tree/{revision}")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err("unsafe repository pagination link".into());
+        }
+    }
+    Ok(next)
+}
+
+async fn repository_tree(
+    repo: &str,
+    revision: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<ApiTreeEntry>, String> {
+    let mut entries = Vec::new();
+    let mut next = Some(format!(
+        "{HF_API}/models/{repo}/tree/{revision}?recursive=true&expand=false"
+    ));
+    let mut visited = std::collections::HashSet::new();
+    while let Some(url) = next.take() {
+        if !visited.insert(url.clone()) || visited.len() > 100 {
+            return Err("repository pagination exceeded its limit".into());
+        }
+        let response = tokio::select! {
+            _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+            response = client()?.get(&url).send() => response.map_err(|error| error.to_string())?
+        };
+        validate_response_url(&response)?;
+        next = tree_next_page(response.headers(), repo, revision)?;
+        let page: Vec<ApiTreeEntry> = tokio::select! {
+            _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+            page = decode_json(response) => page?
+        };
+        entries.extend(page);
+        if entries.len() > MAX_TREE_ENTRIES {
+            return Err("repository contains too many files".into());
+        }
+    }
+    Ok(entries)
+}
+
+async fn files_at(
+    repo_id: &str,
+    revision: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<HfFile>, String> {
+    validate_repo_id(repo_id)?;
+    let entries = repository_tree(repo_id, revision, cancel).await?;
+    listed_gguf_files(repo_id, revision, &entries)
+}
+
+fn listed_gguf_files(
+    repo_id: &str,
+    revision: &str,
+    entries: &[ApiTreeEntry],
+) -> Result<Vec<HfFile>, String> {
+    // Index companion names once. A repository may list thousands of GGUF
+    // variants; searching its whole tree again per row would be quadratic.
+    let mut loading: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        if entry.entry_type != "file" {
+            continue;
+        }
+        let (directory, name) = entry.path.rsplit_once('/').unwrap_or(("", &entry.path));
+        loading
+            .entry(directory.into())
+            .or_default()
+            .insert(name.into());
     }
     entries
-        .into_iter()
+        .iter()
         .filter(|entry| {
             entry.entry_type == "file" && entry.path.to_ascii_lowercase().ends_with(".gguf")
         })
         .map(|entry| {
             validate_repo_path(&entry.path)?;
+            let directory = entry
+                .path
+                .rsplit_once('/')
+                .map(|(directory, _)| directory)
+                .unwrap_or("");
+            let local = loading
+                .get(directory)
+                .filter(|names| names.contains("config.json"))
+                .or_else(|| loading.get(""));
+            let companions_available = !is_mmproj(&entry.path)
+                && shard_group(entry.path.rsplit('/').next().unwrap_or_default()).is_none()
+                && local.is_some_and(|names| {
+                    names.contains("config.json")
+                        && (["tokenizer.json", "tokenizer.model", "spiece.model"]
+                            .iter()
+                            .any(|name| names.contains(*name))
+                            || (names.contains("vocab.json") && names.contains("merges.txt")))
+                });
             // HF stores large files in Git LFS: `oid` is the 40-char git blob
             // SHA while the real file SHA-256 lives in `lfs.oid`.
             let oid = entry
                 .lfs
                 .as_ref()
                 .and_then(|lfs| lfs.oid.clone())
-                .or(entry.oid);
+                .or_else(|| entry.oid.clone());
             Ok(HfFile {
                 path: entry.path.clone(),
                 size_bytes: entry.size,
                 oid,
                 is_mmproj: is_mmproj(&entry.path),
-                download_url: download_url(repo_id, &entry.path),
+                download_url: download_url_at(repo_id, &entry.path, revision),
+                companions_available,
             })
         })
         .collect()
 }
 
-/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Returns every
-/// file name in the group, in order, when `name` is one part of such a set.
-fn shard_group(name: &str) -> Option<Vec<String>> {
+/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Generates the
+/// group in order, without allocating names just to recognize a split model.
+fn shard_group(name: &str) -> Option<impl Iterator<Item = String> + '_> {
     let (stem, extension) = name.rsplit_once('.')?;
     if !extension.eq_ignore_ascii_case("gguf") {
         return None;
@@ -523,15 +667,25 @@ fn shard_group(name: &str) -> Option<Vec<String>> {
     if total <= 1 || index == 0 || index > total {
         return None;
     }
-    Some(
-        (1..=total)
-            .map(|part| format!("{base}-{part:05}-of-{total:05}.{extension}"))
-            .collect(),
-    )
+    Some((1..=total).map(move |part| format!("{base}-{part:05}-of-{total:05}.{extension}")))
 }
 
-/// Which parts of `target`'s multi-part set are not on disk beside it.
-fn missing_shards(target: &Path) -> Vec<String> {
+fn installed_file_metadata(target: &Path, root: &Path) -> Option<fs::Metadata> {
+    let resolved = target.canonicalize().ok()?;
+    if !resolved.starts_with(root) {
+        return None;
+    }
+    fs::metadata(resolved)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+}
+
+/// Which parts of `target`'s multi-part set are not in the selected library.
+fn missing_shards(
+    target: &Path,
+    root: &Path,
+    groups: &mut std::collections::HashMap<PathBuf, Vec<String>>,
+) -> Vec<String> {
     let Some(name) = target.file_name().and_then(|value| value.to_str()) else {
         return Vec::new();
     };
@@ -539,10 +693,20 @@ fn missing_shards(target: &Path) -> Vec<String> {
         return Vec::new();
     };
     let parent = target.parent().unwrap_or(Path::new(""));
-    group
-        .into_iter()
-        .filter(|part| !parent.join(part).is_file())
-        .collect()
+    let mut group = group.peekable();
+    let Some(first) = group.peek() else {
+        return Vec::new();
+    };
+    // Every row in a split set needs the same result. Reuse it only within
+    // this query; the next query must observe newly downloaded/deleted parts.
+    groups
+        .entry(parent.join(first))
+        .or_insert_with(|| {
+            group
+                .filter(|part| installed_file_metadata(&parent.join(part), root).is_none())
+                .collect()
+        })
+        .clone()
 }
 
 /// Which of `files` this machine already holds for `repo_id`.
@@ -565,24 +729,28 @@ pub fn installed_files(
     if files.len() > MAX_TREE_ENTRIES {
         return Err("too many repository files to inspect safely".into());
     }
+    // Resolve the selected library without creating it. Root aliases remain
+    // valid, but a repository link must not claim files outside that library
+    // which the download path would refuse to write.
+    let Ok(canonical_root) = Path::new(root).canonicalize() else {
+        return Ok(Vec::new());
+    };
     let base = Path::new(root).join("hf").join(repo_directory(repo_id));
     let mut installed = Vec::new();
+    let mut shard_groups = std::collections::HashMap::new();
     for file in files {
         if validate_repo_path(file).is_err() {
             continue;
         }
         let target = base.join(relative_path(file));
-        let Ok(metadata) = fs::metadata(&target) else {
+        let Some(metadata) = installed_file_metadata(&target, &canonical_root) else {
             continue;
         };
-        if !metadata.is_file() {
-            continue;
-        }
         installed.push(InstalledHfFile {
             path: file.clone(),
             local_path: target.to_string_lossy().into_owned(),
             size_bytes: metadata.len(),
-            missing_shards: missing_shards(&target),
+            missing_shards: missing_shards(&target, &canonical_root, &mut shard_groups),
         });
     }
     Ok(installed)
@@ -597,21 +765,59 @@ fn expected_sha256(oid: Option<&str>) -> Option<String> {
         .then_some(value)
 }
 
-fn hash_file(path: &Path) -> Result<String, String> {
-    let file =
-        fs::File::open(path).map_err(|error| format!("cannot verify downloaded file: {error}"))?;
-    let mut reader = BufReader::new(file);
+/// Hash a file that is already at a download destination. Reads are bounded by
+/// the size the repository declares and checked for cancellation between
+/// chunks, so verifying a resumed multi-GiB file can be stopped like a transfer.
+async fn hash_existing_file<F>(
+    path: &Path,
+    size: u64,
+    cancel: &AtomicBool,
+    mut progress: F,
+) -> Result<String, String>
+where
+    F: FnMut(u64),
+{
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("cannot verify downloaded file: {error}"))?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| format!("cannot verify downloaded file: {error}"))?
+        .len();
+    if length != size {
+        return Err(format!("existing file is {length} bytes; expected {size}"));
+    }
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; DOWNLOAD_BUFFER_BYTES];
+    let mut read = 0_u64;
+    let mut last_progress = std::time::Instant::now();
     loop {
-        let count = reader
+        if cancel.load(Ordering::Acquire) {
+            return Err(DOWNLOAD_CANCELLED.into());
+        }
+        let count = file
             .read(&mut buffer)
+            .await
             .map_err(|error| format!("cannot hash downloaded file: {error}"))?;
         if count == 0 {
             break;
         }
+        read = read.saturating_add(count as u64);
+        if read > size {
+            return Err("existing file grew while it was verified".into());
+        }
         hasher.update(&buffer[..count]);
+        if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL {
+            progress(read);
+            last_progress = std::time::Instant::now();
+        }
     }
+    if read != size {
+        return Err("existing file shrank while it was verified".into());
+    }
+    progress(read);
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -735,23 +941,147 @@ where
     result
 }
 
+/// Resolve every shard from one immutable tree before downloading any bytes.
+/// A request for any part selects the same complete model and first entrypoint.
+fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>, String> {
+    let (directory, name) = file_path.rsplit_once('/').unwrap_or(("", file_path));
+    let paths: Vec<_> = shard_group(name)
+        .map(Iterator::collect)
+        .unwrap_or_else(|| vec![name.to_owned()]);
+    let indexed: std::collections::HashMap<_, _> = files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    paths
+        .into_iter()
+        .map(|name| {
+            let path = if directory.is_empty() {
+                name
+            } else {
+                format!("{directory}/{name}")
+            };
+            indexed
+                .get(path.as_str())
+                .map(|file| (*file).clone())
+                .ok_or_else(|| {
+                    format!("GGUF model file was not found in the repository tree: {path}")
+                })
+        })
+        .collect()
+}
+
 pub async fn download(
     app: AppHandle,
     repo_id: &str,
     file_path: &str,
     models_dir: &str,
     cancel: Arc<AtomicBool>,
+    include_companions: bool,
 ) -> Result<DownloadedModel, String> {
     validate_repo_id(repo_id)?;
     validate_repo_path(file_path)?;
+    let revision = immutable_revision(repo_id, &cancel).await?;
+    let entries = repository_tree(repo_id, &revision, &cancel).await?;
+    let files = listed_gguf_files(repo_id, &revision, &entries)?;
+    let plan = model_download_plan(&files, file_path)?;
+    drop(files);
+    if plan.iter().any(|file| file.size_bytes > MAX_MODEL_BYTES) {
+        return Err("model file exceeds the 512 GiB safety limit".into());
+    }
+    let total = plan.iter().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.size_bytes)
+            .ok_or("model download size overflow")
+    })?;
+    let entrypoint = plan
+        .first()
+        .ok_or("model download has no files")?
+        .path
+        .clone();
+    let label = if plan.len() > 1 {
+        let (stem, extension) = entrypoint.rsplit_once('.').ok_or("invalid GGUF path")?;
+        let (prefix, _) = stem.rsplit_once("-of-").ok_or("invalid GGUF shard")?;
+        format!(
+            "{}.{extension}",
+            prefix.rsplit_once('-').ok_or("invalid GGUF shard")?.0
+        )
+    } else {
+        entrypoint.clone()
+    };
+    let companions = if include_companions {
+        if cancel.load(Ordering::Acquire) {
+            return Err(DOWNLOAD_CANCELLED.into());
+        }
+        Some(snapshots::gguf_companion_plan(&entries, file_path)?)
+    } else {
+        None
+    };
+    // Both plans use the same verified revision. Release its full tree before
+    // transferring loading assets or model bytes instead of fetching it again.
+    drop(entries);
+    if let Some(plan) = companions {
+        let target = target_path(models_dir, repo_id, file_path)?;
+        snapshots::download_gguf_companions(
+            &app,
+            repo_id,
+            &revision,
+            target
+                .parent()
+                .ok_or("model has no destination directory")?,
+            &plan,
+            &cancel,
+        )
+        .await?;
+    }
+    let mut completed = 0_u64;
+    let mut downloaded = None;
+    for file in &plan {
+        let part = download_file(repo_id, file, models_dir, &cancel, |phase, received, _| {
+            emit_progress(
+                &app,
+                repo_id,
+                &label,
+                phase,
+                completed.saturating_add(received),
+                total,
+            );
+        })
+        .await?;
+        completed = completed.saturating_add(part.size_bytes);
+        if downloaded.is_none() {
+            downloaded = Some(part);
+        }
+    }
+    let mut downloaded = downloaded.ok_or("model download has no files")?;
+    downloaded.size_bytes = completed;
+    if include_companions {
+        snapshots::validate_gguf_companions(Path::new(&downloaded.path))?;
+    }
+    emit_progress(
+        &app,
+        repo_id,
+        &label,
+        "complete",
+        downloaded.size_bytes,
+        downloaded.size_bytes,
+    );
+    Ok(downloaded)
+}
+
+async fn download_file<F>(
+    repo_id: &str,
+    file: &HfFile,
+    models_dir: &str,
+    cancel: &AtomicBool,
+    mut progress: F,
+) -> Result<DownloadedModel, String>
+where
+    F: FnMut(&'static str, u64, u64),
+{
     if cancel.load(Ordering::Acquire) {
         return Err("model download cancelled".into());
     }
-    let file = files(repo_id)
-        .await?
-        .into_iter()
-        .find(|candidate| candidate.path == file_path)
-        .ok_or_else(|| "GGUF file was not found in the repository tree".to_string())?;
+    let file_path = file.path.as_str();
     let target = target_path(models_dir, repo_id, file_path)?;
     let part = temporary_download_path(&target)?;
     let total = file.size_bytes;
@@ -768,13 +1098,17 @@ pub async fn download(
         }
         Ok(metadata) => {
             if let Some(expected) = expected.as_deref() {
-                let existing = target.clone();
-                let actual = tokio::task::spawn_blocking(move || hash_file(&existing))
-                    .await
-                    .map_err(|error| format!("existing model checksum task failed: {error}"))??;
+                if metadata.len() != total {
+                    return Err(
+                        "a different model already exists at the download destination".into(),
+                    );
+                }
+                let actual = hash_existing_file(&target, total, cancel, |read| {
+                    progress("downloading", read, total);
+                })
+                .await?;
                 if actual == expected {
                     note_download(&target, repo_id, file_path);
-                    emit_progress(&app, repo_id, file_path, "complete", total, total);
                     return Ok(DownloadedModel {
                         repo_id: repo_id.to_owned(),
                         file_path: file_path.to_owned(),
@@ -789,7 +1123,6 @@ pub async fn download(
                 // length is only plausibly the same file. Reuse it rather than
                 // transfer it again, but record no provenance for it: nothing
                 // here shows these bytes came from this repository.
-                emit_progress(&app, repo_id, file_path, "complete", total, total);
                 return Ok(DownloadedModel {
                     repo_id: repo_id.to_owned(),
                     file_path: file_path.to_owned(),
@@ -806,12 +1139,11 @@ pub async fn download(
             ));
         }
     }
-    emit_progress(&app, repo_id, file_path, "starting", 0, total);
-    let response = download_client()?
-        .get(&file.download_url)
-        .send()
-        .await
-        .map_err(|error| format!("model download failed: {error}"))?;
+    progress("starting", 0, total);
+    let response = tokio::select! {
+        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        response = download_client()?.get(&file.download_url).send() => response.map_err(|error| format!("model download failed: {error}"))?
+    };
     validate_response_url(&response)?;
     let status = response.status();
     if !status.is_success() {
@@ -834,22 +1166,13 @@ pub async fn download(
         &part,
         response_total,
         expected.as_deref(),
-        &cancel,
-        |phase, received, total| {
-            emit_progress(&app, repo_id, file_path, phase, received, total);
-        },
+        cancel,
+        &mut progress,
     )
     .await?;
     if cancel.load(Ordering::Acquire) {
         let _ = tokio::fs::remove_file(&part).await;
-        emit_progress(
-            &app,
-            repo_id,
-            file_path,
-            "cancelled",
-            received,
-            response_total,
-        );
+        progress("cancelled", received, response_total);
         return Err("model download cancelled".into());
     }
     if let Err(error) = activate_download(&part, &target).await {
@@ -857,14 +1180,6 @@ pub async fn download(
         return Err(error);
     }
     note_download(&target, repo_id, file_path);
-    emit_progress(
-        &app,
-        repo_id,
-        file_path,
-        "complete",
-        received,
-        response_total,
-    );
     Ok(DownloadedModel {
         repo_id: repo_id.to_owned(),
         file_path: file_path.to_owned(),
@@ -876,6 +1191,119 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_file(path: &str, size_bytes: u64) -> HfFile {
+        HfFile {
+            path: path.into(),
+            size_bytes,
+            oid: None,
+            is_mmproj: false,
+            download_url: "https://example.invalid/unused".into(),
+            companions_available: false,
+        }
+    }
+
+    #[test]
+    fn split_model_download_resolves_every_part_in_order_in_the_selected_directory() {
+        let files: Vec<_> = (1..=33)
+            .rev()
+            .map(|part| model_file(&format!("Q4/model-{part:05}-of-00033.gguf"), part))
+            .chain([model_file("Q8/model-00001-of-00033.gguf", 999)])
+            .collect();
+        let plan = model_download_plan(&files, "Q4/model-00017-of-00033.gguf").unwrap();
+        assert_eq!(plan.len(), 33);
+        assert_eq!(plan[0].path, "Q4/model-00001-of-00033.gguf");
+        assert_eq!(plan[32].path, "Q4/model-00033-of-00033.gguf");
+        assert_eq!(plan.iter().map(|file| file.size_bytes).sum::<u64>(), 561);
+    }
+
+    #[test]
+    fn incomplete_repository_shard_sets_are_rejected_before_a_transfer_starts() {
+        let files = [
+            model_file("Q4/model-00001-of-00002.gguf", 10),
+            model_file("Q8/model-00002-of-00002.gguf", 10),
+            model_file("mmproj.gguf", 20),
+        ];
+        assert!(model_download_plan(&files, "Q4/model-00001-of-00002.gguf")
+            .unwrap_err()
+            .contains("Q4/model-00002-of-00002.gguf"));
+        assert_eq!(model_download_plan(&files, "mmproj.gguf").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn completed_shards_are_reused_and_cancellation_is_preserved_between_parts() {
+        let root = installed_fixture();
+        let first = model_file("model-00001-of-00002.gguf", 3);
+        let second = model_file("model-00002-of-00002.gguf", 3);
+        write_repo_file(&root, &first.path, b"one");
+        let cancel = AtomicBool::new(false);
+        let done = download_file(
+            "owner/model",
+            &first,
+            root.to_str().unwrap(),
+            &cancel,
+            |_, _, _| panic!("size-matched existing file needs no network stream"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.size_bytes, 3);
+        assert!(done.path.ends_with(&first.path));
+        cancel.store(true, Ordering::Release);
+        let error = download_file(
+            "owner/model",
+            &second,
+            root.to_str().unwrap(),
+            &cancel,
+            |_, _, _| panic!("cancelled shard must not start a stream"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, DOWNLOAD_CANCELLED);
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(fs::read(done.path).unwrap(), b"one");
+        assert!(
+            !target_path(root.to_str().unwrap(), "owner/model", &second.path)
+                .unwrap()
+                .exists()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_urls_encode_filenames_and_pin_the_verified_revision() {
+        let revision = "a".repeat(40);
+        let url = download_url_at("owner/model", "Q4/a #?.gguf", &revision);
+        assert!(url.contains(&format!("/resolve/{revision}/Q4/a%20%23%3F.gguf")));
+        assert!(!url.contains("/resolve/main/"));
+    }
+
+    #[test]
+    fn pagination_stays_in_the_exact_repository_and_revision() {
+        let headers = |url: &str| {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("link", format!("<{url}>; rel=\"next\"").parse().unwrap());
+            headers
+        };
+        assert!(tree_next_page(
+            &headers("https://huggingface.co/api/models/owner/model/tree/main?cursor=next"),
+            "owner/model",
+            "main"
+        )
+        .unwrap()
+        .is_some());
+        for url in [
+            "https://other.example/api/models/owner/model/tree/main",
+            "https://huggingface.co/api/models/owner/model/tree/main-evil",
+            "https://huggingface.co/api/models/other/model/tree/main",
+            "https://huggingface.co/api/models/owner/model/tree/another",
+            "http://huggingface.co/api/models/owner/model/tree/main",
+        ] {
+            assert!(
+                tree_next_page(&headers(url), "owner/model", "main").is_err(),
+                "{url}"
+            );
+        }
+    }
     use tokio::io::AsyncReadExt;
 
     async fn download_response(
@@ -1145,15 +1573,65 @@ mod tests {
             "type": "file",
         }))
         .expect("parse LFS tree entry");
-        let oid = entry
-            .lfs
-            .as_ref()
-            .and_then(|lfs| lfs.oid.clone())
-            .or(entry.oid);
+        let file = listed_gguf_files("owner/model", &"a".repeat(40), &[entry])
+            .unwrap()
+            .pop()
+            .unwrap();
         assert_eq!(
-            expected_sha256(oid.as_deref()),
+            expected_sha256(file.oid.as_deref()),
             Some("849856e1e7eff8ea7425a2a4cee50f3d547165194f50ea3112c9fc07cb08daad".to_string())
         );
+    }
+
+    #[test]
+    fn one_repository_tree_preserves_file_metadata_and_companion_scope() {
+        let entries: Vec<ApiTreeEntry> = serde_json::from_value(serde_json::json!([
+            {"type":"file", "path":"config.json", "size":2},
+            {"type":"file", "path":"tokenizer.json", "size":3},
+            {"type":"file", "path":"Q4/model.GGUF", "size":42, "oid":"git-blob-model"},
+            {"type":"file", "path":"local/config.json", "size":4},
+            {"type":"file", "path":"local/model.gguf", "size":43},
+            {"type":"file", "path":"Q4/mmproj.gguf", "size":44},
+            {"type":"file", "path":"Q4/model-00001-of-00002.gguf", "size":45},
+            {"type":"directory", "path":"not-a-file.gguf"},
+            {"type":"file", "path":"model.safetensors", "size":46}
+        ]))
+        .unwrap();
+        let revision = "b".repeat(40);
+        let files = listed_gguf_files("owner/model", &revision, &entries).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    file.companions_available
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("Q4/model.GGUF", 42, true),
+                ("local/model.gguf", 43, false),
+                ("Q4/mmproj.gguf", 44, false),
+                ("Q4/model-00001-of-00002.gguf", 45, false),
+            ]
+        );
+        assert_eq!(files[0].oid.as_deref(), Some("git-blob-model"));
+        assert!(files[2].is_mmproj);
+        for file in &files {
+            assert!(file.download_url.contains(&format!("/resolve/{revision}/")));
+        }
+        let companions = snapshots::gguf_companion_plan(&entries, &files[0].path).unwrap();
+        assert_eq!(
+            companions
+                .iter()
+                .map(|file| (file.path.as_str(), file.size))
+                .collect::<Vec<_>>(),
+            [("config.json", 2), ("tokenizer.json", 3)]
+        );
+        let unsafe_entry =
+            serde_json::from_value(serde_json::json!({"type":"file", "path":"../escape.gguf"}))
+                .unwrap();
+        assert!(listed_gguf_files("owner/model", &revision, &[unsafe_entry]).is_err());
     }
 
     fn installed_fixture() -> PathBuf {
@@ -1171,12 +1649,203 @@ mod tests {
         .expect("write installed fixture file");
     }
 
+    #[cfg(any(unix, windows))]
+    fn link_installed_directory(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("create fixture directory link");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // A junction exercises native directory redirection without
+            // requiring Developer Mode, elevation or system setting changes.
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .creation_flags(0x08000000)
+                .output()
+                .expect("create fixture junction");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn unlink_installed_directory(link: &Path) {
+        // A Unix symlink is a file entry while a Windows junction is a
+        // directory entry; either removal leaves the link target intact.
+        #[cfg(unix)]
+        fs::remove_file(link).expect("remove fixture directory link");
+        #[cfg(windows)]
+        fs::remove_dir(link).expect("remove fixture junction");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_excludes_a_repository_link_outside_the_selected_library() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed links-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let outside = fixture.join("outside models");
+        fs::create_dir_all(models.join("hf/owner/model")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        write_repo_file(&models, "plain.gguf", b"plain");
+        fs::write(outside.join("other.gguf"), b"outside").unwrap();
+        let link = models.join("hf/owner/model/linked folder");
+        link_installed_directory(&outside, &link);
+        assert!(target_path(
+            models.to_str().unwrap(),
+            "owner/model",
+            "linked folder/other.gguf"
+        )
+        .is_err());
+        let result = installed_files(
+            models.to_str().unwrap(),
+            "owner/model",
+            &["plain.gguf".into(), "linked folder/other.gguf".into()],
+        );
+        unlink_installed_directory(&link);
+        assert_eq!(fs::read(outside.join("other.gguf")).unwrap(), b"outside");
+        fs::remove_dir_all(&fixture).unwrap();
+        let installed = result.unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].path, "plain.gguf");
+        assert_eq!(installed[0].size_bytes, 5);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_preserves_selected_root_links_and_contained_repository_links() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed aliases-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let cache = models.join("cached model");
+        fs::create_dir_all(models.join("hf/owner/model")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("big-00001-of-00002.gguf"), b"one").unwrap();
+        let root_link = fixture.join("selected library link");
+        let cache_link = models.join("hf/owner/model/cache link");
+        link_installed_directory(&models, &root_link);
+        link_installed_directory(&cache, &cache_link);
+        let relative = "cache link/big-00001-of-00002.gguf";
+        let result = installed_files(
+            root_link.to_str().unwrap(),
+            "owner/model",
+            &[relative.into()],
+        );
+        unlink_installed_directory(&root_link);
+        unlink_installed_directory(&cache_link);
+        assert_eq!(
+            fs::read(cache.join("big-00001-of-00002.gguf")).unwrap(),
+            b"one"
+        );
+        fs::remove_dir_all(&fixture).unwrap();
+        let installed = result.unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(
+            installed[0].local_path,
+            root_link
+                .join("hf")
+                .join("owner")
+                .join("model")
+                .join("cache link")
+                .join("big-00001-of-00002.gguf")
+                .to_string_lossy()
+        );
+        assert_eq!(installed[0].missing_shards, ["big-00002-of-00002.gguf"]);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_never_recreates_the_missing_target_of_a_selected_root_link() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed missing-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let link = fixture.join("selected library link");
+        fs::create_dir_all(&models).unwrap();
+        link_installed_directory(&models, &link);
+        fs::remove_dir(&models).unwrap();
+        let result = installed_files(
+            link.to_str().unwrap(),
+            "owner/model",
+            &["model.gguf".into()],
+        );
+        let recreated = models.exists();
+        unlink_installed_directory(&link);
+        fs::remove_dir(&fixture).unwrap();
+        assert!(result.unwrap().is_empty());
+        assert!(!recreated);
+    }
+
+    #[test]
+    fn installed_split_groups_preserve_row_order_and_refresh_between_queries() {
+        let root = installed_fixture();
+        let base = root.join("hf").join("owner").join("model");
+        fs::create_dir(base.join("Q4")).unwrap();
+        fs::create_dir(base.join("Q8")).unwrap();
+        let requested = [
+            "Q8/big-00002-of-00003.gguf",
+            "Q4/big-00003-of-00003.gguf",
+            "Q4/big-00001-of-00003.gguf",
+            "Q8/big-00001-of-00003.gguf",
+            "Q4/big-00003-of-00003.gguf",
+            "Q4/big-00001-of-00002.GGUF",
+        ];
+        for name in requested {
+            write_repo_file(&root, name, b"ok");
+        }
+        let files = requested.map(str::to_owned);
+        let first = installed_files(root.to_str().unwrap(), "owner/model", &files).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            requested
+        );
+        for row in &first {
+            assert_eq!(row.size_bytes, 2);
+            assert_eq!(
+                Path::new(&row.local_path),
+                base.join(relative_path(&row.path))
+            );
+        }
+        assert_eq!(first[0].missing_shards, ["big-00003-of-00003.gguf"]);
+        assert_eq!(first[1].missing_shards, ["big-00002-of-00003.gguf"]);
+        assert_eq!(first[2].missing_shards, first[1].missing_shards);
+        assert_eq!(first[3].missing_shards, first[0].missing_shards);
+        assert_eq!(first[4].missing_shards, first[1].missing_shards);
+        assert_eq!(first[5].missing_shards, ["big-00002-of-00002.GGUF"]);
+        fs::remove_file(base.join("Q8").join("big-00002-of-00003.gguf")).unwrap();
+        write_repo_file(&root, "Q4/big-00002-of-00003.gguf", b"new");
+        let second = installed_files(root.to_str().unwrap(), "owner/model", &files).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            requested[1..]
+        );
+        assert!(second[0].missing_shards.is_empty());
+        assert!(second[1].missing_shards.is_empty());
+        assert_eq!(
+            second[2].missing_shards,
+            ["big-00002-of-00003.gguf", "big-00003-of-00003.gguf"]
+        );
+        assert!(second[3].missing_shards.is_empty());
+        assert_eq!(second[4].missing_shards, ["big-00002-of-00002.GGUF"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn search_rejects_a_sort_order_the_api_does_not_accept() {
         let rejected = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("build test runtime")
-            .block_on(search("qwen", 5, "popularity"));
+            .block_on(search_format("qwen", 5, "popularity", "gguf"));
         assert_eq!(
             rejected.err(),
             Some("model sort order is not supported".to_string())
@@ -1313,7 +1982,7 @@ mod tests {
     #[test]
     fn only_standard_shard_suffixes_form_a_group() {
         assert_eq!(
-            shard_group("big-00002-of-00003.gguf"),
+            shard_group("big-00002-of-00003.gguf").map(Iterator::collect::<Vec<_>>),
             Some(vec![
                 "big-00001-of-00003.gguf".to_string(),
                 "big-00002-of-00003.gguf".to_string(),

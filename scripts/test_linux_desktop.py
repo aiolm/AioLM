@@ -13,6 +13,42 @@ desktop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(desktop)
 
 
+class PassthroughPath:
+    """Delegate a temporary path while hooking one exact desktop entry."""
+
+    def __init__(self, path, target, on_exists=None, on_read_text=None):
+        self.path = path if isinstance(path, Path) else Path(path)
+        self.target = target if isinstance(target, Path) else Path(target)
+        self.on_exists = on_exists
+        self.on_read_text = on_read_text
+
+    def __truediv__(self, child):
+        return type(self)(self.path / child, self.target, self.on_exists, self.on_read_text)
+
+    @property
+    def parent(self):
+        return type(self)(self.path.parent, self.target, self.on_exists, self.on_read_text)
+
+    def exists(self):
+        if self.path == self.target and self.on_exists:
+            return self.on_exists(self.path)
+        return self.path.exists()
+
+    def read_text(self, *args, **kwargs):
+        if self.path == self.target and self.on_read_text:
+            return self.on_read_text(self.path)
+        return self.path.read_text(*args, **kwargs)
+
+    def __fspath__(self):
+        return self.path.__fspath__()
+
+    def __str__(self):
+        return str(self.path)
+
+    def __getattr__(self, name):
+        return getattr(self.path, name)
+
+
 class DesktopRegistrationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="aiolm-desktop-test-")
@@ -50,6 +86,61 @@ class DesktopRegistrationTests(unittest.TestCase):
         original = entry.read_text()
         desktop.register(self.root / "debug/aiolm", self.icon, self.data, True)
         self.assertEqual(entry.read_text(), original)
+
+    def test_development_preserves_appimage_replaced_after_entry_read(self):
+        replacement_icon = self.root / "replacement.png"
+        replacement_icon.write_bytes(b"replacement icon")
+        entry = desktop.register(self.root / "old.AppImage", self.icon, self.data, True)
+        entry.chmod(0o640)
+        state = {"reads": [], "replacement": None}
+
+        def read_text(path):
+            text = path.read_text()
+            state["reads"].append(text)
+            if len(state["reads"]) == 1:
+                replacement = desktop.register(self.root / "new.AppImage", replacement_icon, self.data)
+                state["replacement"] = {
+                    "text": replacement.read_text(),
+                    "icon": (self.data / "icons/hicolor/128x128/apps/aiolm-local.png").read_bytes(),
+                    "mode": replacement.stat().st_mode & 0o777,
+                }
+            return text
+
+        data = PassthroughPath(self.data, entry, on_read_text=read_text)
+        result = Path(desktop.register(self.root / "debug/aiolm", self.icon, data, True))
+        self.assertEqual(result.read_text(), state["replacement"]["text"])
+        self.assertIn("NoDisplay=false\n", result.read_text())
+        self.assertIn("new.AppImage", result.read_text())
+        self.assertEqual((self.data / "icons/hicolor/128x128/apps/aiolm-local.png").read_bytes(),
+                         state["replacement"]["icon"])
+        self.assertEqual(result.stat().st_mode & 0o777, state["replacement"]["mode"])
+
+    def test_development_preserves_appimage_created_after_entry_was_absent(self):
+        replacement_icon = self.root / "replacement.png"
+        replacement_icon.write_bytes(b"replacement icon")
+        target = self.data / "applications/aiolm.desktop"
+        state = {"exists": 0, "replacement": None}
+
+        def exists(path):
+            state["exists"] += 1
+            if state["exists"] == 1:
+                replacement = desktop.register(self.root / "late.AppImage", replacement_icon, self.data)
+                state["replacement"] = {
+                    "text": replacement.read_text(),
+                    "icon": (self.data / "icons/hicolor/128x128/apps/aiolm-local.png").read_bytes(),
+                    "mode": replacement.stat().st_mode & 0o777,
+                }
+                return False
+            return path.exists()
+
+        data = PassthroughPath(self.data, target, on_exists=exists)
+        result = Path(desktop.register(self.root / "debug/aiolm", self.icon, data, True))
+        self.assertEqual(result.read_text(), state["replacement"]["text"])
+        self.assertIn("NoDisplay=false\n", result.read_text())
+        self.assertIn("late.AppImage", result.read_text())
+        self.assertEqual((self.data / "icons/hicolor/128x128/apps/aiolm-local.png").read_bytes(),
+                         state["replacement"]["icon"])
+        self.assertEqual(result.stat().st_mode & 0o777, state["replacement"]["mode"])
 
     def test_exec_quotes_spaces_and_escapes_field_codes_and_shell_characters(self):
         self.assertEqual(desktop.exec_value('/tmp/a b%u$`"\\/aiolm'),

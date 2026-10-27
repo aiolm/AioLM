@@ -93,11 +93,33 @@ const secretExport = exportProject(secretProject);
 assert.match(secretExport, /\[REDACTED\]/);
 assert.doesNotMatch(secretExport, /secret-value|inline-secret/i);
 assert.match(secretExport, /--api-key=\[REDACTED\]/);
-const imported = importProject(exported);
+const budgetProject = projectFromConfig('Generation budgets', '', {
+  ...config,
+  chat_options: { max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+    access_token: 'synthetic-credential', token: 'synthetic-credential' },
+});
+const budgetExport = exportProject(budgetProject);
+assert.deepEqual(importProject(budgetExport).config.chat_options, {
+  max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+  access_token: '[REDACTED]', token: '[REDACTED]',
+});
+assert.doesNotMatch(budgetExport, /synthetic-credential/);
+const imported = importProject(exported, readProjects(storage));
 projects = upsertProject(imported, readProjects(storage));
-assert.equal(projects.length, 1);
+assert.equal(projects.length, 2);
+assert.equal(projects[0].name, 'Code review (2)');
+assert.deepEqual(projects[1], project);
 assert.equal(projects[0].systemPrompt, "Review code carefully.");
 assert.deepEqual(projects[0].toolIds, ["local:read_file"]);
 assert.equal(deleteProject(project.id, projects).length, 1);
-assert.equal(deleteProject(imported.id, projects).length, 0);
+assert.equal(deleteProject(imported.id, projects).length, 1);
+const externalProject = projectFromConfig('External engine', '', {
+  ...config, active_provider: 'custom.personal', active_runtime: 'local-build',
+  provider_options: { 'custom.personal': { temperature: 0.25 } },
+});
+const externalImport = importProject(exportProject(externalProject));
+assert.equal(externalImport.config.active_provider, 'custom.personal');
+assert.equal(externalImport.config.active_runtime, 'local-build');
+assert.deepEqual(externalImport.config.provider_options, { 'custom.personal': { temperature: 0.25 } });
+assert.throws(() => projectFromConfig('Invalid engine', '', { ...config, active_provider: 'unregistered-invalid-id' } as unknown as AppConfig), /Unknown inference engine/);
 console.log("project store tests passed");

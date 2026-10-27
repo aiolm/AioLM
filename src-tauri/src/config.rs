@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub mod execution;
 pub mod profiles;
 
-const CURRENT_CONFIG_VERSION: u32 = 12;
+const CURRENT_CONFIG_VERSION: u32 = 14;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -25,8 +25,9 @@ const CACHE_TYPES: &[&str] = &[
     "f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl",
 ];
 
-// Keep this list in sync with tuningValidation.ts.  These are all spellings
-// of options whose value is owned by AppConfig or by the server lifecycle;
+// Together with adapter::NATIVE_MODEL_SOURCE_FLAGS this matches the native
+// ownership metadata in tuningValidation.ts. These typed/config spellings
+// are owned by AppConfig or by the server lifecycle;
 // accepting an alias here would let raw server_args silently win over a
 // dedicated control.  The canonical names are used in the error text where
 // useful, while validation accepts every upstream spelling.
@@ -454,6 +455,24 @@ pub struct AppConfig {
     pub gpu: GpuPlacement,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_profiles: Option<profiles::SettingsProfileLibrary>,
+    /// The serving provider every launch from this configuration uses
+    /// (`llama.cpp`, `vllm`, `mlx-vlm`). Configuration written before
+    /// providers existed has none, which always meant llama.cpp; schema 13
+    /// writes it explicitly. Profiles never change it.
+    pub active_provider: String,
+    /// Runtime id of a non-llama provider (see `providers::python_env`).
+    /// llama.cpp runtimes stay identified by `active_backend`/`active_build`.
+    pub active_runtime: String,
+    /// Options for each non-llama provider, keyed by provider id. Each map is
+    /// validated against its own provider's schema only; a value saved for one
+    /// provider is never read by another. Unsupported values are kept and
+    /// reported until the user corrects them.
+    pub provider_options:
+        std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// The runtime most recently selected for each provider, so switching back
+    /// to a provider restores its runtime instead of guessing one.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub recent_runtimes: std::collections::BTreeMap<String, String>,
 }
 
 fn default_iters() -> u32 {
@@ -558,6 +577,10 @@ impl Default for AppConfig {
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
             settings_profiles: Some(profiles::SettingsProfileLibrary::default()),
+            active_provider: crate::providers::LLAMA_PROVIDER.into(),
+            active_runtime: String::new(),
+            provider_options: std::collections::BTreeMap::new(),
+            recent_runtimes: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -653,12 +676,28 @@ impl AppConfig {
         if !matches!(self.flash_attn.as_str(), "auto" | "on" | "off") {
             self.flash_attn = "auto".into();
         }
-        let mut execution_base = self.clone();
-        execution_base.sessions.clear();
-        execution_base.settings_profiles = None;
+        self.active_provider = self.active_provider.trim().to_owned();
+        if self.active_provider.is_empty() {
+            self.active_provider = crate::providers::LLAMA_PROVIDER.into();
+        }
+        self.active_runtime = self.active_runtime.trim().to_owned();
+        self.provider_options
+            .retain(|_, options| !options.is_empty());
+        let execution_base = self
+            .sessions
+            .iter()
+            .any(|session| session.execution.is_some())
+            .then(|| {
+                let mut base = self.clone();
+                base.sessions.clear();
+                base.settings_profiles = None;
+                base
+            });
         for session in &mut self.sessions {
             session.normalize();
-            execution::normalize_session(&execution_base, session);
+            if let Some(base) = &execution_base {
+                execution::normalize_session(base, session);
+            }
         }
         {
             let mut seen = std::collections::HashSet::new();
@@ -686,6 +725,20 @@ impl AppConfig {
         }
         if self.active_backend.is_empty() != self.active_build.is_empty() {
             return Err("active runtime backend and build must be selected together".into());
+        }
+        validate_provider_selection(
+            &self.active_provider,
+            &self.active_runtime,
+            &self.provider_options,
+        )?;
+        for (provider, runtime) in &self.recent_runtimes {
+            if !crate::providers::ProviderId::parse(provider)
+                .is_some_and(|id| id.as_str() == provider)
+                || runtime.len() > 128
+                || runtime.contains('\0')
+            {
+                return Err("invalid recent runtime selection".into());
+            }
         }
         if self.models_dir.len() > 32_768 || self.active_model.len() > 32_768 {
             return Err("model paths are too long".into());
@@ -768,13 +821,20 @@ impl AppConfig {
         }
         {
             let mut seen = std::collections::HashSet::new();
-            let mut execution_base = self.clone();
-            execution_base.sessions.clear();
-            execution_base.settings_profiles = None;
+            let execution_base = self
+                .sessions
+                .iter()
+                .any(|session| session.execution.is_some())
+                .then(|| {
+                    let mut base = self.clone();
+                    base.sessions.clear();
+                    base.settings_profiles = None;
+                    base
+                });
             for session in &self.sessions {
                 session.validate()?;
-                if session.execution.is_some() {
-                    execution::session_config(&execution_base, session)?
+                if let (Some(base), Some(_)) = (&execution_base, &session.execution) {
+                    execution::session_config(base, session)?
                         .validate()
                         .map_err(|error| format!("session '{}': {error}", session.id))?;
                 }
@@ -791,10 +851,49 @@ impl AppConfig {
     }
 }
 
+const MAX_PROVIDER_OPTIONS_BYTES: usize = 262_144;
+
+/// Structural checks only. Option values are validated against the provider
+/// schema when they are displayed or launched, so an unsupported saved value
+/// stays visible as an issue instead of making the whole configuration fail to
+/// load.
+pub(crate) fn validate_provider_selection(
+    provider: &str,
+    runtime: &str,
+    options: &std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+) -> Result<(), String> {
+    use crate::providers::ProviderId;
+    let selected = ProviderId::parse(provider)
+        .ok_or_else(|| format!("unknown inference provider: {provider}"))?;
+    if !runtime.is_empty() {
+        if selected == ProviderId::Llama {
+            return Err("llama.cpp runtimes are selected by backend and build".into());
+        }
+        crate::providers::python_env::validate_id(runtime)?;
+    }
+    for key in options.keys() {
+        match ProviderId::parse(key) {
+            None => return Err(format!("provider options cannot be saved for '{key}'")),
+            Some(id) if id.as_str() == key => {}
+            Some(_) => {
+                return Err(format!(
+                    "provider options require a canonical engine name: '{key}'"
+                ))
+            }
+        }
+    }
+    let bytes = serde_json::to_vec(options).map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_PROVIDER_OPTIONS_BYTES {
+        return Err("provider options are too large".into());
+    }
+    Ok(())
+}
+
 fn migrate(cfg: AppConfig) -> Result<AppConfig, String> {
     migrate_with_presence(cfg, None)
 }
 
+#[cfg(test)]
 fn migrate_value(value: serde_json::Value) -> Result<AppConfig, String> {
     let cfg: AppConfig = serde_json::from_value(value.clone())
         .map_err(|error| format!("invalid config value: {error}"))?;
@@ -981,21 +1080,44 @@ fn migrate_with_presence(
         // type default, so a config written before either existed migrates
         // for free through the container-level `#[serde(default)]` on
         // `AppConfig` itself; no per-field repair is needed here.
-        2..=11 => {}
+        2..=13 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
     migrate_server_args(&mut cfg, raw);
     cfg.normalize();
+    // Configuration written before schema 13 only ever described llama.cpp.
+    // Sessions with their own execution settings keep the provider they were
+    // saved for even if the global selection later changes.
+    if cfg.config_version < 13 {
+        cfg.active_provider = crate::providers::LLAMA_PROVIDER.into();
+        cfg.active_runtime.clear();
+        let inherited: serde_json::Map<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
+            "active_provider": crate::providers::LLAMA_PROVIDER,
+            "active_runtime": "", "active_backend": cfg.active_backend, "active_build": cfg.active_build
+        })).expect("legacy runtime selection is an object");
+        for session in &mut cfg.sessions {
+            if session.execution.is_none() && session.id != "default" {
+                session.execution = Some(inherited.clone());
+            }
+            if let Some(execution) = session.execution.as_mut() {
+                execution
+                    .entry("active_provider")
+                    .or_insert_with(|| crate::providers::LLAMA_PROVIDER.into());
+            }
+        }
+    }
     // Profiles written before schema 12 did not own the runtime pair, so they
     // carry no runtime to apply and have to adopt the one they last ran on.
     let adopt_runtimes = cfg.config_version < 12;
+    let separate_runtimes = cfg.config_version < 13;
     if let Some(raw) = raw {
         profiles::initialize_profiles(
             &mut cfg,
             raw.get("settings_profiles")
                 .is_some_and(|value| !value.is_null()),
             adopt_runtimes,
+            separate_runtimes,
         )?;
     } else if cfg.settings_profiles.is_none() {
         cfg.settings_profiles = Some(profiles::SettingsProfileLibrary::default());
@@ -1054,9 +1176,25 @@ fn load_from_path(path: &Path) -> Result<AppConfig, String> {
         .map_err(|error| format!("invalid config at {}: {error}", path.display()))?;
     let cfg: AppConfig = serde_json::from_value(raw_value.clone())
         .map_err(|error| format!("invalid config at {}: {error}", path.display()))?;
-    let was_old = cfg.config_version < CURRENT_CONFIG_VERSION;
-    let migrated = migrate_value(raw_value.clone())?;
+    let original_version = cfg.config_version;
+    let was_old = original_version < CURRENT_CONFIG_VERSION;
+    let migrated = migrate_with_presence(cfg, Some(&raw_value))?;
     if was_old {
+        let backup = path.with_extension(format!(
+            "v{}-before-v{}.json",
+            original_version, CURRENT_CONFIG_VERSION
+        ));
+        if !backup.exists() {
+            // Preserve the exact pre-migration document, including unknown fields.
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&backup)
+                .map_err(|error| format!("failed to back up settings before migration: {error}"))?;
+            std::io::Write::write_all(&mut file, raw.as_bytes())
+                .map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+        }
         let serialized = serde_json::to_vec_pretty(&migrated)
             .map_err(|error| format!("failed to serialize migrated config: {error}"))?;
         atomic_write(path, &serialized)?;
@@ -1108,16 +1246,32 @@ fn replace_atomically(temp: &Path, target: &Path) -> Result<(), String> {
         fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
     }
 
-    let existing = temp
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let replacement = target
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    // std::fs adds the extended-length prefix to long paths itself; this
+    // direct call must too, or a long home fails after the temp file exists.
+    // Microsoft "Naming Files, Paths, and Namespaces": `\\?\` lifts MAX_PATH
+    // for Unicode file APIs but disables normalization, so the path is made
+    // absolute and normalized first (GetFullPathNameW).
+    let extended = |path: &Path| -> Result<Vec<u16>, String> {
+        let absolute = std::path::absolute(path).map_err(|error| error.to_string())?;
+        let wide: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+        let utf16 = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+        let mut out = if wide.starts_with(&utf16(r"\\?\")) || wide.starts_with(&utf16(r"\\.\")) {
+            Vec::new()
+        } else if wide.starts_with(&utf16(r"\\")) {
+            // \\server\share\... becomes \\?\UNC\server\share\...
+            let mut unc = utf16(r"\\?\UNC");
+            unc.extend_from_slice(&wide[1..]);
+            unc.push(0);
+            return Ok(unc);
+        } else {
+            utf16(r"\\?\")
+        };
+        out.extend(wide);
+        out.push(0);
+        Ok(out)
+    };
+    let existing = extended(temp)?;
+    let replacement = extended(target)?;
     let ok = unsafe {
         MoveFileExW(
             existing.as_ptr(),
@@ -1373,14 +1527,97 @@ mod tests {
     }
 
     #[test]
-    fn first_install_loads_and_saves_only_one_default_profile() {
+    fn engine_option_keys_match_the_keys_used_by_launch_and_recent_selection() {
+        let mut cfg = AppConfig::default();
+        cfg.provider_options.insert(
+            "vllm".into(),
+            serde_json::json!({"temperature":0.5})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        cfg.recent_runtimes
+            .insert("mlx-vlm".into(), "synthetic-runtime".into());
+        cfg.validate().unwrap();
+        let mut wrong_options = cfg.clone();
+        let options = wrong_options.provider_options.remove("vllm").unwrap();
+        wrong_options
+            .provider_options
+            .insert(" vllm".into(), options);
+        assert!(wrong_options.validate().unwrap_err().contains("canonical"));
+        cfg.recent_runtimes
+            .insert(" mlx-vlm".into(), "synthetic-runtime".into());
+        assert!(cfg.validate().unwrap_err().contains("recent runtime"));
+    }
+
+    #[test]
+    fn runtime_migration_keeps_exact_original_bytes_and_preserves_an_existing_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-provider-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        let original = "{\n  \"config_version\": 12, \"future_field\": {\"preserved\":true}\n}\n";
+        fs::write(&path, original).unwrap();
+        let migrated = load_from_path(&path).unwrap();
+        assert_eq!(migrated.config_version, CURRENT_CONFIG_VERSION);
+        assert_eq!(migrated.active_provider, "llama.cpp");
+        let backup = path.with_extension(format!("v12-before-v{CURRENT_CONFIG_VERSION}.json"));
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        // A second older document cannot replace the first recovery point.
+        fs::write(&path, "{\"config_version\":12,\"ctx_size\":8192}").unwrap();
+        assert_eq!(load_from_path(&path).unwrap().ctx_size, 8192);
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn adapter_schema_upgrade_preserves_builtin_options_profiles_and_exact_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-adapter-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        let mut previous = AppConfig {
+            active_provider: "vllm".into(),
+            active_runtime: "synthetic-build".into(),
+            ctx_size: 8192,
+            ..Default::default()
+        };
+        previous.provider_options.insert(
+            "vllm".into(),
+            serde_json::json!({"temperature":0.4})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        previous.normalize();
+        profiles::initialize_profiles(&mut previous, true, false, false).unwrap();
+        previous.config_version = 13;
+        let original = serde_json::to_vec_pretty(&previous).unwrap();
+        fs::write(&path, &original).unwrap();
+        let migrated = load_from_path(&path).unwrap();
+        assert_eq!(migrated.config_version, CURRENT_CONFIG_VERSION);
+        assert_eq!(migrated.active_provider, previous.active_provider);
+        assert_eq!(migrated.active_runtime, previous.active_runtime);
+        assert_eq!(migrated.ctx_size, previous.ctx_size);
+        assert_eq!(migrated.provider_options, previous.provider_options);
+        assert_eq!(migrated.settings_profiles, previous.settings_profiles);
+        assert_eq!(
+            fs::read(path.with_extension(format!("v13-before-v{CURRENT_CONFIG_VERSION}.json")))
+                .unwrap(),
+            original
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn first_install_loads_and_saves_one_default_for_each_provider() {
         let directory =
             std::env::temp_dir().join(format!("aiolm-profile-initialization-{}", Uuid::new_v4()));
         let path = directory.join("config.json");
         let mut cfg = load_from_path(&path).unwrap();
         let profiles = cfg.settings_profiles.as_ref().unwrap();
         assert_eq!(profiles, &profiles::SettingsProfileLibrary::default());
-        assert_eq!(profiles.entries.len(), 1);
+        assert_eq!(profiles.entries.len(), 3);
         assert_eq!(
             profiles.applied["model:"].profile_id.as_deref(),
             Some("profile-default")
@@ -1402,7 +1639,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
-        assert!(cfg.sessions[0].execution.is_none());
+        assert_eq!(
+            cfg.sessions[0].execution.as_ref().unwrap()["active_provider"],
+            "llama.cpp"
+        );
+        assert!(!cfg.sessions[0]
+            .execution
+            .as_ref()
+            .unwrap()
+            .contains_key("temperature"));
         let migrated = migrate_value(serde_json::json!({
             "config_version":11,
             "sessions":[{"id":"isolated","model_profile_id":" profile-a ","execution":{"temperature":99,"ctx_size":256}}]
@@ -1659,6 +1904,38 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_replaces_files_beyond_the_legacy_windows_path_limit() {
+        use std::os::windows::ffi::OsStrExt;
+        // A Unicode/space home plus ordinary engine/runtime IDs and a
+        // help-snapshot file name passes 260 UTF-16 units. Every write and
+        // replace must reach the file, not only the std::fs calls.
+        let root =
+            std::env::temp_dir().join(format!("aiolm long home 눈길 長い {}", Uuid::new_v4()));
+        let dir = root
+            .join("runtimes")
+            .join("adapters")
+            .join("custom.interpreterfixture")
+            .join("simple-layout")
+            .join("help")
+            .join("x".repeat(40));
+        let path = dir.join(format!("{}.json", "e".repeat(64)));
+        assert!(path.as_os_str().encode_wide().count() > 260, "{path:?}");
+        atomic_write(&path, br#"{"version":1}"#).expect("first long-path write");
+        atomic_write(&path, br#"{"version":2}"#).expect("long-path replace");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read long path"),
+            "{\"version\":2}"
+        );
+        assert_eq!(
+            fs::read_dir(&dir).expect("list long path").count(),
+            1,
+            "no temporary file is left behind"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn migration_upgrades_old_config_and_rejects_future_config() {
         let migrated =
@@ -1748,6 +2025,24 @@ mod tests {
         let migrated = migrate_value(explicit).expect("explicit typed values win");
         assert_eq!(migrated.batch_size, 2048);
         assert_eq!(migrated.keep, 12);
+    }
+
+    #[test]
+    fn model_source_arguments_survive_migration_for_explicit_runtime_review() {
+        let args = serde_json::json!(["--hf-repo", "synthetic/old-source", "--fim-qwen-7b-spec"]);
+        for version in [7, CURRENT_CONFIG_VERSION] {
+            let migrated = migrate_value(serde_json::json!({
+                "config_version": version,
+                "active_model": "/synthetic/selected.model",
+                "server_args": args
+            }))
+            .unwrap();
+            assert_eq!(serde_json::to_value(&migrated.server_args).unwrap(), args);
+            assert_eq!(migrated.active_model, "/synthetic/selected.model");
+            // Ownership belongs to launch validation, so opening old settings
+            // never strips these arguments or replaces the user's selection.
+            migrated.validate().unwrap();
+        }
     }
 
     #[test]
@@ -1891,5 +2186,527 @@ mod tests {
         // Every pushed session shares the id "dup", so dedup collapses them
         // to one entry well before the MAX_SESSIONS truncation would matter.
         assert_eq!(cfg.sessions.len(), 1);
+    }
+
+    mod configuration_contract_tests {
+        use super::*;
+        use serde_json::{json, Value};
+        use sha2::{Digest, Sha256};
+        use std::process::Command;
+
+        const CHILD_MODE: &str = "AIOLM_CONFIG_CONTRACT_CHILD";
+        const OWNED_MARKER: &str = "synthetic-config-contract-v1";
+
+        struct OwnedHome(PathBuf);
+
+        impl OwnedHome {
+            fn new() -> Self {
+                let path =
+                    std::env::temp_dir().join(format!("aiolm-config-contract-{}", Uuid::new_v4()));
+                fs::create_dir(&path).unwrap();
+                fs::write(path.join("owned-fixture.marker"), OWNED_MARKER).unwrap();
+                Self(path)
+            }
+        }
+
+        impl Drop for OwnedHome {
+            fn drop(&mut self) {
+                // Only this object's newly-created UUID directory is removed.
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn synthetic_config() -> AppConfig {
+            AppConfig {
+                models_dir: "models".into(),
+                ..AppConfig::default()
+            }
+        }
+
+        fn saved_value(cfg: &AppConfig) -> Value {
+            // Preserve the same f32 number spelling as the actual saved format.
+            serde_json::from_slice(&serde_json::to_vec(cfg).unwrap()).unwrap()
+        }
+
+        fn digest(bytes: &[u8]) -> String {
+            format!("{:x}", Sha256::digest(bytes))
+        }
+
+        fn inherited_session(id: &str) -> SessionDefinition {
+            SessionDefinition {
+                id: id.into(),
+                name: " owned session ".into(),
+                models: SessionModels {
+                    primary_model: " primary.gguf ".into(),
+                    mmproj: " vision.gguf ".into(),
+                    draft_model: " draft.gguf ".into(),
+                },
+                model_profile_id: Some(" profile-owned ".into()),
+                ..SessionDefinition::default()
+            }
+        }
+
+        #[test]
+        fn normalization_preserves_complete_configuration_and_session_bindings() {
+            for mode in ["empty", "inherited", "override", "deduplicate-and-bound"] {
+                let mut cfg = synthetic_config();
+                cfg.port = 0;
+                cfg.ctx_size = 256;
+                cfg.ngl = 1_000;
+                cfg.temperature = 99.0;
+                cfg.active_provider = " llama.cpp ".into();
+                cfg.active_runtime = " ".into();
+                cfg.gpu.gpu_ids = vec![" gpu-a ".into(), " ".into()];
+                cfg.gpu.main_gpu = Some(" gpu-a ".into());
+                cfg.gpu.tensor_split = vec![-1.0, 2.0];
+                cfg.gpu.draft_gpu_id = Some(" ".into());
+                match mode {
+                    "empty" => {}
+                    "inherited" => cfg.sessions.push(inherited_session(" inherited ")),
+                    "override" => {
+                        let mut session = inherited_session(" isolated ");
+                        session.execution = Some(
+                            json!({"temperature":99,"ctx_size":256,"spec_draft_p_min":0.3})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        );
+                        cfg.sessions.push(session);
+                    }
+                    "deduplicate-and-bound" => {
+                        cfg.sessions.push(inherited_session(" session-0 "));
+                        let mut duplicate = inherited_session("session-0");
+                        duplicate.name = "later duplicate must disappear".into();
+                        cfg.sessions.push(duplicate);
+                        for index in 1..70 {
+                            cfg.sessions
+                                .push(inherited_session(&format!(" session-{index} ")));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                let mut expected = cfg.clone();
+                expected.port = 8080;
+                expected.ctx_size = 512;
+                expected.ngl = 999;
+                expected.temperature = 2.0;
+                expected.active_provider = "llama.cpp".into();
+                expected.active_runtime.clear();
+                expected.gpu.gpu_ids = vec!["gpu-a".into()];
+                expected.gpu.main_gpu = Some("gpu-a".into());
+                expected.gpu.tensor_split = vec![0.0, 2.0];
+                expected.gpu.draft_gpu_id = None;
+                if mode == "deduplicate-and-bound" {
+                    expected.sessions.remove(1);
+                    expected.sessions.truncate(64);
+                }
+                for session in &mut expected.sessions {
+                    session.id = session.id.trim().into();
+                    session.name = "owned session".into();
+                    session.models.primary_model = "primary.gguf".into();
+                    session.models.mmproj = "vision.gguf".into();
+                    session.models.draft_model = "draft.gguf".into();
+                    session.model_profile_id = Some("profile-owned".into());
+                    if let Some(execution) = &mut session.execution {
+                        execution.insert("temperature".into(), json!(2.0));
+                        execution.insert("ctx_size".into(), json!(512));
+                    }
+                }
+                cfg.normalize();
+                assert_eq!(saved_value(&cfg), saved_value(&expected), "{mode}");
+                cfg.validate().unwrap();
+                let once = saved_value(&cfg);
+                cfg.normalize();
+                assert_eq!(saved_value(&cfg), once, "second normalization: {mode}");
+                println!(
+                    "CONFIG_CONTRACT {}",
+                    json!({"case":mode,"configuration":once})
+                );
+            }
+        }
+
+        #[test]
+        fn session_validation_preserves_definition_execution_and_duplicate_error_order() {
+            let invalid_patch = json!({"port":9000}).as_object().unwrap().clone();
+            let mut cases = Vec::new();
+            let mut invalid_id = synthetic_config();
+            invalid_id.sessions.push(SessionDefinition {
+                execution: Some(invalid_patch.clone()),
+                ..SessionDefinition::default()
+            });
+            cases.push((
+                "id-before-execution",
+                invalid_id,
+                "session id must be a non-empty string up to 128 characters",
+            ));
+            let mut execution_before_duplicate = synthetic_config();
+            execution_before_duplicate.sessions = vec![
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+                SessionDefinition {
+                    id: "same".into(),
+                    execution: Some(invalid_patch),
+                    ..SessionDefinition::default()
+                },
+            ];
+            cases.push((
+                "execution-before-duplicate",
+                execution_before_duplicate,
+                "unsupported execution setting: port",
+            ));
+            let mut duplicate_before_gpu = synthetic_config();
+            duplicate_before_gpu.sessions = vec![
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+            ];
+            duplicate_before_gpu.gpu.gpu_ids = vec!["gpu-a".into()];
+            duplicate_before_gpu.gpu.main_gpu = Some("missing".into());
+            cases.push((
+                "duplicate-before-gpu",
+                duplicate_before_gpu,
+                "duplicate session id: same",
+            ));
+            let mut gpu_before_library = synthetic_config();
+            gpu_before_library.gpu.gpu_ids = vec!["gpu-a".into()];
+            gpu_before_library.gpu.main_gpu = Some("missing".into());
+            gpu_before_library
+                .settings_profiles
+                .as_mut()
+                .unwrap()
+                .version = 99;
+            cases.push((
+                "gpu-before-library",
+                gpu_before_library,
+                "main_gpu 'missing' must be one of the selected gpu_ids",
+            ));
+            let mut count_before_id = synthetic_config();
+            count_before_id.sessions = vec![SessionDefinition::default(); 65];
+            cases.push((
+                "count-before-id",
+                count_before_id,
+                "too many saved sessions (max 64)",
+            ));
+            for (name, cfg, expected) in cases {
+                let before = saved_value(&cfg);
+                let error = cfg.validate().unwrap_err();
+                assert_eq!(error, expected, "{name}");
+                assert_eq!(
+                    saved_value(&cfg),
+                    before,
+                    "validate must not mutate: {name}"
+                );
+                println!(
+                    "CONFIG_CONTRACT {}",
+                    json!({"case":name,"error":error,
+                "configuration":before})
+                );
+            }
+        }
+
+        fn run_isolated_child(mode: &str) {
+            let home = OwnedHome::new();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "config::tests::configuration_contract_tests::isolated_public_config_child",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_MODE, mode)
+                .env("AIOLM_HOME", &home.0)
+                .output()
+                .unwrap();
+            // The child is reaped before any parent assertion and its own directory
+            // is removed by RAII even if status/assertion fails.
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "child mode {mode}: {}",
+                output.status
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("CONFIG_CHILD_DONE"));
+        }
+
+        #[test]
+        fn public_load_preserves_presence_schema_backup_and_error_contracts() {
+            for mode in [
+                "missing",
+                "current",
+                "freshness",
+                "onboarding-absent",
+                "legacy",
+                "existing-backup",
+                "versionless",
+                "legacy-absent",
+                "typed-present",
+                "typed-absent",
+                "malformed-json",
+                "malformed-type",
+                "future",
+            ] {
+                run_isolated_child(mode);
+            }
+        }
+
+        #[test]
+        fn isolated_public_config_child() {
+            let Ok(mode) = std::env::var(CHILD_MODE) else {
+                return;
+            };
+            let root = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
+            assert!(root.is_absolute());
+            assert!(root.starts_with(std::env::temp_dir()));
+            assert_eq!(
+                fs::read_to_string(root.join("owned-fixture.marker")).unwrap(),
+                OWNED_MARKER
+            );
+            assert_eq!(config_path(), root.join("config.json"));
+            let path = config_path();
+            let original_version = match mode.as_str() {
+                "versionless" => 0,
+                "legacy-absent" => 1,
+                _ => 13,
+            };
+            let old_case = matches!(
+                mode.as_str(),
+                "legacy" | "existing-backup" | "versionless" | "legacy-absent"
+            );
+            let backup = path.with_extension(format!(
+                "v{original_version}-before-v{CURRENT_CONFIG_VERSION}.json"
+            ));
+            let source_cfg = synthetic_config();
+            let mut source = saved_value(&source_cfg);
+            let mut original = None;
+            if mode != "missing" {
+                match mode.as_str() {
+                    "current" | "freshness" => {
+                        source["owned_unknown"] = json!({"retained":true});
+                    }
+                    "onboarding-absent" => {
+                        source
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("onboarding_completed");
+                    }
+                    "legacy" | "existing-backup" | "versionless" | "legacy-absent" => {
+                        source["config_version"] = json!(original_version);
+                        source["owned_unknown"] = json!({"exact_original":true});
+                        source["ctx_size"] = json!(0);
+                        source["stop_existing_sessions_on_load"] = json!(false);
+                        if mode == "versionless" {
+                            source.as_object_mut().unwrap().remove("config_version");
+                            source["spec_draft_n_max"] = json!(0);
+                            source["spec_draft_p_split"] = json!(0.0);
+                            source["reasoning_budget"] = json!(0);
+                        }
+                        if mode == "legacy-absent" {
+                            for field in [
+                                "spec_draft_n_max",
+                                "spec_draft_p_split",
+                                "reasoning_budget",
+                                "flash_attn",
+                                "iters",
+                            ] {
+                                source.as_object_mut().unwrap().remove(field);
+                            }
+                        }
+                    }
+                    "typed-present" | "typed-absent" => {
+                        source["server_args"] = json!([
+                            "--ctx-size",
+                            "2048",
+                            "--verbose",
+                            "--sleep-idle-seconds",
+                            "-1"
+                        ]);
+                        if mode == "typed-absent" {
+                            source.as_object_mut().unwrap().remove("ctx_size");
+                        } else {
+                            source["ctx_size"] = json!(8192);
+                        }
+                    }
+                    "malformed-json" => {}
+                    "malformed-type" => {
+                        source["port"] = json!("not-a-port");
+                    }
+                    "future" => {
+                        source["config_version"] = json!(CURRENT_CONFIG_VERSION + 1);
+                    }
+                    _ => panic!("unknown child mode: {mode}"),
+                }
+                let bytes = if mode == "malformed-json" {
+                    b"{\n  invalid owned fixture\n".to_vec()
+                } else {
+                    let mut bytes = serde_json::to_vec_pretty(&source).unwrap();
+                    bytes.push(b'\n');
+                    bytes
+                };
+                fs::write(&path, &bytes).unwrap();
+                original = Some(bytes);
+            }
+            if mode == "existing-backup" {
+                fs::write(&backup, b"first owned recovery point\n").unwrap();
+            }
+            let mut result = load_result();
+            let mut fact = json!({"case":mode});
+            if mode == "freshness" {
+                let first = result.as_ref().unwrap();
+                assert_eq!(saved_value(first), saved_value(&source_cfg));
+                assert_eq!(fs::read(&path).unwrap(), *original.as_ref().unwrap());
+                fact["first_configuration"] = saved_value(first);
+                source["ctx_size"] = json!(16_384);
+                let mut changed = serde_json::to_vec_pretty(&source).unwrap();
+                changed.push(b'\n');
+                fs::write(&path, &changed).unwrap();
+                original = Some(changed);
+                // Same process, same public path and same home: a second call must
+                // actually observe the changed disk document, without rewriting it.
+                result = load_result();
+            }
+            match mode.as_str() {
+                "malformed-json" | "malformed-type" | "future" => {
+                    let error = result.unwrap_err();
+                    if mode == "future" {
+                        assert_eq!(
+                            error,
+                            format!(
+                                "config schema {} is newer than this app supports (current {})",
+                                CURRENT_CONFIG_VERSION + 1,
+                                CURRENT_CONFIG_VERSION
+                            )
+                        );
+                    } else {
+                        assert!(
+                            error.starts_with(&format!("invalid config at {}:", path.display()))
+                        );
+                    }
+                    assert_eq!(fs::read(&path).unwrap(), *original.as_ref().unwrap());
+                    assert!(!backup.exists());
+                    fact["error"] =
+                        json!(error
+                            .replace(&path.to_string_lossy().to_string(), "<owned-config-path>"));
+                }
+                _ => {
+                    let cfg = result.unwrap();
+                    cfg.validate().unwrap();
+                    assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
+                    match mode.as_str() {
+                        "missing" => {
+                            let expected = AppConfig::default();
+                            assert_eq!(saved_value(&cfg), saved_value(&expected));
+                            assert_eq!(
+                                cfg.models_dir,
+                                root.join("models").to_string_lossy().into_owned()
+                            );
+                            assert!(!cfg.onboarding_completed);
+                            assert!(!path.exists());
+                        }
+                        "current" => {
+                            assert_eq!(saved_value(&cfg), saved_value(&source_cfg));
+                        }
+                        "freshness" => {
+                            let mut expected = source_cfg.clone();
+                            expected.ctx_size = 16_384;
+                            assert_eq!(saved_value(&cfg), saved_value(&expected));
+                            assert_eq!(cfg.ctx_size, 16_384);
+                        }
+                        "onboarding-absent" => {
+                            assert!(cfg.onboarding_completed);
+                        }
+                        "legacy" | "existing-backup" | "versionless" | "legacy-absent" => {
+                            assert_eq!(cfg.ctx_size, 0);
+                            assert!(!cfg.stop_existing_sessions_on_load);
+                            if mode == "versionless" {
+                                assert_eq!(cfg.spec_draft_n_max, 0);
+                                assert_eq!(cfg.spec_draft_p_split, 0.0);
+                                assert_eq!(cfg.reasoning_budget, 0);
+                            }
+                            if mode == "legacy-absent" {
+                                assert_eq!(cfg.spec_draft_n_max, 3);
+                                assert_eq!(cfg.spec_draft_p_split, 0.1);
+                                assert_eq!(cfg.reasoning_budget, -1);
+                                assert_eq!(cfg.flash_attn, "auto");
+                                assert_eq!(cfg.iters, 5);
+                            }
+                            assert_eq!(
+                                serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+                                saved_value(&cfg)
+                            );
+                            let expected_backup = if mode == "existing-backup" {
+                                b"first owned recovery point\n".as_slice()
+                            } else {
+                                original.as_ref().unwrap().as_slice()
+                            };
+                            assert_eq!(fs::read(&backup).unwrap(), expected_backup);
+                        }
+                        "typed-present" | "typed-absent" => {
+                            assert_eq!(
+                                cfg.ctx_size,
+                                if mode == "typed-present" { 8192 } else { 2048 }
+                            );
+                            assert_eq!(cfg.sleep_idle_seconds, -1);
+                            assert_eq!(cfg.server_args, vec!["--verbose"]);
+                        }
+                        _ => unreachable!(),
+                    }
+                    if mode != "missing" && !old_case {
+                        assert_eq!(
+                            fs::read(&path).unwrap(),
+                            *original.as_ref().unwrap(),
+                            "current schema must not rewrite"
+                        );
+                        assert!(!backup.exists());
+                    }
+                    let mut configuration = saved_value(&cfg);
+                    if mode == "missing" {
+                        // Above assertion verifies the exact runtime-resolved path;
+                        // normalize only that known owned path for cross-run facts.
+                        configuration["models_dir"] = json!("<owned-home>/models");
+                    }
+                    fact["configuration"] = configuration;
+                }
+            }
+            let mut files = fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    let bytes = fs::read(entry.path()).unwrap();
+                    json!({"name":entry.file_name().to_string_lossy(),"bytes":bytes.len(),
+                "sha256":digest(&bytes),"utf8":String::from_utf8(bytes).unwrap()})
+                })
+                .collect::<Vec<_>>();
+            files.sort_by_key(|file| file["name"].as_str().unwrap().to_owned());
+            let actual_names = files
+                .iter()
+                .map(|file| file["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            let mut expected_names = vec!["owned-fixture.marker".to_owned()];
+            if mode != "missing" {
+                expected_names.push("config.json".to_owned());
+            }
+            if old_case {
+                expected_names.push(backup.file_name().unwrap().to_string_lossy().into_owned());
+            }
+            expected_names.sort();
+            assert_eq!(
+                actual_names,
+                expected_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            );
+            fact["files"] = json!(files);
+            println!("CONFIG_LOAD_FACT {}", fact);
+            println!("CONFIG_CHILD_DONE");
+        }
     }
 }

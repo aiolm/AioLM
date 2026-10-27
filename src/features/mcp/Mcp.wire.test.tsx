@@ -24,6 +24,7 @@ describe("MCP native tool payloads", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "mcp_list_servers") return [server];
       if (command === "mcp_list_tools") return [{ name: "echo", description: null, inputSchema: schema }];
@@ -37,7 +38,7 @@ describe("MCP native tool payloads", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     fireEvent.click(await screen.findByRole("button", { name: "Prepare call: echo" }));
     expect(screen.getByLabelText("JSON arguments")).toBeInTheDocument();
-    expect(JSON.parse(screen.getByLabelText("Input schema").textContent!)).toEqual(schema);
+    expect(JSON.parse(screen.getByLabelText("Required input format (JSON Schema)").textContent!)).toEqual(schema);
     fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: '{"message":"hello"}' } });
     fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
     expect(screen.getByRole("button", { name: "Approve and run once" })).toBeInTheDocument();
@@ -45,12 +46,11 @@ describe("MCP native tool payloads", () => {
   });
 
   it("preserves discovered properties and required arguments in chat function definitions", async () => {
-    const setError = vi.fn();
-    const { result } = renderHook(() => useChatMcpTools({ setError }));
+    const { result } = renderHook(() => useChatMcpTools());
     await act(() => result.current.refreshMcpTools());
     expect(result.current.mcpDefinitions).toHaveLength(1);
     expect(result.current.mcpDefinitions[0].function.parameters).toEqual(schema);
-    expect(setError).toHaveBeenLastCalledWith(null);
+    expect(result.current.mcpError).toBeNull();
   });
 
   it("normalizes missing schemas and accepts the existing internal spelling", async () => {

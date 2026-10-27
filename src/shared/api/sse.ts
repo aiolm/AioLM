@@ -5,6 +5,7 @@ export interface StreamDelta {
   finish_reason?: string | null;
   usage?: StreamUsage;
   timings?: StreamTimings;
+  metrics?: StreamMetrics;
   id?: string;
   model?: string;
 }
@@ -20,7 +21,7 @@ export interface StreamUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number; [key: string]: unknown };
+  prompt_tokens_details?: { cached_tokens?: number; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
 
@@ -34,12 +35,21 @@ export interface StreamTimings {
   predicted_per_second?: number;
 }
 
+/** vLLM's per-request telemetry uses a decode interval, unlike its overall throughput. */
+export interface StreamMetrics {
+  time_to_first_token_ms?: number | null;
+  generation_time_ms?: number | null;
+  queue_time_ms?: number | null;
+  mean_itl_ms?: number | null;
+  tokens_per_second?: number | null;
+}
+
 export type NormalizedStreamEvent =
   | { type: "text_delta"; text: string }
   | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_delta"; toolCall: ToolCallDelta }
-  | { type: "stats"; usage?: StreamUsage; timings?: StreamTimings }
-  | { type: "completed"; finishReason?: string | null; usage?: StreamUsage; timings?: StreamTimings };
+  | { type: "stats"; usage?: StreamUsage; timings?: StreamTimings; metrics?: StreamMetrics }
+  | { type: "completed"; finishReason?: string | null; usage?: StreamUsage; timings?: StreamTimings; metrics?: StreamMetrics };
 
 export const MAX_SSE_FRAME_CHARS = 4 * 1024 * 1024;
 export const MAX_STREAM_RESULT_CHARS = 16 * 1024 * 1024;
@@ -58,9 +68,9 @@ export function normalizeStreamDelta(delta: StreamDelta): NormalizedStreamEvent[
     events.push({ type: "tool_call_delta", toolCall });
   }
   if (delta.finish_reason != null) {
-    events.push({ type: "completed", finishReason: delta.finish_reason, usage: delta.usage, timings: delta.timings });
-  } else if (delta.usage || delta.timings) {
-    events.push({ type: "stats", usage: delta.usage, timings: delta.timings });
+    events.push({ type: "completed", finishReason: delta.finish_reason, usage: delta.usage, timings: delta.timings, ...(delta.metrics ? { metrics: delta.metrics } : {}) });
+  } else if (delta.usage || delta.timings || delta.metrics) {
+    events.push({ type: "stats", usage: delta.usage, timings: delta.timings, ...(delta.metrics ? { metrics: delta.metrics } : {}) });
   }
   return events;
 }
@@ -126,7 +136,7 @@ export class SseParser {
     const choices = Array.isArray(json.choices) ? json.choices : [];
     const choice = asRecord(choices[0]);
     const delta = asRecord(choice.delta);
-    const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+    const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : "";
     const content = typeof delta.content === "string" ? delta.content : "";
     const rawToolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
     const toolCalls: ToolCallDelta[] = rawToolCalls
@@ -148,10 +158,12 @@ export class SseParser {
       ? json.usage as StreamUsage : undefined;
     const timings = json.timings && typeof json.timings === "object" && !Array.isArray(json.timings)
       ? json.timings as StreamTimings : undefined;
+    const metrics = json.metrics && typeof json.metrics === "object" && !Array.isArray(json.metrics)
+      ? json.metrics as StreamMetrics : undefined;
     if (this.result.length + content.length > MAX_STREAM_RESULT_CHARS) {
       throw new Error("The streamed response exceeds the configured size limit.");
     }
-    if (reasoning || content || toolCalls.length || finishReason !== undefined || usage || timings) {
+    if (reasoning || content || toolCalls.length || finishReason !== undefined || usage || timings || metrics) {
       this.onDelta({
         id: typeof json?.id === "string" ? json.id : undefined,
         model: typeof json?.model === "string" ? json.model : undefined,
@@ -161,6 +173,7 @@ export class SseParser {
         finish_reason: finishReason,
         usage,
         timings,
+        ...(metrics ? { metrics } : {}),
       });
       if (content) this.result += content;
     }

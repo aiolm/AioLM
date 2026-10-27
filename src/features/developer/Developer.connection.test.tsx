@@ -277,7 +277,11 @@ describe("diagnostics screen", () => {
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Diagnostics");
     expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("Runtime diagnostics");
     expect(container.querySelector(".api-hint")).toHaveTextContent("Default model: model loaded · loaded.gguf");
-    expect(container.querySelector("pre")).toHaveTextContent("llama-server: model loaded in 4.2s");
+    const diagnostics = screen.getByRole('region', { name: 'Runtime diagnostics' });
+    expect(diagnostics).toHaveTextContent("llama-server: model loaded in 4.2s");
+    diagnostics.focus();
+    expect(diagnostics).toHaveFocus();
+    expect(diagnostics).not.toHaveAttribute('aria-live');
     // No API state is read, shown or controlled here, and the model's private server details stay private.
     for (const command of [api.apiServerStatus, api.startApiServer, api.stopApiServer, api.localModels, api.sessionSummaryList, ...modelLifecycleCommands()]) {
       expect(command).not.toHaveBeenCalled();

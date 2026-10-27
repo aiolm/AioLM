@@ -17,7 +17,7 @@
 //! reports — makes the result `None` rather than a zero or a guess.
 
 use crate::config::{AppConfig, SplitMode};
-use crate::hardware::{DeviceProfile, GpuDevice, GpuVendor};
+use crate::hardware::{GpuDevice, GpuVendor};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -58,15 +58,14 @@ struct Listed<'a> {
 /// defaults to the first of those.
 pub(super) fn gpu_capacity(
     cfg: &AppConfig,
-    profile: Option<&DeviceProfile>,
+    gpus: &[GpuDevice],
     runtime_devices: &[String],
 ) -> Option<GpuCapacity> {
     let backend = cfg.active_backend.as_str();
     let (prefix, vendor) = backend_devices(backend)?;
     let listed = listed_devices(runtime_devices, prefix);
-    let pool: Vec<&GpuDevice> = profile
-        .into_iter()
-        .flat_map(|profile| &profile.gpus)
+    let pool: Vec<&GpuDevice> = gpus
+        .iter()
         .filter(|gpu| vendor.is_none_or(|vendor| gpu.vendor == vendor))
         .collect();
     let scope = format!("runtime:{backend}:");
@@ -230,7 +229,7 @@ fn searchable(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::GpuPlacement;
-    use crate::hardware::{CpuInfo, DEVICE_PROFILE_SCHEMA};
+    use crate::hardware::{CpuInfo, DeviceProfile, DEVICE_PROFILE_SCHEMA};
 
     const GIB: u64 = 1024 * MIB;
 
@@ -250,7 +249,7 @@ mod tests {
                 "{prefix}0: Apple Test Chip (24576 MiB, 16000 MiB free)"
             )];
             assert_eq!(
-                gpu_capacity(&cfg, Some(&hardware), &devices),
+                gpu_capacity(&cfg, &hardware.gpus, &devices),
                 Some(GpuCapacity {
                     dedicated_bytes: 0,
                     devices: 1,
@@ -378,18 +377,18 @@ mod tests {
         let machine = nvidia();
         let both = config("cuda", &["gpu-a", "gpu-b"], None, SplitMode::Layer);
         assert_eq!(
-            gpu_capacity(&both, Some(&machine), &[]),
+            gpu_capacity(&both, &machine.gpus, &[]),
             capacity(40 * GIB, 2, false)
         );
         let one = config("cuda", &["gpu-b"], None, SplitMode::None);
         assert_eq!(
-            gpu_capacity(&one, Some(&machine), &[]),
+            gpu_capacity(&one, &machine.gpus, &[]),
             capacity(16 * GIB, 1, false)
         );
         // The same card named twice is still one card.
         let repeated = config("cuda", &["gpu-a", "gpu-a"], None, SplitMode::Layer);
         assert_eq!(
-            gpu_capacity(&repeated, Some(&machine), &[]),
+            gpu_capacity(&repeated, &machine.gpus, &[]),
             capacity(24 * GIB, 1, false)
         );
     }
@@ -404,25 +403,25 @@ mod tests {
             SplitMode::Single,
         );
         assert_eq!(
-            gpu_capacity(&main, Some(&machine), &[]),
+            gpu_capacity(&main, &machine.gpus, &[]),
             capacity(16 * GIB, 1, false)
         );
         // llama.cpp's main GPU defaults to the first selected device.
         let first = config("cuda", &["gpu-a", "gpu-b"], None, SplitMode::Single);
         assert_eq!(
-            gpu_capacity(&first, Some(&machine), &[]),
+            gpu_capacity(&first, &machine.gpus, &[]),
             capacity(24 * GIB, 1, false)
         );
         // Only single mode narrows the selection to the main GPU.
         let layered = config("cuda", &["gpu-a", "gpu-b"], Some("gpu-b"), SplitMode::Layer);
         assert_eq!(
-            gpu_capacity(&layered, Some(&machine), &[]),
+            gpu_capacity(&layered, &machine.gpus, &[]),
             capacity(40 * GIB, 2, false)
         );
         // Launch refuses a main GPU outside the device list.
         for mode in [SplitMode::Single, SplitMode::Layer] {
             let outside = config("cuda", &["gpu-a"], Some("gpu-b"), mode);
-            assert_eq!(gpu_capacity(&outside, Some(&machine), &[]), None);
+            assert_eq!(gpu_capacity(&outside, &machine.gpus, &[]), None);
         }
     }
 
@@ -437,7 +436,7 @@ mod tests {
         ]);
         let first = config("cuda", &["runtime:cuda:CUDA0"], None, SplitMode::None);
         assert_eq!(
-            gpu_capacity(&first, Some(&machine), &reported),
+            gpu_capacity(&first, &machine.gpus, &reported),
             capacity(16_380 * MIB, 1, false)
         );
         let both = config(
@@ -447,15 +446,15 @@ mod tests {
             SplitMode::Single,
         );
         assert_eq!(
-            gpu_capacity(&both, Some(&machine), &reported),
+            gpu_capacity(&both, &machine.gpus, &reported),
             capacity(24_560 * MIB, 1, false)
         );
         // Without the runtime's own list the position means nothing.
-        assert_eq!(gpu_capacity(&first, Some(&machine), &[]), None);
+        assert_eq!(gpu_capacity(&first, &machine.gpus, &[]), None);
         // Another backend's id, or one the runtime does not list, is unknown.
         for id in ["runtime:rocm:ROCm0", "runtime:cuda:CUDA2"] {
             let cfg = config("cuda", &[id], None, SplitMode::None);
-            assert_eq!(gpu_capacity(&cfg, Some(&machine), &reported), None);
+            assert_eq!(gpu_capacity(&cfg, &machine.gpus, &reported), None);
         }
     }
 
@@ -470,17 +469,17 @@ mod tests {
             SplitMode::Layer,
         );
         assert_eq!(
-            gpu_capacity(&mixed, Some(&machine), &reported),
+            gpu_capacity(&mixed, &machine.gpus, &reported),
             capacity(32_752 * MIB, 2, true)
         );
         let integrated = config("rocm", &["runtime:rocm:ROCm0"], None, SplitMode::None);
         assert_eq!(
-            gpu_capacity(&integrated, Some(&machine), &reported),
+            gpu_capacity(&integrated, &machine.gpus, &reported),
             capacity(0, 1, true)
         );
         let hardware = config("rocm", &["amd-igpu", "amd-1"], None, SplitMode::Layer);
         assert_eq!(
-            gpu_capacity(&hardware, Some(&machine), &reported),
+            gpu_capacity(&hardware, &machine.gpus, &reported),
             capacity(32 * GIB, 2, true)
         );
     }
@@ -491,22 +490,22 @@ mod tests {
         let reported = lines(&AMD_LINES);
         let all = config("rocm", &[], None, SplitMode::None);
         assert_eq!(
-            gpu_capacity(&all, Some(&machine), &reported),
+            gpu_capacity(&all, &machine.gpus, &reported),
             capacity(2 * 32_752 * MIB, 2, false)
         );
         let single = config("rocm", &[], None, SplitMode::Single);
         assert_eq!(
-            gpu_capacity(&single, Some(&machine), &reported),
+            gpu_capacity(&single, &machine.gpus, &reported),
             capacity(32_752 * MIB, 1, false)
         );
         // Integrated GPUs are used only when nothing dedicated is listed.
         let only_integrated = lines(&AMD_LINES[..2]);
         assert_eq!(
-            gpu_capacity(&all, Some(&machine), &only_integrated),
+            gpu_capacity(&all, &machine.gpus, &only_integrated),
             capacity(0, 1, true)
         );
         // Summing every detected adapter would be a guess.
-        assert_eq!(gpu_capacity(&all, Some(&machine), &[]), None);
+        assert_eq!(gpu_capacity(&all, &machine.gpus, &[]), None);
     }
 
     #[test]
@@ -515,11 +514,11 @@ mod tests {
         let cfg = config("cuda", &["runtime:cuda:CUDA0"], None, SplitMode::None);
         // A listed device that matches no detected card.
         let unknown = lines(&["CUDA0: Other Accel (8192 MiB, 8000 MiB free)"]);
-        assert_eq!(gpu_capacity(&cfg, Some(&machine), &unknown), None);
-        assert_eq!(gpu_capacity(&cfg, None, &unknown), None);
+        assert_eq!(gpu_capacity(&cfg, &machine.gpus, &unknown), None);
+        assert_eq!(gpu_capacity(&cfg, &[], &unknown), None);
         // A listed device without a memory figure.
         let unmeasured = lines(&["CUDA0: Test Accel 24G"]);
-        assert_eq!(gpu_capacity(&cfg, Some(&machine), &unmeasured), None);
+        assert_eq!(gpu_capacity(&cfg, &machine.gpus, &unmeasured), None);
         // A name shared by an integrated and a dedicated card.
         let ambiguous = profile(vec![
             card(GpuVendor::Amd, "Test Radeon", "amd-igpu", Some(512), true),
@@ -533,7 +532,7 @@ mod tests {
         ]);
         let listed = lines(&["ROCm0: Test Radeon Pro 32G (32752 MiB, 32000 MiB free)"]);
         let rocm = config("rocm", &["runtime:rocm:ROCm0"], None, SplitMode::None);
-        assert_eq!(gpu_capacity(&rocm, Some(&ambiguous), &listed), None);
+        assert_eq!(gpu_capacity(&rocm, &ambiguous.gpus, &listed), None);
         // A card whose memory the driver did not report.
         let unreported = profile(vec![card(
             GpuVendor::Nvidia,
@@ -543,17 +542,17 @@ mod tests {
             false,
         )]);
         let hardware = config("cuda", &["gpu-a"], None, SplitMode::None);
-        assert_eq!(gpu_capacity(&hardware, Some(&unreported), &[]), None);
+        assert_eq!(gpu_capacity(&hardware, &unreported.gpus, &[]), None);
         // A card that is not on this machine, or not on this backend's list.
         for (backend, id) in [("cuda", "gpu-missing"), ("rocm", "gpu-a")] {
             let cfg = config(backend, &[id], None, SplitMode::None);
-            assert_eq!(gpu_capacity(&cfg, Some(&machine), &[]), None);
+            assert_eq!(gpu_capacity(&cfg, &machine.gpus, &[]), None);
         }
-        assert_eq!(gpu_capacity(&hardware, None, &[]), None);
+        assert_eq!(gpu_capacity(&hardware, &[], &[]), None);
         // A backend without GPU devices has no GPU capacity to report.
         for backend in ["cpu", "openvino", ""] {
             let cfg = config(backend, &["gpu-a"], None, SplitMode::None);
-            assert_eq!(gpu_capacity(&cfg, Some(&machine), &[]), None);
+            assert_eq!(gpu_capacity(&cfg, &machine.gpus, &[]), None);
         }
     }
 }

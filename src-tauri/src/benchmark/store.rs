@@ -64,11 +64,21 @@ fn encoded(entry: &Entry) -> Result<Vec<u8>, String> {
 
 fn metadata(result: &PerformanceBenchResult) -> Value {
     // Serialize metadata without walking/cloning accumulated rows each trial.
+    // Engine identity comes from the run, so the accelerator a Python runtime
+    // reported replaces the start event's placeholder.
     let mut value = json!({
         "run_id": result.run_id, "status": result.status, "message": result.message,
         "args": result.args, "runtime_version": result.runtime_version,
         "context_size": result.context_size, "parallel": result.parallel,
+        "provider": result.provider, "model_format": result.model_format,
+        "runtime_accelerator": result.runtime_accelerator,
     });
+    if let Some(variant) = &result.runtime_variant {
+        value["runtime_variant"] = json!(variant);
+    }
+    if let Some(version) = &result.runtime_plugin_version {
+        value["runtime_plugin_version"] = json!(version);
+    }
     if let Some(provenance) = &result.provenance {
         value["provenance"] = json!(provenance);
     }
@@ -122,6 +132,12 @@ fn valid_row(row: &Value) -> bool {
 }
 
 fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths = files_unsorted(root)?;
+    paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
+    Ok(paths)
+}
+
+fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = match fs::read_dir(root.join("runs")) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -130,19 +146,21 @@ fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
-        if entry
+        if !entry
             .file_type()
             .map_err(|error| error.to_string())?
             .is_file()
-            && entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
         {
-            paths.push(entry.path());
+            continue;
+        }
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
+            paths.push(path);
         }
     }
-    paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
     Ok(paths)
 }
 
@@ -164,19 +182,31 @@ fn validate_record(record: &Value) -> Result<(), String> {
     {
         return Err("invalid benchmark record envelope".into());
     }
-    let mut request: PerformanceBenchRequest = serde_json::from_value(
+    let mut request = PerformanceBenchRequest::deserialize(
         record
             .get("request")
-            .cloned()
             .ok_or("benchmark request is missing")?,
     )
     .map_err(|error| error.to_string())?;
     crate::performance_bench::validate_request(&mut request)?;
     if let Some(value) = record.pointer("/result/provenance") {
-        let provenance: super::provenance::BenchmarkProvenance =
-            serde_json::from_value(value.clone())
-                .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
+        let provenance = super::provenance::BenchmarkProvenance::deserialize(value)
+            .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
         provenance.validate(&request.context_profile)?;
+    }
+    for name in ["runtime_variant", "runtime_plugin_version"] {
+        if record
+            .get("result")
+            .and_then(|result| result.get(name))
+            .is_some_and(|value| {
+                !value.is_null()
+                    && !value.as_str().is_some_and(|text| {
+                        !text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control)
+                    })
+            })
+        {
+            return Err(format!("invalid benchmark {name}"));
+        }
     }
     if request.run_id != id
         || record.pointer("/result/run_id").and_then(Value::as_str) != Some(id)
@@ -226,7 +256,7 @@ fn record_digest(record: &Value) -> String {
 }
 
 fn existing_digests(root: &Path) -> Result<HashSet<String>, String> {
-    Ok(files(root)?
+    Ok(files_unsorted(root)?
         .into_iter()
         .filter_map(|path| {
             path.file_name()
@@ -237,12 +267,64 @@ fn existing_digests(root: &Path) -> Result<HashSet<String>, String> {
         .collect())
 }
 
+// Constructors stay inside this module so a path decision requires evidence
+// that the exact immutable record passed the complete validator.
+// Revisit this proof if validation gains external freshness checks or other
+// non-pure dependencies.
+mod validated {
+    use super::{validate_record, Value};
+
+    pub(super) struct Record(Value);
+    pub(super) struct RecordRef<'a>(&'a Value);
+
+    pub(super) fn batch(records: Vec<Value>) -> Result<impl Iterator<Item = Record>, String> {
+        if records.len() > 100 {
+            return Err("import at most 100 benchmark records at a time".into());
+        }
+        // This is eager: every supplied record is checked before returning
+        // the owning iterator, including duplicates and tombstoned ids.
+        for record in &records {
+            validate_record(record)?;
+        }
+        Ok(records.into_iter().map(Record))
+    }
+
+    impl Record {
+        pub(super) fn view(&self) -> RecordRef<'_> {
+            RecordRef(&self.0)
+        }
+
+        pub(super) fn into_value(self) -> Value {
+            self.0
+        }
+    }
+
+    impl<'a> RecordRef<'a> {
+        pub(super) fn check(record: &'a Value) -> Result<Self, String> {
+            validate_record(record)?;
+            Ok(Self(record))
+        }
+
+        pub(super) fn value(self) -> &'a Value {
+            self.0
+        }
+    }
+}
+
 fn path_for(
     root: &Path,
     record: &Value,
     existing: &HashSet<String>,
 ) -> Result<Option<PathBuf>, String> {
-    validate_record(record)?;
+    path_for_validated(root, validated::RecordRef::check(record)?, existing)
+}
+
+fn path_for_validated(
+    root: &Path,
+    record: validated::RecordRef<'_>,
+    existing: &HashSet<String>,
+) -> Result<Option<PathBuf>, String> {
+    let record = record.value();
     let digest = record_digest(record);
     let id = record["id"].as_str().expect("validated id");
     if existing.contains(&digest)
@@ -486,12 +568,12 @@ fn update_result(record: &mut Option<Value>, result: Value) -> Result<(), String
         .and_then(|value| value.get_mut("result"))
         .and_then(Value::as_object_mut)
         .ok_or("benchmark metadata is missing its start event")?;
-    for (key, value) in result
-        .as_object()
-        .ok_or("benchmark metadata must be an object")?
-    {
+    let Value::Object(result) = result else {
+        return Err("benchmark metadata must be an object".into());
+    };
+    for (key, value) in result {
         if key != "rows" {
-            target.insert(key.clone(), value.clone());
+            target.insert(key, value);
         }
     }
     Ok(())
@@ -553,29 +635,36 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
 }
 
 pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> {
-    if records.len() > 100 {
-        return Err("import at most 100 benchmark records at a time".into());
-    }
-    for record in &records {
-        validate_record(record)?;
-    }
+    let records = validated::batch(records)?;
     let _lock = StoreLock::acquire(root)?;
     let mut imported = 0;
     let mut existing = existing_digests(root)?;
     for record in records {
-        let Some(path) = path_for(root, &record, &existing)? else {
+        let Some(path) = path_for_validated(root, record.view(), &existing)? else {
             continue;
         };
+        let record = record.into_value();
         let digest = record_digest(&record);
-        let mut result = record["result"].clone();
-        result
-            .as_object_mut()
-            .ok_or("benchmark result is missing")?
-            .remove("rows");
-        let mut bytes = encoded(&Entry::Start {
+        record["result"]
+            .as_object()
+            .ok_or("benchmark result is missing")?;
+        let start = Entry::Start {
             record,
             origin: Some(JournalOrigin::Legacy),
-        })?;
+        };
+        let mut bytes = encoded(&start)?;
+        let Entry::Start { mut record, .. } = start else {
+            unreachable!("import encoded a start event");
+        };
+        let mut result = record
+            .get_mut("result")
+            .expect("checked benchmark result")
+            .take();
+        drop(record);
+        result
+            .as_object_mut()
+            .expect("checked benchmark result")
+            .remove("rows");
         bytes.extend(encoded(&Entry::Finish { result })?);
         crate::config::atomic_write(&path, &bytes)?;
         sync_parent(&path)?;
@@ -589,6 +678,218 @@ pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> 
 mod tests {
     use super::*;
     use crate::performance_bench::PerformanceBenchRow;
+    #[test]
+    fn import_batch_boundaries_keep_preflight_errors_and_empty_scan_effects() {
+        let parent = root();
+        let capped = parent.join("capped");
+        assert_eq!(
+            import(&capped, vec![Value::Null; 101]).unwrap_err(),
+            "import at most 100 benchmark records at a time"
+        );
+        assert!(!capped.exists());
+
+        let rejected = parent.join("first-error");
+        let mut invalid = record("first-error", 1);
+        invalid["request"]["generation_length"] = json!(0);
+        assert_eq!(
+            import(&rejected, vec![invalid, Value::Null]).unwrap_err(),
+            "generation length must be 1 to 4096 and repetitions 1 to 10"
+        );
+        assert!(!rejected.exists());
+
+        let maximum = parent.join("maximum");
+        let records = (0..100u64)
+            .map(|index| record(&format!("maximum-{index}"), index))
+            .collect();
+        assert_eq!(import(&maximum, records).unwrap(), 100);
+        let page = list(&maximum, 0, 100).unwrap();
+        assert_eq!(page.total, 100);
+        assert_eq!(page.records.len(), 100);
+        assert_eq!(page.next_offset, None);
+        assert!(page.warnings.is_empty());
+
+        let empty = parent.join("empty");
+        assert_eq!(import(&empty, vec![]).unwrap(), 0);
+        assert!(empty.join(".store.lock").is_file());
+        assert!(!empty.join("runs").exists());
+        let blocker = empty.join("runs");
+        fs::write(&blocker, b"preserved scan blocker").unwrap();
+        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
+        assert_eq!(
+            import(&empty, vec![]).unwrap_err(),
+            format!("cannot read benchmark history: {io_error}")
+        );
+        assert_eq!(fs::read(&blocker).unwrap(), b"preserved scan blocker");
+        // Remove only files this test requested; unexpected residue must survive.
+        for index in 0..100u64 {
+            let digest = record_digest(&record(&format!("maximum-{index}"), index));
+            fs::remove_file(maximum.join("runs").join(format!("{index:016}-{digest}"))).unwrap();
+            fs::remove_file(
+                maximum
+                    .join("run-locks")
+                    .join(format!("{}.lock", digest.strip_suffix(".jsonl").unwrap())),
+            )
+            .unwrap();
+        }
+        fs::remove_dir(maximum.join("runs")).unwrap();
+        fs::remove_dir(maximum.join("run-locks")).unwrap();
+        fs::remove_file(maximum.join(".store.lock")).unwrap();
+        fs::remove_dir(maximum).unwrap();
+        fs::remove_file(blocker).unwrap();
+        fs::remove_file(empty.join(".store.lock")).unwrap();
+        fs::remove_dir(empty).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn import_enforces_exact_record_size_and_preserves_unknown_padding() {
+        let parent = root();
+        let destination = parent.join("size-boundary");
+        let mut input = record("size-boundary", 7);
+        input["unknown-padding"] = json!("");
+        let overhead = serde_json::to_vec(&input).unwrap().len();
+        assert!(overhead < MAX_RECORD_BYTES);
+        input["unknown-padding"] = json!("x".repeat(MAX_RECORD_BYTES - overhead));
+        let original = serde_json::to_vec(&input).unwrap();
+        assert_eq!(original.len(), MAX_RECORD_BYTES);
+
+        let mut oversized = input.clone();
+        oversized["unknown-padding"] =
+            json!(format!("{}x", input["unknown-padding"].as_str().unwrap()));
+        assert_eq!(
+            serde_json::to_vec(&oversized).unwrap().len(),
+            MAX_RECORD_BYTES + 1
+        );
+        assert_eq!(
+            import(&destination, vec![oversized.clone()]).unwrap_err(),
+            "benchmark record exceeds the storage size limit"
+        );
+        assert!(!destination.exists());
+
+        assert_eq!(import(&destination, vec![input.clone()]).unwrap(), 1);
+        let journal = destination
+            .join("runs")
+            .join(format!("{:016}-{}", 7, record_digest(&input)));
+        let bytes = fs::read(&journal).unwrap();
+        let first_line = bytes.split(|byte| *byte == b'\n').next().unwrap();
+        let start: Value = serde_json::from_slice(first_line).unwrap();
+        assert_eq!(start["kind"], "start");
+        assert_eq!(start["origin"], "legacy");
+        assert_eq!(serde_json::to_vec(&start["record"]).unwrap(), original);
+        let page = list(&destination, 0, 100).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.next_offset, None);
+        assert!(page.warnings.is_empty());
+        // A new imported record has display state but no accepted receipt.
+        let mut displayed = input.clone();
+        displayed["localState"] = json!("recovery");
+        assert_eq!(page.records, vec![displayed]);
+
+        assert_eq!(
+            import(&destination, vec![oversized]).unwrap_err(),
+            "benchmark record exceeds the storage size limit"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+        fs::remove_file(journal).unwrap();
+        fs::remove_dir(destination.join("runs")).unwrap();
+        fs::remove_file(
+            destination
+                .join("run-locks")
+                .join(format!("{:x}.lock", Sha256::digest(b"size-boundary"))),
+        )
+        .unwrap();
+        fs::remove_dir(destination.join("run-locks")).unwrap();
+        fs::remove_file(destination.join(".store.lock")).unwrap();
+        fs::remove_dir(destination).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn native_scan_order_and_both_replay_validation_gates_remain_independent() {
+        let parent = root();
+        let native = parent.join("native");
+        fs::create_dir(&native).unwrap();
+        let blocker = native.join("runs");
+        fs::write(&blocker, b"native scan blocker").unwrap();
+        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
+        let mut invalid = record("native-invalid", 1);
+        invalid["request"]["generation_length"] = json!(0);
+        let native_error = match RunJournal::begin(&native, invalid) {
+            Err(error) => error,
+            Ok(journal) => {
+                drop(journal);
+                panic!("invalid native input was accepted");
+            }
+        };
+        assert_eq!(
+            native_error,
+            format!("cannot read benchmark history: {io_error}")
+        );
+        assert!(native.join(".store.lock").is_file());
+        assert_eq!(fs::read(&blocker).unwrap(), b"native scan blocker");
+
+        let replay_root = parent.join("replay");
+        let runs = replay_root.join("runs");
+        fs::create_dir_all(&runs).unwrap();
+        let good = record("invalid-start", 11);
+        let mut bad_start = good.clone();
+        bad_start["result"]["parallel"] = json!("invalid");
+        let mut first_bytes = encoded(&Entry::Start {
+            record: bad_start,
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        // This valid Finish would repair parallel if Start validation were removed.
+        first_bytes.extend(
+            encoded(&Entry::Finish {
+                result: good["result"].clone(),
+            })
+            .unwrap(),
+        );
+        let first_path = runs.join(format!("{:016}-{}", 11, record_digest(&good)));
+        fs::write(&first_path, &first_bytes).unwrap();
+
+        let second = record("invalid-finish", 12);
+        let mut bad_finish = second["result"].clone();
+        bad_finish["parallel"] = json!("invalid");
+        let mut second_bytes = encoded(&Entry::Start {
+            record: second.clone(),
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        second_bytes.extend(encoded(&Entry::Finish { result: bad_finish }).unwrap());
+        let second_path = runs.join(format!("{:016}-{}", 12, record_digest(&second)));
+        fs::write(&second_path, &second_bytes).unwrap();
+
+        let page = list(&replay_root, 0, 100).unwrap();
+        assert_eq!(page.total, 2);
+        assert!(page.records.is_empty());
+        assert_eq!(page.next_offset, None);
+        let warning = "a benchmark record could not be read and was preserved: benchmark record and request do not match";
+        assert_eq!(page.warnings, vec![warning.to_owned(), warning.to_owned()]);
+        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+        assert_eq!(fs::read(&second_path).unwrap(), second_bytes);
+        fs::remove_file(blocker).unwrap();
+        fs::remove_file(native.join(".store.lock")).unwrap();
+        fs::remove_dir(native).unwrap();
+        fs::remove_file(first_path).unwrap();
+        fs::remove_file(second_path).unwrap();
+        fs::remove_dir(runs).unwrap();
+        for id in ["invalid-start", "invalid-finish"] {
+            fs::remove_file(
+                replay_root
+                    .join("run-locks")
+                    .join(format!("{:x}.lock", Sha256::digest(id.as_bytes()))),
+            )
+            .unwrap();
+        }
+        fs::remove_dir(replay_root.join("run-locks")).unwrap();
+        fs::remove_file(replay_root.join(".store.lock")).unwrap();
+        fs::remove_dir(replay_root).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
     pub(super) fn root() -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("aiolm-benchmark-store-{}", uuid::Uuid::new_v4()));
@@ -620,6 +921,306 @@ mod tests {
             error: None,
         }
     }
+    #[test]
+    fn import_validates_a_later_duplicate_before_creating_the_store() {
+        let parent = root();
+        let destination = parent.join("absent-import");
+        let first = record("same-id", 1);
+        let mut invalid = record("same-id", 2);
+        invalid["request"]["generation_length"] = json!(0);
+        assert_eq!(
+            import(&destination, vec![first, invalid]).unwrap_err(),
+            "generation length must be 1 to 4096 and repetitions 1 to 10"
+        );
+        assert!(!destination.exists());
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn import_keeps_original_request_and_provenance_representations() {
+        let root = root();
+        let mut input = record("original-values", 7);
+        input["request"]["prompt_lengths"] = json!([32, 16, 16]);
+        input["request"]["batch_sizes"] = json!([8, 2, 2]);
+        input["request"]["extension"] = serde_json::from_str::<Value>(
+            r#"{"integer":18446744073709551615,"float":1.0,"zero":-0.0,"nested":["한글",null]}"#,
+        )
+        .unwrap();
+        input["result"]["provenance"] = json!({
+            "schema_version": 1, "app_version": "synthetic",
+            "method": {"id": "cold-prompt-serving", "version": 1},
+            "corpus": {"profile": "novel_en", "version": 1, "sha256": "a".repeat(64)},
+            "model": {"status": "unidentified", "format": "gguf",
+                "metadata": {"format": "GGUF", "name": "Synthetic", "base_models": [], "source": "gguf"}},
+            "environment": {"os": "synthetic", "arch": "synthetic",
+                "cpu": {"name": "synthetic", "logical_cores": 1},
+                "installed_gpus": [], "execution": {"mode": "cpu", "selected_gpus": [],
+                    "devices": [], "selection_complete": true}, "detection": "synthetic"},
+            "execution_config": {"threads": -1, "tensor_split": [1.0, -0.0]},
+            "extension": input["request"]["extension"].clone()
+        });
+        let original_bytes = serde_json::to_vec(&input).unwrap();
+        let request_bytes = serde_json::to_vec(&input["request"]).unwrap();
+        let provenance_bytes = serde_json::to_vec(&input["result"]["provenance"]).unwrap();
+        // The journal keeps the supplied values, including unknown fields and Number kinds.
+        let mut result = input["result"].clone();
+        result.as_object_mut().unwrap().remove("rows");
+        let mut expected = encoded(&Entry::Start {
+            record: input.clone(),
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        expected.extend(encoded(&Entry::Finish { result }).unwrap());
+        assert_eq!(import(&root, vec![input.clone(), input]).unwrap(), 1);
+        let path = files(&root).unwrap().remove(0);
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_vec(&replay_run(&path).unwrap().record).unwrap(),
+            original_bytes
+        );
+        let page = list(&root, 0, 10).unwrap();
+        assert!(page.warnings.is_empty());
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(
+            serde_json::to_vec(&page.records[0]["request"]).unwrap(),
+            request_bytes
+        );
+        assert_eq!(
+            serde_json::to_vec(&page.records[0]["result"]["provenance"]).unwrap(),
+            provenance_bytes
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicates_and_tombstones_do_not_hide_deserialization_errors_or_native_validation() {
+        let root = root();
+        let valid = record("retained-id", 1);
+        assert_eq!(import(&root, vec![valid.clone()]).unwrap(), 1);
+        let path = files(&root).unwrap().remove(0);
+        let bytes = fs::read(&path).unwrap();
+        let mut malformed = valid.clone();
+        // A floating point JSON Number must not silently become a typed u32.
+        malformed["request"]["generation_length"] = json!(8.0);
+        let expected =
+            serde_json::from_value::<PerformanceBenchRequest>(malformed["request"].clone())
+                .unwrap_err()
+                .to_string();
+        let mut malformed_provenance = valid.clone();
+        malformed_provenance["result"]["provenance"] = json!({});
+        let expected_provenance = format!(
+            "invalid benchmark provenance: {}",
+            serde_json::from_value::<super::super::provenance::BenchmarkProvenance>(json!({}))
+                .unwrap_err()
+        );
+        assert_eq!(
+            import(&root, vec![malformed.clone()]).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
+            expected_provenance
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        delete(&root, "retained-id").unwrap();
+        assert_eq!(import(&root, vec![valid]).unwrap(), 0);
+        assert_eq!(
+            import(&root, vec![malformed.clone()]).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
+            expected_provenance
+        );
+        assert!(files(&root).unwrap().is_empty());
+        // Fresh ids make native validation independent of duplicate/tombstone rejection.
+        for (mut input, expected) in [
+            (malformed, expected),
+            (malformed_provenance, expected_provenance),
+        ] {
+            input["id"] = json!("standalone-native");
+            input["request"]["run_id"] = json!("standalone-native");
+            input["result"]["run_id"] = json!("standalone-native");
+            let native_error = match RunJournal::begin(&root, input) {
+                Ok(journal) => {
+                    drop(journal);
+                    panic!("invalid native input was accepted");
+                }
+                Err(error) => error,
+            };
+            assert_eq!(native_error, expected);
+            assert!(files(&root).unwrap().is_empty());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_updates_preserve_unknown_values_and_persisted_rows() {
+        let mut stored = Some(record("metadata", 7));
+        let persisted_rows = json!([row()]);
+        stored.as_mut().unwrap()["result"]["rows"] = persisted_rows.clone();
+        let extension = json!({"nested": [null, {"é": "漢字"}], "enabled": true});
+        for (index, incoming_rows) in [
+            json!([{"must_not_replace": true}]),
+            Value::Null,
+            json!({"not": "rows"}),
+            json!(7),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            update_result(
+                &mut stored,
+                json!({"rows": incoming_rows, "extension": extension.clone(), "nullable": null, "last": index}),
+            )
+            .unwrap();
+            let result = &stored.as_ref().unwrap()["result"];
+            assert_eq!(result["rows"], persisted_rows);
+            assert_eq!(result["extension"], extension);
+            assert_eq!(result.get("nullable"), Some(&Value::Null));
+            assert_eq!(result["last"], json!(index));
+        }
+    }
+
+    #[test]
+    fn metadata_requires_a_start_before_rejecting_non_object_updates() {
+        for incoming in [
+            Value::Null,
+            json!(false),
+            json!("invalid"),
+            json!([]),
+            json!({}),
+        ] {
+            let mut missing = None;
+            assert_eq!(
+                update_result(&mut missing, incoming).unwrap_err(),
+                "benchmark metadata is missing its start event"
+            );
+            assert!(missing.is_none());
+        }
+        for incoming in [Value::Null, json!(false), json!("invalid"), json!([])] {
+            let mut stored = Some(record("metadata", 7));
+            let before = stored.clone();
+            assert_eq!(
+                update_result(&mut stored, incoming).unwrap_err(),
+                "benchmark metadata must be an object"
+            );
+            assert_eq!(stored, before);
+        }
+    }
+
+    #[test]
+    fn import_keeps_original_start_and_exact_finish_metadata_bytes() {
+        let root = root();
+        for row_count in [0, 1, 640] {
+            for position in 0..3 {
+                let id = format!("import-metadata-{row_count}-{position}");
+                let mut original = record(&id, (row_count * 3 + position) as u64);
+                original["unknown-root"] =
+                    json!({"text": "e\u{301}😀", "integer": 9007199254740993u64});
+                let mut persisted_row = json!(row());
+                persisted_row["unknown-row"] = json!({"rows": [true, null], "unsigned": u64::MAX});
+                let persisted_rows: Vec<_> = (0..row_count)
+                    .map(|index| {
+                        let mut value = persisted_row.clone();
+                        value["id"] = json!(format!("trial-{index}"));
+                        value
+                    })
+                    .collect();
+                let mut fields = vec![
+                    ("a", json!({"rows": [null, {"한글": "漢字"}]})),
+                    ("run_id", json!(&id)),
+                    ("status", json!("complete")),
+                    ("message", Value::Null),
+                    ("args", json!([])),
+                    ("runtime_version", json!("synthetic")),
+                    ("context_size", json!(256)),
+                    ("parallel", json!(1)),
+                    (
+                        "z",
+                        json!({"min": i64::MIN, "max": u64::MAX, "large": 9007199254740993u64,
+                        "float": 1.0f64, "negative_zero": -0.0f64, "empty": {}, "nullable": null}),
+                    ),
+                ];
+                let at = [0, fields.len() / 2, fields.len()][position];
+                fields.insert(at, ("rows", json!(persisted_rows)));
+                original["result"] = Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key.into(), value))
+                        .collect(),
+                );
+
+                // Reference the journal protocol: untouched Start, then clone/remove Finish.
+                // Removal on the actual Map retains both supported backend orderings.
+                let mut expected_result = original["result"].clone();
+                expected_result.as_object_mut().unwrap().remove("rows");
+                let mut expected = encoded(&Entry::Start {
+                    record: original.clone(),
+                    origin: Some(JournalOrigin::Legacy),
+                })
+                .unwrap();
+                expected.extend(
+                    encoded(&Entry::Finish {
+                        result: expected_result,
+                    })
+                    .unwrap(),
+                );
+
+                assert_eq!(import(&root, vec![original.clone()]).unwrap(), 1);
+                let path = path_for(&root, &original, &HashSet::new())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(fs::read(&path).unwrap(), expected);
+                let page = list(&root, 0, 100).unwrap();
+                assert!(page.warnings.is_empty());
+                let stored = page.records.iter().find(|value| value["id"] == id).unwrap();
+                assert_eq!(
+                    serde_json::to_vec(&stored["result"]).unwrap(),
+                    serde_json::to_vec(&original["result"]).unwrap()
+                );
+                assert_eq!(stored["unknown-root"], original["unknown-root"]);
+                assert_eq!(import(&root, vec![original]).unwrap(), 0);
+                assert_eq!(fs::read(path).unwrap(), expected);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn import_keeps_prior_journal_after_failure_and_retries_remaining_records() {
+        let root = root();
+        let first = record("first", 7);
+        let second = record("second", 7);
+        let third = record("third", 7);
+        let path = |value: &Value| path_for(&root, value, &HashSet::new()).unwrap().unwrap();
+        let first_path = path(&first);
+        let second_path = path(&second);
+        let third_path = path(&third);
+        fs::create_dir_all(&second_path).unwrap();
+        let batch = vec![first, second, third];
+
+        assert!(import(&root, batch.clone()).is_err());
+        let first_bytes = fs::read(&first_path).unwrap();
+        assert!(second_path.is_dir());
+        assert!(!third_path.exists());
+        let page = list(&root, 0, 100).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0]["id"], "first");
+        assert!(page.warnings.is_empty());
+
+        fs::remove_dir(&second_path).unwrap();
+        assert_eq!(import(&root, batch.clone()).unwrap(), 2);
+        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+        assert!(second_path.is_file() && third_path.is_file());
+        assert_eq!(import(&root, batch).unwrap(), 0);
+        let page = list(&root, 0, 100).unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.records.len(), 3);
+        assert!(page.warnings.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn history_keeps_more_than_twenty_runs_and_import_preserves_native_ids() {
         let root = root();
@@ -720,6 +1321,112 @@ mod tests {
         assert_eq!(reopened.records[0]["result"]["status"], "complete");
         assert!(reopened.records[0]["result"].get("provenance").is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_python_engine_run_keeps_the_identity_its_runtime_reported() {
+        let root = root();
+        let mut initial = record("engine-identity", 10);
+        initial["backend"] = json!("metal");
+        initial["build"] = json!("0.7.6");
+        let request = serde_json::from_value(initial["request"].clone()).unwrap();
+        let cfg = crate::config::AppConfig {
+            active_provider: "mlx-vlm".into(),
+            ..Default::default()
+        };
+        initial["result"] = json!(crate::performance_bench::failed(
+            &request,
+            &cfg,
+            "pending".into()
+        ));
+        let journal = RunJournal::begin(&root, initial).unwrap();
+        let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
+        result.runtime_accelerator = Some("metal".into());
+        result.runtime_version = "0.7.6".into();
+        result.rows.push(row());
+        result.status = "complete";
+        result.message = None;
+        journal.checkpoint(&result).unwrap();
+        journal.finish(&result).unwrap();
+        drop(journal);
+        let stored = list(&root, 0, 20).unwrap().records.remove(0);
+        assert_eq!(stored["backend"], "metal");
+        assert_eq!(stored["result"]["provider"], "mlx-vlm");
+        assert_eq!(stored["result"]["runtime_accelerator"], "metal");
+        assert_eq!(stored["result"]["runtime_version"], "0.7.6");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn metal_plugin_identity_and_formats_survive_interrupted_and_finished_history() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let root = root();
+        for (index, format) in [
+            ArtifactFormat::HfSafetensors,
+            ArtifactFormat::Mlx,
+            ArtifactFormat::Gguf,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("metal-history-{index}");
+            let mut initial = record(&id, 10 + index as u64);
+            initial["backend"] = json!("metal");
+            initial["build"] = json!("0.30.0");
+            let request = serde_json::from_value(initial["request"].clone()).unwrap();
+            let cfg = crate::config::AppConfig {
+                active_provider: "vllm".into(),
+                ..Default::default()
+            };
+            let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
+            initial["result"] = json!(&result);
+            let journal = RunJournal::begin(&root, initial).unwrap();
+            result.runtime_accelerator = Some("metal".into());
+            result.runtime_variant = Some("vllm-metal".into());
+            result.runtime_version = "0.30.0".into();
+            result.runtime_plugin_version = Some("0.30.1".into());
+            result.model_format = format;
+            result.rows.push(row());
+            journal.checkpoint(&result).unwrap();
+            if index != 0 {
+                result.status = "complete";
+                result.message = None;
+                journal.finish(&result).unwrap();
+            }
+            drop(journal);
+            let stored = list(&root, 0, 20)
+                .unwrap()
+                .records
+                .into_iter()
+                .find(|value| value["id"] == id)
+                .unwrap();
+            assert_eq!(stored["result"]["runtime_version"], "0.30.0");
+            assert_eq!(stored["result"]["runtime_variant"], "vllm-metal");
+            assert_eq!(stored["result"]["runtime_plugin_version"], "0.30.1");
+            assert_eq!(stored["result"]["runtime_accelerator"], "metal");
+            assert_eq!(stored["result"]["model_format"], json!(format));
+            assert_eq!(stored["result"]["provider"], "vllm");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn history_accepts_legacy_identity_and_rejects_malformed_plugin_labels() {
+        let legacy = record("synthetic-metal-labels", 10);
+        assert!(validate_record(&legacy).is_ok());
+        let mut metal = legacy.clone();
+        metal["result"]["runtime_variant"] = json!("vllm-metal");
+        metal["result"]["runtime_plugin_version"] = json!("0.30.0");
+        assert!(validate_record(&metal).is_ok());
+        for bad in [
+            json!(7),
+            json!(""),
+            json!("0.30.0\nspoofed"),
+            json!("x".repeat(257)),
+        ] {
+            for field in ["runtime_variant", "runtime_plugin_version"] {
+                let mut malformed = metal.clone();
+                malformed["result"][field] = bad.clone();
+                assert!(validate_record(&malformed).is_err(), "{field}: {bad}");
+            }
+        }
     }
     #[test]
     fn write_failures_are_reported_without_losing_prior_measurements() {

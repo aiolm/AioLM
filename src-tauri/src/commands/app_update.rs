@@ -101,7 +101,9 @@ pub(crate) async fn install_app_update(
 /// cannot steer where the browser goes.
 #[tauri::command]
 pub(crate) async fn open_app_update_release() -> Result<(), String> {
-    open::that(app_update::RELEASE_PAGE_URL)
+    tokio::task::spawn_blocking(|| open::that(app_update::RELEASE_PAGE_URL))
+        .await
+        .map_err(|_| "the release page could not be opened".to_string())?
         .map_err(|error| format!("the release page could not be opened: {error}"))
 }
 

@@ -1,8 +1,11 @@
+import { runtimeCatalogSnapshot, subscribeRuntimeCatalog } from '../../shared/api/providers';
+import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
+import { CustomSelect } from '../../shared/ui/CustomSelect';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
@@ -15,7 +18,7 @@ import Badge from "../../shared/ui/Badge";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelPathIdentity, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
@@ -23,21 +26,29 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { startModelScan } from '../../shared/runtime/modelScan';
+import { memorySourceText, statusDisplayCopy } from '../../shared/i18n/statusDisplayCopy';
 import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { providerCopy } from '../../shared/i18n/providerCopy';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
   const { t, locale } = useI18n();
+  useSyncExternalStore(subscribeRuntimeCatalog, runtimeCatalogSnapshot, runtimeCatalogSnapshot);
   const copy = executionText[locale];
 
   const cfg = store.cfg;
+  const selectedProvider = api.providerOf(cfg ?? {});
+  const selectedRuntime = cfg?.active_runtime ?? '';
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanTruncated, setScanTruncated] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
+  const modelFilterInput = useRef<HTMLInputElement>(null);
+  const [providerFilter, setProviderFilter] = useState<api.ProviderId | 'all'>('all');
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
   const [folderSaved, setFolderSaved] = useState(false);
   const [scanRequest, setScanRequest] = useState(0);
@@ -48,6 +59,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [serverAdapterScales, setServerAdapterScales] = useState<Record<number, string>>({});
   const [adapterBusy, setAdapterBusy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; confirmIcon?: string; onConfirm: () => void } | null>(null);
+  const pendingDeletions = useRef(new Set<string>());
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
@@ -57,6 +69,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   useSessionPolling({
     active: active && focus === 'library' && api.isNativeRuntimeAvailable(),
+    details: true,
     onData: setSessions,
   });
 
@@ -75,7 +88,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     setScanning(true);
     setScanError(null);
     try {
-      const job = startModelScan(dir);
+      const job = startModelScan(dir, selectedProvider !== 'llama.cpp' && selectedRuntime ? { provider: selectedProvider, runtime: selectedRuntime } : undefined);
       pendingScan.current = job;
       const result = await job.result;
       if (!isCurrentScan(generation, scanGeneration.current)) return;
@@ -91,7 +104,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         setScanning(false);
       }
     }
-  }, [dir, t, onModels]);
+  }, [dir, t, onModels, selectedProvider, selectedRuntime]);
 
   const cancelScan = useCallback(() => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
@@ -136,18 +149,38 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
   const visible = (models ?? []).filter((model) => {
+    if (providerFilter !== 'all' && !api.modelCompatibleForLibrary(model, providerFilter)) return false;
     if (!showVision && model.is_vision) return false;
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
-  const liveModel = store.status.model ?? "";
+  const onlyHiddenVision = visible.length === 0 && !showVision && models !== null && models.length > 0 && models.every(model => model.is_vision);
+  const hasModelFilters = normalizedQuery.length > 0 || providerFilter !== 'all';
+  const clearModelFilters = () => {
+    setModelQuery('');
+    setProviderFilter('all');
+    modelFilterInput.current?.focus();
+  };
+  const liveModel = loadedModelPath(store.status);
   const serverRunning = isServerBusy(store.status.state);
+  const statusCopy = statusDisplayCopy[locale];
+  const memory = store.status.memory;
+  const memoryLine = memory ? memory.source === 'unknown' ? statusCopy.memoryUnavailable
+    : t('ui.modelsMemoryLine', { total: formatMebibytes(memory.total_mb), model: formatMebibytes(memory.model_mb), kv: formatMebibytes(memory.kv_mb), source: memorySourceText(memory.source, locale) }) : undefined;
+  const lifecycle = store.status.lifecycle;
+  const lifecycleLine = lifecycle ? t('ui.modelsSlotsLine', {
+    parallel: lifecycle.parallel || statusCopy.automatic,
+    sleep: lifecycle.sleep_idle_seconds < 0 ? statusCopy.off : `${lifecycle.sleep_idle_seconds} s`,
+    idle: lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0,
+    requests: lifecycle.active_requests ?? store.status.active_requests ?? 0,
+  }) : undefined;
   // Starting a row applies its own model, so the only setup a row can be
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
-  const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
-  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => session.model));
-  if (isServerRunning(store.status.state) && store.status.model) loadedModels.add(store.status.model);
+  const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
+  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => modelPathIdentity(loadedModelPath(session))));
+  if (isServerRunning(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
+  const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
 
   const refreshServerAdapters = useCallback(async () => {
     if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {
@@ -250,9 +283,9 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const performSelectAndStart = async (model: api.GgufModel) => {
     const switching = serverRunning && liveModel !== model.path;
     try {
-      if (switching) await store.stop();
       const next = await store.updateConfig({ active_model: model.path });
-      await store.start(next);
+      // Backend preflight completes before replacing the running process.
+      await store.start(next, switching);
       notify(switching ? `${t("panel.restartServer")}: ${model.name}` : `${t("panel.serverStarted")}: ${model.name}`);
     } catch (error) {
       notify(isLifecycleCancellation(error) ? t("ui.taskCancelled") : `${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -285,20 +318,25 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   };
 
   const removeModel = async (model: api.GgufModel) => {
-    if (serverRunning || loadedModels.has(model.path) || model.shards?.files.some(path => loadedModels.has(path))) {
+    if (serverRunning || isModelLoaded(model)) {
       notify(t("ui.stopBeforeDelete"));
       return;
     }
     const remove = async () => {
       setPendingConfirm(null);
+      if (pendingDeletions.current.has(model.path)) return;
+      pendingDeletions.current.add(model.path);
       try {
         await api.deleteModel(model.path, model.shards?.files);
         forgetExecution(model.path);
-        if (cfg?.active_model === model.path) await store.updateConfig({ active_model: '' });
+        if (store.getConfig()?.active_model === model.path) {
+          await store.updateConfig(current => current.active_model === model.path ? { active_model: '' } : {});
+        }
         notify(t("ui.deletedModelNamed", { name: model.name }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
+        pendingDeletions.current.delete(model.path);
         invalidateModelCatalog();
       }
     };
@@ -354,16 +392,16 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
+            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{<ModelName model={models?.find((model) => model.path === liveModel)?.name ?? liveModel} />}</div>}
             {/* Memory and slot status of the running model is what this card is for, so it starts expanded. */}
             <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>
             <div className="models-runtime-details-content">
-            <div className="models-status-line" title={store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : undefined}>
-              {store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : "—"}
+            <div className="models-status-line" title={memoryLine}>
+              {memoryLine ?? "—"}
             </div>
-            <div className="models-status-line mt-1" title={store.status.lifecycle ? t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 }) : undefined}>
-              {store.status.lifecycle ? <>{t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 })}{store.status.lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
+            <div className="models-status-line mt-1" title={lifecycleLine}>
+              {lifecycle ? <>{lifecycleLine}{lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
             </div>
             </div>
             </details>
@@ -372,12 +410,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             {serverRunning && <button type="button" onClick={() => void api.unloadModel().then(() => notify(t("ui.unloadedOk"))).catch((error) => notify(`${t("ui.unloadFailed")}: ${error instanceof Error ? error.message : String(error)}`))} disabled={store.busy} className="app-button app-button--secondary app-button--sm">{t("ui.unloadModel")}</button>}
           </div>
         </div>
-        {(store.status.state === "failed" || store.status.state === "crashed") && store.status.error && (
-          <FeedbackBanner tone="error" title={t("ui.serverFailedTitle", { state: store.status.state })} className="mt-3 max-h-48 overflow-auto">
+      </div>}
+
+        {!compact && (store.status.state === "failed" || store.status.state === "crashed") && store.status.error && (
+          <FeedbackBanner tone="error" title={t("ui.serverFailedTitle", { state: copy[store.status.state] })} className="mt-3 max-h-48 overflow-auto">
             <pre className="whitespace-pre-wrap break-words">{normalizeDisplayText(store.status.error)}</pre>
           </FeedbackBanner>
         )}
-      </div>}
 
       </>}
 
@@ -401,7 +440,8 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
       {focus !== "lora" && <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
-        <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>}
@@ -425,13 +465,17 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
-          <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
+          models.length === 0 ? <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
             action={dir.trim() ? { label: t("panel.chooseFolder"), onClick: () => void browse() } : undefined} />
+            : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={t("ui.modelsVisionHiddenBody")}
+              action={{ label: t(hasModelFilters ? "ui.modelsClearAndShowVision" : "ui.modelsShowVision"), onClick: () => { clearModelFilters(); setShowVision(true); } }} />
+              : <EmptyState title={t("ui.modelsNoMatches")} description={t("ui.modelsNoMatchesBody")}
+                action={{ label: t("ui.modelsClearFilters"), onClick: clearModelFilters }} />
         )}
         {visible.map((model) => {
           const displayName = normalizeDisplayText(model.name);
           const incomplete = !!model.shards?.missing.length;
-          const running = loadedModels.has(model.path) || !!model.shards?.files.some(path => loadedModels.has(path));
+          const running = isModelLoaded(model);
           const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           return (
             <div
@@ -453,20 +497,20 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className="models-model-name app-list-row__action flex-col items-start"
 
               >
-                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} localPath={model.path} />
+                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} artifact={model.artifact} {...(model.artifact?.format === 'gguf' || !model.artifact ? { localPath: model.path } : {})} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
-              <span className="models-model-size" >{formatMebibytes(model.size_mb)}</span>
+              <span className="models-model-size" >{model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}</span>
               <div className="models-model-actions">
                 {model.is_vision && <Badge>{t("ui.visionTag")}</Badge>}
                 {running && <StatusBadge label={copy.running} tone="success" />}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || runtimeGap} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
               <code className="models-model-path">{normalizeDisplayPath(model.path)}</code>
               <div className="models-file-actions">
                   <button type="button" data-icon="copy" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
-                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
+                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={(running || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
               </div>
             </div>
           );

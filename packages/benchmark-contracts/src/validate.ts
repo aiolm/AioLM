@@ -51,6 +51,15 @@ function assertSchema(value: unknown, spec: JsonSchema, path: string): void {
 export function validatePublicBenchmark(value: unknown): PublicBenchmarkSubmission {
   assertSchema(value, contractSchema, 'benchmark');
   const result = value as PublicBenchmarkSubmission;
+  const metal = result.runtime.variant === 'vllm-metal';
+  if (metal ? result.schema_version !== 2 || result.runtime.name !== 'vllm' || result.runtime.backend !== 'metal' || !result.runtime.plugin_version
+    : result.runtime.plugin_version !== undefined || result.runtime.name === 'vllm' && result.runtime.backend === 'metal') throw new Error('Invalid vllm-metal runtime identity.');
+  if (result.schema_version === 1 && (result.runtime.name !== 'llama.cpp' || result.model.format !== undefined || result.method?.version === 2)) throw new Error('Version 1 benchmarks describe llama.cpp GGUF measurements.');
+  if (result.schema_version === 2) {
+    const formats = result.runtime.name === 'llama.cpp' ? ['gguf'] : metal ? ['hf-safetensors', 'mlx', 'gguf'] : result.runtime.name === 'vllm' ? ['hf-safetensors'] : ['hf-safetensors', 'mlx'];
+    if (!result.model.format || !formats.includes(result.model.format) || result.method && result.method.version !== 2 || result.runtime.name !== 'llama.cpp' && result.model.metadata != null) throw new Error('Invalid runtime/model format for version 2 benchmark.');
+    if (result.runtime.name !== 'llama.cpp' && result.execution.settings !== null) throw new Error('Python engines cannot carry llama.cpp execution settings.');
+  }
   if ((result.model.status === 'sha256') !== (result.model.sha256 !== null)) throw new Error('Invalid public benchmark model identity.');
   const metadata = result.model.metadata;
   if (metadata?.artifact && (!metadata.repository || metadata.source === 'gguf')) {

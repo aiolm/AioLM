@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
+import { buildChatRequestBody } from '../../shared/api/chat';
 import { emptyProfileLibrary, profileTargetKey, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { createTestStore } from '../../testing/appStore';
 import { requestProfileFromApplication } from '../model-settings/profileEditor';
@@ -44,6 +45,19 @@ function systemPrompt() {
 
 describe('chat profile application', () => {
   beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+  it('uses the conversation media order for both attached history and the new request, including Retry', async () => {
+    const image: ImageAttachment = { name: 'synthetic.png', dataUrl: 'data:image/png;base64,AA==', kind: 'image' };
+    const messages: ChatHistoryMessage[] = [{ role: 'user', content: 'Earlier', images: [image] }, { role: 'assistant', content: 'Earlier answer' }];
+    vi.mocked(api.chatStream).mockRejectedValueOnce(new Error('synthetic interruption'));
+    const { result } = setup({ activeThread: { ...createChatThread(), mediaBeforeText: true }, msgs: messages, attachments: [image] });
+    await act(async () => { await result.current.send(); });
+    const initial = structuredClone(vi.mocked(api.chatStream).mock.calls[0][3]);
+    for (const message of initial.filter(item => item.role === 'user')) {
+      expect(message.content).toEqual([{ type: 'image_url', image_url: { url: image.dataUrl } }, { type: 'text', text: expect.any(String) }]);
+    }
+    await act(async () => { await result.current.send(true); });
+    expect(vi.mocked(api.chatStream).mock.calls[1][3]).toEqual(initial);
+  });
   it('inherits the copied target prompt for a new conversation while later profile edits stay separate', async () => {
     const { result } = setup();
     await act(async () => { await result.current.send(); });
@@ -69,5 +83,36 @@ describe('chat profile application', () => {
     const { result } = setup({ modelProfile: null });
     await act(async () => { await result.current.send(); });
     expect(systemPrompt()).toBe('You are a helpful assistant.');
+  });
+  it('omits automatic guidance only when the conversation explicitly disables it', async () => {
+    const { result } = setup({ modelProfile: null, activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBeUndefined();
+    expect(vi.mocked(api.chatStream).mock.calls[0][3]).toEqual([{ role: 'user', content: 'Hello' }]);
+  });
+  it('keeps explicit profile instructions when automatic guidance is disabled', async () => {
+    const { result } = setup({ activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBe('Copied default instruction');
+  });
+  it('keeps explicit conversation instructions when automatic guidance is disabled', async () => {
+    const { result } = setup({ activeThread: { ...createChatThread(), systemPrompt: 'Keep these instructions.', useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBe('Keep these instructions.');
+  });
+  it('bounds vLLM output by its selected context without changing saved options', async () => {
+    const cfg = createTestStore().cfg!;
+    const options = { max_model_len: 128, max_tokens: 2048, temperature: 0.4 };
+    const engine: api.EngineInfo = { provider: 'vllm', runtime_id: 'synthetic-metal', upstream_model: 'served-model',
+      modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {} };
+    const { result } = setup({ effectiveConfig: { ...cfg, active_provider: 'vllm', provider_options: { vllm: options } }, engine });
+    await act(async () => { await result.current.send(); });
+    const [, , model, messages, sampling] = vi.mocked(api.chatStream).mock.calls[0];
+    const body = buildChatRequestBody(model, messages, sampling);
+    expect(body.max_tokens).toBeGreaterThan(0);
+    expect(body.max_tokens).toBeLessThan(128);
+    expect(body.temperature).toBe(0.4);
+    expect(body).not.toHaveProperty('max_tokens_limit');
+    expect(options.max_tokens).toBe(2048);
   });
 });

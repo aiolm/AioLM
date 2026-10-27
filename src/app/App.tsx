@@ -1,3 +1,4 @@
+import { useModelName } from '../shared/ui/ModelName';
 import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
 import StatusBadge from "../shared/ui/StatusBadge";
@@ -20,14 +21,15 @@ import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
-import Onboarding, { type SetupChoices } from "../features/onboarding/Onboarding";
+import type { SetupChoices } from "../features/onboarding/Onboarding";
 import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
-import { useRuntimeVersionLabel } from "../shared/runtime/installedRuntimes";
+import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
+import { isProviderId, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { applyTypography } from "../shared/config/typography";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
@@ -35,6 +37,7 @@ import type { ExecutionSection } from '../features/models/ModelWorkspace';
 import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '../features/model-settings/ModelSettingsProvider';
 import { modelActions } from '../shared/i18n/modelActions';
 import AppUpdateNotice from '../features/updates/AppUpdateNotice';
+import { loadedModelPath } from '../shared/runtime/loadedModel';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
@@ -47,6 +50,7 @@ const BenchPanel = lazy(() => import("../features/bench/Bench"));
 const RuntimesPanel = lazy(() => import("../features/runtimes/Runtimes"));
 const ProjectsPanel = lazy(() => import("../features/projects/Projects"));
 const SettingsPanel = lazy(() => import("../features/settings/Settings"));
+const navigationEntries = navigationGroups.flatMap(group => group.items);
 
 function PanelLoading() {
   const { t } = useI18n();
@@ -73,11 +77,6 @@ function TaskActivity({ hasActivity, title, indicator, children }: { hasActivity
   </PanelFeedbackActivity>;
 }
 
-function shortModel(path: string | undefined, emptyLabel: string): string {
-  if (!path) return emptyLabel;
-  return modelDisplayName(path);
-}
-
 export default function App() {
   return <DraftGuardProvider><AppContent /></DraftGuardProvider>;
 }
@@ -98,7 +97,18 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
   // may open the workspace; a pending save must keep this wizard mounted.
   const [needsSetup, setNeedsSetup] = useState(() => baseStore.cfg?.onboarding_completed === false);
   const [preferencesReady, setPreferencesReady] = useState(needsSetup);
-  const { setLocale } = useI18n();
+  const [setupModule, setSetupModule] = useState<typeof import("../features/onboarding/Onboarding") | null>(null);
+  const [setupError, setSetupError] = useState<Error | null>(null);
+  const { setLocale, t } = useI18n();
+  useEffect(() => {
+    if (!needsSetup) return;
+    let current = true;
+    void import("../features/onboarding/Onboarding").then(
+      module => { if (current) setSetupModule(module); },
+      cause => { if (current) setSetupError(cause instanceof Error ? cause : new Error(String(cause))); },
+    );
+    return () => { current = false; };
+  }, [needsSetup]);
   useEffect(() => {
     if (preferencesReady) return;
     // Earlier releases followed the OS until a language was explicitly saved.
@@ -112,6 +122,13 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
   }, [preferencesReady, setPreferences, setLocale]);
   if (!preferencesReady) return <SurfaceLoading />;
   if (needsSetup && baseStore.cfg) {
+    if (setupError) {
+      // No wizard edits exist yet. A user-requested reload creates a fresh
+      // document module map instead of relying on a cached failed import.
+      return <div className="app-runtime-empty" role="alert"><EmptyState title={t('error.attention')} description={normalizeDisplayText(setupError.message)} action={{ label: t('common.retry'), onClick: () => window.location.reload() }} /></div>;
+    }
+    if (!setupModule) return <SurfaceLoading />;
+    const Onboarding = setupModule.default;
     const completeSetup = async (choices: SetupChoices) => {
       const next = { ...preferences, locale: choices.locale, theme: choices.theme };
       savePreferences(next, { required: true });
@@ -127,7 +144,7 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
 
 function ReadyApp({ preferences, setPreferences, baseStore }: InitializedAppProps) {
   const { store, selectModel } = useExecutionStore(baseStore);
-  return <ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider>;
+  return <TaskCancellationProvider><ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider></TaskCancellationProvider>;
 }
 
 function AppShell({ preferences, setPreferences, store, selectModel }: { preferences: AppPreferences; setPreferences: React.Dispatch<React.SetStateAction<AppPreferences>>; store: ReturnType<typeof useAppStore>; selectModel: (path: string) => Promise<void> }) {
@@ -137,6 +154,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const executionCopy = executionText[locale];
   const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
+  const [runtimeEngineRequest, setRuntimeEngineRequest] = useState<{ provider: ProviderId; revision: number }>();
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [developerSection, setDeveloperSection] = useState<"api" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -149,7 +167,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // navigates away from the page that started it.
   useModelDownloadTask();
   const copy = navigationText[locale];
-  const entries = navigationGroups.flatMap(group => group.items);
   useEffect(() => {
     const dialog = menuRef.current;
     if (menuOpen && dialog && !dialog.open) dialog.showModal();
@@ -167,14 +184,21 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // and that message was the only place it existed: without somewhere to accept
   // it, being told "or start it anyway with key ..." led nowhere.
   const [overrideAccepted, setOverrideAccepted] = useState(false);
+  const [dismissedRuntimeError, setDismissedRuntimeError] = useState<string | null>(null);
+  useEffect(() => { setDismissedRuntimeError(null); }, [store.status.error]);
   const serverState = store.status.state;
   const stopServer = store.stop;
-  const hasError = store.bootError || store.actionError || store.statusPollError || store.status.error;
-  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "";
+  const runtimeError = store.status.error === dismissedRuntimeError ? undefined : store.status.error;
+  const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError;
+  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? "";
+  const dismissErrors = () => {
+    setDismissedRuntimeError(store.status.error ?? null);
+    store.clearErrors();
+  };
   const overrideKey = verificationOverrideKey(errorText);
   const acceptOverride = () => {
     void api.allowVerificationOverride(overrideKey!)
-      .then(() => { setOverrideAccepted(true); store.clearErrors(); })
+      .then(() => { setOverrideAccepted(true); dismissErrors(); })
       .catch(() => undefined);
   };
 
@@ -248,7 +272,11 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   };
   const navigateRef = useRef(navigate); navigateRef.current = navigate;
   useEffect(() => {
-    const manage = () => { navigateRef.current('runtimes'); };
+    const manage = (event: Event) => {
+      const provider = (event as CustomEvent<{ provider?: ProviderId }>).detail?.provider;
+      if (provider && isProviderId(provider)) setRuntimeEngineRequest(previous => ({ provider, revision: (previous?.revision ?? 0) + 1 }));
+      navigateRef.current('runtimes');
+    };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
     return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);
   }, []);
@@ -264,14 +292,13 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
   };
 
-  const runtimeLabel = useRuntimeVersionLabel(store.status.execution?.active_backend ?? "", store.status.execution?.active_build ?? "");
-  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
+  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "diagnostics";
-  const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
-  const backendLabel = store.status.execution?.active_backend
-    ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${runtimeLabel}` : ""}`
-    : t("load.pathRuntime");
+  const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
+  const liveModelName = useModelName(liveModel);
+  const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
+  const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
 
 
   const brand = <div className="aiolm-brand"><AioMark /><strong>AioLM</strong></div>;
@@ -287,9 +314,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   </nav>;
   const sidebarToggleLabel = sidebarCollapsed ? copy.expandSidebar : copy.collapseSidebar;
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
-    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(navigationEntries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
-  return <TaskCancellationProvider><PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
+  return <PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
     <aside id="aiolm-sidebar" className="aiolm-sidebar">
       <div className="aiolm-sidebar-heading">{brand}<button type="button" className="app-icon-button aiolm-sidebar-toggle" aria-label={sidebarToggleLabel} title={sidebarToggleLabel} aria-expanded={!sidebarCollapsed} aria-controls="aiolm-sidebar" onClick={() => setSidebarCollapsed(current => !current)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={sidebarCollapsed ? "M4 4h16v16H4V4Z M9 4v16M13 9l3 3-3 3" : "M4 4h16v16H4V4Z M9 4v16M16 9l-3 3 3 3"} /></svg></button></div>
@@ -302,7 +329,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{shortModel(liveModel, modelCopy.choose)}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel && <span className="aiolm-context-label">{backendLabel}</span>}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
+        <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
@@ -310,7 +337,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} indicator={<PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} />}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
-          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors}
+          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
             action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(errorText)}</FeedbackBanner>}
           {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
         </PanelFeedback>
@@ -323,9 +350,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} /></>)}
+          {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} />)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
-          <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
+          <section hidden={!showDeveloper} aria-label={t(navigationEntries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} onNavigate={navigate} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
           </section>
           {panel("mcp", <McpPanel store={store} />)}
@@ -333,5 +360,5 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </main>
       </div>
     </div>
-  </div></PanelFeedbackProvider></TaskCancellationProvider>;
+  </div></PanelFeedbackProvider>;
 }

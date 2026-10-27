@@ -1,5 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import type { GpuDevice } from '../../shared/api/types';
+import { createPortal } from 'react-dom';
+import { providerOf, providerDisplayName } from '../../shared/api/providers';
+import type { AppConfig, GpuDevice } from '../../shared/api/types';
+import type { ProviderId } from '../../shared/api/providers';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -15,11 +18,15 @@ import { SERVER_OPTIONS, type ServerOption } from '../../shared/config/serverOpt
 import { useServerOptions } from '../tuning/useServerOptions';
 import GpuPlacementSummary from './GpuPlacementSummary';
 import ServerArgumentsSummary from './ServerArgumentsSummary';
+import RuntimeProfileValues from './RuntimeProfileValues';
+import { useProfileRuntimeSchema, type ProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
+import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
+  provider?: ProviderId;
   id: string;
   name: string;
   scope: 'preset' | 'global' | 'model';
@@ -31,6 +38,8 @@ export interface ProfileViewItem {
 }
 
 export interface SettingsProfileControlProps {
+  resetDisabled?: boolean;
+  bannerTarget?: HTMLElement | null;
   saveAction?: ReactNode;
   children?: ReactNode;
   items: ProfileViewItem[];
@@ -40,6 +49,7 @@ export interface SettingsProfileControlProps {
   defaultProfileId: string;
   modelPath: string;
   currentSettings: Partial<ExecutionSettings>;
+  runtimeConfig?: AppConfig;
   currentPrompt: string;
   defaults: Partial<ExecutionSettings>;
   runtimeOptions?: readonly ServerOption[];
@@ -49,23 +59,26 @@ export interface SettingsProfileControlProps {
   disabled: boolean;
   blocked?: boolean;
   full: boolean;
+  showBanner?: boolean;
+  lockSelection?: boolean;
+  selectionOnly?: boolean;
+  onPreviewChange?: (id: string | null) => void;
   onApply: (id: string) => Promise<void>;
   onSaveAs: (name: string, scope: 'model' | 'global') => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onSetDefault: (id: string) => Promise<void>;
   onRevert: () => Promise<void>;
-  onReset: () => boolean;
+  onReset: () => boolean | void;
   onEditingChange?: (dirty: boolean) => void;
 }
 
 type ActionDraft =
-  | { kind: 'create'; name: string; scope: 'model' | 'global'; model: string }
+  | { kind: 'create'; name: string; scope: 'global'; model: string }
   | { kind: 'rename' | 'delete'; id: string; name: string; model: string };
 
 const groups = [
   { scope: 'global', label: 'globalProfiles', empty: 'emptyGlobal' },
-  { scope: 'model', label: 'modelProfiles', empty: 'emptyModel' },
 ] as const;
 const settingGroups = [
   { label: 'sampling', keys: ['temperature', 'top_p', 'top_k'] },
@@ -77,22 +90,24 @@ const settingGroups = [
 
 type DefaultRuntime = { options: readonly ServerOption[]; verified: boolean; backend?: string; build?: string };
 
-function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
+function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; provider: ProviderId; schema: ProfileRuntimeSchema; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const renderValue = valueRenderer(locale);
-  const installedRuntimes = useInstalledRuntimes();
+  const llama = provider === 'llama.cpp';
+  const installedRuntimes = useInstalledRuntimes(llama);
   const backend = settings.active_backend ?? runtime.backend ?? '';
   const build = settings.active_build ?? runtime.build ?? '';
   const sameRuntime = backend === (runtime.backend ?? '') && build === (runtime.build ?? '');
   // A preview may name a different runtime. Its defaults must come from that
   // build, while the current/default cards reuse the editor's existing probe.
-  const previewRuntime = useServerOptions(backend, build, !sameRuntime && !!backend && !!build);
+  const previewRuntime = useServerOptions(backend, build, llama && !sameRuntime && !!backend && !!build);
   const source = sameRuntime ? runtime : previewRuntime;
   const displayDevices = sameRuntime ? gpuDevices
     : previewRuntime.capabilities?.backend === backend ? runtimeGpuDevices(backend, previewRuntime.capabilities.devices) : [];
+  if (!llama) return <RuntimeProfileValues settings={settings} provider={provider} prompt={prompt} mode={mode} schema={schema} />;
   const keys = new Set([...Object.keys(settings), ...(settings.runtime_defaults ?? [])]);
-  const entries: [string, unknown][] = [...keys].filter(key => key !== 'active_model' && key !== 'runtime_defaults' && key !== 'chat_options').map(key => [key, settings[key as keyof ExecutionSettings]]);
+  const entries: [string, unknown][] = [...keys].filter(key => !['active_model', 'runtime_defaults', 'chat_options', 'provider_options', 'active_runtime'].includes(key)).map(key => [key, settings[key as keyof ExecutionSettings]]);
   const rendered = new Set(settingGroups.flatMap(group => [...group.keys]) as string[]);
   const extra = [...entries.filter(([key]) => !rendered.has(key)), ...Object.entries(settings.chat_options ?? {})];
   return <div className="settings-profile-values">
@@ -103,8 +118,8 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
       return <section key={group.label} className="settings-profile-value-group" aria-label={copy[group.label]}>
         <h4>{copy[group.label]}</h4>
         <dl>{rows.map(([key, value]) => {
-          const inherited = settings.runtime_defaults?.includes(key);
-          const customized = mode !== 'reference' && isCustomizedSetting(key, value, settings, source.options, source.verified);
+          const inherited = llama && settings.runtime_defaults?.includes(key);
+          const customized = mode !== 'reference' && (llama ? isCustomizedSetting(key, value, settings, source.options, source.verified) : settings.provider_options?.[provider]?.[key] !== undefined);
           const placement = key === 'gpu' && !inherited && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length ? value as Record<string, unknown> : null;
           const args = key === 'server_args' && !inherited && Array.isArray(value) && value.length && value.every(token => typeof token === 'string') ? value as string[] : null;
           return <div key={key} className={`settings-profile-value${placement || args ? ' settings-profile-value--stacked' : ''}${customized ? ' settings-profile-value--custom' : ''}`}>
@@ -112,7 +127,7 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
             <dd>{inherited ? <DefaultValue info={settingDefaultInfo(key, source.options, source.verified, locale, { selected: mode === 'current' })} />
               : placement ? <GpuPlacementSummary placement={placement} devices={displayDevices} />
                 : args ? <ServerArgumentsSummary args={args} options={source.options} />
-                  : key === 'active_build' && typeof value === 'string' && value ? runtimeVersionLabel(installedRuntimes, backend, value) : renderValue(value)}</dd>
+                  : key === 'active_provider' ? providerDisplayName(provider) : key === 'active_build' && typeof value === 'string' && value ? runtimeVersionLabel(installedRuntimes, backend, value) : renderValue(value)}</dd>
           </div>;
         })}</dl>
       </section>;
@@ -123,9 +138,11 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
   </div>;
 }
 
-export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children }: SettingsProfileControlProps) {
+export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, resetDisabled = false, blocked = false, full, showBanner = true, lockSelection = false, selectionOnly = false, onPreviewChange, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
+  const provider = providerOf(currentSettings);
+  const schema = useProfileRuntimeSchema(runtimeConfig, full && provider !== 'llama.cpp');
   const runtime = { options: runtimeOptions, verified: runtimeVerified, backend: currentSettings.active_backend, build: currentSettings.active_build };
   const labelId = useId();
   const detailId = useId();
@@ -147,6 +164,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
   editingChangeRef.current = onEditingChange;
   const active = items.find(item => item.id === (activeId ?? basedOnId));
   const preview = items.find(item => item.id === previewId);
+  useEffect(() => { onPreviewChange?.(preview?.id ?? null); }, [preview?.id, onPreviewChange]);
   const detailItem = preview ?? active;
   const defaultProfile = items.find(item => item.id === defaultProfileId);
   const isDefault = (item: ProfileViewItem) => item.id === defaultProfileId;
@@ -175,9 +193,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     if (!action && !pending && restoreFocusRef.current) {
       restoreFocusRef.current = false;
       if (originRef.current?.isConnected) originRef.current.focus();
+      else if (bannerTarget) bannerTarget.querySelector<HTMLButtonElement>('.settings-profile-picker button')?.focus();
       else bannerRef.current?.focus();
     }
-  }, [action, pending, previewId]);
+  }, [action, pending, previewId, bannerTarget]);
 
   const closeAction = () => { restoreFocusRef.current = true; setAction(null); setError(''); };
   const closePreview = () => { restoreFocusRef.current = true; setPreviewId(null); };
@@ -206,29 +225,39 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     if (action) closeAction();
     else closePreview();
   };
+  const nameImeHandlers = useImeEnterGuard<HTMLInputElement>(action?.name ?? '', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault(); submit();
+  });
 
   if (!active) return null;
 
-  return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
-    <div className={`settings-profile-banner settings-profile-banner--${state} app-card app-card--tight${state === 'working' ? ' app-card--warning' : ''}`}>
+  const draftActions = <>
+    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || resetDisabled} aria-describedby={`${labelId}-reset-hint`} onClick={() => { const changed = onReset(); if (changed === undefined) return; setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
+    {saveAction}
+    <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+  </>;
+  const banner = <div className={`settings-profile-banner settings-profile-banner--${state}${bannerTarget ? ' settings-profile-banner--compact' : ` app-card app-card--tight${state === 'working' ? ' app-card--warning' : ''}`}`}>
       <span className="settings-profile-state-dot" aria-hidden="true" />
       <div className="settings-profile-banner-text"><div className="settings-profile-title-line" aria-live="polite"><h3 ref={bannerRef} id={labelId} tabIndex={-1}>{title}</h3>{isDefault(active) && <Badge tone="info" className="settings-profile-default-badge">{copy.defaultProfile}</Badge>}</div><p role="status" aria-atomic="true" className={resetFeedback ? 'settings-profile-feedback' : undefined}><span key={resetFeedback?.sequence ?? 0}>{resetFeedback ? resetFeedback.changed ? copy.resetDone : copy.resetUnchanged : subtitle}</span></p></div>
       <div className="settings-profile-buttons">
-        {full && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || !modelPath.trim()} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
-        {saveAction}
-        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked || !modelPath.trim()} onClick={event => openAction({ kind: 'create', name: '', scope: active.scope === 'global' ? 'global' : 'model', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+        {lockSelection ? <span className="settings-profile-selected-name">{active.name}{state === 'working' ? ` · ${copy.editing}` : ''}</span> : <CustomSelect className="settings-profile-picker" ariaLabel={copy.profiles} size="sm" value={active.id}
+          disabled={mutationLocked || blocked} options={items.map(item => ({ value: item.id, label: `${copy[item.scope]} · ${item.name}${bannerTarget && state === 'working' && item.id === active.id ? ` · ${copy.editing}` : ''}` }))}
+          onChange={id => { if (id !== active.id) void run(() => onApply(id), () => setPreviewId(null)); }} />}
+        {draftActions}
         {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
       </div>
-    </div>
+    </div>;
+
+  return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
+    {showBanner && !selectionOnly && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
+    {(full || lockSelection) && <p id={`${labelId}-reset-hint`} className="app-section-hint">{copy.resetHint}</p>}
 
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>
         <label htmlFor={`${formId}-name`}>{copy.name}</label>
-        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } }} />
-        {action.kind === 'create' && <>
-          <label className="settings-profile-scope">{copy.scope}<CustomSelect<'model' | 'global'> value={action.scope} options={[{ value: 'model', label: copy.model }, { value: 'global', label: copy.global }]} ariaLabel={copy.scope} disabled={locked} size="sm" onChange={scope => setAction({ ...action, scope })} /></label>
-          {action.scope === 'global' && <p className="settings-profile-hint">{copy.saveGlobalHint}</p>}
-        </>}
+        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} {...nameImeHandlers} />
+        {action.kind === 'create' && <p className="settings-profile-hint">{copy.saveGlobalHint}</p>}
       </>
       <div className="settings-profile-buttons">
         <button ref={cancelRef} type="button" className="app-button app-button--secondary app-button--sm" disabled={pending} onClick={closeAction}>{copy.cancel}</button>
@@ -252,7 +281,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
               const isActive = active?.id === item.id;
               const isEditing = isActive && state === 'working';
               const isPreview = preview?.id === item.id;
-              return <button key={item.id} type="button" className={`app-button app-button--secondary app-button--sm settings-profile-chip${isActive ? ' settings-profile-chip--active' : ''}`} disabled={mutationLocked} aria-pressed={isPreview} aria-label={`${item.name}${isActive ? ` · ${copy.active}` : ''}${isEditing ? ` · ${copy.editing}` : ''}${isDefault(item) ? ` · ${copy.defaultProfile}` : ''}`} aria-controls={detailId} onClick={event => { originRef.current = event.currentTarget; setPreviewId(isPreview ? null : item.id); setError(''); }}>
+              return <button key={item.id} type="button" className={`app-button app-button--secondary app-button--sm settings-profile-chip${isActive ? ' settings-profile-chip--active' : ''}`} disabled={mutationLocked} aria-pressed={isPreview || selectionOnly && !preview && isActive} aria-label={`${item.name}${isActive ? ` · ${copy.active}` : ''}${isEditing ? ` · ${copy.editing}` : ''}${isDefault(item) ? ` · ${copy.defaultProfile}` : ''}`} aria-controls={detailId} onClick={event => { originRef.current = event.currentTarget; setPreviewId(isPreview || selectionOnly && isActive ? null : item.id); setError(''); }}>
                 {isActive && <span aria-hidden="true">✓</span>}<span>{item.name}</span>{isEditing && <Badge tone="warning" aria-hidden="true">{copy.editing}</Badge>}{isDefault(item) && <Badge tone="info" className="settings-profile-default-badge" aria-hidden="true">{copy.defaultProfile}</Badge>}
               </button>;
             }) : <span className="settings-profile-hint">{copy[group.empty]}</span>}</div>
@@ -261,7 +290,8 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       </div>
       <section id={detailId} className={`settings-profile-detail app-card${preview ? ' app-card--accent' : ''}`} aria-label={preview ? copy.preview : copy.current}>
         <div className="settings-profile-detail-heading">
-          <div>{preview && <p className="settings-profile-eyebrow">{copy.preview}</p>}<h3>{preview?.name ?? copy.current}</h3>
+          <div>{preview && <p className="settings-profile-eyebrow">{copy.preview}</p>}<h3>{preview?.name ?? (selectionOnly ? title : copy.current)}</h3>
+            {selectionOnly && !preview && <p role="status" aria-atomic="true" className={resetFeedback ? 'settings-profile-feedback' : undefined}><span key={resetFeedback?.sequence ?? 0}>{resetFeedback ? resetFeedback.changed ? copy.resetDone : copy.resetUnchanged : subtitle}</span></p>}
             {preview && <div className="settings-profile-badges">
               <Badge>{copy[preview.scope]}</Badge>
               {isDefault(preview) && <Badge>{copy.defaultProfile}</Badge>}
@@ -270,23 +300,24 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
             </div>}
           </div>
           <div className="settings-profile-buttons">
+            {selectionOnly && !preview && draftActions}
+            {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
             {preview && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={closePreview}>{copy.closePreview}</button>}
-            {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked || !modelPath.trim()} onClick={() => void run(() => onApply(preview.id), () => setPreviewId(null))}>{copy.apply}</button>}
+            {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), closePreview)}>{copy.apply}</button>}
             {detailItem && detailItem.scope !== 'preset' && <>
-              {!isDefault(detailItem) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} aria-describedby={detailItem.scope === 'model' ? `${detailId}-default-hint` : undefined} onClick={() => void run(() => onSetDefault(detailItem.id))}>{copy.setDefault}</button>}
+              {!isDefault(detailItem) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(() => onSetDefault(detailItem.id))}>{copy.setDefault}</button>}
               <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={event => openAction({ kind: 'rename', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.rename}</button>
               <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || isDefault(detailItem)} aria-describedby={isDefault(detailItem) ? `${detailId}-delete-hint` : undefined} onClick={event => openAction({ kind: 'delete', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.remove}</button>
             </>}
           </div>
         </div>
         {detailItem && isDefault(detailItem) && <p id={`${detailId}-delete-hint`} className="settings-profile-hint">{copy.defaultDeleteHint}</p>}
-        {detailItem?.scope === 'model' && !isDefault(detailItem) && <p id={`${detailId}-default-hint`} className="settings-profile-hint">{copy.modelDefaultHint}</p>}
         {preview && <p className="settings-profile-hint">{copy.previewHint}</p>}
         {preview?.description && <p className="settings-profile-hint">{preview.description}</p>}
-        <SettingsValues settings={preview?.settings ?? currentSettings} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
+        <SettingsValues settings={preview?.settings ?? currentSettings} provider={preview?.provider ?? preview?.settings.active_provider ?? provider} schema={schema} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
       </section>
       <details className="settings-profile-defaults app-card app-card--tight"><summary>{copy.defaults}<Badge>{copy.readonly}</Badge></summary>
-        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
+        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} provider={provider} schema={schema} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
       </details>
     </>}
     {children && <div className="settings-profile-editor">{children}</div>}

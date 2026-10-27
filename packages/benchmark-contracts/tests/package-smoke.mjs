@@ -68,10 +68,111 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizeBenchmarkTrials, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
+    const row = payload.measurements.rows[0];
     assert.equal(validatePublicBenchmark(payload), payload);
+    for (const [name, format] of [['vllm', 'hf-safetensors'], ['mlx-vlm', 'mlx']]) {
+      const python = { ...payload, schema_version: 2, runtime: { ...payload.runtime, name }, model: { ...payload.model, format } };
+      assert.equal(validatePublicBenchmark(python), python);
+      assert.throws(() => validatePublicBenchmark({ ...python, schema_version: 1 }));
+      assert.throws(() => validatePublicBenchmark({ ...python, model: { ...python.model, format: 'gguf' } }));
+      assert.throws(() => validatePublicBenchmark({ ...python, execution: { ...python.execution, settings: { gpu_layers: 0 } } }));
+    }
     assert.equal(summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
+    const timestamp = value => assertIsoTimestamp(value);
+    for (const value of [
+      '2024-02-29T23:59:59Z',
+      '2024-02-29T23:59:59.123456789+05:30',
+      '2024-02-29t23:59:59.1z',
+      '2000-02-29T00:00:00-04:00',
+      '0000-02-29T00:00:00Z',
+    ]) assert.equal(timestamp(value), value);
+    for (const value of [
+      'Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)',
+      '2023-02-29T00:00:00Z',
+      '2024-13-01T00:00:00Z',
+      '2024-02-29T24:00:00Z',
+      '2024-02-29T00:00:00',
+      '', undefined, null, 42,
+    ]) assert.throws(() => timestamp(value));
+    const lowerBound = summarizeBenchmarkTrials([{
+      ...row, id: 'lower-bound', error: null, prompt_tokens: 1, generation_length: 1, concurrency: 1, repetition: 1,
+      completion_tokens: 0, cached_tokens: 0, ttft_ms: 0, tpot_ms: 0, pp_tps: 0, tg_tps: 0,
+      e2e_ms: 0, total_tps: 0, peak_memory_bytes: 0,
+    }])[0];
+    assert.equal(lowerBound.ttft_ms, 0);
+    assert.equal(lowerBound.tg_stddev, null);
+    assert.equal(lowerBound.speedup, null);
+    const maxTrial = { ...row, id: 'max-a', error: null, ttft_ms: Number.MAX_VALUE, tg_tps: Number.MAX_VALUE, peak_memory_bytes: Number.MAX_VALUE };
+    const maxSummary = summarizeBenchmarkTrials([maxTrial, { ...maxTrial, id: 'max-b', repetition: 2 }])[0];
+    assert.equal(maxSummary.ttft_ms, Number.MAX_VALUE);
+    assert.equal(maxSummary.tg_tps, Number.MAX_VALUE);
+    assert.equal(maxSummary.tg_stddev, 0);
+    const largeTrial = { ...row, id: 'large-a', error: null, ttft_ms: Number.MAX_VALUE, tg_tps: Number.MAX_VALUE };
+    const halfTrial = { ...row, id: 'large-b', error: null, repetition: 2, ttft_ms: Number.MAX_VALUE / 2, tg_tps: Number.MAX_VALUE / 2 };
+    const largeSummary = summarizeBenchmarkTrials([largeTrial, halfTrial])[0];
+    assert.equal(largeSummary.ttft_ms, Number.MAX_VALUE * 0.75);
+    assert(Math.abs(largeSummary.tg_stddev / (Number.MAX_VALUE / (2 * Math.sqrt(2))) - 1) <= Number.EPSILON * 2);
+    const nullSummary = summarizeBenchmarkTrials([{ ...row, id: 'null-metric', error: null, tg_tps: null }])[0];
+    assert.equal(nullSummary.tg_tps, null);
+    assert.equal(nullSummary.tg_stddev, null);
+    const failedSummary = summarizeBenchmarkTrials([{ ...row, id: 'failed-trial', error: 'failed', tg_tps: 100 }])[0];
+    assert.equal(failedSummary.samples, 0);
+    assert.equal(failedSummary.tg_tps, null);
+    const duplicateSummary = summarizeBenchmarkTrials([
+      { ...row, id: 'duplicate', error: null, tg_tps: 10 },
+      { ...row, id: 'duplicate', error: null, repetition: 2, tg_tps: 30 },
+    ])[0];
+    assert.equal(duplicateSummary.samples, 1);
+    assert.equal(duplicateSummary.tg_tps, 10);
+    const workloadSummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'work-a', error: null, prompt_tokens: 1, tg_tps: 10 },
+      { ...row, id: 'work-b', error: null, prompt_tokens: 2, tg_tps: 20 },
+    ]);
+    assert.deepEqual(workloadSummaries.map(summary => summary.prompt_tokens), [1, 2]);
+    const concurrencySummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'concurrency-base', error: null, concurrency: 1, tg_tps: 10, cached_tokens: 0 },
+      { ...row, id: 'concurrency-two', error: null, concurrency: 2, tg_tps: 20, cached_tokens: 0 },
+    ]);
+    assert.equal(concurrencySummaries.find(summary => summary.concurrency === 2).speedup, 2);
+    const cachedSummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'cached-base', error: null, concurrency: 1, tg_tps: 10, cached_tokens: 1 },
+      { ...row, id: 'cached-two', error: null, concurrency: 2, tg_tps: 20, cached_tokens: 1 },
+    ]);
+    assert.equal(cachedSummaries.find(summary => summary.concurrency === 2).speedup, null);
+    const unrepresentableSpeedup = summarizeBenchmarkTrials([
+      { ...row, id: 'ratio-base', error: null, concurrency: 1, tg_tps: Number.MIN_VALUE, cached_tokens: 0 },
+      { ...row, id: 'ratio-high', error: null, concurrency: 2, tg_tps: Number.MAX_VALUE, cached_tokens: 0 },
+    ]).find(summary => summary.concurrency === 2);
+    assert.equal(unrepresentableSpeedup.speedup, null);
+    assert.equal(summarizeBenchmarkTrials([
+      { ...row, id: 'memory-a', error: null, peak_memory_bytes: 0 },
+      { ...row, id: 'memory-b', error: null, repetition: 2, peak_memory_bytes: Number.MAX_VALUE },
+    ])[0].peak_memory_bytes, Number.MAX_VALUE);
+    const summarizeMemory = values => summarizeBenchmarkTrials(values.map((peak_memory_bytes, index) => ({
+      ...row, id: 'memory-sign-' + index, error: null, peak_memory_bytes,
+    })))[0].peak_memory_bytes;
+    assert(Object.is(summarizeMemory([-0, +0]), +0));
+    assert(Object.is(summarizeMemory([+0, -0]), +0));
+    assert(Object.is(summarizeMemory([-0, -0]), -0));
+    assert(Object.is(summarizeMemory([0]), +0));
+    assert.equal(summarizeMemory([null]), null);
+    assert.equal(summarizeBenchmarkTrials([{ ...row, id: 'memory-error', error: 'failed', peak_memory_bytes: Number.MAX_VALUE }])[0].peak_memory_bytes, null);
+    const largeMemorySummary = summarizeBenchmarkTrials(Array.from({ length: 130000 }, (_, index) => ({
+      ...row, id: 'memory-large-' + index, error: null, peak_memory_bytes: index,
+    })))[0];
+    assert.equal(largeMemorySummary.peak_memory_bytes, 129999);
+    for (const format of ['hf-safetensors', 'mlx', 'gguf']) {
+      const metal = { ...payload, schema_version: 2,
+        runtime: { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' },
+        model: { ...payload.model, format } };
+      assert.equal(validatePublicBenchmark(metal), metal);
+      for (const runtime of [{ ...metal.runtime, variant: undefined }, { ...metal.runtime, plugin_version: undefined },
+        { ...metal.runtime, backend: 'cuda' }, { ...metal.runtime, name: 'mlx-vlm' }]) {
+        assert.throws(() => validatePublicBenchmark({ ...metal, runtime }));
+      }
+    }
     assert.throws(() => validatePublicBenchmark({ ...payload, local_path: '/private/model.gguf' }));
     assert.throws(() => validatePublicBenchmark({ ...payload, constructor: 'private' }));
     assert.equal(validateBenchmarkReceipt({ submission_id: payload.submission_id, id: 'accepted-1' }, payload.submission_id).id, 'accepted-1');
@@ -93,8 +194,63 @@ try {
     assert.throws(() => validateDescriptionMd('x'.repeat(4001)));
     assert.throws(() => validateDescriptionMd(42));
     const body = serializePublicationRequest(publication);
+    assert.equal(body, JSON.stringify({ benchmark: payload, description_md: 'Hello **world**' }));
+    assert.equal(utf8ByteLength(body), new TextEncoder().encode(body).length);
+    const originalStringify = JSON.stringify;
+    let publicationStringifications = 0;
+    JSON.stringify = function(value, ...rest) {
+      if (value?.benchmark === payload) publicationStringifications++;
+      return originalStringify.call(this, value, ...rest);
+    };
+    try {
+      assert.equal(serializePublicationRequest(publication), body);
+    } finally {
+      JSON.stringify = originalStringify;
+    }
+    assert.equal(publicationStringifications, 1, 'Publication serialization should stringify the normalized request once.');
+    const legacyBody = serializePublicationRequest(payload);
+    assert.equal(legacyBody, JSON.stringify({ benchmark: payload, description_md: '' }));
+    assert.deepEqual(parsePublicationSnapshot(legacyBody), { benchmark: payload, description_md: '' });
     assert.equal(parsePublicationSnapshot(body).benchmark.submission_id, payload.submission_id);
     assert.throws(() => parsePublicationSnapshot('{invalid'));
+    const unicodeDescription = '😀'.repeat(DESCRIPTION_MAX_CODEPOINTS);
+    assert.equal(countCodePoints(unicodeDescription), DESCRIPTION_MAX_CODEPOINTS);
+    assert.equal(validateDescriptionMd(unicodeDescription), unicodeDescription);
+    assert.throws(() => validateDescriptionMd(unicodeDescription + '😀'), /Publication description exceeds 4000 characters\\./);
+
+    const maximumRows = Array.from({ length: PUBLICATION_MAX_ROWS }, (_, index) => ({ ...row, repetition: index + 1 }));
+    const maximumRowsRequest = { benchmark: { ...payload, measurements: { ...payload.measurements, rows: maximumRows } }, description_md: '' };
+    assert.equal(validatePublicationRequest(maximumRowsRequest).benchmark.measurements.rows.length, PUBLICATION_MAX_ROWS);
+    assert.throws(() => validatePublicationRequest({
+      benchmark: { ...maximumRowsRequest.benchmark, measurements: { ...maximumRowsRequest.benchmark.measurements, rows: maximumRows.concat(row) } },
+      description_md: ''
+    }), /Invalid public benchmark field: benchmark\\.measurements\\.rows/);
+
+    const largeRow = Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'number' ? Number.MAX_SAFE_INTEGER : value]));
+    const requestForLargeRowCount = largeRowCount => ({
+      benchmark: { ...payload, measurements: { ...payload.measurements,
+        rows: Array.from({ length: PUBLICATION_MAX_ROWS }, (_, index) => index < largeRowCount ? largeRow : row) } },
+      description_md: ''
+    });
+    let lowerLargeRowCount = 0;
+    let upperLargeRowCount = PUBLICATION_MAX_ROWS;
+    while (lowerLargeRowCount < upperLargeRowCount) {
+      const candidate = Math.ceil((lowerLargeRowCount + upperLargeRowCount) / 2);
+      const candidateBody = JSON.stringify(requestForLargeRowCount(candidate));
+      if (utf8ByteLength(candidateBody) <= PUBLICATION_MAX_UTF8_BYTES) lowerLargeRowCount = candidate;
+      else upperLargeRowCount = candidate - 1;
+    }
+    const boundaryRequest = requestForLargeRowCount(lowerLargeRowCount);
+    const boundaryBytes = utf8ByteLength(JSON.stringify(boundaryRequest));
+    const boundaryDescriptionLength = PUBLICATION_MAX_UTF8_BYTES - boundaryBytes;
+    assert(boundaryDescriptionLength >= 0 && boundaryDescriptionLength <= DESCRIPTION_MAX_CODEPOINTS, 'Synthetic boundary request did not leave a valid description range.');
+    boundaryRequest.description_md = 'x'.repeat(boundaryDescriptionLength);
+    const exactLimitBody = serializePublicationRequest(boundaryRequest);
+    assert.equal(utf8ByteLength(exactLimitBody), PUBLICATION_MAX_UTF8_BYTES);
+    assert.equal(parsePublicationSnapshot(exactLimitBody).description_md.length, boundaryDescriptionLength);
+    const overlimitRequest = { ...boundaryRequest, description_md: boundaryRequest.description_md + 'x' };
+    assert.equal(utf8ByteLength(JSON.stringify(overlimitRequest)), PUBLICATION_MAX_UTF8_BYTES + 1);
+    assert.throws(() => serializePublicationRequest(overlimitRequest), /Publication request exceeds 4MiB\\./);
     const code = encodeRecoveryCode(RECOVERY_FIXTURE);
     assert.ok(code.startsWith('aiolm-recovery-v1.'));
     assert.equal(code, 'aiolm-recovery-v1.eyJ2ZXJzaW9uIjoxLCJvcmlnaW4iOiJodHRwczovL2JlbmNobWFya3MuZXhhbXBsZS50ZXN0Iiwic3VibWlzc2lvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInNlY3JldCI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEifQ');
@@ -115,23 +271,24 @@ try {
     const label = input => formatRuntimeVersionLabel(input);
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 10638 }), '0.3.0-dev(10638)');
-    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev' }), '0.3.0-dev(?)');
-    assert.equal(label({ name: 'llama.cpp', build: 'b10638' }), '?(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev' }), '0.3.0-dev');
+    assert.equal(label({ name: 'llama.cpp', build: 'b10638' }), 'b10638');
     assert.equal(label({ name: 'llama.cpp', version: null, build: null }), null);
     assert.equal(label({ name: 'llama.cpp', version: 'unknown', build: '' }), null);
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev (build 10638, commit bf9421646)', build: 'b1' }), '0.3.0-dev(10638)');
     assert.equal(label({ name: 'llama.cpp', version: 'compiler: x\\nversion: 0.3.0-dev (build 10638, commit bf9421646)' }), '0.3.0-dev(10638)');
-    assert.equal(label({ name: 'llama.cpp', version: 'version: 4589 (1a2b3c4)', build: 'b9999' }), '?(4589)');
-    assert.equal(label({ name: 'llama.cpp', version: 'b123-abcdef', build: 'b9999' }), '?(123)');
-    assert.equal(label({ name: 'llama.cpp', build: 'pr12345' }), '?(pr12345)');
+    assert.equal(label({ name: 'llama.cpp', version: 'version: 4589 (1a2b3c4)', build: 'b9999' }), 'b4589');
+    assert.equal(label({ name: 'llama.cpp', version: 'b123-abcdef', build: 'b9999' }), 'b123');
+    assert.equal(label({ name: 'llama.cpp', build: 'pr12345' }), 'pr12345');
     assert.equal(label({ name: 'llama.cpp', version: '0.0.0-dev (build 0, commit unknown)', build: 'pr12345' }), '0.0.0-dev(pr12345)');
     assert.equal(label({ name: 'llama.cpp', version: 'version: 0 (unknown)', build: 0 }), null);
-    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b0' }), '0.3.0-dev(?)');
-    assert.equal(label({ name: 'llama.cpp', build: 'local_b10840_nop2p' }), '?(local_b10840_nop2p)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b0' }), '0.3.0-dev');
+    assert.equal(label({ name: 'llama.cpp', build: 'local_b10840_nop2p' }), 'local_b10840_nop2p');
     assert.equal(label({ name: 'vllm', version: '0.6.3.post1' }), '0.6.3.post1');
     assert.equal(label({ name: 'MLX', version: 'b123-abcdef', build: 'b7' }), 'b123-abcdef(b7)');
     assert.equal(label({ version: 'version: 0.3.0-dev (build 10638)' }), 'version: 0.3.0-dev (build 10638)');
     assert.equal(label({ name: 'vllm' }), null);
+    assert.equal(label({ name: 'vllm', variant: 'vllm-metal', version: '0.30.0', plugin_version: '0.30.0', build: 'stale-build' }), 'vllm-metal 0.30.0 · vLLM 0.30.0');
   `);
   execFileSync(process.execPath, ['node-smoke.mjs'], { cwd: consumer, stdio: 'pipe', windowsHide: true });
 
@@ -166,6 +323,11 @@ try {
   assert.equal(openapi.paths['/v1/upload-sessions'].post.operationId, 'createUploadSession');
   assert.equal(openapi.paths['/v1/benchmark-runs/{id}'].delete.operationId, 'deleteBenchmarkRun');
   assert.equal(browser.namespace.validatePublicationRequest({ benchmark: payload, description_md: '' }).description_md, '');
+  const browserPublication = { benchmark: payload, description_md: '😀'.repeat(4000) };
+  assert.equal(browser.namespace.countCodePoints(browserPublication.description_md), 4000);
+  assert.equal(browser.namespace.serializePublicationRequest(browserPublication), JSON.stringify(browserPublication));
+  assert.throws(() => browser.namespace.validateDescriptionMd(browserPublication.description_md + '😀'), /Publication description exceeds 4000 characters\./);
+  assert.throws(() => browser.namespace.validatePublicBenchmark({}), /Invalid public benchmark field/);
   assert.equal(browser.namespace.formatRuntimeVersionLabel({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
   assert.equal(browser.namespace.decodeRecoveryCode(browser.namespace.encodeRecoveryCode(browser.namespace.RECOVERY_FIXTURE)).version, 1);
 
@@ -177,7 +339,8 @@ try {
     const publication: BenchmarkPublicationRequest = validatePublicationRequest({ benchmark: payload, description_md: '' });
     const runtimeInput: RuntimeVersionLabelInput = { name: payload.runtime.name, version: payload.runtime.version, build: payload.runtime.build };
     const runtimeLabel: string | null = formatRuntimeVersionLabel(runtimeInput);
-    export { summaries, receipt, publication, runtimeLabel };
+    const metalIdentity: PublicBenchmarkSubmission['runtime'] = { name: 'vllm', version: '0.30.0', backend: 'metal', build: null, variant: 'vllm-metal', plugin_version: '0.30.0' };
+    export { summaries, receipt, publication, runtimeLabel, metalIdentity };
   `);
   const program = ts.createProgram([join(consumer, 'consumer.ts')], { strict: true, noEmit: true, types: [], target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext });
   const diagnostics = ts.getPreEmitDiagnostics(program);

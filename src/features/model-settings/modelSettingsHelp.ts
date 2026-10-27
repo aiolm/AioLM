@@ -9,7 +9,7 @@ const en = {
   loraScale: 'Controls the strength of this adapter. 1 uses its original scale; 0 gives it no effect.',
   gpuDevices: 'Select devices to use for model offloading. With none selected, the runtime chooses devices automatically. GPU layers controls how much of the model is offloaded.',
   gpuMain: 'Select the GPU used in single-GPU mode, or for intermediate results and the KV cache in row mode. Automatic uses the runtime default.',
-  gpuDraft: 'Select a device for draft-model offloading. A device name entered under auxiliary models takes priority; otherwise Automatic uses the runtime default. Also configure the draft model and speculative mode.',
+  gpuDraft: 'Select a device for draft-model offloading. Choose a detected GPU here, or switch to entering engine device names directly. Automatic follows the runtime default. Also configure the draft model and speculative mode.',
   gpuSplitMode: 'Automatic uses the runtime default. single uses one GPU; layer distributes layers; row splits weights by rows; tensor distributes weights and the KV cache and requires runtime support.',
   gpuTensorSplit: 'Enter one non-negative weight per GPU in selection order, separated by commas, with at least one above 0. For example, 3, 1 assigns a 3:1 ratio. Leave empty for automatic allocation.',
 };
@@ -26,7 +26,7 @@ const ko: Help = {
   loraScale: '어댑터의 적용 강도를 조절합니다. 1은 원래 강도이며, 0은 효과를 적용하지 않습니다.',
   gpuDevices: '모델 연산을 맡길 GPU를 선택합니다. 선택하지 않으면 런타임이 장치를 자동으로 정합니다. GPU 레이어 설정으로 GPU에 배치할 양을 조절합니다.',
   gpuMain: '단일 GPU 모드에서 사용할 GPU 또는 row 모드에서 중간 결과와 KV 캐시를 맡을 GPU입니다. 자동은 런타임 기본값을 사용합니다.',
-  gpuDraft: '드래프트 모델을 배치할 장치를 선택합니다. 보조 모델 탭에 입력한 장치 이름이 우선하며, 별도 입력이 없을 때 자동은 런타임 기본값을 사용합니다. 드래프트 모델과 추측 모드도 설정하세요.',
+  gpuDraft: '드래프트 모델을 배치할 장치를 선택합니다. 감지된 GPU를 고르거나 장치 이름 직접 입력으로 전환할 수 있습니다. 자동은 런타임 기본값을 사용합니다. 드래프트 모델과 추측 모드도 설정하세요.',
   gpuSplitMode: '자동은 런타임 기본값입니다. single은 GPU 하나, layer는 레이어 분산, row는 가중치를 행 단위로 분산합니다. tensor는 가중치와 KV 캐시를 분산하며 런타임 지원이 필요합니다.',
   gpuTensorSplit: 'GPU를 선택한 순서대로 0 이상의 비중을 쉼표로 구분해 입력하고, 하나 이상은 0보다 크게 지정하세요. 예를 들어 3, 1은 3:1로 배분합니다. 비워 두면 자동 배분합니다.',
 };
@@ -42,7 +42,7 @@ const ja: Help = {
   loraScale: 'アダプターの適用強度を調整します。1 は元の強度、0 は効果なしです。',
   gpuDevices: 'モデルのオフロードに使う GPU を選択します。未選択ならランタイムが自動選択します。GPU レイヤー数でオフロードする量を調整します。',
   gpuMain: '単一 GPU モードで使う GPU、または row モードで中間結果と KV キャッシュを処理する GPU を選択します。自動はランタイムの既定値を使います。',
-  gpuDraft: 'ドラフトモデルを配置するデバイスを選択します。補助モデルの項目に入力したデバイス名が優先され、入力がなければ自動はランタイムの既定値を使います。ドラフトモデルと投機モードも設定してください。',
+  gpuDraft: 'ドラフトモデルを配置するデバイスを選択します。検出したGPUを選ぶか、デバイス名の直接入力に切り替えられます。自動はランタイムの既定値を使います。ドラフトモデルと投機モードも設定してください。',
   gpuSplitMode: '自動はランタイムの既定値です。single は GPU 1 台、layer はレイヤー分散、row は重みを行ごとに分散します。tensor は重みと KV キャッシュを分散し、ランタイムの対応が必要です。',
   gpuTensorSplit: 'GPU の選択順に 0 以上の比重をカンマ区切りで入力し、少なくとも 1 つを 0 より大きくしてください。例: 3, 1 は 3:1 に配分します。空欄は自動配分です。',
 };
@@ -58,7 +58,7 @@ const zh: Help = {
   loraScale: '控制适配器的作用强度。1 为原始强度，0 表示不产生效果。',
   gpuDevices: '选择用于模型卸载的 GPU。不选择时由运行时自动决定。GPU 层数设置控制卸载到 GPU 的数量。',
   gpuMain: '选择单 GPU 模式使用的 GPU，或 row 模式中处理中间结果和 KV 缓存的 GPU。自动使用运行时默认值。',
-  gpuDraft: '选择放置草稿模型的设备。辅助模型中输入的设备名称优先；未输入时，自动使用运行时默认值。还需配置草稿模型和推测模式。',
+  gpuDraft: '选择放置草稿模型的设备。可选择已检测到的GPU，或切换为直接输入设备名称。自动使用运行时默认值。还需配置草稿模型和推测模式。',
   gpuSplitMode: '自动使用运行时默认值。single 使用一个 GPU；layer 分配模型层；row 按行拆分权重；tensor 分配权重和 KV 缓存，需要运行时支持。',
   gpuTensorSplit: '按 GPU 选择顺序输入以逗号分隔的非负权重，至少一个大于 0。例如 3, 1 按 3:1 分配。留空则自动分配。',
 };

@@ -1,0 +1,19 @@
+usage: fake-engine [options] [TARGET]
+
+positional arguments:
+  TARGET                entry to serve
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         model path
+  --host HOST           bind address
+  -p, --port PORT       bind port
+  --fresh-count N       synthetic count, zero is meaningful
+  --fresh-label TEXT    synthetic label, empty is meaningful
+  --fresh-pair A B      synthetic fixed pair
+  --fresh-switch        synthetic switch
+  --fresh-optional [VALUE]      synthetic optional value
+  --fresh-files FILE [FILE ...]  synthetic one-or-more values
+  --fresh-any [VALUE ...]       synthetic zero-or-more values
+  -i X, --fresh-items X Y       synthetic aliases with unknown count
+

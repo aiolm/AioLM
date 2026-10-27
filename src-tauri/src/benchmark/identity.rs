@@ -1,6 +1,10 @@
 //! The app does not hash models. This module only reads digests that an earlier
 //! build cached, and never reads a model. The cache is invalidated by file
-//! metadata changes.
+//! metadata changes. A Hugging Face or MLX snapshot directory is identified by
+//! its format, its immutable upstream revision when one is known, and AioLM's
+//! local fingerprint of the files as they are now; none of those is a content
+//! digest, so a snapshot is never reported with a `sha256`.
+use crate::providers::artifacts::{self, ArtifactFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -13,6 +17,18 @@ pub(crate) struct ModelIdentity {
     pub status: String,
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
+    /// Weight format. Absent in records written before formats were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ArtifactFormat>,
+    /// Upstream commit of a snapshot, from its Hugging Face cache directory or
+    /// download manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// `artifacts::local_fingerprint` of a snapshot: relative paths, sizes,
+    /// modification times and small JSON files. It detects local changes; it
+    /// is not a digest of the weights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_fingerprint: Option<String>,
     /// How the model was packaged, when that could be established without
     /// guessing. Absent in records written before this was collected, and
     /// absent from the identity cache: it is gathered per run, not digested.
@@ -86,6 +102,9 @@ fn unidentified(path: &Path) -> ModelIdentity {
         .into(),
         sha256: None,
         metadata: None,
+        format: gguf_format(path),
+        revision: None,
+        local_fingerprint: None,
         size_bytes: if multipart {
             None
         } else {
@@ -111,7 +130,34 @@ fn read_cached(path: &Path) -> Option<CachedIdentity> {
     serde_json::from_slice(&bytes).ok()
 }
 
+fn gguf_format(path: &Path) -> Option<ArtifactFormat> {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+        .then_some(ArtifactFormat::Gguf)
+}
+
+fn snapshot(path: &Path) -> ModelIdentity {
+    let artifact = artifacts::inspect_snapshot(path);
+    ModelIdentity {
+        status: "unidentified".into(),
+        sha256: None,
+        // A partial download's byte count is not the model's size.
+        size_bytes: (!artifact.incomplete && artifact.size_bytes > 0)
+            .then_some(artifact.size_bytes),
+        format: Some(artifact.format),
+        local_fingerprint: Some(artifacts::local_fingerprint(
+            path,
+            artifact.revision.as_deref(),
+        )),
+        revision: artifact.revision,
+        metadata: None,
+    }
+}
+
 pub(crate) fn cached(root: &Path, path: &Path) -> ModelIdentity {
+    if path.is_dir() {
+        return snapshot(path);
+    }
     let fallback = unidentified(path);
     if fallback.status == "multipart" {
         return fallback;
@@ -133,7 +179,10 @@ pub(crate) fn cached(root: &Path, path: &Path) -> ModelIdentity {
                     hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
                 })
         })
-        .map(|value| value.identity)
+        .map(|value| ModelIdentity {
+            format: gguf_format(&path),
+            ..value.identity
+        })
         .unwrap_or(fallback)
 }
 
@@ -149,6 +198,9 @@ mod tests {
             status: "sha256".into(),
             sha256: Some(format!("{:x}", Sha256::digest(contents))),
             size_bytes: Some(contents.len() as u64),
+            format: Some(ArtifactFormat::Gguf),
+            revision: None,
+            local_fingerprint: None,
             metadata: None,
         };
         let entry = serde_json::json!({
@@ -192,6 +244,45 @@ mod tests {
         let reused = cached(&root, &model);
         assert_eq!(reused.status, "sha256");
         assert!(reused.metadata.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_snapshot_keeps_format_and_revision_without_claiming_a_digest() {
+        let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
+        let revision = "0123456789abcdef0123456789abcdef01234567";
+        let snapshot = root
+            .join("models--org--name")
+            .join("snapshots")
+            .join(revision);
+        fs::create_dir_all(&snapshot).unwrap();
+        fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","architectures":["LlamaForCausalLM"]}"#,
+        )
+        .unwrap();
+        fs::write(snapshot.join("model.safetensors"), b"synthetic weights").unwrap();
+        fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+
+        let identity = cached(&root, &snapshot);
+        assert_eq!(identity.status, "unidentified");
+        assert_eq!(identity.sha256, None);
+        assert_eq!(identity.format, Some(ArtifactFormat::HfSafetensors));
+        assert_eq!(identity.revision.as_deref(), Some(revision));
+        let fingerprint = identity.local_fingerprint.clone().unwrap();
+        assert!(
+            fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        );
+
+        // A local edit changes the fingerprint; the upstream revision stays.
+        fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","architectures":["LlamaForCausalLM"],"edited":true}"#,
+        )
+        .unwrap();
+        let edited = cached(&root, &snapshot);
+        assert_eq!(edited.revision.as_deref(), Some(revision));
+        assert_ne!(edited.local_fingerprint, Some(fingerprint));
         fs::remove_dir_all(root).unwrap();
     }
 

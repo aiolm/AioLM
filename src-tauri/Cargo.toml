@@ -1,8 +1,8 @@
 [package]
 name = "aiolm"
-version = "0.3.1"
+version = "0.3.2"
 default-run = "aiolm"
-description = "AioLM: Tauri desktop GUI for llama.cpp"
+description = "AioLM: Tauri desktop manager for local inference runtimes"
 authors = ["aiolm contributors"]
 edition = "2021"
 rust-version = "1.98.0"
@@ -25,6 +25,91 @@ name = "smoke_fake"
 path = "tests/smoke_fake.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "runtime_adapters"
+path = "tests/runtime_adapters.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_help_journey"
+path = "tests/runtime_help_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_option_order_journey"
+path = "tests/runtime_option_order_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_entrypoint_wizard"
+path = "tests/runtime_entrypoint_wizard.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_bridge_journey"
+path = "tests/runtime_bridge_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_bridge_help_streams"
+path = "tests/runtime_bridge_help_streams.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_help_encoding_journey"
+path = "tests/runtime_help_encoding_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_interpreter_command_journey"
+path = "tests/runtime_interpreter_command_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_metadata_journey"
+path = "tests/runtime_metadata_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_positional_metadata_journey"
+path = "tests/runtime_positional_metadata_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_entry_ownership_journey"
+path = "tests/runtime_entry_ownership_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_registration_bounds"
+path = "tests/runtime_registration_bounds.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_adapter_setup"
+path = "tests/runtime_adapter_setup.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_command_journey"
+path = "tests/runtime_command_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_context_journey"
+path = "tests/runtime_context_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_fact_conflict_journey"
+path = "tests/runtime_fact_conflict_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "headless_descendant_listener"
+path = "tests/headless_descendant_listener.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -39,8 +124,10 @@ tauri-plugin-notification = "~2.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# Already locked through reqwest; help decoding of explicit Windows code pages.
+encoding_rs = "0.8.35"
 reqwest = { version = "0.12", features = ["json", "stream"] }
-tokio = { version = "1", features = ["process", "fs", "time", "macros", "rt-multi-thread", "io-util", "net", "sync"] }
+tokio = { version = "1", features = ["process", "fs", "time", "macros", "rt-multi-thread", "io-util", "net", "sync", "signal"] }
 futures-util = "0.3"
 which = "6"
 zip = "2"
@@ -66,9 +153,17 @@ tauri-plugin-wdio-webdriver = { version = "=1.4.0", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"
+gtk = "0.18"
+# Retain the Linux notification sender using the already locked async backend.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 # Share the desktop plugins' async-io backend. Enabling zbus/tokio globally
 # makes the notification plugin's blocking DBus call nest a Tokio runtime.
 zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["signal"] }
+
+# Keep full executable/artifact verification responsive in development too.
+# The version matches Cargo.lock; release already optimizes this dependency.
+[profile.dev.package."sha2:0.10.9"]
+opt-level = 3

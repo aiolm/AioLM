@@ -51,7 +51,7 @@ use crate::gguf::{self, ModelFacts, TensorBytes};
 use crate::hardware::{self, GpuVendor};
 use crate::tuning_defaults;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
@@ -202,13 +202,15 @@ pub struct Environment {
 impl Environment {
     pub fn detect(cfg: &AppConfig, runtime_devices: &[String]) -> Self {
         let ram_capacity_bytes = crate::hardware_memory::system_memory_bytes();
-        let profile = (cfg.active_backend != "cpu").then(hardware::detect);
-        let mut env = Self::from_profile(cfg, ram_capacity_bytes, profile.as_ref());
+        let gpus = (cfg.active_backend != "cpu")
+            .then(hardware::detect_gpu_devices)
+            .unwrap_or_default();
+        let mut env = Self::from_gpus(cfg, ram_capacity_bytes, &gpus);
         // A possible integrated adapter in the machine is not proof that the
         // selected runtime device shares RAM. Only resolved selection may use
         // RAM as GPU capacity.
         env.shared_memory = false;
-        if let Some(capacity) = capacity::gpu_capacity(cfg, profile.as_ref(), runtime_devices) {
+        if let Some(capacity) = capacity::gpu_capacity(cfg, &gpus, runtime_devices) {
             env.vram_capacity_bytes = Some(capacity.dedicated_bytes);
             env.shared_memory = capacity.shared;
             env.accelerator = Accelerator::Gpu {
@@ -218,10 +220,10 @@ impl Environment {
         env
     }
 
-    fn from_profile(
+    fn from_gpus(
         cfg: &AppConfig,
         ram_capacity_bytes: Option<u64>,
-        profile: Option<&hardware::DeviceProfile>,
+        gpus: &[hardware::GpuDevice],
     ) -> Self {
         let device_count = |count: usize| {
             if cfg.gpu.split_mode == SplitMode::Single {
@@ -253,9 +255,8 @@ impl Environment {
                 }
             }
         };
-        let eligible: Vec<_> = profile
-            .into_iter()
-            .flat_map(|profile| &profile.gpus)
+        let eligible: Vec<_> = gpus
+            .iter()
             .filter(|gpu| gpu.vendor != GpuVendor::Unknown)
             .filter(|gpu| vendor.is_none_or(|vendor| gpu.vendor == vendor))
             .collect();
@@ -937,38 +938,96 @@ struct CachedFacts {
     facts: Result<Arc<ModelFacts>, String>,
 }
 
+#[derive(Default)]
+struct FactsCache {
+    entries: HashMap<PathBuf, CachedFacts>,
+    order: VecDeque<PathBuf>,
+}
+
 /// Header facts by canonical path. An entry is reused only while the file
 /// keeps its size and modification time, so a replaced model is read again.
-static FACTS: LazyLock<Mutex<HashMap<PathBuf, CachedFacts>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static FACTS: LazyLock<Mutex<FactsCache>> = LazyLock::new(|| Mutex::new(FactsCache::default()));
+
+fn touch_facts(cache: &mut FactsCache, canonical: &Path) {
+    if cache.order.back().is_some_and(|path| path == canonical) {
+        return;
+    }
+    if let Some(position) = cache.order.iter().position(|path| path == canonical) {
+        let path = cache
+            .order
+            .remove(position)
+            .expect("cache order position exists");
+        cache.order.push_back(path);
+    } else {
+        cache.order.push_back(canonical.to_path_buf());
+    }
+}
+
+impl FactsCache {
+    fn hit(
+        &mut self,
+        canonical: &Path,
+        len: u64,
+        modified: Option<SystemTime>,
+    ) -> Option<Result<Arc<ModelFacts>, String>> {
+        let hit = self.entries.get(canonical).and_then(|entry| {
+            (entry.len == len && entry.modified == modified).then(|| entry.facts.clone())
+        });
+        if hit.is_some() {
+            touch_facts(self, canonical);
+        }
+        hit
+    }
+
+    fn insert(
+        &mut self,
+        canonical: &Path,
+        len: u64,
+        modified: Option<SystemTime>,
+        facts: Result<Arc<ModelFacts>, String>,
+    ) {
+        if self.entries.len() >= MAX_CACHED_FACTS && !self.entries.contains_key(canonical) {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(
+            canonical.to_path_buf(),
+            CachedFacts {
+                len,
+                modified,
+                facts,
+            },
+        );
+        touch_facts(self, canonical);
+    }
+}
+
+fn cached_facts_in(
+    cache: &Mutex<FactsCache>,
+    canonical: &Path,
+    len: u64,
+    modified: Option<SystemTime>,
+) -> Result<Arc<ModelFacts>, String> {
+    if let Ok(mut cache) = cache.lock() {
+        let hit = cache.hit(canonical, len, modified);
+        if let Some(facts) = hit {
+            return facts;
+        }
+    }
+    let facts = gguf::read_model_facts(canonical).map(Arc::new);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(canonical, len, modified, facts.clone());
+    }
+    facts
+}
 
 fn cached_facts(
     canonical: &Path,
     len: u64,
     modified: Option<SystemTime>,
 ) -> Result<Arc<ModelFacts>, String> {
-    if let Ok(cache) = FACTS.lock() {
-        if let Some(entry) = cache.get(canonical) {
-            if entry.len == len && entry.modified == modified {
-                return entry.facts.clone();
-            }
-        }
-    }
-    let facts = gguf::read_model_facts(canonical).map(Arc::new);
-    if let Ok(mut cache) = FACTS.lock() {
-        if cache.len() >= MAX_CACHED_FACTS && !cache.contains_key(canonical) {
-            cache.clear();
-        }
-        cache.insert(
-            canonical.to_path_buf(),
-            CachedFacts {
-                len,
-                modified,
-                facts: facts.clone(),
-            },
-        );
-    }
-    facts
+    cached_facts_in(&FACTS, canonical, len, modified)
 }
 
 fn load_model(path: &str, disk: &mut Disk, auxiliary: bool) -> Loaded {
@@ -1094,7 +1153,7 @@ struct Shape {
     tensors: TensorBytes,
 }
 
-fn shape(model: &FoundModel) -> Result<Shape, EstimateNote> {
+fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
     let facts = &model.facts;
     let architecture = facts.architecture.as_deref().unwrap_or_default();
     let qwen_hybrid = matches!(
@@ -1128,13 +1187,12 @@ fn shape(model: &FoundModel) -> Result<Shape, EstimateNote> {
         .head_count
         .as_ref()
         .ok_or(EstimateNote::MissingMetadata)?;
-    let tensors = model.tensors.clone().ok_or(EstimateNote::MissingMetadata)?;
+    let tensors = model.tensors.ok_or(EstimateNote::MissingMetadata)?;
     // Header dimensions are untrusted sizes, not allocations to honour. Reject
     // incomplete layer arrays and implausible shapes instead of manufacturing
     // an MHA fallback or overflowing arithmetic later in the estimate.
     const MAX_DIM: u64 = 1 << 24;
     if n_embd > MAX_DIM
-        || tensors.total() == 0
         || tensors.layers.len() != n_layer
         || tensors.layers.iter().any(|layer| layer.total() == 0)
         || (0..n_layer).any(|il| {
@@ -1744,6 +1802,32 @@ fn draft_layers(cfg: &AppConfig) -> u64 {
 }
 
 pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        // Python providers can also load a single GGUF (including Metal).
+        // Artifact inspection accounts for the selected format without using
+        // llama.cpp's placement or KV formulas for another engine.
+        let path = Path::new(&cfg.active_model);
+        let artifact = crate::providers::execution::inspect(path)
+            .unwrap_or_else(|_| crate::providers::artifacts::inspect_snapshot(path));
+        return ResourceEstimate {
+            vram_bytes: None,
+            ram_offload_bytes: None,
+            ssd_offload_bytes: None,
+            required_vram_bytes: None,
+            host_memory_bytes: None,
+            vram_capacity_bytes: env.vram_capacity_bytes,
+            ram_capacity_bytes: env.ram_capacity_bytes,
+            disk_bytes: artifact.size_bytes,
+            disk_complete: artifact.ready_files(),
+            model_bytes: artifact.size_bytes,
+            auxiliary_bytes: 0,
+            kv_bytes: None,
+            notes: vec![
+                EstimateNote::UnsupportedArchitecture,
+                EstimateNote::Automatic,
+            ],
+        };
+    }
     let memory = estimate_memory(cfg, env);
     let mut notes: BTreeSet<_> = memory.notes.iter().copied().collect();
     let required_vram_bytes = memory.vram.map(ResourceRange::planned);
@@ -1911,7 +1995,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
     if speculative && !cfg.spec_draft_model.trim().is_empty() {
         notes.insert(EstimateNote::Auxiliary);
         match load_model(&cfg.spec_draft_model, &mut disk, true) {
-            Loaded::Ready(model) => match shape(&model) {
+            Loaded::Ready(model) => match shape(model) {
                 Ok(shape) => draft = Some(shape),
                 Err(note) => {
                     notes.insert(note);
@@ -1945,7 +2029,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
     // build_args always supplies n_gpu_layers (including the app default).
     // Upstream fit.cpp does not redistribute experts once it is explicit.
 
-    let main_shape = main.as_ref().map(shape);
+    let main_shape = main.map(shape);
     if let Some(Err(note)) = &main_shape {
         notes.insert(*note);
     }
@@ -2254,6 +2338,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn python_provider_disk_accounting_accepts_gguf_without_inventing_memory() {
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let path = scratch.write("metal-model.gguf", &fixture::file(&values, &tensors));
+        let mut cfg = config(&path);
+        cfg.active_provider = "vllm".into();
+        let result = super::estimate(&cfg, &environment(GPU));
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(result.model_bytes, size);
+        assert_eq!(result.disk_bytes, size);
+        assert!(result.disk_complete);
+        assert_eq!(result.required_vram_bytes, None);
+        assert_eq!(result.host_memory_bytes, None);
+        assert_eq!(result.kv_bytes, None);
+    }
+
     fn adapter(path: &Path) -> LoraAdapterConfig {
         LoraAdapterConfig {
             path: path.to_string_lossy().into_owned(),
@@ -2264,6 +2365,36 @@ mod tests {
 
     fn size(path: &Path) -> u64 {
         std::fs::metadata(path).unwrap().len()
+    }
+
+    #[test]
+    fn facts_cache_keeps_recent_models_when_capacity_is_exceeded() {
+        let cache = Mutex::new(FactsCache::default());
+
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let bytes = fixture::file(&values, &tensors);
+        let hot = scratch.write("hot.gguf", &bytes);
+        let cold: Vec<_> = (0..64)
+            .map(|index| scratch.write(&format!("cold-{index}.gguf"), &bytes))
+            .collect();
+
+        let read = |path: &Path| {
+            let mut disk = Disk::default();
+            let (canonical, len, modified) = disk.count(path, false).unwrap();
+            assert!(cached_facts_in(&cache, &canonical, len, modified).is_ok());
+        };
+        read(&hot);
+        for path in &cold {
+            read(path);
+            read(&hot);
+        }
+
+        let canonical = std::fs::canonicalize(hot).unwrap();
+        let cache = cache.lock().unwrap();
+        assert_eq!(cache.entries.len(), MAX_CACHED_FACTS);
+        assert!(cache.entries.contains_key(&canonical));
+        assert_eq!(cache.order.back(), Some(&canonical));
     }
 
     #[test]
@@ -2857,14 +2988,14 @@ mod tests {
     fn runtime_gpu_selection_and_single_mode_preserve_declared_placement() {
         let mut cfg = config(Path::new("synthetic.gguf"));
         cfg.gpu.gpu_ids = vec!["runtime:cuda:CUDA0".into(), "runtime:cuda:CUDA1".into()];
-        let env = Environment::from_profile(&cfg, Some(32 << 30), None);
+        let env = Environment::from_gpus(&cfg, Some(32 << 30), &[]);
         assert_eq!(env.accelerator, Accelerator::Gpu { devices: 2 });
         assert!(env.shared_memory); // Physical mapping is unknown, so do not claim separate pools.
         cfg.gpu.split_mode = SplitMode::Single;
-        assert_eq!(Environment::from_profile(&cfg, None, None).accelerator, GPU);
+        assert_eq!(Environment::from_gpus(&cfg, None, &[]).accelerator, GPU);
         cfg.active_backend = "cpu".into();
         assert_eq!(
-            Environment::from_profile(&cfg, None, None).accelerator,
+            Environment::from_gpus(&cfg, None, &[]).accelerator,
             Accelerator::Cpu
         );
     }
@@ -2923,6 +3054,31 @@ mod tests {
         let (values, _) = plain("llama");
         let empty = scratch.write("empty.gguf", &fixture::file(&values, &[]));
         assert!(estimate(&config(&empty), &environment(GPU)).ram.is_none());
+
+        // Non-layer weights cannot make an incomplete repeating layer valid.
+        let (values, mut tensors) = plain("llama");
+        tensors.retain(|(name, _, _)| !name.starts_with("blk.1."));
+        let gap = scratch.write("missing-layer.gguf", &fixture::file(&values, &tensors));
+        let bytes = size(&gap);
+        let env = environment(GPU);
+        assert_eq!(
+            super::estimate(&config(&gap), &env),
+            ResourceEstimate {
+                vram_bytes: None,
+                ram_offload_bytes: None,
+                ssd_offload_bytes: None,
+                required_vram_bytes: None,
+                host_memory_bytes: None,
+                vram_capacity_bytes: env.vram_capacity_bytes,
+                ram_capacity_bytes: env.ram_capacity_bytes,
+                disk_bytes: bytes,
+                disk_complete: true,
+                model_bytes: bytes,
+                auxiliary_bytes: 0,
+                kv_bytes: None,
+                notes: vec![EstimateNote::MissingMetadata],
+            }
+        );
     }
 
     #[test]
@@ -3096,7 +3252,7 @@ mod tests {
             Loaded::Ready(found) => found,
             _ => panic!("synthetic model unreadable"),
         };
-        let dimensions = shape(&found).unwrap();
+        let dimensions = shape(found).unwrap();
         assert_eq!(
             dimensions.recurrent_bytes,
             vec![71_680 + 24_576, 0, 71_680, 0]

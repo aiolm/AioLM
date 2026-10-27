@@ -70,6 +70,7 @@ export function registerTask(task: Omit<AppTask, "state" | "startedAt"> & Partia
 export function updateTask(id: string, patch: Partial<Omit<AppTask, "id">>) {
   const current = tasks.get(id);
   if (!current) return;
+  if (patch.state === "running" || patch.state === "cancelling") cancelClear(id);
   tasks.set(id, { ...current, ...patch });
   publish();
 }

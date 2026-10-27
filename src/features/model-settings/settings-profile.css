@@ -6,10 +6,12 @@
 .settings-profile-banner-text { flex: 1 1 180px; min-width: 0; }
 .settings-profile-title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .settings-profile-banner h3, .settings-profile-detail h3 { margin: 0; font-size: var(--ui-text); font-weight: 650; overflow-wrap: break-word; }
-.settings-profile-banner p { margin: 3px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
-.settings-profile-banner p.settings-profile-feedback { color: var(--ui-accent); font-weight: 500; }
+.settings-profile-banner p, .settings-profile-detail-heading p[role="status"] { margin: 3px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
+.settings-profile-banner p.settings-profile-feedback, .settings-profile-detail-heading p.settings-profile-feedback { color: var(--ui-accent); font-weight: 500; }
 .settings-profile-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
 .settings-profile-buttons .app-button { max-width: 100%; }
+.settings-profile-picker { flex: 1 1 160px; min-width: 0; max-width: 260px; }
+.settings-profile-picker .app-custom-select-trigger { width: 100%; }
 .settings-profile-groups { display: grid; gap: 18px; margin: 22px 0; }
 .settings-profile-group { min-width: 0; }
 .settings-profile-group-heading { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }

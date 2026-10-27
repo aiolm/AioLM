@@ -6,9 +6,11 @@ import { testConfig } from '../../testing/appStore';
 import { rtProbe } from '../../shared/api';
 import type { AppConfig, DeviceReport, RuntimeCapabilities } from '../../shared/api/types';
 import { materializeProfileApplication } from '../../shared/config/settingsProfiles';
+import * as api from '../../shared/api';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
-vi.mock('../../shared/api', () => ({ rtProbe: vi.fn() }));
+vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn(), providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn() }));
 
 const device: DeviceReport = {
   profile: { schema_version: 1, os: 'test', arch: 'x86_64', detection: 'fixture', fingerprint: 'synthetic',
@@ -30,6 +32,32 @@ beforeEach(() => { vi.clearAllMocks(); vi.mocked(rtProbe).mockResolvedValue(capa
 afterEach(cleanup);
 
 describe('benchmark execution environment', () => {
+  it('masks sensitive and unverified options in an external engine environment', async () => {
+    const credential = schemaOption({ key: 'credential', flag: '--credential', target: 'launch', group: 'engine', kind: { type: 'text' } });
+    credential.sensitive = { certainty: 'documented', value: true };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [credential]));
+    // A real environment projection must verify its selected build, not infer
+    // support from the names of saved values.
+    const { container } = render(view({ ...cfg, active_provider: 'custom.bench', active_runtime: 'build',
+      provider_options: { 'custom.bench': { credential: 'BENCH-PRIVATE', retired: 'BENCH-UNKNOWN' } } }));
+    expect(container).not.toHaveTextContent('BENCH-PRIVATE');
+    expect(container).not.toHaveTextContent('BENCH-UNKNOWN');
+    expect(await screen.findByText('--credential')).toBeVisible();
+    expect(container).not.toHaveTextContent('BENCH-PRIVATE');
+  });
+  it.each(['vllm', 'mlx-vlm'] as const)('describes %s without native settings or native CPU placement leaking into the environment', async provider => {
+    render(view({ ...cfg, active_provider: provider, active_runtime: '', active_backend: 'cpu', ngl: 0,
+      provider_options: { [provider]: { max_tokens: 512 }, 'llama.cpp': { stale: 'native-only' } } }));
+    expect(term('Inference engine')).toHaveTextContent(provider === 'vllm' ? 'vLLM' : 'MLX');
+    expect(term('Runtime')).toHaveTextContent('Choose a runtime');
+    expect(term('Maximum output tokens')).toHaveTextContent('Needs a compatibility check');
+    expect(screen.queryByText('512')).not.toBeInTheDocument();
+    expect(term('Selected GPU')).toHaveTextContent('Runtime selects the GPU at launch');
+    expect(screen.queryByText('GPU layers')).not.toBeInTheDocument();
+    expect(screen.queryByText('native-only')).not.toBeInTheDocument();
+    await act(async () => {});
+    expect(rtProbe).not.toHaveBeenCalled();
+  });
   it('shows only selected hardware with physical capacities and profile settings', async () => {
     render(view());
     expect(term('Selected GPU')).toHaveTextContent('Example GPU B · 16.00 GiB VRAM');

@@ -1,49 +1,20 @@
 /* Static presentation extracted into semantic classes; live dimensions stay in React. */
 @layer components {
 .ui-font-size-12px { font-size: var(--ui-text-support); }
-.ui-font-weight-800 { font-weight: 800; }
-.ui-letter-spacing-0-04em { letter-spacing: -0.04em; }
-.ui-line-height-1 { line-height: 1; }
-.ui-font-variant-numeric-tabular-nums { font-variant-numeric: tabular-nums; }
 .ui-transform-translateY-100 { transform: translateY(-100%); }
 .ui-border-color-border { border-color: var(--ui-border); }
-.ui-background-panel { background: var(--ui-panel); }
 .ui-color-muted { color: var(--ui-muted); }
 .ui-color-faint { color: var(--ui-faint); }
 .ui-color-warning { color: var(--ui-warning); }
-.ui-background-warning { background: var(--ui-warning); }
-.ui-color-success { color: var(--ui-success); }
 .ui-color-danger { color: var(--ui-danger); }
-.ui-border-color-warning-border { border-color: var(--tone-warning-border); }
-.ui-background-warning-bg { background: var(--tone-warning-bg); }
 .ui-color-warning-ink { color: var(--tone-warning-ink); }
-.ui-border-color-error-border { border-color: var(--tone-error-border); }
-.ui-background-error-bg { background: var(--tone-error-bg); }
-.ui-color-error-ink { color: var(--tone-error-ink); }
 .ui-color-ink { color: var(--ui-ink); }
 .ui-background-mono-bg { background: var(--ui-mono-bg); }
 .ui-color-mono-ink { color: var(--ui-mono-ink); }
 .ui-background-surface-muted { background: var(--ui-surface-muted); }
 .ui-background-rgb-0-0-0-18 { background: var(--ui-mono-bg); }
 .ui-color-inherit { color: inherit; }
-.ui-background-danger-solid { background: var(--ui-danger-solid); }
-.ui-border-color-surface { border-color: var(--ui-surface); }
 .ui-color-accent { color: var(--ui-accent); }
-.ui-background-accent-soft { background: var(--ui-accent-soft); }
-.ui-border-color-success-border { border-color: var(--tone-success-border); }
-.ui-background-success-bg { background: var(--tone-success-bg); }
-.ui-color-success-ink { color: var(--tone-success-ink); }
 .ui-min-width-120px { min-width: 120px; }
-.ui-border-color-border-accent { border-color: var(--ui-border-accent); }
-.ui-background-border { background: var(--ui-border); }
-.ui-background-accent-solid { background: var(--ui-accent-solid); }
 .ui-background-panel-raised { background: var(--ui-panel-raised); }
-.ui-background-transparent { background: transparent; }
-.ui-border-1px-solid-var-tone-success-border { border: 1px solid var(--tone-success-border); }
-.ui-width-100 { width: 100%; }
-.ui-border-color-accent { border-color: var(--ui-accent); }
-.ui-border-color-info-border { border-color: var(--tone-info-border); }
-.ui-background-info-bg { background: var(--tone-info-bg); }
-.ui-color-info-ink { color: var(--tone-info-ink); }
-.ui-background-surface { background: var(--ui-surface); }
 }

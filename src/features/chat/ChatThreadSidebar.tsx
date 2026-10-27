@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatThread } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
+import { chatTitlePreview, displayChatTitle } from './chatThreadTitle';
 
 interface ChatThreadSidebarProps {
   open: boolean;
@@ -90,13 +91,14 @@ export default function ChatThreadSidebar({
                 onClose?.();
               }}
               className="chat-thread-entry app-list-row__action"
+              aria-label={displayChatTitle(thread.title, ct('newConversation'))}
               aria-current={thread.id === activeThreadId ? "true" : undefined}
             >
-              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={thread.title || ct("newConversation")}>{thread.title || ct("newConversation")}</span>
+              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={displayChatTitle(thread.title, ct('newConversation'))}>{chatTitlePreview(displayChatTitle(thread.title, ct('newConversation')))}</span>
             </button>
               <span className="mt-0.5 block px-2.5 text-xs tabular-nums ui-color-faint" >{thread.messages.length ? `${thread.messages.length} ${ct("messages")}` : ct("empty")}</span>
             </div>
-            <button type="button" onClick={() => onDelete(thread)} aria-label={`${ct("delete")}: ${thread.title || ct("newConversation")}`} className="app-icon-button app-icon-button--danger mr-1" title={ct("delete")}>
+            <button type="button" onClick={() => onDelete(thread)} aria-label={`${ct("delete")}: ${displayChatTitle(thread.title, ct('newConversation'))}`} className="app-icon-button app-icon-button--danger mr-1" title={ct("delete")}>
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg>
             </button>
           </div>

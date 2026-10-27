@@ -6,11 +6,11 @@ use std::sync::{
 };
 use tauri::{Emitter, State};
 
-struct RuntimeBusyGuard {
+pub(super) struct RuntimeBusyGuard {
     busy: Arc<AtomicBool>,
 }
 
-fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
+pub(super) fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
     if state
         .server
         .lock()
@@ -35,7 +35,7 @@ fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
 }
 
 impl RuntimeBusyGuard {
-    fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
+    pub(super) fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
         busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| Self { busy: busy.clone() })
             .map_err(|_| "another runtime operation is already in progress".to_string())
@@ -334,7 +334,7 @@ pub(crate) async fn realign_saved_gpu_placement(
     previous: &config::AppConfig,
     cfg: &mut config::AppConfig,
 ) {
-    if previous.active_backend == cfg.active_backend {
+    if !needs_saved_gpu_realignment(previous, cfg) {
         return;
     }
     let Ok(capabilities) = runtime::probe(&cfg.active_backend, &cfg.active_build).await else {
@@ -348,6 +348,16 @@ pub(crate) async fn realign_saved_gpu_placement(
     cfg.active_build = build;
 }
 
+fn needs_saved_gpu_realignment(previous: &config::AppConfig, cfg: &config::AppConfig) -> bool {
+    // These backend/device names belong to the managed llama.cpp adapter.
+    // Other adapters retain dormant legacy fields in project/profile snapshots;
+    // changing those fields must not probe llama.cpp or replace their placement.
+    use crate::providers::{provider_of, ProviderId};
+    provider_of(previous) == ProviderId::Llama
+        && provider_of(cfg) == ProviderId::Llama
+        && previous.active_backend != cfg.active_backend
+}
+
 #[tauri::command]
 pub(crate) async fn rt_probe(
     backend: String,
@@ -359,6 +369,27 @@ pub(crate) async fn rt_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_gpu_realignment_only_translates_between_llama_backends() {
+        let mut previous = config::AppConfig {
+            active_backend: "rocm".into(),
+            ..Default::default()
+        };
+        let mut next = previous.clone();
+        next.active_backend = "vulkan".into();
+        assert!(needs_saved_gpu_realignment(&previous, &next));
+        assert!(!needs_saved_gpu_realignment(&previous, &previous));
+        for provider in ["custom.personal", "vllm", "mlx-vlm"] {
+            next.active_provider = provider.into();
+            assert!(!needs_saved_gpu_realignment(&previous, &next));
+            previous.active_provider = provider.into();
+            assert!(!needs_saved_gpu_realignment(&previous, &next));
+            next.active_provider = "llama.cpp".into();
+            assert!(!needs_saved_gpu_realignment(&previous, &next));
+            previous.active_provider = "llama.cpp".into();
+        }
+    }
 
     #[test]
     fn runtime_mutations_check_named_sessions_as_well_as_default() {

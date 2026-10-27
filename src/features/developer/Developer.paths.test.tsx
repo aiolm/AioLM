@@ -4,6 +4,7 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
 import * as api from "../../shared/api/index";
 import DeveloperPanel from "./Developer";
+import { testConfig } from "../../testing/appStore";
 
 vi.mock("../../shared/api/index", () => ({
   apiServerStatus: vi.fn(),
@@ -28,6 +29,30 @@ beforeEach(() => {
 });
 
 describe("developer page path presentation", () => {
+  it.each([true, false])('names the loaded native runtime instead of a later selection, with engine metadata %s', withEngine => {
+    const store = {
+      ...runningStore,
+      cfg: { ...testConfig, active_backend: 'metal', active_build: 'b222' },
+      status: {
+        ...runningStore.status,
+        execution: { active_provider: 'llama.cpp', active_backend: 'cpu', active_build: 'b111' },
+        ...(withEngine ? { engine: { provider: 'llama.cpp', runtime_id: 'cpu-b111' } } : {}),
+      },
+    } as AppStore;
+    render(<I18nProvider initialLocale="en"><DeveloperPanel store={store} section="diagnostics" /></I18nProvider>);
+    expect(screen.getByText('llama.cpp · cpu / b111')).toBeVisible();
+    expect(screen.queryByText('llama.cpp · metal / b222')).not.toBeInTheDocument();
+    expect(store.cfg?.active_backend).toBe('metal');
+    expect(store.status.execution?.active_backend).toBe('cpu');
+  });
+
+  it('names the loaded snapshot in diagnostics while keeping its served model ID intact', () => {
+    const snapshot = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    const store = { ...runningStore, status: { ...runningStore.status, model: 'served-alias', execution: { active_model: snapshot } } };
+    render(<I18nProvider initialLocale="en"><DeveloperPanel store={store} section="diagnostics" /></I18nProvider>);
+    expect(screen.getByTitle(snapshot)).toHaveTextContent('Qwen-model');
+    expect(store.status.model).toBe('served-alias');
+  });
   it("shows model IDs without the verbatim prefix but copies the exact ID the API reports", async () => {
     const models = [{ id: path, object: "model", owned_by: "llama.cpp" }];
     const writeText = vi.fn(async () => undefined);

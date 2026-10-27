@@ -76,11 +76,9 @@ impl ModelSource {
         // Two sessions serving the same file must stay individually
         // addressable, so each is advertised with its session id appended.
         for index in 0..ready.len() {
-            let shared = ready
-                .iter()
-                .filter(|other| other.model_id == ready[index].model_id)
-                .count();
-            if shared > 1 {
+            let shared = (index > 0 && ready[index - 1].model_id == ready[index].model_id)
+                || (index + 1 < ready.len() && ready[index + 1].model_id == ready[index].model_id);
+            if shared {
                 ready[index].advertised =
                     format!("{}@{}", ready[index].model_id, ready[index].session_id);
             }
@@ -101,6 +99,33 @@ impl ModelSource {
             }
         }
         Err(RouteError::Changed)
+    }
+
+    /// Attachment preprocessing chooses a session explicitly, so an unloaded
+    /// target never falls back to a different model with the same file name.
+    pub(super) fn acquire_session(&self, session_id: &str) -> Result<Lease, ApiError> {
+        for _ in 0..4 {
+            let catalog = self.snapshot();
+            let target = catalog
+                .ready
+                .iter()
+                .find(|candidate| candidate.session_id == session_id)
+                .ok_or_else(|| {
+                    ApiError::new(
+                        400,
+                        "transcription_session_unavailable",
+                        "the selected transcription session is not running",
+                    )
+                })?;
+            if let Some(lease) = Lease::begin(target) {
+                return Ok(lease);
+            }
+        }
+        Err(ApiError::new(
+            503,
+            "model_changed",
+            "the transcription session changed; retry",
+        ))
     }
 }
 
@@ -277,6 +302,7 @@ pub(super) struct Lease {
     target: Arc<Mutex<ServerState>>,
     upstream: String,
     key: String,
+    engine: Option<crate::providers::protocol::EngineInfo>,
 }
 
 impl Lease {
@@ -293,6 +319,7 @@ impl Lease {
             target: candidate.target.clone(),
             upstream: candidate.url.clone(),
             key: candidate.key.clone(),
+            engine: state.engine.clone(),
         })
     }
 
@@ -304,6 +331,23 @@ impl Lease {
     /// The private key of this model process. It never leaves the app.
     pub(super) fn upstream_key(&self) -> &str {
         &self.key
+    }
+    pub(super) fn adapt(
+        &self,
+        endpoint: &str,
+        body: &mut serde_json::Value,
+    ) -> Result<(), ApiError> {
+        if let Some(engine) = &self.engine {
+            crate::providers::protocol::adapt_request(engine, endpoint, body)
+                .map_err(|error| ApiError::new(400, error.code, error.message))?;
+        } else if endpoint.starts_with("audio/") {
+            return Err(ApiError::new(
+                400,
+                "unsupported_task",
+                "this session has no verified audio transcription capability",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -454,6 +498,65 @@ mod tests {
         // Once the duplicate goes away the plain name works again.
         sessions.get("s1").unwrap().state.lock().unwrap().lifecycle = Lifecycle::Stopped;
         assert_eq!(resolved(&source, Some("same.gguf")), Ok("default".into()));
+    }
+
+    #[test]
+    fn sorted_catalogs_preserve_unique_and_duplicate_advertisements() {
+        let (source, default, sessions) = source();
+        ready(
+            &default,
+            "http://127.0.0.1:1/v1",
+            "key-d",
+            r"C:\models\shared.gguf",
+        );
+        add_named(&sessions, "s3", "/models/unique-b.gguf");
+        add_named(&sessions, "s1", r"C:\models\unique-a.gguf");
+        add_named(&sessions, "s2", "/models/shared.gguf");
+        add_named(&sessions, "s4", r"D:\models\unique-a.gguf");
+
+        let catalog = source.snapshot();
+        let actual: Vec<(&str, &str, &str)> = catalog
+            .ready
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.model_id.as_str(),
+                    candidate.session_id.as_str(),
+                    candidate.advertised.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("shared.gguf", "default", "shared.gguf@default"),
+                ("shared.gguf", "s2", "shared.gguf@s2"),
+                ("unique-a.gguf", "s1", "unique-a.gguf@s1"),
+                ("unique-a.gguf", "s4", "unique-a.gguf@s4"),
+                ("unique-b.gguf", "s3", "unique-b.gguf"),
+            ]
+        );
+        assert_eq!(catalog.select(None).ok().unwrap().session_id, "default");
+        assert!(matches!(
+            catalog.select(Some("shared.gguf")),
+            Err(RouteError::Ambiguous { .. })
+        ));
+        assert_eq!(
+            catalog
+                .select(Some("unique-a.gguf@s4"))
+                .ok()
+                .unwrap()
+                .session_id,
+            "s4"
+        );
+        assert_eq!(
+            catalog
+                .select(Some("unique-b.gguf"))
+                .ok()
+                .unwrap()
+                .session_id,
+            "s3"
+        );
     }
 
     #[test]

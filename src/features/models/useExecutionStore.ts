@@ -1,3 +1,4 @@
+import { providerOf } from '../../shared/api/providers';
 import { useCallback, useRef, useState } from 'react';
 import type { AppStore } from '../../shared/state/store';
 import type { AppConfig } from '../../shared/api/types';
@@ -14,7 +15,7 @@ import { sessionConfig } from '../../shared/runtime/sessionUtils';
 
 function saveTargetApplication(target: AppConfig, source: SettingsProfileLibrary, key: string): SettingsProfileLibrary {
   const previous = source.applied[key];
-  const saved = previous && profileTargetKey(previous.model) !== profileTargetKey(target.active_model)
+  const saved = previous && profileTargetKey(previous.model) !== profileTargetKey(target.active_model, 'default', providerOf(target))
     ? { ...previous, model: target.active_model, settings: profileSettingsSnapshot(target) } : previous;
   const resolved = resolveProfileApplication(target, source, saved, key);
   let library = resolved.library;
@@ -35,14 +36,14 @@ function applicationPatch(current: AppConfig, patch: Partial<AppConfig>): Partia
     return { ...patch, settings_profiles: ensureProfileAssignments(target, patch.settings_profiles) };
   }
   let library = ensureProfileAssignments(current, previous ?? emptyProfileLibrary());
-  if (Object.keys(executionChanges(current, target)).length) library = saveTargetApplication(target, library, profileTargetKey(target.active_model));
+  if (Object.keys(executionChanges(current, target)).length) library = saveTargetApplication(target, library, profileTargetKey(target.active_model, 'default', providerOf(target)));
   if (patch.sessions) {
     for (const definition of patch.sessions) {
       if (definition.id === 'default' || !definition.models.primary_model) continue;
       const before = current.sessions?.find(session => session.id === definition.id);
       const nextConfig = sessionConfig(target, definition);
       if (!before || Object.keys(executionChanges(sessionConfig(current, before), nextConfig)).length) {
-        library = saveTargetApplication(nextConfig, library, profileTargetKey(nextConfig.active_model, definition.id));
+        library = saveTargetApplication(nextConfig, library, profileTargetKey(nextConfig.active_model, definition.id, providerOf(nextConfig)));
       }
     }
   }
@@ -50,6 +51,25 @@ function applicationPatch(current: AppConfig, patch: Partial<AppConfig>): Partia
   if (JSON.stringify(previous) === JSON.stringify(library)) return patch;
   library.revision = (previous?.revision ?? 0) + 1;
   return { ...patch, settings_profiles: library };
+}
+
+/** Keys of a plain object or array whose own properties are all enumerable string keys. */
+function dataKeys(value: object): string[] | undefined {
+  const array = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return undefined;
+  const keys = Object.keys(value);
+  return Reflect.ownKeys(value).length === keys.length + (array ? 1 : 0) ? keys : undefined;
+}
+
+/** Equal configuration data, keeping key order, array length, and undefined and absent fields distinct. */
+function sameData(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return Object.is(left, right);
+  const keys = dataKeys(left);
+  const other = dataKeys(right);
+  if (!keys || !other || Array.isArray(left) !== Array.isArray(right) || (Array.isArray(left) && left.length !== (right as unknown[]).length)) return false;
+  return keys.length === other.length && keys.every((key, index) => key === other[index]
+    && sameData((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
 }
 
 /** All screens persist model settings through the same serialized native config queue. */
@@ -65,13 +85,30 @@ export function useExecutionStore(base: AppStore) {
       // Expand against the latest config at persist time. The base store
       // re-expands after a revision-conflict reload, so a computed profile
       // library must never pin the snapshot read here.
-      const expand = (fresh: AppConfig): Partial<AppConfig> => {
+      const resolve = (fresh: AppConfig): Partial<AppConfig> => {
         let next = typeof patch === 'function' ? patch(fresh) : patch;
         const changesExecution = Object.keys(executionChanges(fresh, { ...fresh, ...next })).length > 0;
         if (changesExecution) next = withManualOverrides(fresh, next);
-        return applicationPatch(fresh, next);
+        return next;
       };
-      const preview = expand(current);
+      const input = resolve(current);
+      let inputs: [Partial<AppConfig>, AppConfig] | undefined;
+      // A patch carrying a whole library would copy both libraries for little saving; it always expands again.
+      if (input.settings_profiles === undefined) {
+        try { inputs = structuredClone<[Partial<AppConfig>, AppConfig]>([input, current]); } catch { inputs = undefined; }
+      }
+      const preview = applicationPatch(current, input);
+      // The patch is evaluated again for every expansion. Only the first one may
+      // reuse the preview's profile expansion, and only while the same snapshot
+      // and the evaluated patch hold the data the preview expanded.
+      let reusable = inputs && { inputs, input, preview };
+      const expand = (fresh: AppConfig): Partial<AppConfig> => {
+        const next = resolve(fresh);
+        const previewed = reusable;
+        reusable = undefined;
+        if (!previewed || fresh !== current || !sameData(previewed.inputs, [next, fresh])) return applicationPatch(fresh, next);
+        return previewed.preview === previewed.input ? next : { ...next, settings_profiles: previewed.preview.settings_profiles };
+      };
       if (!Object.keys(executionChanges(current, { ...current, ...preview })).length) {
         const saved = await latest.current.updateConfig(expand);
         setError(null);
@@ -106,7 +143,7 @@ export function useExecutionStore(base: AppStore) {
       if (current.active_model === path) return {};
       const patch = restoreExecution(current, path);
       const library = ensureProfileAssignments(current, current.settings_profiles ?? emptyProfileLibrary());
-      const key = profileTargetKey(path);
+      const key = profileTargetKey(path, 'default', providerOf(current));
       if (library.applied[key]) {
         const selected = resolveProfileForExecution({ ...current, ...patch }, library, library.applied[key], key);
         return { ...patch, ...selected.application.settings, settings_profiles: { ...selected.library, revision: library.revision + 1,
@@ -126,7 +163,7 @@ export function useExecutionStore(base: AppStore) {
     const prepare = (saved: AppConfig) => {
       const library = ensureProfileAssignments(saved, saved.settings_profiles ?? emptyProfileLibrary());
       const target = saved;
-      const key = profileTargetKey(saved.active_model);
+      const key = profileTargetKey(saved.active_model, 'default', providerOf(saved));
       const selected = resolveProfileForExecution(target, library, library.applied[key], key);
       const settings_profiles = { ...selected.library, applied: { ...selected.library.applied, [key]: selected.application } };
       const next = { ...target, ...selected.application.settings, settings_profiles };

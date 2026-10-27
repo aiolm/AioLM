@@ -40,6 +40,11 @@ const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CHECKSUMS_BYTES: usize = 64 * 1024;
 /// Backstop for an installer whose release metadata declares no size.
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+/// The longest written bytes go unreported while a download waits for its
+/// next read. Changes to the percentage shown are reported as they are
+/// written, so this only bounds how stale the count gets on a slow or stalled
+/// transfer or one of unknown size, at no more than two extra events a second.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Only one install may download and launch at a time, whatever the renderer
 /// sends: two installers running over the same files is worse than a refusal.
@@ -57,7 +62,8 @@ pub struct UpdateStatus {
     /// `latest_version` is strictly newer than `current_version`.
     pub available: bool,
     /// This build can install that update itself: a supported platform, a
-    /// recognised installation, and a matching installer asset in the release.
+    /// recognised installation, and a matching installer asset in the release
+    /// with a SHA-256 digest, or a trusted `checksums.txt`, to verify it against.
     pub can_install: bool,
     pub release_url: Option<String>,
     pub published_at: Option<String>,
@@ -225,12 +231,23 @@ fn find_asset<'a>(assets: &'a [ReleaseAsset], name: &str) -> Result<&'a ReleaseA
 }
 
 /// Whether `install` could actually run for this release: a platform with a
-/// published installer, an installation this app recognises, and an asset for
-/// that installer with a download URL this app is willing to fetch.
+/// published installer, an installation this app recognises, an asset for
+/// that installer with a download URL this app is willing to fetch, and a
+/// digest source `expected_digest` would not refuse before any request: the
+/// asset's own digest when it carries one, otherwise the release's first
+/// `checksums.txt` asset on a trusted URL. That file's entry, and the
+/// installer's hash, can only be checked when `install` downloads them.
 fn installable(kind: Option<InstallKind>, assets: &[ReleaseAsset], version: &str) -> bool {
     kind.is_some_and(|kind| {
-        find_asset(assets, &installer_asset_name(kind, version))
-            .is_ok_and(|asset| validate_asset_url(&asset.browser_download_url).is_ok())
+        find_asset(assets, &installer_asset_name(kind, version)).is_ok_and(|asset| {
+            validate_asset_url(&asset.browser_download_url).is_ok()
+                && match asset.digest.as_deref() {
+                    Some(digest) => normalize_digest(digest).is_ok(),
+                    None => find_asset(assets, CHECKSUMS_ASSET).is_ok_and(|checksums| {
+                        validate_asset_url(&checksums.browser_download_url).is_ok()
+                    }),
+                }
+        })
     })
 }
 
@@ -510,25 +527,93 @@ async fn download_installer(
     if total.is_some_and(|length| length > limit) {
         return Err("installer download is larger than the release declares".into());
     }
-    let mut file = tokio::fs::File::create(path)
+    let file = tokio::fs::File::create(path)
         .await
         .map_err(|error| format!("could not write the downloaded installer: {error}"))?;
+    write_installer(progress, response, file, total, limit, PROGRESS_INTERVAL).await
+}
+
+/// Stream an already validated installer response into `file`.
+///
+/// Every chunk is still checked against `limit` before it is written, but a
+/// body can arrive in many chunks and each report becomes one event to the
+/// renderer, which shows only a whole percentage of a known `total` and an
+/// indeterminate bar otherwise. So a report is made for the first bytes, for
+/// each write that changes the percentage the renderer shows, and otherwise
+/// once `interval` has passed since the last one. The interval is checked as
+/// each chunk is written and, by a timer, while the next read is pending; a
+/// write or flush that is itself slow delays a report by its own duration.
+/// A report only ever counts bytes `write_all` has confirmed, never a chunk
+/// that was refused, and whatever is still unreported when the body ends or
+/// fails is reported once before returning. The last report is therefore the
+/// confirmed byte count: a failed write may have left more in the file, and on
+/// a failure the report says only how far the download got. The timer belongs
+/// to this future, so nothing is reported once it returns or is dropped.
+async fn write_installer<W: tokio::io::AsyncWrite + Unpin>(
+    progress: ProgressSink<'_>,
+    mut response: reqwest::Response,
+    mut file: W,
+    total: Option<u64>,
+    limit: u64,
+    interval: Duration,
+) -> Result<u64, String> {
+    // The percentage the settings panel shows, computed the same way in
+    // floating point: `Math.min(100, Math.floor(downloaded / total * 100))`.
+    let percent = |bytes: u64| {
+        total
+            .filter(|&total| total > 0)
+            .map(|total| (bytes as f64 / total as f64 * 100.0).floor().min(100.0) as u64)
+    };
     let mut received = 0_u64;
-    let mut stream = response;
-    while let Some(chunk) = stream
-        .chunk()
-        .await
-        .map_err(|error| format!("installer download failed: {error}"))?
-    {
-        received = received.saturating_add(chunk.len() as u64);
-        if received > limit {
-            return Err("installer download is larger than the release declares".into());
+    let mut reported = 0_u64;
+    let mut reported_at = tokio::time::Instant::now();
+    let streamed = loop {
+        let next = response.chunk();
+        tokio::pin!(next);
+        // A timer that fires keeps polling the same read: the client's
+        // per-read timeout lives in the body and restarts only on a frame.
+        let chunk = loop {
+            if received == reported {
+                break next.await;
+            }
+            tokio::select! {
+                biased;
+                chunk = &mut next => break chunk,
+                () = tokio::time::sleep_until(reported_at + interval) => {
+                    progress("downloading", received, total);
+                    reported = received;
+                    reported_at = tokio::time::Instant::now();
+                }
+            }
+        };
+        let chunk = match chunk {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break Ok(()),
+            Err(error) => break Err(format!("installer download failed: {error}")),
+        };
+        let written = received.saturating_add(chunk.len() as u64);
+        if written > limit {
+            break Err("installer download is larger than the release declares".to_string());
         }
-        file.write_all(&chunk)
-            .await
-            .map_err(|error| format!("could not write the downloaded installer: {error}"))?;
+        if let Err(error) = file.write_all(&chunk).await {
+            break Err(format!("could not write the downloaded installer: {error}"));
+        }
+        received = written;
+        let now = tokio::time::Instant::now();
+        if received != reported
+            && (reported == 0
+                || percent(received) != percent(reported)
+                || now >= reported_at + interval)
+        {
+            progress("downloading", received, total);
+            reported = received;
+            reported_at = now;
+        }
+    };
+    if received != reported {
         progress("downloading", received, total);
     }
+    streamed?;
     file.flush()
         .await
         .map_err(|error| format!("could not write the downloaded installer: {error}"))?;
@@ -1417,7 +1502,11 @@ mod tests {
         ] {
             let kind = unix_install_kind(os, arch).unwrap();
             assert_eq!(installer_asset_name(kind, "0.1.12"), expected);
-            assert!(installable(Some(kind), &[asset(expected, None)], "0.1.12"));
+            assert!(installable(
+                Some(kind),
+                &[asset(expected, Some(&"c".repeat(64)))],
+                "0.1.12"
+            ));
             assert!(!installable(
                 Some(kind),
                 &release("v0.1.12").assets,
@@ -1596,6 +1685,168 @@ mod tests {
     async fn a_malformed_published_digest_is_refused_rather_than_worked_around() {
         let assets = vec![asset("AioLM_0.1.12_x64-setup.exe", Some("sha256:nope"))];
         assert!(expected_digest(&assets[0], &assets).await.is_err());
+    }
+
+    /// `can_install` must not offer an install that `install` refuses before
+    /// downloading anything. A published digest is the only source when there
+    /// is one, so a malformed one is never replaced by `checksums.txt`; without
+    /// one, only a trusted `checksums.txt` can supply it, and its contents are
+    /// fetched and matched at install time rather than here.
+    #[tokio::test]
+    async fn an_install_is_offered_only_when_its_installer_has_a_digest_to_match() {
+        let valid = "c".repeat(64);
+        let padded = format!("  sha256:{}  ", "C".repeat(64));
+        let checksums = asset(CHECKSUMS_ASSET, None);
+        let untrusted_checksums = ReleaseAsset {
+            browser_download_url: format!("https://cdn.attacker.example/{CHECKSUMS_ASSET}"),
+            ..asset(CHECKSUMS_ASSET, None)
+        };
+        let not_sha256: Result<String, String> =
+            Err("release asset digest is not a SHA-256 value".to_string());
+        let untrusted: Result<String, String> =
+            Err("release asset host is not trusted: cdn.attacker.example".to_string());
+        let mut failures = Vec::new();
+        for kind in [
+            InstallKind::Nsis,
+            InstallKind::Msi,
+            InstallKind::Dmg(InstallerArch::X64),
+            InstallKind::Dmg(InstallerArch::Arm64),
+            InstallKind::Deb(InstallerArch::X64),
+            InstallKind::Deb(InstallerArch::Arm64),
+        ] {
+            let name = installer_asset_name(kind, "0.1.12");
+            let installer = |digest: Option<&str>| asset(&name, digest);
+            let unverified: Result<String, String> = Err(format!(
+                "release publishes no SHA-256 digest for {name} and no {CHECKSUMS_ASSET}; refusing an unverified installer"
+            ));
+            // (case, assets with the installer first, offered, what
+            // `expected_digest` decides without a request; `None` where it
+            // would have to download `checksums.txt`)
+            let cases = [
+                (
+                    "no digest or checksums",
+                    vec![installer(None)],
+                    false,
+                    Some(unverified.clone()),
+                ),
+                (
+                    "malformed digest",
+                    vec![installer(Some("sha256:nope"))],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "malformed digest beside trusted checksums",
+                    vec![installer(Some("sha256:nope")), checksums.clone()],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "blank digest beside trusted checksums",
+                    vec![installer(Some("  ")), checksums.clone()],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "bare digest",
+                    vec![installer(Some(&valid))],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "prefixed upper-case padded digest",
+                    vec![installer(Some(&padded))],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "digest beside untrusted checksums",
+                    vec![installer(Some(&valid)), untrusted_checksums.clone()],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "digest on an untrusted installer URL",
+                    vec![ReleaseAsset {
+                        browser_download_url: format!("https://cdn.attacker.example/{name}"),
+                        ..installer(Some(&valid))
+                    }],
+                    false,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "no digest, trusted checksums",
+                    vec![installer(None), checksums.clone()],
+                    true,
+                    None,
+                ),
+                (
+                    "no digest, untrusted checksums",
+                    vec![installer(None), untrusted_checksums.clone()],
+                    false,
+                    Some(untrusted.clone()),
+                ),
+                (
+                    "no digest, checksums under another name",
+                    vec![installer(None), asset("Checksums.txt", None)],
+                    false,
+                    Some(unverified.clone()),
+                ),
+                (
+                    "no digest, untrusted checksums listed first",
+                    vec![
+                        installer(None),
+                        untrusted_checksums.clone(),
+                        checksums.clone(),
+                    ],
+                    false,
+                    Some(untrusted.clone()),
+                ),
+                (
+                    "no digest, trusted checksums listed first",
+                    vec![
+                        installer(None),
+                        checksums.clone(),
+                        untrusted_checksums.clone(),
+                    ],
+                    true,
+                    None,
+                ),
+            ];
+            for (case, assets, offered, offline) in cases {
+                if installable(Some(kind), &assets, "0.1.12") != offered {
+                    failures.push(format!("{name}, {case}: offered should be {offered}"));
+                }
+                if let Some(decision) = offline {
+                    let actual = expected_digest(&assets[0], &assets).await;
+                    if actual != decision {
+                        failures.push(format!("{name}, {case}: expected_digest gave {actual:?}"));
+                    }
+                }
+            }
+            // A digest never stands in for a recognised installation or the
+            // requested version's asset.
+            let verified = [installer(Some(&valid))];
+            assert!(!installable(None, &verified, "0.1.12"), "{name}");
+            assert!(!installable(Some(kind), &verified, "0.1.13"), "{name}");
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+        // Nor for the installer of another architecture.
+        for (kind, other) in [
+            (
+                InstallKind::Dmg(InstallerArch::Arm64),
+                "AioLM_0.1.12_x64.dmg",
+            ),
+            (
+                InstallKind::Deb(InstallerArch::Arm64),
+                "AioLM_0.1.12_amd64.deb",
+            ),
+        ] {
+            assert!(
+                !installable(Some(kind), &[asset(other, Some(&valid))], "0.1.12"),
+                "{other}"
+            );
+        }
     }
 
     /// `INSTALL_RUNNING` is process-wide, exactly as it is for the app, so the
@@ -1860,5 +2111,451 @@ mod tests {
             "https://github.com/aiolm/AioLM/releases/latest"
         );
         assert!(validate_release_page_url(RELEASE_PAGE_URL).is_ok());
+    }
+
+    type BodyChunk = Result<Vec<u8>, std::io::Error>;
+    type Accepted = std::sync::Arc<std::sync::Mutex<(Sha256, u64)>>;
+
+    /// An installer response whose body is the given chunks, read through the
+    /// same `reqwest::Response::chunk` the download uses. No socket is opened.
+    fn streamed_response<S>(chunks: S) -> reqwest::Response
+    where
+        S: futures_util::Stream<Item = BodyChunk> + Send + 'static,
+    {
+        reqwest::Response::from(tauri::http::Response::new(reqwest::Body::wrap_stream(
+            chunks,
+        )))
+    }
+
+    /// A response the test feeds one chunk at a time; the body stays pending
+    /// until the next chunk is sent and ends when the sender is dropped.
+    fn scripted_response() -> (
+        tokio::sync::mpsc::UnboundedSender<BodyChunk>,
+        reqwest::Response,
+    ) {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let response = streamed_response(futures_util::stream::poll_fn(move |cx| {
+            receiver.poll_recv(cx)
+        }));
+        (sender, response)
+    }
+
+    /// Body bytes that depend on their offset, so a dropped, repeated or
+    /// reordered chunk changes what the writer receives.
+    fn body_bytes(offset: u64, len: usize) -> Vec<u8> {
+        (0..len as u64)
+            .map(|index| ((offset + index) % 251) as u8)
+            .collect()
+    }
+
+    fn body_sha(len: u64) -> String {
+        let mut hasher = Sha256::new();
+        let mut offset = 0;
+        while offset < len {
+            let piece = (len - offset).min(65536);
+            hasher.update(body_bytes(offset, piece as usize));
+            offset += piece;
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Stands in for the installer file: hashes what it accepts, and can cap
+    /// each write, fail or stay pending (never woken) once a byte count is
+    /// reached, or fail its flush.
+    struct TestWriter {
+        accepted: Accepted,
+        max_write: usize,
+        fail_at: Option<u64>,
+        pend_at: Option<u64>,
+        fail_flush: bool,
+    }
+
+    impl TestWriter {
+        fn new() -> (Self, Accepted) {
+            let accepted = Accepted::default();
+            let writer = TestWriter {
+                accepted: accepted.clone(),
+                max_write: usize::MAX,
+                fail_at: None,
+                pend_at: None,
+                fail_flush: false,
+            };
+            (writer, accepted)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for TestWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let mut accepted = self.accepted.lock().expect("writer state");
+            let open = self.pend_at.map_or(u64::MAX, |at| at - accepted.1);
+            if open == 0 {
+                return std::task::Poll::Pending;
+            }
+            let room = self
+                .fail_at
+                .map_or(u64::MAX, |at| at - accepted.1)
+                .min(open);
+            if room == 0 {
+                return std::task::Poll::Ready(Err(std::io::Error::other(
+                    "synthetic write failure",
+                )));
+            }
+            let len = buf
+                .len()
+                .min(self.max_write)
+                .min(usize::try_from(room).unwrap_or(usize::MAX));
+            accepted.0.update(&buf[..len]);
+            accepted.1 += len as u64;
+            std::task::Poll::Ready(Ok(len))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(if self.fail_flush {
+                Err(std::io::Error::other("synthetic flush failure"))
+            } else {
+                Ok(())
+            })
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    fn accepted_bytes(accepted: &Accepted) -> (String, u64) {
+        let accepted = accepted.lock().expect("writer state");
+        (format!("{:x}", accepted.0.clone().finalize()), accepted.1)
+    }
+
+    /// Long enough that no report in a test is ever due to time alone.
+    const UNHURRIED: Duration = Duration::from_secs(3600);
+
+    /// Writes a body of `sizes` chunks, optionally ending in a read error,
+    /// and returns the result, the byte count of every report, and what the
+    /// writer accepted.
+    async fn write_chunks(
+        sizes: &[usize],
+        stream_error: bool,
+        total: Option<u64>,
+        limit: u64,
+        interval: Duration,
+        (writer, accepted): (TestWriter, Accepted),
+    ) -> (Result<u64, String>, Vec<u64>, (String, u64)) {
+        let mut offset = 0_u64;
+        let mut chunks: Vec<BodyChunk> = sizes
+            .iter()
+            .map(|&len| {
+                let chunk = body_bytes(offset, len);
+                offset += len as u64;
+                Ok(chunk)
+            })
+            .collect();
+        if stream_error {
+            chunks.push(Err(std::io::Error::other("synthetic stream failure")));
+        }
+        let reports = std::sync::Mutex::new(Vec::new());
+        let progress = |phase: &str, downloaded: u64, reported_total: Option<u64>| {
+            assert_eq!((phase, reported_total), ("downloading", total));
+            reports.lock().expect("reports").push(downloaded);
+        };
+        let response = streamed_response(futures_util::stream::iter(chunks));
+        let result = write_installer(&progress, response, writer, total, limit, interval).await;
+        (
+            result,
+            reports.into_inner().expect("reports"),
+            accepted_bytes(&accepted),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_download_reports_its_first_bytes_and_each_whole_percent_through_the_last_byte() {
+        // An empty frame, then 4,000 chunks of 25 bytes: one report for the
+        // first bytes, then one per percentage shown, the last of them the
+        // full size. The panel's floating point still shows 29,000, 57,000
+        // and 58,000 of 100,000 as the percentage below, so the chunk after
+        // each of them is the one that shows the next.
+        let mut sizes = vec![0];
+        sizes.extend([25; 4000]);
+        let (result, reports, written) = write_chunks(
+            &sizes,
+            false,
+            Some(100_000),
+            100_000,
+            UNHURRIED,
+            TestWriter::new(),
+        )
+        .await;
+        assert_eq!(result, Ok(100_000));
+        let mut expected: Vec<u64> = vec![25];
+        expected.extend((1..=100).map(|percent| match percent {
+            29 | 57 | 58 => percent * 1000 + 25,
+            _ => percent * 1000,
+        }));
+        assert_eq!(reports, expected);
+        assert_eq!(written, (body_sha(100_000), 100_000));
+
+        // Chunks larger than a percent are each reported, as every chunk was.
+        let (result, reports, _) = write_chunks(
+            &[300, 300, 400],
+            false,
+            Some(1000),
+            1000,
+            UNHURRIED,
+            TestWriter::new(),
+        )
+        .await;
+        assert_eq!(result, Ok(1000));
+        assert_eq!(reports, vec![300, 600, 1000]);
+
+        // Short writes still put every byte in the file, in order.
+        let (mut writer, accepted) = TestWriter::new();
+        writer.max_write = 7;
+        let (result, reports, written) = write_chunks(
+            &[1000, 2000, 3000],
+            false,
+            Some(6000),
+            6000,
+            UNHURRIED,
+            (writer, accepted),
+        )
+        .await;
+        assert_eq!(result, Ok(6000));
+        assert_eq!(reports, vec![1000, 3000, 6000]);
+        assert_eq!(written, (body_sha(6000), 6000));
+    }
+
+    #[tokio::test]
+    async fn a_download_reports_the_writes_that_change_the_percentage_the_settings_panel_shows() {
+        // The panel shows `Math.min(100, Math.floor(downloaded / total * 100))`
+        // in floating point, where 29,000 of 100,000 still shows 28%: the
+        // write that first shows 29% is the one reaching 29,025.
+        let (result, reports, written) = write_chunks(
+            &[28_000, 1000, 25, 70_975],
+            false,
+            Some(100_000),
+            100_000,
+            UNHURRIED,
+            TestWriter::new(),
+        )
+        .await;
+        assert_eq!(result, Ok(100_000));
+        assert_eq!(reports, vec![28_000, 29_025, 100_000]);
+        assert_eq!(written, (body_sha(100_000), 100_000));
+    }
+
+    #[tokio::test]
+    async fn a_download_of_unknown_size_is_reported_by_time_rather_than_by_every_chunk() {
+        for total in [None, Some(0)] {
+            let (result, reports, written) = write_chunks(
+                &[50; 2000],
+                false,
+                total,
+                100_000,
+                UNHURRIED,
+                TestWriter::new(),
+            )
+            .await;
+            assert_eq!(result, Ok(100_000));
+            // Nothing after the first bytes falls due within the hour, so
+            // the rest is the one report made when the body ends.
+            assert_eq!(reports, vec![50, 100_000]);
+            assert_eq!(written, (body_sha(100_000), 100_000));
+        }
+        // Once the interval has passed, the next written chunk is reported;
+        // an empty frame adds nothing to report.
+        let (result, reports, _) = write_chunks(
+            &[0, 50, 0, 50, 50],
+            false,
+            None,
+            1000,
+            Duration::ZERO,
+            TestWriter::new(),
+        )
+        .await;
+        assert_eq!(result, Ok(150));
+        assert_eq!(reports, vec![50, 100, 150]);
+    }
+
+    #[tokio::test]
+    async fn bytes_written_before_a_stalled_read_are_reported_once_while_it_waits_or_when_it_ends()
+    {
+        for (interval, while_waiting) in [
+            (Duration::from_millis(20), vec![1_u64, 2]),
+            (UNHURRIED, vec![1]),
+        ] {
+            let (sender, response) = scripted_response();
+            let reports = std::sync::Mutex::new(Vec::new());
+            let progress = |_: &str, downloaded: u64, _: Option<u64>| {
+                reports.lock().expect("reports").push(downloaded);
+            };
+            let (writer, accepted) = TestWriter::new();
+            let mut download = Box::pin(write_installer(
+                &progress,
+                response,
+                writer,
+                Some(1000),
+                1000,
+                interval,
+            ));
+            // Two bytes, then a read that stays pending: the second byte is
+            // no new percent, so only the interval can report it.
+            sender.send(Ok(body_bytes(0, 1))).expect("send a byte");
+            sender.send(Ok(body_bytes(1, 1))).expect("send a byte");
+            let waiting = async {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = &mut download => panic!("the body is still open"),
+                        () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                    if accepted_bytes(&accepted).1 == 2
+                        && *reports.lock().expect("reports") == while_waiting
+                    {
+                        break;
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(30), waiting)
+                .await
+                .expect("the pending read is reported as the interval allows");
+            // The body ends without another chunk: whatever was unreported
+            // is reported once, and nothing is reported twice.
+            drop(sender);
+            assert_eq!(download.await, Ok(2));
+            assert_eq!(reports.into_inner().expect("reports"), vec![1, 2]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_download_last_reports_only_bytes_that_were_written() {
+        // The chunk past the limit is refused before it is written or counted.
+        for total in [Some(1000), None] {
+            let (result, reports, written) = write_chunks(
+                &[500, 500, 1],
+                false,
+                total,
+                1000,
+                UNHURRIED,
+                TestWriter::new(),
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err("installer download is larger than the release declares".to_string())
+            );
+            assert_eq!(reports, vec![500, 1000]);
+            assert_eq!(written, (body_sha(1000), 1000));
+        }
+        // A body that fails after bytes that were not yet due a report.
+        let (result, reports, written) = write_chunks(
+            &[1; 5],
+            true,
+            Some(1000),
+            1000,
+            UNHURRIED,
+            TestWriter::new(),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err("installer download failed: error decoding response body".to_string())
+        );
+        assert_eq!(reports, vec![1, 5]);
+        assert_eq!(written, (body_sha(5), 5));
+        // A write that fails partway through the sixth chunk: those bytes may
+        // be in the file, but they are never reported as downloaded.
+        let (mut writer, accepted) = TestWriter::new();
+        writer.fail_at = Some(2750);
+        let (result, reports, written) =
+            write_chunks(&[500; 10], false, None, 5000, UNHURRIED, (writer, accepted)).await;
+        assert_eq!(
+            result,
+            Err("could not write the downloaded installer: synthetic write failure".to_string())
+        );
+        assert_eq!(reports, vec![500, 2500]);
+        assert_eq!(written, (body_sha(2750), 2750));
+        // Every byte is reported before the flush fails.
+        let (mut writer, accepted) = TestWriter::new();
+        writer.fail_flush = true;
+        let (result, reports, written) =
+            write_chunks(&[1; 50], false, None, 1000, UNHURRIED, (writer, accepted)).await;
+        assert_eq!(
+            result,
+            Err("could not write the downloaded installer: synthetic flush failure".to_string())
+        );
+        assert_eq!(reports, vec![1, 50]);
+        assert_eq!(written, (body_sha(50), 50));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_download_releases_its_body_and_file_and_reports_nothing_more() {
+        // Dropped while the read for a third chunk is pending, and while the
+        // write of a third chunk is pending after one of its bytes.
+        for (pending, sizes, pend_at) in [
+            ("read", vec![1, 1], None),
+            ("write", vec![1, 1, 2], Some(3)),
+        ] {
+            let (sender, response) = scripted_response();
+            let reports = std::sync::Mutex::new(Vec::new());
+            let progress = |_: &str, downloaded: u64, _: Option<u64>| {
+                reports.lock().expect("reports").push(downloaded);
+            };
+            let (mut writer, accepted) = TestWriter::new();
+            writer.pend_at = pend_at;
+            let interval = Duration::from_millis(200);
+            let mut download = Box::pin(write_installer(
+                &progress,
+                response,
+                writer,
+                Some(1000),
+                1000,
+                interval,
+            ));
+            let mut offset = 0_u64;
+            for len in sizes {
+                sender.send(Ok(body_bytes(offset, len))).expect("send");
+                offset += len as u64;
+            }
+            // The first byte is reported at once; the second, written in the
+            // same poll, is no new percentage and not yet due.
+            let reached = pend_at.unwrap_or(offset);
+            let written = async {
+                while accepted_bytes(&accepted).1 < reached {
+                    tokio::select! {
+                        biased;
+                        _ = &mut download => panic!("the {pending} is still pending"),
+                        () = tokio::task::yield_now() => {}
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(30), written)
+                .await
+                .expect("the bytes before the pending step are written");
+            drop(download);
+            assert!(
+                sender.is_closed(),
+                "the body goes with the download ({pending})"
+            );
+            assert_eq!(
+                std::sync::Arc::strong_count(&accepted),
+                1,
+                "the file goes with the download ({pending})"
+            );
+            assert_eq!(*reports.lock().expect("reports"), vec![1], "{pending}");
+            // Well past the interval, nothing that could report the second
+            // byte has outlived the download.
+            tokio::time::sleep(interval * 5).await;
+            assert_eq!(*reports.lock().expect("reports"), vec![1], "{pending}");
+        }
     }
 }

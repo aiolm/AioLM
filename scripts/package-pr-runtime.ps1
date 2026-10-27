@@ -93,8 +93,8 @@ try {
   if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
     $crtDirectories = @(Find-MsvcRuntimeDirectories)
     foreach ($crtDirectory in $crtDirectories) {
+      $crtDirectoryName = Split-Path -Leaf $crtDirectory
       Get-ChildItem -LiteralPath $crtDirectory -File -Filter '*.dll' | Where-Object {
-        $crtDirectoryName = Split-Path -Leaf $crtDirectory
         $crtDirectoryName -ine 'System32' -or $_.Name -match '^(msvcp140|vcruntime140|vcomp140|concrt140)'
       } | Copy-Item -Destination $packageRoot -Force
     }
@@ -107,10 +107,12 @@ try {
   }
 
   $checkedOutRef = ''
-  try {
-    $checkedOutRef = (& git -C $sourceRoot symbolic-ref --short HEAD 2>$null).Trim()
-  } catch {
-    $checkedOutRef = ''
+  if ([string]::IsNullOrWhiteSpace($HeadRef)) {
+    try {
+      $checkedOutRef = (& git -C $sourceRoot symbolic-ref --short HEAD 2>$null).Trim()
+    } catch {
+      $checkedOutRef = ''
+    }
   }
   $source = [ordered]@{
     pull_request = [UInt64]$PullRequest

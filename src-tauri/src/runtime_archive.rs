@@ -101,6 +101,25 @@ fn link_target(path: &Path, value: &str, hard_link: bool) -> Result<PathBuf, Str
     Ok(target)
 }
 
+fn prepare_root(root: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(root).map_err(|error| error.to_string())?;
+            fs::symlink_metadata(root).map_err(|error| error.to_string())?
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    // Only the private extraction root must be plain. A selected data
+    // directory above it may legitimately be reached through an alias.
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(
+            "Cannot extract runtime files into a linked folder or an existing file.".into(),
+        );
+    }
+    Ok(())
+}
+
 fn prepare_parent(root: &Path, relative: &Path) -> Result<PathBuf, String> {
     let mut current = root.to_path_buf();
     for component in relative.parent().unwrap_or(Path::new("")).components() {
@@ -181,7 +200,7 @@ fn set_file_mode(path: &Path, mode: Option<u32>) -> Result<(), String> {
 }
 
 pub(super) fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), String> {
-    fs::create_dir_all(dest).map_err(|error| error.to_string())?;
+    prepare_root(dest)?;
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let mut magic = [0_u8; 2];
     file.read_exact(&mut magic)
@@ -324,6 +343,7 @@ pub(super) fn extract_release(
     dest: &Path,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    prepare_root(dest)?;
     let unpacked = dest.join(format!(".unpack-{}", uuid::Uuid::new_v4().simple()));
     extract(path, &unpacked, cancel)?;
     let entries = fs::read_dir(&unpacked)
@@ -402,6 +422,138 @@ mod tests {
             archive.append(&header, *contents).unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[cfg(any(unix, windows))]
+    fn link_directory(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn unlink_directory(link: &Path) {
+        // A Unix symlink is a file entry while a Windows junction is a
+        // directory entry; either removal leaves the link target intact.
+        #[cfg(unix)]
+        fs::remove_file(link).unwrap();
+        #[cfg(windows)]
+        fs::remove_dir(link).unwrap();
+    }
+
+    fn zip_file(path: &Path) {
+        let mut archive = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        archive
+            .start_file(
+                "runtime/llama-server",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        std::io::Write::write_all(&mut archive, b"server").unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn extraction_refuses_linked_staging_roots_before_writing_archive_contents() {
+        let mut observations = Vec::new();
+        for tar in [false, true] {
+            for release in [false, true] {
+                let fixture = Fixture::new();
+                let path = fixture
+                    .0
+                    .join(if tar { "runtime.tar.gz" } else { "runtime.zip" });
+                if tar {
+                    tar_file(&path, &[("runtime/llama-server", b"server", None)]);
+                } else {
+                    zip_file(&path);
+                }
+                let outside = fixture.0.join("outside staging");
+                fs::create_dir(&outside).unwrap();
+                fs::write(outside.join("existing.txt"), b"preserved").unwrap();
+                let dest = fixture.0.join("linked staging");
+                link_directory(&outside, &dest);
+                let cancel = Arc::new(AtomicBool::new(false));
+                let result = if release {
+                    extract_release(&path, &dest, &cancel)
+                } else {
+                    extract(&path, &dest, &cancel)
+                };
+                unlink_directory(&dest);
+                assert_eq!(
+                    fs::read(outside.join("existing.txt")).unwrap(),
+                    b"preserved"
+                );
+                observations.push((
+                    tar,
+                    release,
+                    result.err(),
+                    fs::read_dir(&outside).unwrap().count(),
+                ));
+            }
+        }
+        assert!(
+            observations
+                .iter()
+                .all(|(_, _, error, entries)| error.is_some() && *entries == 1),
+            "{observations:?}"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn extraction_keeps_regular_staging_under_a_selected_parent_alias() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("runtime.tar.gz");
+        tar_file(&path, &[("runtime/llama-server", b"server", None)]);
+        let selected = fixture.0.join("selected data");
+        fs::create_dir(&selected).unwrap();
+        let alias = fixture.0.join("selected alias");
+        link_directory(&selected, &alias);
+        let dest = alias.join("private staging");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let result = extract_release(&path, &dest, &cancel);
+        unlink_directory(&alias);
+        result.unwrap();
+        assert_eq!(
+            fs::read(selected.join("private staging").join("llama-server")).unwrap(),
+            b"server"
+        );
+        assert_eq!(
+            fs::read_dir(selected.join("private staging"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn extraction_merges_companions_into_an_existing_regular_staging_directory() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("runtime.tar.gz");
+        tar_file(&path, &[("runtime/llama-server", b"server", None)]);
+        let dest = fixture.0.join("private staging");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("companion.dll"), b"companion").unwrap();
+        extract_release(&path, &dest, &Arc::new(AtomicBool::new(false))).unwrap();
+        assert_eq!(fs::read(dest.join("llama-server")).unwrap(), b"server");
+        assert_eq!(fs::read(dest.join("companion.dll")).unwrap(), b"companion");
+        assert_eq!(fs::read_dir(dest).unwrap().count(), 2);
     }
 
     fn long_name_tar(metadata: &[u8]) -> Vec<u8> {

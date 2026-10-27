@@ -1,12 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { translate, type UnifiedKey, type TranslationVars } from "../../shared/i18n/i18nUnified";
 import type { RuntimeCapabilities, PullRequestPreview } from "../../shared/api/types";
-import type { AppStore } from "../../shared/state/store";
-import { writeLoadingProfiles, type LoadingProfile } from "../../shared/runtime/runtimeUtils";
 import RuntimeCapabilitiesCard from "./RuntimeCapabilitiesCard";
-import RuntimeLoadingProfiles from "./RuntimeLoadingProfiles";
 import RuntimePullRequestProvenance from "./RuntimePullRequestProvenance";
 
 const path = String.raw`\\?\C:\runtimes\llama-server.exe`;
@@ -21,8 +18,6 @@ function expectReadableMarkup(container: HTMLElement) {
     expect(element.getAttribute("aria-label") ?? "").not.toContain(path.slice(0, 4));
   }
 }
-
-beforeEach(() => localStorage.clear());
 
 describe("runtime path presentation", () => {
   it("cleans path examples in pull-request details and artifact lookup failures", () => {
@@ -48,7 +43,7 @@ describe("runtime path presentation", () => {
       devices: [`plugin ${path}`], diagnostics: [`Failed to open ${path}`, JSON.stringify({ path: networkPath })],
     };
     const original = structuredClone(capabilities);
-    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeBusy={false} serverRunning={false} probeTarget={{ backend: "cpu", build: "b123" }} onProbe={vi.fn()} />);
+    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} serverRunning={false} probeTarget={{ backend: "cpu", build: "b123" }} />);
 
     fireEvent.click(container.querySelector("summary")!);
     expect(container.querySelector("pre")).toHaveTextContent(String.raw`Failed to open C:\runtimes\llama-server.exe`);
@@ -57,24 +52,4 @@ describe("runtime path presentation", () => {
     expect(capabilities).toEqual(original);
   });
 
-  it("cleans saved profile labels and delete confirmation while loading the original model paths", async () => {
-    const profile: LoadingProfile = {
-      id: "legacy", name: `Saved ${networkPath}`, backend: "cpu", build: "b123",
-      active_model: networkPath, mmproj: path, ctx_size: 4096, ngl: 0, threads: 4, flash_attn: "auto",
-    };
-    writeLoadingProfiles([profile]);
-    const updateConfig = vi.fn().mockResolvedValue(undefined);
-    const store = { updateConfig } as unknown as AppStore;
-    const { container } = render(<I18nProvider initialLocale="en"><RuntimeLoadingProfiles store={store} disabled={false} /></I18nProvider>);
-    fireEvent.click(container.querySelector("summary")!);
-
-    expect(screen.getByText(`Saved ${displayNetworkPath}`)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Load saved settings" }));
-    await waitFor(() => expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ active_model: networkPath, mmproj: path })));
-    expectReadableMarkup(container);
-    fireEvent.click(screen.getByRole("button", { name: `Delete: Saved ${displayNetworkPath}` }));
-    expect(screen.getByRole("dialog")).toHaveTextContent(`Saved ${displayNetworkPath}`);
-    expectReadableMarkup(container);
-    expect(JSON.parse(localStorage.getItem("aiolm.loading-profiles.v1") ?? "[]")).toEqual([profile]);
-  });
 });

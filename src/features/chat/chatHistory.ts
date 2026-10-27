@@ -1,7 +1,9 @@
 import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTypes.ts";
+import type { ChatContentPart, ChatMessage as ChatRequestMessage, ChatToolDefinition } from "../../shared/api/types.ts";
 import { invoke, isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
 import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
+import { copyMediaPreparation, validMediaPreparation } from './mediaPreparationHistory.ts';
 
 export type { ChatCitation } from "./chatTypes.ts";
 
@@ -22,6 +24,8 @@ const PERSISTED_REASONING_LIMIT = 16 * 1024;
 const PERSISTED_MESSAGES_LIMIT = 100;
 const PERSISTED_THREADS_LIMIT = 100;
 const PERSISTED_RAW_LIMIT = 4 * 1024 * 1024;
+/** Serialized size of the one request snapshot a conversation keeps for Retry. */
+const RETRY_SNAPSHOT_LIMIT = 1024 * 1024;
 
 export interface ChatHistoryMessage {
   role: "user" | "assistant";
@@ -33,14 +37,57 @@ export interface ChatHistoryMessage {
   reasoning?: string;
   interrupted?: boolean;
   failed?: boolean;
+  /** Runtime-reported termination; absent in older conversations. */
+  finishReason?: string;
+  /** An MCP call this reply requested was stopped or failed before its result was used. */
+  toolRound?: "cancelled" | "failed";
   citations?: ChatCitation[];
   metrics?: ResponseMetrics;
+  /** Only on an unfinished last reply: what Retry resends after a restart or conversation switch. */
+  retry?: ChatRetrySnapshot;
 }
+
+export type ChatRetryUnavailableReason = "not-saved" | "local-instructions" | "too-large" | "tools-not-saved";
+
+/**
+ * An MCP tool a turn offered the model: which server and tool it came from and
+ * the exact definition sent. It identifies the tool for Retry and grants
+ * nothing, so the tool must be discovered again and every call approved again.
+ */
+export interface ChatRetryTool {
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  definition: ChatToolDefinition;
+}
+
+/**
+ * The request an unfinished reply was generated from, exactly as first
+ * prepared, so Retry never rebuilds a different prompt. Local instructions
+ * and skills are never written into saved conversations, so a turn that used
+ * them records only why it cannot be resent once this session forgets it.
+ * Auth and approvals are not part of it: a retry always uses the live session
+ * and asks again before running any tool. `tools` names the MCP tools the
+ * request offered; snapshots saved before it existed have none.
+ */
+export type ChatRetrySnapshot =
+  | { version: 1; text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[]; tools?: ChatRetryTool[] }
+  | { version: 1; unavailable: Exclude<ChatRetryUnavailableReason, "not-saved" | "tools-not-saved"> };
+
+export type SavedChatRetry =
+  | { kind: "ready"; snapshot: Extract<ChatRetrySnapshot, { history: ChatRequestMessage[] }> }
+  | { kind: "unavailable"; reason: ChatRetryUnavailableReason };
 
 export interface ChatThread {
   id: string;
   title: string;
   systemPrompt: string;
+  /** Legacy conversations keep the automatic prompt unless explicitly disabled. */
+  useDefaultSystemPrompt?: boolean;
+  /** Explicit model compatibility choice; legacy conversations keep text first. */
+  mediaBeforeText?: boolean;
+  /** Project defaults already applied; later turns keep conversation overrides. */
+  projectBinding?: { id: string; updatedAt: number };
   createdAt: number;
   updatedAt: number;
   messages: ChatHistoryMessage[];
@@ -60,8 +107,27 @@ export interface ChatStorage {
 
 export type ChatPersistenceResult = "native" | "indexeddb" | "local" | "unavailable";
 
+/** Every mounted conversation participates in deleting the shared workspace. */
+export const CHAT_WORKSPACE_CLEAR_EVENT = "aiolm:chat-workspace-clear";
+export type ChatWorkspaceClearDetail = { state: "clearing" | "failed" } | { state: "cleared"; workspace: ChatWorkspace };
+let clearingWorkspace = false;
+let clearOperation: Promise<ChatWorkspace> | null = null;
+const historyOperations = new Set<Promise<unknown>>();
+
+export function isChatWorkspaceClearing(): boolean { return clearingWorkspace; }
+
+function notifyWorkspaceClear(detail: ChatWorkspaceClearDetail): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CHAT_WORKSPACE_CLEAR_EVENT, { detail }));
+}
+
+function trackHistoryOperation<T>(operation: Promise<T>): Promise<T> {
+  historyOperations.add(operation);
+  void operation.then(() => historyOperations.delete(operation), () => historyOperations.delete(operation));
+  return operation;
+}
+
 function sameWorkspace(left: ChatWorkspace, right: ChatWorkspace): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
 function browserStorage(): ChatStorage | null {
@@ -76,7 +142,10 @@ function browserStorage(): ChatStorage | null {
 function validImage(value: unknown): value is ImageAttachment {
   if (value === null || typeof value !== "object") return false;
   const image = value as Partial<ImageAttachment>;
-  return typeof image.name === "string" && typeof image.dataUrl === "string";
+  return typeof image.name === "string" && typeof image.dataUrl === "string"
+    && (image.kind === undefined || ['image', 'audio', 'video'].includes(image.kind))
+    && (image.ref === undefined || /^[a-f0-9]{64}\.(?:png|jpe?g|webp|wav|mp3|flac|mp4|webm)$/.test(image.ref))
+    && (image.preparation === undefined || validMediaPreparation(image.preparation, image));
 }
 
 function validDocument(value: unknown): value is DocumentAttachment {
@@ -96,6 +165,89 @@ function validCitation(value: unknown): value is ChatCitation {
     && Number.isInteger(citation.offset)
     && citation.offset >= 0
     && (citation.score === undefined || (typeof citation.score === "number" && Number.isFinite(citation.score)));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const optionalString = (value: unknown) => value === undefined || typeof value === "string";
+
+function validContentPart(value: unknown): value is ChatContentPart {
+  if (!isRecord(value)) return false;
+  switch (value.type) {
+    case "text": return typeof value.text === "string";
+    case "image_url": return isRecord(value.image_url) && typeof value.image_url.url === "string";
+    case "video_url": return isRecord(value.video_url) && typeof value.video_url.url === "string";
+    case "input_audio": return isRecord(value.input_audio) && typeof value.input_audio.data === "string" && typeof value.input_audio.format === "string";
+    case "input_video": return isRecord(value.input_video) && optionalString(value.input_video.data) && optionalString(value.input_video.url);
+    case "aiolm_media": return isRecord(value.media) && typeof value.media.ref === "string" && ["image", "audio", "video"].includes(value.media.kind as string);
+    default: return false;
+  }
+}
+
+function validRequestMessage(value: unknown): value is ChatRequestMessage {
+  if (!isRecord(value) || !["system", "user", "assistant", "tool"].includes(value.role as string)) return false;
+  return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(validContentPart)))
+    && optionalString(value.tool_call_id) && optionalString(value.name)
+    && (value.tool_calls === undefined || (Array.isArray(value.tool_calls) && value.tool_calls.every((call) => isRecord(call)
+      && typeof call.id === "string" && call.type === "function" && isRecord(call.function)
+      && typeof call.function.name === "string" && typeof call.function.arguments === "string")));
+}
+
+function validRetryTool(value: unknown): value is ChatRetryTool {
+  if (!isRecord(value) || !isRecord(value.definition)) return false;
+  const definition = value.definition.function;
+  return typeof value.serverId === "string" && typeof value.serverName === "string" && typeof value.toolName === "string"
+    && value.definition.type === "function" && isRecord(definition) && typeof definition.name === "string"
+    && optionalString(definition.description) && isRecord(definition.parameters);
+}
+
+function validRetrySnapshot(value: unknown): value is ChatRetrySnapshot {
+  if (!isRecord(value) || value.version !== 1) return false;
+  if ("unavailable" in value) return value.unavailable === "local-instructions" || value.unavailable === "too-large";
+  return typeof value.text === "string"
+    && Array.isArray(value.images) && value.images.every(validImage)
+    && Array.isArray(value.documents) && value.documents.every(validDocument)
+    && Array.isArray(value.history) && value.history.length > 0 && value.history.every(validRequestMessage)
+    && (value.tools === undefined || (Array.isArray(value.tools) && value.tools.every(validRetryTool)));
+}
+
+/** Records what Retry needs for a turn, or why it cannot be resent exactly after this session. */
+export function chatRetrySnapshot(
+  request: { text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[]; tools?: ChatRetryTool[] },
+  usesLocalInstructions: boolean,
+): ChatRetrySnapshot {
+  if (usesLocalInstructions) return { version: 1, unavailable: "local-instructions" };
+  const snapshot = { version: 1 as const, text: request.text, images: request.images, documents: request.documents, history: request.history, tools: request.tools ?? [] };
+  return JSON.stringify(snapshot).length > RETRY_SNAPSHOT_LIMIT ? { version: 1, unavailable: "too-large" } : snapshot;
+}
+
+function validToolRound(value: unknown): value is "cancelled" | "failed" {
+  return value === "cancelled" || value === "failed";
+}
+
+/** A reply that stopped, failed or still waits on a tool, so the turn it answers is not finished. */
+export function unfinishedReply(message: ChatHistoryMessage | undefined): boolean {
+  return message?.role === "assistant" && (!!message.interrupted || !!message.failed || message.finishReason === "tool_calls" || validToolRound(message.toolRound));
+}
+
+/** The reply asked for a tool, or its request already carries a tool call and result, so it depends on the tools it was offered. */
+export function toolTurn(message: ChatHistoryMessage | undefined, history: ChatRequestMessage[]): boolean {
+  return message?.finishReason === "tool_calls" || validToolRound(message?.toolRound)
+    || history.some((item) => item.role === "tool" || !!item.tool_calls?.length);
+}
+
+/** How Retry can recover the conversation's unfinished last reply from what was saved; null when nothing is unfinished. */
+export function savedRetry(message: ChatHistoryMessage | undefined): SavedChatRetry | null {
+  if (!unfinishedReply(message)) return null;
+  const snapshot = message?.retry;
+  // Replies saved before snapshots existed, or by a format this version does not know.
+  if (!validRetrySnapshot(snapshot)) return { kind: "unavailable", reason: "not-saved" };
+  if ("unavailable" in snapshot) return { kind: "unavailable", reason: snapshot.unavailable };
+  // An earlier version saved a tool turn without its tools; resending it would silently drop them.
+  if (!snapshot.tools && toolTurn(message, snapshot.history)) return { kind: "unavailable", reason: "tools-not-saved" };
+  return { kind: "ready", snapshot };
 }
 
 function validMessage(value: unknown): value is ChatHistoryMessage {
@@ -120,6 +272,12 @@ function normalizeThread(value: unknown): ChatThread | null {
     id: thread.id,
     title: thread.title.trim() || "New conversation",
     systemPrompt: typeof thread.systemPrompt === "string" ? thread.systemPrompt : "You are a helpful assistant.",
+    ...(thread.useDefaultSystemPrompt === false ? { useDefaultSystemPrompt: false } : {}),
+    ...(thread.mediaBeforeText === true ? { mediaBeforeText: true } : {}),
+    ...(thread.projectBinding && typeof thread.projectBinding.id === 'string'
+      && thread.projectBinding.id.length > 0 && thread.projectBinding.id.length <= 256
+      && typeof thread.projectBinding.updatedAt === 'number' && Number.isFinite(thread.projectBinding.updatedAt)
+      ? { projectBinding: { id: thread.projectBinding.id, updatedAt: thread.projectBinding.updatedAt } } : {}),
     createdAt: typeof thread.createdAt === "number" ? thread.createdAt : Date.now(),
     updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : Date.now(),
     messages: thread.messages,
@@ -152,7 +310,7 @@ function safeThread(thread: ChatThread): ChatThread {
   return {
     ...thread,
     systemPrompt: thread.systemPrompt.slice(0, PERSISTED_TEXT_LIMIT),
-    messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message) => {
+    messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message, index, kept) => {
       const safeMessage: ChatHistoryMessage = {
         role: message.role,
         content: message.content.slice(0, PERSISTED_TEXT_LIMIT),
@@ -163,10 +321,16 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.reasoning !== undefined) safeMessage.reasoning = message.reasoning.slice(0, PERSISTED_REASONING_LIMIT);
       if (message.interrupted) safeMessage.interrupted = true;
       if (message.failed) safeMessage.failed = true;
+      if (message.role === 'assistant' && typeof message.finishReason === 'string' && message.finishReason) {
+        safeMessage.finishReason = message.finishReason.slice(0, 128);
+      }
+      if (message.role === 'assistant' && validToolRound(message.toolRound)) safeMessage.toolRound = message.toolRound;
       if (message.images !== undefined) {
         safeMessage.images = message.images.slice(0, 4).map((image) => ({
           name: image.name,
-          dataUrl: image.dataUrl.length <= LOCAL_IMAGE_LIMIT ? image.dataUrl : "",
+          ...(image.ref ? { ref: image.ref, kind: image.kind ?? 'image', mime: image.mime, sizeBytes: image.sizeBytes } : {}),
+          ...(image.preparation && validMediaPreparation(image.preparation, image) ? { preparation: copyMediaPreparation(image.preparation) } : {}),
+          dataUrl: image.ref ? '' : image.dataUrl.length <= (isNativeRuntimeAvailable() ? 64 * 1024 * 1024 : LOCAL_IMAGE_LIMIT) ? image.dataUrl : "",
         }));
       }
       if (message.documents !== undefined) {
@@ -178,6 +342,8 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.citations !== undefined) safeMessage.citations = message.citations.slice(0, 64);
       const metrics = sanitizeResponseMetrics(message.metrics);
       if (metrics) safeMessage.metrics = metrics;
+      // Only the last reply can be retried; an earlier snapshot is superseded.
+      if (message.role === "assistant" && index === kept.length - 1 && validRetrySnapshot(message.retry)) safeMessage.retry = message.retry;
       return safeMessage;
     }),
   };
@@ -308,7 +474,7 @@ export function mergeHydratedWorkspace(
     const local = currentById.get(thread.id);
     const baseline = initialById.get(thread.id);
     if (!local && baseline) return [];
-    const localChanged = local && (!baseline || JSON.stringify(local) !== JSON.stringify(baseline));
+    const localChanged = local && (!baseline || (local !== baseline && JSON.stringify(local) !== JSON.stringify(baseline)));
     return [localChanged ? local : thread];
   });
   for (const local of current.threads) {
@@ -338,16 +504,37 @@ export function dropLegacyChatWorkspace(storage: ChatStorage | null = browserSto
  * already removes it from storage; this is the "leave nothing behind" path
  * exposed in Settings.
  */
-export async function clearChatWorkspace(): Promise<ChatWorkspace> {
-  const fresh = defaultChatWorkspace();
-  await clearBrowserConversations();
-  if (isNativeRuntimeAvailable()) {
-    await inNativeQueue(async () => {
-      await invoke("conversations_clear");
-      nativeWritten = new Map();
-    });
-  }
-  return fresh;
+export function clearChatWorkspace(clearRelatedData?: () => Promise<void>): Promise<ChatWorkspace> {
+  if (clearOperation) return clearOperation;
+  clearingWorkspace = true;
+  notifyWorkspaceClear({ state: "clearing" });
+  const operation = (async () => {
+    try {
+      // Reads can migrate browser data and saves may already be queued. They
+      // must settle before deletion, so none can restore an older copy later.
+      await Promise.allSettled([...historyOperations]);
+      await clearBrowserConversations();
+      if (isNativeRuntimeAvailable()) {
+        await inNativeQueue(async () => {
+          await invoke("conversations_clear");
+          nativeWritten = new Map();
+        });
+      }
+      await clearRelatedData?.();
+      const fresh = defaultChatWorkspace();
+      clearingWorkspace = false;
+      notifyWorkspaceClear({ state: "cleared", workspace: fresh });
+      return fresh;
+    } catch (error) {
+      clearingWorkspace = false;
+      notifyWorkspaceClear({ state: "failed" });
+      throw error;
+    } finally {
+      clearOperation = null;
+    }
+  })();
+  clearOperation = operation;
+  return operation;
 }
 
 async function clearBrowserConversations(): Promise<void> {
@@ -371,7 +558,7 @@ async function clearBrowserConversations(): Promise<void> {
 }
 
 export function loadChatWorkspace(storage: ChatStorage | null = browserStorage()): ChatWorkspace {
-  if (!storage) return defaultChatWorkspace();
+  if (clearingWorkspace || !storage) return defaultChatWorkspace();
   try {
     return persistedWorkspace(parseWorkspace(storage.getItem(CHAT_WORKSPACE_KEY))
       ?? parseWorkspace(storage.getItem(LEGACY_CHAT_WORKSPACE_KEY))
@@ -385,7 +572,7 @@ export function saveChatWorkspace(
   workspace: ChatWorkspace,
   storage: ChatStorage | null = browserStorage(),
 ): void {
-  if (!storage) return;
+  if (clearingWorkspace || !storage) return;
   try {
     storage.setItem(CHAT_WORKSPACE_KEY, JSON.stringify(persistedWorkspace(workspace)));
   } catch {
@@ -394,14 +581,17 @@ export function saveChatWorkspace(
 }
 
 /** Never rejects: a store that cannot be read yields what the browser holds. */
-export async function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
-  if (!isNativeRuntimeAvailable()) return loadBrowserWorkspace();
-  try {
-    return await loadNativeWorkspace();
-  } catch (error) {
-    console.error("Conversations could not be read from the data folder.", error);
-    return loadBrowserWorkspace();
-  }
+export function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
+  if (clearingWorkspace) return Promise.resolve(defaultChatWorkspace());
+  return trackHistoryOperation((async () => {
+    if (!isNativeRuntimeAvailable()) return loadBrowserWorkspace();
+    try {
+      return await loadNativeWorkspace();
+    } catch (error) {
+      console.error("Conversations could not be read from the data folder.", error);
+      return loadBrowserWorkspace();
+    }
+  })());
 }
 
 async function loadBrowserWorkspace(): Promise<ChatWorkspace> {
@@ -430,21 +620,24 @@ async function loadBrowserWorkspace(): Promise<ChatWorkspace> {
   return loadChatWorkspace();
 }
 
-export async function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
-  if (isNativeRuntimeAvailable()) return saveNativeWorkspace(workspace);
-  const safe = persistedWorkspace(workspace);
-  saveChatWorkspace(safe);
-  try {
-    await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
-    return "indexeddb";
-  } catch {
+export function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
+  if (clearingWorkspace) return Promise.resolve("unavailable");
+  return trackHistoryOperation((async () => {
+    if (isNativeRuntimeAvailable()) return saveNativeWorkspace(workspace);
+    const safe = persistedWorkspace(workspace);
+    saveChatWorkspace(safe);
     try {
-      await writeIndexedWorkspace(safe);
+      await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
       return "indexeddb";
     } catch {
-      return browserStorage() ? "local" : "unavailable";
+      try {
+        await writeIndexedWorkspace(safe);
+        return "indexeddb";
+      } catch {
+        return browserStorage() ? "local" : "unavailable";
+      }
     }
-  }
+  })());
 }
 
 interface StoredConversations {
@@ -463,9 +656,9 @@ function inNativeQueue<T>(task: () => Promise<T>): Promise<T> {
   return operation;
 }
 
-/** Nothing has been put into it yet; such a conversation gets no file. */
+/** An empty draft without an explicit conversation choice gets no file. */
 function untouched(thread: ChatThread): boolean {
-  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.title === "New conversation";
+  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.useDefaultSystemPrompt !== false && thread.mediaBeforeText !== true && thread.title === "New conversation";
 }
 
 function readActiveThreadId(): string | null {

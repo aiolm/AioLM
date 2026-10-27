@@ -41,6 +41,15 @@ keeps its measurements while awaiting approval; its follow-up replaces them with
 the final answer request's measurements, without adding tool execution or approval
 wait time. The turn continues to use its original session and settings snapshot.
 
+The composer status distinguishes an MCP approval request, native tool execution
+(including its OS approval wait), a failed request, an interrupted response, and
+a completed response. Once a tool returns, the follow-up model request resumes
+the first-token or generation status. Stop remains available during execution.
+A saved assistant request with `finish_reason: tool_calls` is incomplete after
+reload; opening its history does not approve or execute the tool. A saved user
+message without an assistant response shows only the message count. A token-limited response
+keeps its limit notice; message count alone does not establish completion.
+
 Chat requests default to `timings_per_token: true` and
 `stream_options.include_usage: true`. Explicit `false` values in chat JSON are
 honored. These defaults apply only to the request body and do not change saved

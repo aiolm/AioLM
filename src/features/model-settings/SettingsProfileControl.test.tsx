@@ -4,13 +4,15 @@ import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import SettingsProfileControl, { type ProfileViewItem, type SettingsProfileControlProps } from './SettingsProfileControl';
 import * as api from '../../shared/api';
 import { parseRuntimeHelp } from '../../shared/config/serverOptions';
+import { testConfig } from '../../testing/appStore';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn() }));
 
 const items: ProfileViewItem[] = [
   { id: 'balanced', name: 'Balanced', scope: 'preset', settings: { temperature: 0.7, ctx_size: 4096 }, description: 'Balanced output.' },
   { id: 'creative', name: 'Creative', scope: 'global', settings: { temperature: 0.9 }, system_prompt: 'Write freely.' },
-  { id: 'precise', name: 'Precise', scope: 'model', settings: { temperature: 0.2 }, system_prompt: 'Be concise.' },
+  { id: 'precise', name: 'Precise', scope: 'global', settings: { temperature: 0.2 }, system_prompt: 'Be concise.' },
   { id: 'everyday', name: 'Everyday', scope: 'global', settings: { temperature: 0.7 }, deletable: false, deletionReason: 'default' },
 ];
 const resolved = () => vi.fn().mockResolvedValue(undefined);
@@ -24,15 +26,84 @@ function mount(overrides: Partial<SettingsProfileControlProps> = {}, locale: Loc
   return { ...props, ...view, rerenderControl: (patch: Partial<SettingsProfileControlProps>) => view.rerender(<I18nProvider initialLocale={locale}><SettingsProfileControl {...props} {...patch} /></I18nProvider>) };
 }
 function preview(name: string) { fireEvent.click(screen.getByRole('button', { name })); }
-function openCreate(scope: 'Global' | 'Model' = 'Model') {
+function openCreate() {
   fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
-  if (screen.getByRole('combobox', { name: 'Scope' }).textContent !== scope) {
-    fireEvent.click(screen.getByRole('combobox', { name: 'Scope' }));
-    fireEvent.click(screen.getByRole('option', { name: scope }));
-  }
+  expect(screen.queryByRole('combobox', { name: 'Scope' })).not.toBeInTheDocument();
 }
 
 describe('settings profile workspace', () => {
+  it('offers draft editing actions in the profile selection detail without duplicating the picker', () => {
+    const props = mount({ selectionOnly: true, state: 'working', saveAction: <button type="button">Save selected profile</button> });
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(document.querySelector('.settings-profile-banner')).not.toBeInTheDocument();
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Save selected profile' })).toBeEnabled();
+    expect(current.getByRole('button', { name: 'Save as new' })).toBeEnabled();
+    fireEvent.click(current.getByRole('button', { name: 'Reset options to defaults' }));
+    expect(props.onReset).toHaveBeenCalledOnce();
+    expect(current.getByRole('status')).toHaveTextContent('Options reset to defaults.');
+    preview('Creative');
+    expect(screen.queryByRole('button', { name: 'Reset options to defaults' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save selected profile' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revert' })).toBeEnabled();
+    expect(props.onApply).not.toHaveBeenCalled();
+    preview('Precise · Selected · Editing');
+    expect(screen.getByRole('region', { name: 'Current values' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save selected profile' })).toBeVisible();
+  });
+  it('uses the selected runtime schema in current values, preview and defaults without exposing saved secrets', async () => {
+    const provider = 'custom.profile-engine';
+    const window = schemaOption({ key: 'window', flag: '--window', target: 'launch', group: 'custom-group', kind: { type: 'integer' }, runtime_default: '12' });
+    const credential = schemaOption({ key: 'credential', flag: '--credential', target: 'launch', group: 'custom-group', kind: { type: 'text' } });
+    credential.sensitive = { certainty: 'documented', value: true };
+    credential.runtime_default = { certainty: 'documented', value: { literal: 'DEFAULT-SECRET' } };
+    vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [window, credential]));
+    const runtimeConfig = { ...testConfig, active_provider: provider, active_runtime: 'build-one', temperature: 0.7, top_p: 0.9,
+      provider_options: { [provider]: { window: 5, credential: 'CURRENT-SECRET', retired: 'RETIRED-SECRET' } } } satisfies api.AppConfig;
+    const saved: ProfileViewItem = { id: 'saved-engine', name: 'Engine saved', provider, scope: 'global', settings: {
+      provider_options: { [provider]: { window: 9, credential: 'PREVIEW-SECRET' } } } };
+    const { container, onApply, onReset } = mount({ items: [saved], activeId: saved.id, defaultProfileId: saved.id,
+      currentSettings: runtimeConfig, defaults: { ...runtimeConfig, provider_options: { [provider]: {} } }, runtimeConfig });
+    const detail = within(container.querySelector('.settings-profile-detail') as HTMLElement);
+    expect(detail.queryByText('Temperature')).not.toBeInTheDocument();
+    expect(await detail.findByText('--window')).toBeVisible();
+    expect(detail.getByText('5')).toBeVisible();
+    expect(detail.getByText('Retired')).toBeVisible();
+    expect(detail.getByText(/Needs a compatibility check/)).toBeVisible();
+    preview('Engine saved · Selected · Default profile');
+    expect(detail.getByText('--window')).toBeVisible();
+    expect(detail.getByText('9')).toBeVisible();
+    fireEvent.click(container.querySelector('.settings-profile-defaults > summary')!);
+    const defaults = within(container.querySelector('.settings-profile-defaults') as HTMLElement);
+    expect(defaults.getByText('--window')).toBeVisible();
+    expect(defaults.getByText('12')).toBeVisible();
+    expect(defaults.queryByText('Temperature')).not.toBeInTheDocument();
+    for (const secret of ['CURRENT-SECRET', 'PREVIEW-SECRET', 'RETIRED-SECRET', 'DEFAULT-SECRET']) expect(container).not.toHaveTextContent(secret);
+    expect(api.providerOptionSchema).toHaveBeenCalledWith(runtimeConfig);
+    expect(onApply).not.toHaveBeenCalled(); expect(onReset).not.toHaveBeenCalled();
+    expect(runtimeConfig.provider_options[provider].credential).toBe('CURRENT-SECRET');
+  });
+  it('selects a profile directly from the persistent banner before a model is chosen', async () => {
+    const { onApply } = mount({ full: false, modelPath: '' });
+    const picker = screen.getByRole('combobox', { name: 'Settings profiles' });
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole('option', { name: 'Global · Creative' }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith('creative'));
+  });
+  it('previews only the selected engine settings while keeping stored native settings intact', () => {
+    const currentSettings = { active_provider: 'mlx-vlm' as const, active_runtime: 'synthetic-mlx', active_backend: 'cuda', active_build: 'old-native-build', ngl: 20,
+      provider_options: { 'mlx-vlm': { kv_bits: 4 }, vllm: { gpu_memory_utilization: 0.9 } } };
+    const { container } = mount({ currentSettings });
+    const details = within(container.querySelector('.settings-profile-detail') as HTMLElement);
+    expect(details.getByText('MLX')).toBeVisible();
+    expect(details.getByText('synthetic-mlx')).toBeVisible();
+    expect(details.getByText('Kv bits')).toBeVisible();
+    expect(details.queryByText('GPU layers')).not.toBeInTheDocument();
+    expect(details.queryByText('cuda')).not.toBeInTheDocument();
+    expect(details.queryByText('old-native-build')).not.toBeInTheDocument();
+    expect(details.queryByText('Gpu memory utilization')).not.toBeInTheDocument();
+    expect(currentSettings.ngl).toBe(20);
+  });
   it.each([
     ['en', 'Save as new', 'Create new profile', 'Select this profile'], ['ko', '새 프로필로 저장', '새 프로필 생성', '이 프로필 선택'],
     ['ja', '新規として保存', '新しいプロファイルを作成', 'このプロファイルを選択'], ['zh', '另存为新预设', '创建新预设', '选择此预设'],
@@ -84,7 +155,7 @@ describe('settings profile workspace', () => {
     const path = 'models/My Models/adapter file.gguf';
     const tensor = 'blk\\.\\d+\\.ffn.*=CPU,per_layer_token_embd.weight=CPU';
     const args = ['--control-vector-layer-range', '-1', '8', '--override-tensor', tensor, '--control-vector', path,
-      '--override-tensor=output.weight=CPU', '--future-option', 'value with spaces, commas=kept', '-0.5', '--jinja', '--cache-ram', '--no-warmup'];
+      '--override-tensor=output.weight=CPU', '--future-option', 'value with spaces, commas=kept', '--', '--未知', '-', '-0.5', '--jinja', '--cache-ram', '--no-warmup'];
     mount({ currentSettings: { server_args: args }, runtimeOptions: parseRuntimeHelp([
       '--control-vector-layer-range START END  range', '--override-tensor PATTERN  placement', '--control-vector FNAME  path',
       '--jinja  use templates', '--cache-ram N  cache', '--no-warmup  skip warmup',
@@ -92,33 +163,33 @@ describe('settings profile workspace', () => {
     const rows = within(screen.getByRole('region', { name: 'Current values' })).getAllByRole('listitem');
     expect(rows.map(row => [...row.querySelectorAll('code')].map(code => code.textContent))).toEqual([
       ['--control-vector-layer-range', '-1', '8'], ['--override-tensor', tensor], ['--control-vector', path],
-      ['--override-tensor', 'output.weight=CPU'], ['--future-option', 'value with spaces, commas=kept', '-0.5'],
+      ['--override-tensor', 'output.weight=CPU'], ['--future-option', 'value with spaces, commas=kept'], ['--'], ['--未知'], ['-', '-0.5'],
       ['--jinja'], ['--cache-ram'], ['--no-warmup'],
     ]);
   });
   it('resets the selected profile draft without applying the preview or changing saved profiles', () => {
     const props = mount({ blocked: true });
     preview('Creative');
-    const reset = screen.getByRole('button', { name: 'Reset all to defaults' });
-    expect(reset).not.toHaveAttribute('aria-describedby');
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    expect(reset).toHaveAccessibleDescription('Model and connection settings and conversation instructions are kept. Engine options that need review are kept too.');
     expect(screen.queryByText(/Reset all options in the selected profile/)).not.toBeInTheDocument();
     fireEvent.click(reset);
     expect(props.onReset).toHaveBeenCalledOnce();
-    expect(screen.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    expect(screen.getByRole('status')).toHaveTextContent('Options reset to defaults.');
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(props.onApply).not.toHaveBeenCalled();
     expect(props.onSaveAs).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['en', true, 'Reset all to defaults', 'Reset to defaults.'],
-    ['en', false, 'Reset all to defaults', 'Already using defaults.'],
-    ['ko', true, '전체 기본값으로 초기화', '기본값으로 초기화했습니다.'],
-    ['ko', false, '전체 기본값으로 초기화', '이미 기본값입니다.'],
-    ['ja', true, 'すべて既定値に戻す', '既定値に戻しました。'],
-    ['ja', false, 'すべて既定値に戻す', 'すでに既定値です。'],
-    ['zh', true, '全部重置为默认值', '已重置为默认值。'],
-    ['zh', false, '全部重置为默认值', '已在使用默认值。'],
+    ['en', true, 'Reset options to defaults', 'Options reset to defaults.'],
+    ['en', false, 'Reset options to defaults', 'Options already use defaults.'],
+    ['ko', true, '옵션을 기본값으로 되돌리기', '옵션을 기본값으로 되돌렸습니다.'],
+    ['ko', false, '옵션을 기본값으로 되돌리기', '옵션이 이미 기본값입니다.'],
+    ['ja', true, 'オプションを既定値に戻す', '既定値に戻しました。'],
+    ['ja', false, 'オプションを既定値に戻す', 'オプションはすでに既定値です。'],
+    ['zh', true, '将选项恢复为默认值', '已将选项恢复为默认值。'],
+    ['zh', false, '将选项恢复为默认值', '选项已在使用默认值。'],
   ] as const)('announces reset results in %s when values changed is %s', (locale, changed, label, message) => {
     const props = mount({ onReset: vi.fn(() => changed) }, locale);
     expect(screen.queryByText(message)).not.toBeInTheDocument();
@@ -133,17 +204,17 @@ describe('settings profile workspace', () => {
     vi.useFakeTimers();
     try {
       const props = mount({ onReset: vi.fn(() => false) });
-      const reset = screen.getByRole('button', { name: 'Reset all to defaults' });
+      const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
       fireEvent.click(reset);
-      expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+      expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
       act(() => vi.advanceTimersByTime(3000));
       fireEvent.click(reset);
       act(() => vi.advanceTimersByTime(3000));
-      expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+      expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
       expect(props.onReset).toHaveBeenCalledTimes(2);
       act(() => vi.advanceTimersByTime(1000));
-      expect(screen.queryByText('Already using defaults.')).not.toBeInTheDocument();
-      expect(screen.getByText('Model profile · selected for this model')).toBeVisible();
+      expect(screen.queryByText('Options already use defaults.')).not.toBeInTheDocument();
+      expect(screen.getByText('Global profile · selected for this model')).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
@@ -154,7 +225,7 @@ describe('settings profile workspace', () => {
     expect(screen.queryByRole('region', { name: 'Preset profiles' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Balanced' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Global profiles' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Model profiles' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Model profiles' })).not.toBeInTheDocument();
     const activeChip = screen.getByRole('button', { name: 'Precise · Selected' });
     expect(activeChip).toHaveClass('settings-profile-chip--active');
     preview('Creative');
@@ -169,16 +240,19 @@ describe('settings profile workspace', () => {
     expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('0.2')).toBeInTheDocument();
   });
 
-  it('applies a preview only through its explicit action and closes after saving succeeds', async () => {
+  it('applies a preview through its explicit action and returns focus to the profile choice', async () => {
     let complete!: () => void;
     const onApply = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
     mount({ onApply }); preview('Creative');
-    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    const apply = screen.getByRole('button', { name: 'Select this profile' });
+    apply.focus();
+    fireEvent.click(apply);
     expect(onApply).toHaveBeenCalledWith('creative');
     expect(screen.getByRole('region', { name: 'Preview' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Select this profile' })).toBeDisabled();
     await act(async () => complete());
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Creative' })).toHaveFocus();
   });
 
   it('retains the preview and offers retry when application fails', async () => {
@@ -193,7 +267,7 @@ describe('settings profile workspace', () => {
 
   it('keeps the selected profile identity while previewing saved values during editing', () => {
     const props = mount({ state: 'working', basedOnId: 'precise', currentSettings: { temperature: 0.4 } });
-    expect(screen.getByText('Model profile · unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Global profile · unsaved changes')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Precise · Selected · Editing' })).toHaveClass('settings-profile-chip--active');
     expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('0.4')).toBeInTheDocument();
     preview('Precise · Selected · Editing');
@@ -219,7 +293,7 @@ describe('settings profile workspace', () => {
     openCreate();
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'From current values' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
-    await waitFor(() => expect(props.onSaveAs).toHaveBeenCalledWith('From current values', 'model'));
+    await waitFor(() => expect(props.onSaveAs).toHaveBeenCalledWith('From current values', 'global'));
     expect(props.onApply).not.toHaveBeenCalled();
   });
 
@@ -228,7 +302,7 @@ describe('settings profile workspace', () => {
     expect(screen.getByRole('heading', { name: 'Precise · Editing' })).toBeInTheDocument();
     props.rerenderControl({ state: 'named' });
     expect(screen.getByRole('heading', { name: 'Precise' })).toBeInTheDocument();
-    expect(screen.getByText('Model profile · selected for this model')).toBeInTheDocument();
+    expect(screen.getByText('Global profile · selected for this model')).toBeInTheDocument();
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
   });
 
@@ -297,7 +371,7 @@ describe('settings profile workspace', () => {
 
   it('lists GPU placement fields on separate rows by device name without losing unreported ids', () => {
     const gpu = { draft_gpu_id: 'runtime:vulkan:Vulkan1', gpu_ids: ['runtime:vulkan:Vulkan0', 'runtime:vulkan:Vulkan1'], main_gpu: 'runtime:vulkan:Vulkan0', split_mode: 'layer' as const, tensor_split: [] };
-    const saved = { id: 'placed', name: 'Placed', scope: 'model' as const, settings: { gpu: { ...gpu, gpu_ids: ['pci:0000:03:00.0'], main_gpu: null, draft_gpu_id: null } } };
+    const saved = { id: 'placed', name: 'Placed', scope: 'global' as const, settings: { gpu: { ...gpu, gpu_ids: ['pci:0000:03:00.0'], main_gpu: null, draft_gpu_id: null } } };
     const props = mount({ items: [...items, saved], currentSettings: { gpu }, defaults: { gpu },
       gpuDevices: [{ name: 'Vulkan0 · Example GPU', stable_id: 'runtime:vulkan:Vulkan0', vendor: 'amd', integrated: false }] });
     const summary = (region: HTMLElement) => within(within(region).getByText('GPU placement').nextElementSibling as HTMLElement);
@@ -319,15 +393,15 @@ describe('settings profile workspace', () => {
     expect(props.currentSettings.gpu).toEqual(gpu);
   });
 
-  it.each(['Model', 'Global'] as const)('creates a %s profile only through a successfully saved name form', async scope => {
-    const props = mount(); openCreate(scope);
+  it.each(['models/example.gguf', ''])('creates a shared profile with model selection %s only after saving the name', async modelPath => {
+    const props = mount({ modelPath }); openCreate();
     expect(screen.getByLabelText('Profile name')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Create new profile' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: '  Clear answers  ' } });
     expect(props.onSaveAs).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
     await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
-    expect(props.onSaveAs).toHaveBeenCalledWith('Clear answers', scope.toLowerCase());
+    expect(props.onSaveAs).toHaveBeenCalledWith('Clear answers', 'global');
   });
 
   it('preserves typed names after save failure and does not create duplicate requests while saving', async () => {
@@ -341,6 +415,52 @@ describe('settings profile workspace', () => {
     await act(async () => fail(new Error('Storage unavailable')));
     expect(screen.getByLabelText('Profile name')).toHaveValue('Retry this name');
     expect(screen.getByRole('alert')).toHaveTextContent('Storage unavailable');
+  });
+
+
+  it.each([
+    { action: 'create', confirmation: 'native composition', isComposing: true, keyCode: 13 },
+    { action: 'rename', confirmation: 'native composition', isComposing: true, keyCode: 13 },
+    { action: 'create', confirmation: '229 fallback', isComposing: false, keyCode: 229 },
+    { action: 'rename', confirmation: '229 fallback', isComposing: false, keyCode: 229 },
+    { action: 'create', confirmation: 'compositionend before Enter', isComposing: false, keyCode: 13, committed: true },
+    { action: 'rename', confirmation: 'compositionend before Enter', isComposing: false, keyCode: 13, committed: true },
+  ] as const)('keeps $action name editing open for $confirmation Enter, then submits the complete name once', async scenario => {
+    const { action, isComposing, keyCode } = scenario;
+    const committed = 'committed' in scenario;
+    const props = mount();
+    const before = structuredClone({ items: props.items, settings: props.currentSettings, prompt: props.currentPrompt });
+    if (action === 'create') openCreate();
+    else fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const input = screen.getByLabelText('Profile name');
+    const name = '한글 이름 日本語';
+    if (committed) {
+      fireEvent.keyDown(input, { key: 'Unidentified', keyCode: 229 });
+      fireEvent.input(input, { target: { value: name }, inputType: 'insertFromComposition', isComposing: true });
+      fireEvent.compositionEnd(input, { data: '日本語' });
+    } else {
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: name } });
+    }
+    const nativeDefaultAvailable = fireEvent.keyDown(input, { key: 'Enter', keyCode, isComposing });
+    expect(props.onSaveAs).not.toHaveBeenCalled();
+    expect(props.onRename).not.toHaveBeenCalled();
+    expect(input).toBeVisible();
+    expect(input).toHaveValue(name);
+    expect(input).toHaveFocus();
+    expect(nativeDefaultAvailable).toBe(!committed);
+    expect({ items: props.items, settings: props.currentSettings, prompt: props.currentPrompt }).toEqual(before);
+
+    fireEvent.compositionEnd(input, { data: '日本語' });
+    fireEvent.keyUp(input, { key: 'Enter', keyCode: 13 });
+    expect(fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: false })).toBe(false);
+    await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
+    expect(vi.mocked(props.onSaveAs).mock.calls).toEqual(action === 'create' ? [[name, 'global']] : []);
+    expect(vi.mocked(props.onRename).mock.calls).toEqual(action === 'rename' ? [['precise', name]] : []);
+    expect(props.onApply).not.toHaveBeenCalled();
+    expect(props.onDelete).not.toHaveBeenCalled();
+    expect(props.onSetDefault).not.toHaveBeenCalled();
+    expect({ items: props.items, settings: props.currentSettings, prompt: props.currentPrompt }).toEqual(before);
   });
 
   it('renames separately from updating profile values', async () => {
@@ -453,7 +573,7 @@ describe('settings profile workspace', () => {
     if (target === 'preview') preview('Creative');
     const button = screen.getByRole('button', { name: 'Set as default' });
     expect(button).toBeEnabled();
-    if (target === 'current') expect(button).toHaveAccessibleDescription('Setting this profile as default makes it available to all models.');
+    expect(button).not.toHaveAttribute('aria-describedby');
     fireEvent.click(button);
     await waitFor(() => expect(props.onSetDefault).toHaveBeenCalledWith(target === 'current' ? 'precise' : 'creative'));
     expect(props.onApply).not.toHaveBeenCalled();
@@ -526,9 +646,9 @@ describe('settings profile workspace', () => {
   });
 
   it.each([
-    ['ko', 'Precise · 편집 중', '모델 프로필 · 저장하지 않은 변경'],
-    ['ja', 'Precise · 編集中', 'モデルプロファイル · 未保存の変更'],
-    ['zh', 'Precise · 编辑中', '模型预设 · 未保存的更改'],
+    ['ko', 'Precise · 편집 중', '공용 프로필 · 저장하지 않은 변경'],
+    ['ja', 'Precise · 編集中', '共通プロファイル · 未保存の変更'],
+    ['zh', 'Precise · 编辑中', '通用预设 · 未保存的更改'],
   ] as const)('provides %s named editing-state copy', (locale, title, subtitle) => {
     mount({ state: 'working', basedOnId: 'precise', full: false }, locale);
     expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();

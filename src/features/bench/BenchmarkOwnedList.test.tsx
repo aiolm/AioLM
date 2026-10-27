@@ -125,6 +125,68 @@ describe('owned recovery list', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it.each(['en', 'ko', 'ja', 'zh'] as const)('explains a locked vault when saving a backup in %s', async (locale) => {
+    const copy = benchmarkCopy(locale);
+    vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue(page('00000000-0000-4000-8000-000000000001', null));
+    vi.mocked(sharing.benchmarkSharingRecoveryExport).mockRejectedValueOnce(new sharing.BenchmarkSharingError('vault-locked', 'synthetic-secret-must-not-appear'));
+    render(<BenchmarkOwnedList busy={false} copy={copy} />);
+    fireEvent.click(await screen.findByRole('button', { name: copy.recoveryExport }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy.vaultLocked);
+    expect(screen.getByRole('button', { name: copy.recoveryExport })).toBeEnabled();
+    expect(document.body.textContent).not.toContain('synthetic-secret-must-not-appear');
+    expect(screen.queryByText(copy.recoverySaved)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['file write failed', sharing.benchmarkSharingRecoveryExport, 'recoveryExport', 'recoveryExportError'],
+    ['file read failed', sharing.benchmarkSharingRecoveryImport, 'recoveryImport', 'recoveryImportError'],
+    ['clipboard failed', sharing.benchmarkSharingRecoveryCopy, 'recoveryCopy', 'recoveryCopyError'],
+  ] as const)('keeps recovery advice specific to the action when native details say %s', async (nativeDetail, operation, button, advice) => {
+    const copy = benchmarkCopy('en');
+    vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue(page('00000000-0000-4000-8000-000000000001', null));
+    vi.mocked(operation).mockRejectedValueOnce(new sharing.BenchmarkSharingError('vault-unavailable', `${nativeDetail}: synthetic-secret-must-not-appear`));
+    render(<BenchmarkOwnedList busy={false} copy={copy} />);
+    fireEvent.click(await screen.findByRole('button', { name: copy[button] }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy[advice]);
+    expect(screen.getByRole('button', { name: copy[button] })).toBeEnabled();
+    expect(document.body.textContent).not.toContain('synthetic-secret-must-not-appear');
+    expect(screen.queryByText(copy.recoverySaved)).not.toBeInTheDocument();
+    expect(screen.queryByText(copy.recoveryImported)).not.toBeInTheDocument();
+    expect(screen.queryByText(copy.recoveryCopied)).not.toBeInTheDocument();
+  });
+
+  it('offers recovery when a backup import cannot find the owner credential', async () => {
+    const copy = benchmarkCopy('en');
+    vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue({ items: [], next_cursor: null });
+    vi.mocked(sharing.benchmarkSharingRecoveryImport).mockRejectedValueOnce(new sharing.BenchmarkSharingError('credential-missing', 'synthetic-secret-must-not-appear'));
+    render(<BenchmarkOwnedList busy={false} copy={copy} />);
+    fireEvent.click(await screen.findByRole('button', { name: copy.recoveryImport }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy.publishOwnershipMissing);
+    expect(document.body.textContent).not.toContain('synthetic-secret-must-not-appear');
+    expect(screen.queryByText(copy.recoveryImported)).not.toBeInTheDocument();
+    expect(sharing.benchmarkSharingOwnedList).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains a locked vault before opening website management', async () => {
+    const copy = benchmarkCopy('en');
+    vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue(page('00000000-0000-4000-8000-000000000001', null));
+    vi.mocked(sharing.benchmarkSharingOpenManagement).mockRejectedValueOnce(new sharing.BenchmarkSharingError('vault-locked', 'synthetic-secret-must-not-appear'));
+    render(<BenchmarkOwnedList busy={false} copy={copy} />);
+    fireEvent.click(await screen.findByRole('button', { name: copy.openManagement }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy.vaultLocked);
+    expect(document.body.textContent).not.toContain('synthetic-secret-must-not-appear');
+  });
+
+  it('does not diagnose a browser opening failure as an unavailable credential store', async () => {
+    const copy = benchmarkCopy('en');
+    vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue(page('00000000-0000-4000-8000-000000000001', null));
+    vi.mocked(sharing.benchmarkSharingOpenManagement).mockRejectedValueOnce(new sharing.BenchmarkSharingError('vault-unavailable', 'browser failed: synthetic-secret-must-not-appear'));
+    render(<BenchmarkOwnedList busy={false} copy={copy} />);
+    fireEvent.click(await screen.findByRole('button', { name: copy.openManagement }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy.managementError);
+    expect(document.body.textContent).not.toContain('synthetic-secret-must-not-appear');
+  });
+
   it('opens both empty and populated management lists', async () => {
     vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValueOnce({ items: [], next_cursor: null });
     const { unmount } = render(<BenchmarkOwnedList busy={false} copy={benchmarkCopy('en')} />);
@@ -158,7 +220,7 @@ describe('owned recovery list', () => {
     await screen.findByText('Could not open result management. Try again.');
     vi.mocked(sharing.benchmarkSharingRecoveryCopy).mockRejectedValue(new Error('locked'));
     fireEvent.click(screen.getByRole('button', { name: 'Copy backup code' }));
-    await screen.findByText('The action could not be completed. Check the file or connection and try again.');
+    await screen.findByText(benchmarkCopy('en').recoveryCopyError);
   });
 
   it('refreshes bindings when the revision changes', async () => {

@@ -80,7 +80,7 @@ export function normalizePublicationInput(value: unknown): BenchmarkPublicationR
 }
 
 /** Validate bounds shared by wrapper and legacy bodies. */
-export function validatePublicationRequest(value: unknown): BenchmarkPublicationRequest {
+function validateAndSerializePublicationRequest(value: unknown): { request: BenchmarkPublicationRequest; serialized: string } {
   const request = normalizePublicationInput(value);
   if (request.benchmark.measurements.rows.length > PUBLICATION_MAX_ROWS) {
     throw new Error('Publication exceeds 10000 measurement rows.');
@@ -89,13 +89,16 @@ export function validatePublicationRequest(value: unknown): BenchmarkPublication
   if (utf8ByteLength(serialized) > PUBLICATION_MAX_UTF8_BYTES) {
     throw new Error('Publication request exceeds 4MiB.');
   }
-  return request;
+  return { request, serialized };
+}
+
+export function validatePublicationRequest(value: unknown): BenchmarkPublicationRequest {
+  return validateAndSerializePublicationRequest(value).request;
 }
 
 /** Once-serialized exact request bytes; retry reuses these bytes so the body hash stays stable. */
 export function serializePublicationRequest(request: BenchmarkPublicationRequest): string {
-  const normalized = validatePublicationRequest(request);
-  return JSON.stringify(normalized);
+  return validateAndSerializePublicationRequest(request).serialized;
 }
 
 /** Parse an exact request snapshot without re-serializing caller data first. */

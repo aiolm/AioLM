@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { availableParallelism } from "node:os";
 
 export default defineConfig({
   plugins: [react()],
@@ -7,13 +8,16 @@ export default defineConfig({
     "process.env.NODE_ENV": JSON.stringify("test"),
   },
   test: {
+    // Leave capacity for the Vite coordinator and DOM updates so worker
+    // processes do not starve ordinary async waits on small CI runners.
+    maxWorkers: Math.min(4, Math.max(1, Math.floor(availableParallelism() / 2))),
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       // Only covers src/** exercised by Vitest (component/hook/utility
-      // tests). The 24 direct Node assertion scripts under tests/direct/**
+      // tests). The 21 direct Node assertion scripts under tests/direct/**
       // (run via tests/direct/run.ts) are not instrumented here —
       // see README's validation section for that scope split.
       provider: "v8",

@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOptions';
 import SettingsChangeList, { changeCount } from './SettingsChangeList';
+import * as api from '../../shared/api';
+import { testConfig } from '../../testing/appStore';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 const runtimeOptions = parseRuntimeHelp([
   '--threads N               threads (default: 6)',
@@ -89,5 +92,33 @@ describe('profile save change list', () => {
     /></I18nProvider>);
     expect(screen.getByText('using runtime default (Reference value: 40, 0 = disabled)')).toBeInTheDocument();
     expect(screen.queryByText('40 (using runtime default)')).not.toBeInTheDocument();
+  });
+  it('never reveals unverified provider option values in a save confirmation', () => {
+    const { container } = render(<I18nProvider initialLocale="en"><SettingsChangeList
+      saved={{ active_provider: 'custom.review', provider_options: { 'custom.review': { credential: 'OLD-PRIVATE' } } }}
+      current={{ active_provider: 'custom.review', provider_options: { 'custom.review': { credential: 'NEW-PRIVATE' } } }}
+      savedPrompt="" currentPrompt="" runtimeOptions={[]} runtimeVerified={false}
+    /></I18nProvider>);
+    expect(container).not.toHaveTextContent('OLD-PRIVATE');
+    expect(container).not.toHaveTextContent('NEW-PRIVATE');
+    expect(container).toHaveTextContent('Needs a compatibility check');
+  });
+  it('shows declared option changes while masking old and new secrets and unrecognized values', async () => {
+    const provider = 'custom.review';
+    const credential = schemaOption({ key: 'credential', flag: '--credential', target: 'launch', group: 'engine', kind: { type: 'text' } });
+    credential.sensitive = { certainty: 'documented', value: true };
+    vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [credential,
+      schemaOption({ key: 'limit', flag: '--limit', target: 'launch', group: 'engine', kind: { type: 'integer' } }),
+      schemaOption({ key: 'note', flag: '--note', target: 'launch', group: 'engine', kind: { type: 'text' } }),
+    ]));
+    const runtimeConfig = { ...testConfig, active_provider: provider, active_runtime: 'build' } satisfies api.AppConfig;
+    const saved = { active_provider: provider, provider_options: { [provider]: { credential: 'OLD-PRIVATE', limit: 5, note: 'OLD-PRIVATE', retired: 'OLD-RETIRED' } } } as const;
+    const current = { active_provider: provider, provider_options: { [provider]: { credential: 'NEW-PRIVATE', limit: 9, note: 'OLD-PRIVATE NEW-PRIVATE', retired: 'NEW-RETIRED' } } } as const;
+    const { container } = render(<I18nProvider initialLocale="en"><SettingsChangeList saved={saved} current={current}
+      savedPrompt="" currentPrompt="" runtimeOptions={[]} runtimeVerified={false} runtimeConfig={runtimeConfig} /></I18nProvider>);
+    expect(await screen.findByText('9')).toBeVisible();
+    expect(screen.getByText('5')).toBeVisible();
+    for (const value of ['OLD-PRIVATE', 'NEW-PRIVATE', 'OLD-RETIRED', 'NEW-RETIRED']) expect(container).not.toHaveTextContent(value);
+    expect(changeCount(saved, current, '', '')).toBe(4);
   });
 });

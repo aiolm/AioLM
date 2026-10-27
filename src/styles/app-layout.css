@@ -1,38 +1,13 @@
 /* Functional panel geometry. Visual rules live in the shared component system. */
-.app-page-content { min-width: 0; min-height: 0; overflow: hidden; }
-.tuning-redesign { min-width: 0; min-height: 0; overflow: hidden; container: tuning / inline-size; }
-.tuning-redesign__header { display: flex; min-width: 0; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; }
-.tuning-redesign__title { min-width: 0; }
-.tuning-redesign__title p { max-width: 54rem; }
-.tuning-redesign__body { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 auto; }
-.tuning-navigation { display: flex; min-width: 0; flex-shrink: 0; flex-flow: row wrap; align-items: center; }
-.tuning-navigation__mode { display: grid; grid-template-columns: 1fr 1fr; }
-.tuning-navigation__search { position: relative; display: flex; min-width: 0; align-items: center; }
-.tuning-navigation__search input { width: 100%; }
-.tuning-navigation__search-icon { position: absolute; left: 9px; pointer-events: none; }
-.tuning-navigation__search-clear { position: absolute; right: 4px; }
-.tuning-navigation__categories { display: flex; flex: 1 1 100%; flex-wrap: wrap; }
-.tuning-category-link { justify-content: space-between; }
-.tuning-category-link__label { min-width: 0; overflow-wrap: break-word; white-space: normal; }
-.tuning-redesign__content { min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
-.tuning-redesign__content > .tuning-panel-scroll { height: 100%; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.tuning-category-heading { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; }
-.tuning-category-heading h3 { min-width: 0; }
-.tuning-category-heading p { min-width: 0; }
 .app-page-scroll { width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; container: workspace / inline-size; }
 .app-page-scroll > :not(.chat-layout):not(.discover-columns) { flex-shrink: 0; }
 /* Keep the same content edge when a page or an inner list starts scrolling. */
-.tuning-panel-scroll, .tuning-navigation, .tuning-apply-footer { scrollbar-gutter: stable; }
-.tuning-navigation, .tuning-apply-footer { overflow-x: hidden; }
 .chat-message-log, .aiolm-navigation { scrollbar-gutter: stable; }
 /* Form columns use their own available width, including inside detail panes. */
 .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .app-summary-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
-.app-master-detail, .app-balanced-columns, .discover-columns { grid-template-columns: minmax(0,1fr); }
-.app-master-detail > *, .app-balanced-columns > *, .app-form-grid > *, .app-summary-grid > * { min-width: 0; }
-.app-form-grid > .app-field-full { grid-column: 1 / -1; }
-.chat-context-slot { display: flex; min-height: auto; max-height: 84px; flex-direction: column; overflow: auto; align-items: stretch; }
-.chat-context-slot > * { width: 100%; min-width: 0; flex: 0 0 auto; overflow-wrap: break-word; }
+.app-master-detail, .discover-columns { grid-template-columns: minmax(0,1fr); }
+.app-master-detail > *, .app-form-grid > *, .app-summary-grid > * { min-width: 0; }
 .chat-mcp-tools { min-height: auto; }
 .chat-mcp-catalog-slot { min-height: 20px; overflow: auto; }
 .chat-attachment-status-slot { min-height: 16px; }
@@ -54,29 +29,3 @@
 .models-model-actions { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 6px; }
 .tuning-custom-input-slot { display: flex; min-height: 34px; align-items: stretch; }
 .tuning-custom-input-slot > input { min-width: 0; }
-.tuning-advanced-error-slot { min-height: 36px; overflow: auto; }
-.tuning-preset-bar { min-height: 32px; overflow-x: auto; }
-.app-workspace-content { min-height: 0; min-width: 0; flex: 1; overflow: hidden; }
-.app-workspace-content[hidden] { display: none; }
-.tuning-apply-footer { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,260px); align-items: center; justify-content: space-between; flex: 0 0 auto; }
-.tuning-apply-footer button { flex-shrink: 0; }
-.profiles-page { max-width: 1100px; }
-.workspace-page-heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; }
-.workspace-page-heading p { max-width: 70ch; }
-.profile-snapshot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); align-items: start; }
-.profile-snapshot { min-width: 0; }
-.profile-model-name { overflow-wrap: anywhere; }
-.profile-snapshot-status { display: block; }
-.profile-snapshot-actions { display: flex; flex-wrap: wrap; align-items: start; }
-.profile-manage summary { cursor: pointer; list-style: none; }
-.profile-name-form { display: grid; }
-.profile-default-prompt summary, .legacy-profiles summary { cursor: pointer; }
-.legacy-profile-row { display: flex; flex-wrap: wrap; align-items: center; }
-.legacy-profile-row > div { flex: 1; min-width: 160px; overflow-wrap: break-word; }
-.project-config-snapshot dl { display: grid; }
-.project-config-snapshot dl > div { display: grid; grid-template-columns: minmax(80px, .4fr) minmax(0, 1fr); }
-.project-config-snapshot dd { overflow-wrap: break-word; }
-.tuning-presets-menu { position: relative; }
-.tuning-presets-menu summary { cursor: pointer; }
-.tuning-presets-options { display: flex; flex-wrap: wrap; }
-.tuning-preset-bar { align-items: start; }

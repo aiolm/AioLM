@@ -832,6 +832,20 @@ pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), St
     Ok(())
 }
 
+/// The installed runtime's identity for help caching: what its own
+/// `--version` reported at install time, or the build directory when the
+/// runtime predates the version sidecar. The executable hash is separate.
+pub fn installed_version_label(backend: &str, build: &str) -> Result<String, String> {
+    let dir = runtime_dir(backend, build)?;
+    Ok(match read_version_manifest(&dir) {
+        Some(version) => format!(
+            "{backend}/{build}: {} (build {}, commit {})",
+            version.semver, version.build, version.commit
+        ),
+        None => format!("{backend}/{build}"),
+    })
+}
+
 pub fn runtime_dir(backend: &str, build: &str) -> Result<PathBuf, String> {
     validate_runtime_identifiers(backend, build)?;
     Ok(runtimes_root().join(format!("{build}-{backend}")))
@@ -921,11 +935,14 @@ pub async fn run_runtime_tool(
 
 /// Keep a failure message readable without losing the operative last lines.
 fn tail_lines(text: &str, count: usize) -> String {
-    let lines = text
+    let mut lines = text
         .lines()
+        .rev()
         .filter(|line| !line.trim().is_empty())
+        .take(count)
         .collect::<Vec<_>>();
-    lines[lines.len().saturating_sub(count)..].join(" | ")
+    lines.reverse();
+    lines.join(" | ")
 }
 
 /// Names every spawned child may inherit, on every platform: enough of the OS
@@ -1344,6 +1361,73 @@ fn build_environment_overrides() -> Vec<(OsString, OsString)> {
     .into_iter()
     .map(|(name, value)| (OsString::from(name), OsString::from(value)))
     .collect()
+}
+
+/// A source archive has no `.git`, so llama.cpp's build-info step runs
+/// `git rev-parse`/`rev-list` and Git walks up the parent directories. When
+/// the AioLM home lives inside another checkout (a development tree, a user's
+/// own repository) that walk finds the enclosing repository and the built
+/// server reports its commit and build count as its own. A ceiling at the
+/// build workspace stops discovery there, so the engine reports no commit
+/// rather than a foreign one. Both the given and the resolved spelling are
+/// listed because Git compares ceilings after resolving drive aliases.
+fn with_git_ceiling(
+    mut environment: Vec<(OsString, OsString)>,
+    ceiling: &Path,
+) -> Result<Vec<(OsString, OsString)>, String> {
+    let mut entries = vec![ceiling.to_path_buf()];
+    if let Ok(resolved) = ceiling.canonicalize() {
+        let resolved = strip_verbatim_prefix(&resolved);
+        if resolved != ceiling {
+            entries.push(resolved);
+        }
+    }
+    let joined = std::env::join_paths(&entries)
+        .map_err(|error| format!("build workspace path cannot bound Git discovery: {error}"))?;
+    set_environment_value(&mut environment, "GIT_CEILING_DIRECTORIES", joined);
+    Ok(environment)
+}
+
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// llama.cpp's CMake keeps an explicitly defined `LLAMA_BUILD_COMMIT`, so the
+/// built server reports the reviewed head instead of anything Git finds. Older
+/// trees ignore the definition and report `unknown` behind the Git ceiling;
+/// the build number stays the honest Git-less 0.
+fn reviewed_commit_define(commit: &str) -> Result<String, String> {
+    validate_commit_sha(commit)?;
+    Ok(format!(
+        "-DLLAMA_BUILD_COMMIT={}",
+        commit.to_ascii_lowercase()
+    ))
+}
+
+/// A PR runtime's own `--version` must not name a commit other than the one
+/// the user reviewed. An empty or `unknown` commit is accepted (an older tree
+/// without the commit definition); anything else must be an abbreviated (at
+/// least 7 hex digits) or full prefix of the reviewed head. The source
+/// manifest records the reviewed head either way.
+fn reported_commit_matches_source(version: &RuntimeVersion, reviewed: &str) -> Result<(), String> {
+    let reported = version.commit.trim().to_ascii_lowercase();
+    let reviewed = reviewed.trim().to_ascii_lowercase();
+    if reported.is_empty() || reported == "unknown" {
+        return Ok(());
+    }
+    if reported.len() >= 7
+        && reported.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && reviewed.starts_with(&reported)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "the built runtime reports commit {reported}, not the reviewed commit {reviewed}; the build read foreign Git metadata, so it was not activated"
+    ))
 }
 
 /// Names that must never reach a child, whatever list they are added to.
@@ -2538,14 +2622,7 @@ async fn run_probe_with_cancel_and_environment(
                 String::from_utf8_lossy(&stdout),
                 String::from_utf8_lossy(&stderr)
             );
-            let detail: String = text
-                .chars()
-                .rev()
-                .take(MAX_BUILD_DETAIL_CHARS)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
+            let detail = tail_chars(&text, MAX_BUILD_DETAIL_CHARS);
             return ProbeCommand {
                 success: false,
                 text,
@@ -2569,11 +2646,19 @@ async fn run_probe_with_cancel_and_environment(
         combined.push('\n');
         combined.push_str(stderr_text.trim());
     }
+    let diagnostic = (!status.success()).then(|| {
+        let mut diagnostic = format!("runtime probe exited with {status}: {}", args.join(" "));
+        let detail = tail_chars(combined.trim(), MAX_BUILD_DETAIL_CHARS);
+        if !detail.is_empty() {
+            diagnostic.push('\n');
+            diagnostic.push_str(&detail);
+        }
+        diagnostic
+    });
     ProbeCommand {
         success: status.success(),
         text: combined,
-        diagnostic: (!status.success())
-            .then(|| format!("runtime probe exited with {status}: {}", args.join(" "))),
+        diagnostic,
     }
 }
 
@@ -2759,6 +2844,22 @@ async fn probe_with_cancel(
     if cancelled() {
         return Err("server start cancelled".into());
     }
+    Ok(capabilities_from_probes(
+        resolved_backend,
+        resolved_build,
+        &binary,
+        dependency_error,
+        [version, help, devices, bench],
+    ))
+}
+
+fn capabilities_from_probes(
+    backend: String,
+    build: String,
+    binary: &Path,
+    dependency_error: Option<String>,
+    [version, help, devices, bench]: [ProbeCommand; 4],
+) -> RuntimeCapabilities {
     let mut diagnostics = Vec::new();
     if let Some(error) = dependency_error.as_ref() {
         diagnostics.push(error.clone());
@@ -2778,23 +2879,30 @@ async fn probe_with_cancel(
             bench.success,
         )
     };
-    Ok(RuntimeCapabilities {
-        backend: resolved_backend,
-        build: resolved_build,
+    // Failed commands can print plausible flags or device names while reporting
+    // initialization errors. Keep that output in diagnostics, not capabilities.
+    let help_text = if help.success { &help.text } else { "" };
+    RuntimeCapabilities {
+        backend,
+        build,
         executable: binary.to_string_lossy().into_owned(),
         state: state.into(),
-        version: version.text.chars().take(4096).collect(),
-        flags: probe_flags(&help.text),
-        server_help: if help.success {
-            help.text.clone()
+        version: if version.success {
+            version.text.chars().take(4096).collect()
         } else {
             String::new()
         },
-        supports_dflash: help_supports_dflash(&help.text),
-        devices: probe_devices(&devices.text),
+        flags: probe_flags(help_text),
+        server_help: help_text.to_owned(),
+        supports_dflash: help_supports_dflash(help_text),
+        devices: if devices.success {
+            probe_devices(&devices.text)
+        } else {
+            Vec::new()
+        },
         diagnostics,
         bench_available: bench.success,
-    })
+    }
 }
 
 fn help_supports_dflash(help: &str) -> bool {
@@ -2802,41 +2910,74 @@ fn help_supports_dflash(help: &str) -> bool {
         .any(|token| token == "draft-dflash")
 }
 
+/// Metadata consumed by provider discovery, without a filesystem size total.
+pub(crate) struct InstalledRuntimeMetadata {
+    pub build: String,
+    pub backend: String,
+    pub dir: String,
+    pub version: Option<RuntimeVersion>,
+}
+
+// Project each directory before inspecting the next entry. In particular, full
+// listing must measure size before reading that entry's manifests.
+fn installed_directories_in(root: &Path) -> impl Iterator<Item = (String, String, PathBuf)> {
+    fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (build, backend) = name.split_once('-')?;
+            if validate_runtime_identifiers(backend, build).is_err() {
+                return None;
+            }
+            let dir = entry.path();
+            if !dir.join(server_executable_name()).is_file()
+                || !dir.join(bench_executable_name()).is_file()
+            {
+                return None;
+            }
+            Some((build.into(), backend.into(), dir))
+        })
+}
+
 pub fn list_installed() -> Vec<InstalledRuntime> {
-    let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(runtimes_root()) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Some((build, backend)) = name.split_once('-') else {
-            continue;
-        };
-        if validate_runtime_identifiers(backend, build).is_err() {
-            continue;
-        }
-        let dir = entry.path();
-        if !dir.join(server_executable_name()).is_file()
-            || !dir.join(bench_executable_name()).is_file()
-        {
-            continue;
-        }
-        out.push(InstalledRuntime {
-            build: build.into(),
-            backend: backend.into(),
+    list_installed_in(&runtimes_root())
+}
+
+pub(crate) fn list_installed_in(root: &Path) -> Vec<InstalledRuntime> {
+    let mut out = installed_directories_in(root)
+        .map(|(build, backend, dir)| InstalledRuntime {
+            build,
+            backend,
             dir: dir.to_string_lossy().to_string(),
             size_mb: dir_size(&dir),
             version: read_version_manifest(&dir),
             source: read_source_manifest(&dir),
             replaced: None,
-        });
-    }
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|a, b| b.build.cmp(&a.build).then(a.backend.cmp(&b.backend)));
+    out
+}
+
+pub(crate) fn list_installed_metadata() -> Vec<InstalledRuntimeMetadata> {
+    list_installed_metadata_in(&runtimes_root())
+}
+
+pub(crate) fn list_installed_metadata_in(root: &Path) -> Vec<InstalledRuntimeMetadata> {
+    let mut out = installed_directories_in(root)
+        .map(|(build, backend, dir)| InstalledRuntimeMetadata {
+            build,
+            backend,
+            dir: dir.to_string_lossy().to_string(),
+            version: read_version_manifest(&dir),
+        })
+        .collect::<Vec<_>>();
     out.sort_by(|a, b| b.build.cmp(&a.build).then(a.backend.cmp(&b.backend)));
     out
 }
@@ -5015,8 +5156,9 @@ pub async fn install_pr_with(
         } else {
             String::new()
         };
-        let configure_args =
+        let mut configure_args =
             source_build_configure_args(backend, &source_root, &build_root, &architectures)?;
+        configure_args.push(reviewed_commit_define(&origin.commit)?);
         progress("configuring", 0.0, 0.0);
         run_cmake_command(
             &cmake,
@@ -5070,6 +5212,7 @@ pub async fn install_pr_with(
             .map_err(|error| format!("runtime size task failed: {error}"))?;
         let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
         if let Some(version) = version.as_ref() {
+            reported_commit_matches_source(version, &origin.commit)?;
             write_version_manifest(&staging, version);
         }
         // Provenance is part of the safety contract for a PR runtime. If the
@@ -5865,6 +6008,8 @@ async fn run_cmake_command(
     })
     .await
     .map_err(|error| format!("failed to prepare CMake environment: {error}"))?;
+    // Each build runs in its private workspace; Git discovery stops there.
+    let environment = with_git_ceiling(environment, current_dir)?;
     if cancel.load(Ordering::Acquire) {
         return Err("runtime install cancelled".into());
     }
@@ -6095,13 +6240,25 @@ fn msvc_openmp_has_required_files(directory: &Path) -> bool {
     msvc_runtime_directory_has_dll(directory, "vcomp140.dll")
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn is_msvc_runtime_library_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name.starts_with("msvcp140")
-        || name.starts_with("vcruntime140")
-        || name.starts_with("vcomp140")
-        || name.starts_with("concrt140")
+    // Prefix matching also selects DebugCRT and CLR-specific libraries from
+    // a developer's System32. Only the retail C/C++ and OpenMP runtime belongs
+    // in a portable inference bundle (VS 2022's redistributable file set).
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "concrt140.dll"
+            | "msvcp140.dll"
+            | "msvcp140_1.dll"
+            | "msvcp140_2.dll"
+            | "msvcp140_atomic_wait.dll"
+            | "msvcp140_codecvt_ids.dll"
+            | "vccorlib140.dll"
+            | "vcruntime140.dll"
+            | "vcruntime140_1.dll"
+            | "vcruntime140_threads.dll"
+            | "vcomp140.dll"
+    )
 }
 
 #[cfg(windows)]
@@ -6194,7 +6351,45 @@ fn copy_msvc_runtime_dependencies(
     destination: &Path,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let sources = locate_msvc_runtime_directories();
+    copy_msvc_runtime_dependencies_from_sources(
+        destination,
+        cancel,
+        &locate_msvc_runtime_directories(),
+    )
+}
+
+#[cfg(windows)]
+fn copy_msvc_runtime_dependencies_from_sources(
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+    sources: &[PathBuf],
+) -> Result<(), String> {
+    // Do not silently strip an existing runtime's dependencies or export a
+    // bundle contaminated by an earlier permissive copy. The source runtime
+    // stays untouched; export's owned snapshot is discarded on error.
+    for entry in fs::read_dir(destination).map_err(|error| error.to_string())? {
+        if cancel.load(Ordering::Acquire) {
+            return Err("runtime install cancelled".into());
+        }
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.ends_with(".dll")
+            && [
+                "msvcp140",
+                "vcruntime140",
+                "vccorlib140",
+                "vcomp140",
+                "concrt140",
+            ]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            && !is_msvc_runtime_library_name(&name)
+        {
+            return Err(format!(
+                "runtime contains a non-retail MSVC library ({name}); rebuild with the retail redistributable before exporting"
+            ));
+        }
+    }
     if sources.is_empty() && msvc_crt_has_required_files(destination) {
         return Ok(());
     }
@@ -6204,7 +6399,7 @@ fn copy_msvc_runtime_dependencies(
         );
     }
     for source in sources {
-        let entries = fs::read_dir(&source).map_err(|error| error.to_string())?;
+        let entries = fs::read_dir(source).map_err(|error| error.to_string())?;
         for entry in entries {
             if cancel.load(Ordering::Acquire) {
                 return Err("runtime install cancelled".into());
@@ -6218,8 +6413,8 @@ fn copy_msvc_runtime_dependencies(
             if !metadata.is_file() || metadata.file_type().is_symlink() || !is_dll {
                 continue;
             }
-            if path_has_directory(&source, "System32")
-                && !is_msvc_runtime_library_name(&entry.file_name().to_string_lossy())
+            if path_has_directory(source, "debug_nonredist")
+                || !is_msvc_runtime_library_name(&entry.file_name().to_string_lossy())
             {
                 continue;
             }
@@ -6822,8 +7017,186 @@ fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), Str
 }
 
 #[cfg(test)]
+pub(crate) mod listing_fixture {
+    use super::*;
+
+    pub(crate) struct Fixture {
+        pub root: PathBuf,
+        files: Vec<PathBuf>,
+        directories: Vec<PathBuf>,
+    }
+
+    fn check_ancestors(path: &Path) {
+        for ancestor in path.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor).unwrap();
+            assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                assert_eq!(metadata.file_attributes() & 0x400, 0, "reparse ancestor");
+            }
+        }
+    }
+
+    impl Fixture {
+        pub(crate) fn new() -> Self {
+            let parent = fs::canonicalize(std::env::temp_dir()).unwrap();
+            check_ancestors(&parent);
+            let root = parent.join(format!("rp-{}", Uuid::new_v4().simple()));
+            fs::create_dir(&root).unwrap();
+            check_ancestors(&root);
+            Self {
+                directories: vec![root.clone()],
+                root,
+                files: vec![],
+            }
+        }
+
+        pub(crate) fn directory(&mut self, relative: &str) -> PathBuf {
+            let mut directory = self.root.clone();
+            for component in Path::new(relative).components() {
+                assert!(matches!(component, Component::Normal(_)));
+                directory.push(component);
+                if !self.directories.contains(&directory) {
+                    check_ancestors(directory.parent().unwrap());
+                    fs::create_dir(&directory).unwrap();
+                    self.directories.push(directory.clone());
+                }
+                check_ancestors(&directory);
+            }
+            directory
+        }
+
+        pub(crate) fn write(&mut self, relative: &str, bytes: &[u8]) {
+            let relative_path = Path::new(relative);
+            assert!(relative_path
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))));
+            if let Some(parent) = relative_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                self.directory(parent.to_str().unwrap());
+            }
+            let file = self.root.join(relative_path);
+            if !self.files.contains(&file) {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file)
+                    .unwrap();
+                self.files.push(file.clone());
+            }
+            let metadata = fs::symlink_metadata(&file).unwrap();
+            assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+            fs::write(file, bytes).unwrap();
+        }
+
+        pub(crate) fn remove_file(&mut self, relative: &str) {
+            let file = self.root.join(relative);
+            assert!(self.files.contains(&file));
+            fs::remove_file(&file).unwrap();
+            self.files.retain(|entry| entry != &file);
+        }
+
+        pub(crate) fn finish(self) {
+            for file in self.files {
+                check_ancestors(file.parent().unwrap());
+                let metadata = fs::symlink_metadata(&file).unwrap();
+                assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+                fs::remove_file(file).unwrap();
+            }
+            for directory in self.directories.into_iter().rev() {
+                check_ancestors(&directory);
+                fs::remove_dir(directory).unwrap();
+            }
+        }
+    }
+
+    pub(crate) fn assert_json(label: &str, actual: serde_json::Value, expected: serde_json::Value) {
+        println!(
+            "RUNTIME_LISTING_JSON {}",
+            serde_json::json!({"case":label,"actual":actual,"expected":expected})
+        );
+        assert_eq!(actual, expected, "{label}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_runtime_listing_keeps_json_order_and_fresh_nested_sizes() {
+        use super::listing_fixture::{assert_json, Fixture};
+        use serde_json::json;
+        let mut fixture = Fixture::new();
+        for name in ["b10-cpu", "b9-cuda", "b9-cpu"] {
+            fixture.write(&format!("{name}/{}", server_executable_name()), b"server");
+            fixture.write(&format!("{name}/{}", bench_executable_name()), b"bench");
+        }
+        let version = br#"{"semver":"synthetic","build":9,"commit":"abc"}"#;
+        let source = br#"{"pull_request":7,"repository":"synthetic/runtime","commit":"abc","archive_sha256":"fixture","url":"synthetic"}"#;
+        fixture.write("b9-cpu/aiolm-runtime.json", version);
+        fixture.write("b9-cpu/aiolm-runtime-source.json", source);
+        fixture.write("b9-cuda/llama-board-runtime.json", version);
+        fixture.write("b9-cpu/nested/payload", b"12345");
+        let mb = |bytes: usize| bytes as f64 / 1_048_576.0;
+        let mut expected = json!([
+            {"build":"b9","backend":"cpu","dir":fixture.root.join("b9-cpu").to_str().unwrap(),"size_mb":mb(11+version.len()+source.len()+5),
+             "version":{"semver":"synthetic","build":9,"commit":"abc"},
+             "source":{"pull_request":7,"repository":"synthetic/runtime","commit":"abc","archive_sha256":"fixture","url":"synthetic","head_ref":"","author":"","state":"","fork":false,"commit_check":""}},
+            {"build":"b9","backend":"cuda","dir":fixture.root.join("b9-cuda").to_str().unwrap(),"size_mb":mb(11+version.len()),"version":{"semver":"synthetic","build":9,"commit":"abc"}},
+            {"build":"b10","backend":"cpu","dir":fixture.root.join("b10-cpu").to_str().unwrap(),"size_mb":mb(11)}
+        ]);
+        assert_json(
+            "full initial",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected.clone(),
+        );
+        fixture.write("b9-cpu/nested/payload", b"12345678901234567");
+        expected[0]["size_mb"] = json!(mb(11 + version.len() + source.len() + 17));
+        assert_json(
+            "full grown child",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected.clone(),
+        );
+        fixture.remove_file("b9-cpu/nested/payload");
+        expected[0]["size_mb"] = json!(mb(11 + version.len() + source.len()));
+        assert_json(
+            "full removed child",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected,
+        );
+        fixture.finish();
+    }
+
+    #[test]
+    fn full_runtime_listing_keeps_the_depth_boundary() {
+        use super::listing_fixture::{assert_json, Fixture};
+        use serde_json::json;
+        let mut fixture = Fixture::new();
+        fixture.write(&format!("b1-cpu/{}", server_executable_name()), b"s");
+        fixture.write(&format!("b1-cpu/{}", bench_executable_name()), b"b");
+        let mut relative = String::from("b1-cpu");
+        for depth in 1..=33 {
+            relative.push_str("/d");
+            fixture.directory(&relative);
+            if depth == 32 {
+                fixture.write(&format!("{relative}/included"), b"12345");
+            }
+            if depth == 33 {
+                fixture.write(&format!("{relative}/excluded"), b"1234567890123");
+            }
+        }
+        let expected = json!([{"build":"b1","backend":"cpu","dir":fixture.root.join("b1-cpu").to_str().unwrap(),"size_mb":7.0/1_048_576.0}]);
+        assert_json(
+            "full depth boundary",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected,
+        );
+        fixture.finish();
+    }
 
     /// Architecture list used wherever a test only cares about the other
     /// configure options; the CUDA policy has its own tests.
@@ -6850,6 +7223,99 @@ mod tests {
             commit_check: "github-actions-checkout-ref".into(),
             url: "https://github.com/ggml-org/llama.cpp/pull/27342".into(),
         }
+    }
+
+    #[test]
+    fn msvc_runtime_names_reject_debug_clr_and_prefix_lookalikes() {
+        for name in [
+            "msvcp140.dll",
+            "MSVCP140_1.DLL",
+            "msvcp140_2.dll",
+            "msvcp140_atomic_wait.dll",
+            "msvcp140_codecvt_ids.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "vcruntime140_threads.dll",
+            "vccorlib140.dll",
+            "concrt140.dll",
+            "vcomp140.dll",
+        ] {
+            assert!(is_msvc_runtime_library_name(name), "retail DLL: {name}");
+        }
+        for name in [
+            "msvcp140d.dll",
+            "msvcp140_1d.dll",
+            "msvcp140d_atomic_wait.dll",
+            "vcruntime140d.dll",
+            "vcruntime140_1d.dll",
+            "vcruntime140_threadsd.dll",
+            "concrt140d.dll",
+            "vcomp140d.dll",
+            "vccorlib140d.dll",
+            "msvcp140_clr0400.dll",
+            "vcruntime140_clr0400.dll",
+            "msvcp140_fake.dll",
+            "msvcp140.dll.exe",
+            "kernel32.dll",
+        ] {
+            assert!(
+                !is_msvc_runtime_library_name(name),
+                "non-retail DLL: {name}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msvc_runtime_copy_uses_retail_files_without_capturing_developer_utilities() {
+        let root = test_directory("msvc-retail-copy");
+        let system = root.join("System32");
+        let debug = root.join("debug_nonredist").join("x64");
+        let destination = root.join("destination");
+        for directory in [&system, &debug, &destination] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        for name in [
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vccorlib140.dll",
+            "vcomp140.dll",
+        ] {
+            fs::write(system.join(name), b"synthetic retail DLL").unwrap();
+            fs::write(debug.join(name), b"synthetic developer utility").unwrap();
+        }
+        for name in ["msvcp140d.dll", "vcruntime140_clr0400.dll", "kernel32.dll"] {
+            fs::write(system.join(name), b"synthetic non-runtime file").unwrap();
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_msvc_runtime_dependencies_from_sources(
+            &destination,
+            &cancel,
+            &[debug, system.clone()],
+        )
+        .unwrap();
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 4);
+        assert_eq!(
+            fs::read(destination.join("msvcp140.dll")).unwrap(),
+            b"synthetic retail DLL"
+        );
+        assert!(system.join("msvcp140d.dll").is_file());
+        assert!(!destination.join("msvcp140d.dll").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msvc_runtime_export_refuses_existing_non_retail_files_without_removing_them() {
+        let root = test_directory("msvc-non-retail-input");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("vcruntime140d.dll");
+        fs::write(&file, b"synthetic original dependency").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let error = copy_msvc_runtime_dependencies_from_sources(&root, &cancel, &[]).unwrap_err();
+        assert!(error.contains("non-retail MSVC library"), "{error}");
+        assert_eq!(fs::read(&file).unwrap(), b"synthetic original dependency");
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn test_bundle_manifest(root: &Path) -> RuntimeBundleManifest {
@@ -7797,6 +8263,38 @@ mod tests {
             classify_preflight(false, true, true, true),
             "failed preflight"
         );
+    }
+
+    #[test]
+    fn failed_probe_output_is_diagnostic_and_never_a_reported_capability() {
+        let reports = [
+            "version: 0.1.0 (build 123, commit abcdef)",
+            "--model FILE --spec-type {none,draft-dflash}",
+            "Vulkan0: Synthetic GPU",
+            "llama-bench --help",
+        ];
+        for failed in 0..4 {
+            let probes = std::array::from_fn(|index| ProbeCommand {
+                success: index != failed,
+                text: reports[index].into(),
+                diagnostic: (index == failed).then(|| "synthetic loader failure".into()),
+            });
+            let capabilities = capabilities_from_probes(
+                "cpu".into(),
+                "b123".into(),
+                Path::new("synthetic-runtime"),
+                None,
+                probes,
+            );
+            assert_eq!(capabilities.state, "failed preflight");
+            assert_eq!(capabilities.version.is_empty(), failed == 0);
+            assert_eq!(capabilities.flags.is_empty(), failed == 1);
+            assert_eq!(capabilities.server_help.is_empty(), failed == 1);
+            assert_eq!(capabilities.supports_dflash, failed != 1);
+            assert_eq!(capabilities.devices.is_empty(), failed == 2);
+            assert_eq!(capabilities.bench_available, failed != 3);
+            assert_eq!(capabilities.diagnostics, ["synthetic loader failure"]);
+        }
     }
 
     #[tokio::test]
@@ -9663,6 +10161,25 @@ mod tests {
             .contains("synthetic backend initialization"));
     }
 
+    #[tokio::test]
+    async fn a_failed_probe_retains_a_bounded_initialization_diagnostic() {
+        let binary = which::which("node").expect("Node test fixture");
+        let script = format!(
+            "process.stdout.write('λ'.repeat({})); process.stderr.write('missing synthetic libbackend.so\\n'); process.exitCode = 127;",
+            MAX_BUILD_DETAIL_CHARS * 2,
+        );
+        let result = run_probe_with(&binary, &["-e", &script], Duration::from_secs(3)).await;
+        assert!(!result.success);
+        assert!(result.text.contains("missing synthetic libbackend.so"));
+        let diagnostic = result.diagnostic.expect("failed probe diagnostic");
+        let (status, detail) = diagnostic.split_once('\n').expect("probe output detail");
+        assert!(status.starts_with("runtime probe exited with "));
+        assert!(detail.ends_with("missing synthetic libbackend.so"));
+        assert!(detail.contains('λ'));
+        assert!(!detail.contains('�'));
+        assert!(detail.chars().count() <= MAX_BUILD_DETAIL_CHARS);
+    }
+
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_cold_device_probe_can_finish_after_eight_seconds() {
@@ -9954,6 +10471,96 @@ mod tests {
         .await
         .unwrap();
         println!("Verified ROCm bundle SHA-256: {}", exported.archive_sha256);
+    }
+
+    fn git_in(
+        dir: &Path,
+        environment: Option<&[(OsString, OsString)]>,
+        args: &[&str],
+    ) -> std::process::Output {
+        let git =
+            which::which("git").expect("git is required for the nested build-info regression");
+        let mut command = std::process::Command::new(git);
+        if let Some(environment) = environment {
+            command.env_clear().envs(environment.iter().cloned());
+        }
+        command
+            .args([
+                "-c",
+                "user.name=AioLM test",
+                "-c",
+                "user.email=test@example.invalid",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs")
+    }
+
+    #[test]
+    fn nested_source_build_cannot_read_an_enclosing_repository_commit() {
+        // Mirrors a PR workspace under an AioLM home that sits inside another
+        // checkout: <repo>/home/downloads/.<nonce>/source/<repo>-<sha>.
+        let root = std::env::temp_dir().join(format!("aiolm-nested-git-{}", Uuid::new_v4()));
+        let workspace = root.join("home").join("downloads").join(".n-pr1-cpu");
+        let source = workspace.join("source").join("llama.cpp-0123abc");
+        let build = workspace.join("build");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&build).unwrap();
+        assert!(git_in(&root, None, &["init", "-q"]).status.success());
+        assert!(git_in(
+            &root,
+            None,
+            &["commit", "-q", "--allow-empty", "-m", "enclosing"]
+        )
+        .status
+        .success());
+        let enclosing = git_in(&root, None, &["rev-parse", "--short", "HEAD"]);
+        assert!(enclosing.status.success());
+        // Without a ceiling the build-info commands report the enclosing
+        // repository, which is exactly the contamination being prevented.
+        let base = child_environment();
+        let leaked = git_in(&source, Some(&base), &["rev-parse", "--short", "HEAD"]);
+        assert!(leaked.status.success());
+        assert_eq!(leaked.stdout, enclosing.stdout);
+        // The build child's environment stops discovery at the workspace for
+        // both the source tree and the separate build tree.
+        let bounded = with_git_ceiling(base, &workspace).unwrap();
+        for dir in [&source, &build] {
+            let head = git_in(dir, Some(&bounded), &["rev-parse", "--short", "HEAD"]);
+            assert!(
+                !head.status.success(),
+                "{}",
+                String::from_utf8_lossy(&head.stdout)
+            );
+            let count = git_in(dir, Some(&bounded), &["rev-list", "--count", "HEAD"]);
+            assert!(!count.status.success());
+        }
+        let _ = remove_tree_bounded(&root);
+    }
+
+    #[test]
+    fn pr_runtime_version_must_not_name_a_foreign_commit() {
+        let version = |commit: &str| RuntimeVersion {
+            semver: "0.0.0-synthetic".into(),
+            build: 1,
+            commit: commit.into(),
+        };
+        let reviewed = "18dc7ef9d7424b387c672a7a94bc86ceab7fdede";
+        assert!(reported_commit_matches_source(&version("18dc7ef"), reviewed).is_ok());
+        assert!(reported_commit_matches_source(&version("unknown"), reviewed).is_ok());
+        assert!(reported_commit_matches_source(&version(""), reviewed).is_ok());
+        assert!(reported_commit_matches_source(&version(reviewed), reviewed).is_ok());
+        for foreign in ["ec0d5f6", "1", "18dc7e", "18dc7ef-dirty", "18DC7EFX"] {
+            let error = reported_commit_matches_source(&version(foreign), reviewed).unwrap_err();
+            assert!(error.contains("foreign Git metadata"), "{foreign}: {error}");
+        }
+        assert_eq!(
+            reviewed_commit_define(reviewed).unwrap(),
+            format!("-DLLAMA_BUILD_COMMIT={reviewed}")
+        );
+        assert!(reviewed_commit_define("18dc7ef").is_err());
+        assert!(reviewed_commit_define("x").is_err());
     }
 }
 #[cfg(all(test, windows))]

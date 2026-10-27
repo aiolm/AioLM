@@ -1,12 +1,9 @@
 import type { AppConfig, GpuPlacement, GpuDevice, SessionDefinition, SessionStatus } from "../api/types";
 import { executionSettings, sessionExecutionSettings } from "../config/executionSettings";
+import { loadedModelPath } from './loadedModel';
 
 export const DEFAULT_SESSION_ID = "default";
-export const SESSION_STATUS_CHANGED_EVENT = "aiolm:session-status-changed";
-
-export function notifySessionStatusChanged(): void {
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
-}
+export { SESSION_STATUS_CHANGED_EVENT, notifySessionStatusChanged } from './sessionEvents.ts';
 
 export function emptyGpuPlacement(): GpuPlacement {
   return { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null };
@@ -89,18 +86,6 @@ export function toggleGpuSelection(placement: GpuPlacement, id: string, devices:
   };
 }
 
-export function gpuTensorSplitDrafts(placement: GpuPlacement): Record<string, string> {
-  return Object.fromEntries(placement.gpu_ids.map((id, index) => [id, String(placement.tensor_split[index] ?? 1)]));
-}
-
-export function parseGpuTensorSplits(drafts: Record<string, string>, gpuIds: string[]): number[] | null {
-  if (gpuIds.length < 2) return [];
-  const values = gpuIds.map((id) => Number(drafts[id]?.trim()));
-  return values.some((value, index) => !drafts[gpuIds[index]]?.trim() || !Number.isFinite(value) || value < 0)
-    ? null
-    : values;
-}
-
 export function sessionConfig(cfg: AppConfig, definition: SessionDefinition): AppConfig {
   return {
     ...cfg,
@@ -116,7 +101,7 @@ export function sessionDefinitionFromStatus(status: SessionStatus, cfg: AppConfi
   return {
     id: status.id,
     name: status.name || status.id,
-    models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
+    models: { primary_model: loadedModelPath(status), mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
     gpu: cloneGpuPlacement(status.gpu ?? status.execution?.gpu),
     enabled: true,
     ...(status.execution ? { execution: sessionExecutionSettings({ ...cfg, ...executionSettings(status.execution) }) } : {}),

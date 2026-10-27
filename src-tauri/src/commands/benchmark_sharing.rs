@@ -48,6 +48,7 @@ fn valid_submission_id(submission_id: &str) -> Result<(), SharingError> {
 }
 
 /// Generation snapshot: global epoch plus per-submission generation.
+#[derive(Clone, Copy)]
 struct LiveGuard {
     epoch: u64,
     generation: u64,
@@ -63,15 +64,27 @@ fn snapshot_live(submission_id: &str) -> LiveGuard {
 /// Re-check before every subsequent side effect. A bumped generation means
 /// user cancel; a bumped epoch or active measurement means benchmark work
 /// started. Stale completions must not start new work.
-fn ensure_live(
-    state: &AppState,
-    submission_id: &str,
-    guard: &LiveGuard,
-) -> Result<(), SharingError> {
-    if permits::epoch() != guard.epoch || permits::generation(submission_id) != guard.generation {
+fn ensure_generation_live(submission_id: &str, live: &LiveGuard) -> Result<(), SharingError> {
+    if permits::epoch() != live.epoch || permits::generation(submission_id) != live.generation {
         permits::clear_permit(submission_id);
         return Err(SharingError::cancelled());
     }
+    Ok(())
+}
+
+fn ensure_epoch_live(epoch: u64) -> Result<(), SharingError> {
+    if permits::epoch() != epoch {
+        return Err(SharingError::measurement_active());
+    }
+    Ok(())
+}
+
+fn ensure_live(
+    state: &AppState,
+    submission_id: &str,
+    live: &LiveGuard,
+) -> Result<(), SharingError> {
+    ensure_generation_live(submission_id, live)?;
     if guard::measurement_active(state) {
         permits::clear_permit(submission_id);
         return Err(SharingError::measurement_active());
@@ -110,6 +123,24 @@ async fn abortable_request<T>(
 
 fn join_error() -> SharingError {
     SharingError::vault_unavailable_msg("A local sharing task failed.")
+}
+
+/// Run one short privileged filesystem/vault operation off the async runtime.
+/// The operation gate is added here rather than around a whole command so
+/// dialogs and network requests remain cancellable and non-blocking to the
+/// benchmark entry point.
+async fn spawn_privileged_blocking<T, F>(state: &AppState, work: F) -> Result<T, SharingError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, SharingError> + Send + 'static,
+{
+    let gate = guard::try_privileged_operation(state)?;
+    tokio::task::spawn_blocking(move || {
+        let _gate = gate;
+        work()
+    })
+    .await
+    .map_err(|_| join_error())?
 }
 
 #[derive(Debug, Serialize)]
@@ -317,8 +348,8 @@ fn prepare_inner(
 ) -> Result<Prepared, SharingError> {
     valid_submission_id(submission_id)?;
     let bytes = transport::submission_bytes(body)?;
-    probe_body_submission(&bytes, submission_id)?;
-    let body_sha256 = transport::body_sha256_hex(&bytes);
+    probe_body_submission(bytes, submission_id)?;
+    let body_sha256 = transport::body_sha256_hex(bytes);
     let destination = config::submit_endpoint_for_origin(origin);
     let _lock = registry::submission_lock(benchmarks, submission_id)?;
     ensure_record(
@@ -339,9 +370,12 @@ pub(crate) async fn benchmark_sharing_prepare(
     body: String,
 ) -> Result<PrepareResponse, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
+    let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    tokio::task::spawn_blocking(move || {
+    let prepared_submission = submission_id.clone();
+    let prepared = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&submission_id, &live)?;
         prepare_inner(&vault::OsVault, &benchmarks, &origin, &submission_id, &body).map(
             |prepared| PrepareResponse {
                 credential_ref: prepared.credential_ref,
@@ -350,8 +384,9 @@ pub(crate) async fn benchmark_sharing_prepare(
             },
         )
     })
-    .await
-    .map_err(|_| join_error())?
+    .await?;
+    ensure_live(&state, &prepared_submission, &live)?;
+    Ok(prepared)
 }
 
 fn load_bound_secret(
@@ -377,7 +412,7 @@ fn load_bound_secret(
                 "This submission was restored from a backup.",
             ));
         }
-        if transport::body_sha256_hex(&bytes) != binding.body_sha256 {
+        if transport::body_sha256_hex(bytes) != binding.body_sha256 {
             return Err(SharingError::binding_conflict_msg(
                 "This submission is already bound to different data.",
             ));
@@ -394,6 +429,34 @@ fn open_browser(url: &str) -> Result<(), SharingError> {
         .map_err(|_| SharingError::vault_unavailable_msg("The system browser could not be opened."))
 }
 
+async fn open_browser_async(
+    state: &AppState,
+    submission_id: &str,
+    live: &LiveGuard,
+    url: String,
+) -> Result<(), SharingError> {
+    open_browser_async_with(state, submission_id, live, url, open_browser).await
+}
+
+async fn open_browser_async_with<F>(
+    state: &AppState,
+    submission_id: &str,
+    live: &LiveGuard,
+    url: String,
+    opener: F,
+) -> Result<(), SharingError>
+where
+    F: FnOnce(&str) -> Result<(), SharingError> + Send + 'static,
+{
+    let submission_id = submission_id.to_owned();
+    let live = *live;
+    spawn_privileged_blocking(state, move || {
+        ensure_generation_live(&submission_id, &live)?;
+        opener(&url)
+    })
+    .await
+}
+
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_begin_verification(
     state: State<'_, AppState>,
@@ -403,13 +466,18 @@ pub(crate) async fn benchmark_sharing_begin_verification(
     let live = snapshot_live(&submission_id);
     let (base, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    let (secret, binding) = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        let submission_id = submission_id.clone();
-        move || load_bound_secret(&vault::OsVault, &benchmarks, &origin, &submission_id, None)
+    let secret_submission = submission_id.clone();
+    let (secret, binding) = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&secret_submission, &live)?;
+        load_bound_secret(
+            &vault::OsVault,
+            &benchmarks,
+            &origin,
+            &secret_submission,
+            None,
+        )
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     if binding.body_sha256 == registry::UNKNOWN_BODY {
         return Err(SharingError::binding_conflict_msg(
             "This submission was restored from a backup.",
@@ -438,7 +506,13 @@ pub(crate) async fn benchmark_sharing_begin_verification(
     // The challenge page completes the Turnstile check; only the exact
     // configured verification URL is ever opened.
     ensure_live(&state, &submission_id, &live)?;
-    open_browser(&created.verification_url)?;
+    open_browser_async(
+        &state,
+        &submission_id,
+        &live,
+        created.verification_url.clone(),
+    )
+    .await?;
     Ok(response)
 }
 
@@ -452,13 +526,18 @@ pub(crate) async fn benchmark_sharing_poll_verification(
     let live = snapshot_live(&submission_id);
     let (base, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    let (secret, _) = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        let submission_id = submission_id.clone();
-        move || load_bound_secret(&vault::OsVault, &benchmarks, &origin, &submission_id, None)
+    let secret_submission = submission_id.clone();
+    let (secret, _) = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&secret_submission, &live)?;
+        load_bound_secret(
+            &vault::OsVault,
+            &benchmarks,
+            &origin,
+            &secret_submission,
+            None,
+        )
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     ensure_live(&state, &submission_id, &live)?;
     let client = transport::shared_client()?;
     let outcome = abortable_request(
@@ -493,26 +572,23 @@ pub(crate) async fn benchmark_sharing_submit(
     let (base, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
     let submission = submission_id.clone();
-    let request_body = body.clone();
-    let (secret, _) = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        move || {
-            load_bound_secret(
-                &vault::OsVault,
-                &benchmarks,
-                &origin,
-                &submission,
-                Some(&request_body),
-            )
-        }
+    let (secret, body) = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&submission, &live)?;
+        let (secret, _) = load_bound_secret(
+            &vault::OsVault,
+            &benchmarks,
+            &origin,
+            &submission,
+            Some(&body),
+        )?;
+        Ok((secret, body))
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     ensure_live(&state, &submission_id, &live)?;
     // Accepted replays may submit without a live permit; the server returns
     // the existing receipt. A missing permit is never an error here.
     let permit = permits::live_permit(&submission_id).map(|(permit, _)| permit);
-    let bytes = transport::submission_bytes(&body)?;
+    transport::submission_bytes(&body)?;
     let client = transport::shared_client()?;
     let outcome = abortable_request(
         &submission_id,
@@ -523,7 +599,7 @@ pub(crate) async fn benchmark_sharing_submit(
             &secret,
             permit.as_deref(),
             &submission_id,
-            &bytes,
+            body.into_bytes(),
         ),
     )
     .await?;
@@ -603,13 +679,12 @@ pub(crate) async fn benchmark_sharing_recovery_export(
     let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    let contents = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        let submission_id = submission_id.clone();
-        move || export_bytes(&vault::OsVault, &benchmarks, &origin, &submission_id)
+    let export_submission = submission_id.clone();
+    let contents = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&export_submission, &live)?;
+        export_bytes(&vault::OsVault, &benchmarks, &origin, &export_submission)
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     ensure_live(&state, &submission_id, &live)?;
     let path = tokio::task::spawn_blocking({
         let submission_id = submission_id.clone();
@@ -626,9 +701,11 @@ pub(crate) async fn benchmark_sharing_recovery_export(
     // The dialog may have outlived a cancel or measurement start: never
     // write a stale backup.
     ensure_live(&state, &submission_id, &live)?;
-    tokio::task::spawn_blocking(move || write_recovery_file(&path, &contents))
-        .await
-        .map_err(|_| join_error())??;
+    spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&submission_id, &live)?;
+        write_recovery_file(&path, &contents)
+    })
+    .await?;
     Ok(true)
 }
 
@@ -732,6 +809,7 @@ pub(crate) async fn benchmark_sharing_recovery_import(
     state: State<'_, AppState>,
 ) -> Result<Option<ImportResponse>, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
+    let dialog_epoch = permits::epoch();
     let (_, origin) = service_origin()?;
     let path = tokio::task::spawn_blocking(|| {
         rfd::FileDialog::new()
@@ -745,14 +823,13 @@ pub(crate) async fn benchmark_sharing_recovery_import(
     let benchmarks = benchmarks_root()?;
     // Vault and registry writes are privileged: re-check liveness after the
     // dialog before touching them.
-    if guard::measurement_active(&state) {
-        return Err(SharingError::measurement_active());
-    }
-    tokio::task::spawn_blocking(move || {
+    guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
+    ensure_epoch_live(dialog_epoch)?;
+    spawn_privileged_blocking(&state, move || {
+        ensure_epoch_live(dialog_epoch)?;
         import_path_inner(&vault::OsVault, &benchmarks, &origin, &path).map(Some)
     })
     .await
-    .map_err(|_| join_error())?
 }
 
 /// Copy the recovery string to the OS clipboard without handing the key to JS.
@@ -765,15 +842,15 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
     let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    let contents = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        let submission_id = submission_id.clone();
-        move || export_bytes(&vault::OsVault, &benchmarks, &origin, &submission_id)
+    let export_submission = submission_id.clone();
+    let contents = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&export_submission, &live)?;
+        export_bytes(&vault::OsVault, &benchmarks, &origin, &export_submission)
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     ensure_live(&state, &submission_id, &live)?;
-    tokio::task::spawn_blocking(move || {
+    spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&submission_id, &live)?;
         let mut clipboard = arboard::Clipboard::new().map_err(|_| {
             SharingError::vault_unavailable_msg("The system clipboard is unavailable.")
         })?;
@@ -783,7 +860,6 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
         Ok::<_, SharingError>(true)
     })
     .await
-    .map_err(|_| join_error())?
 }
 
 /// Exchange the owner proof for a one-time ticket and open the bound
@@ -791,6 +867,7 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
 /// native code; the WebView only learns success or a structured failure,
 /// and no page opens on any failure. `base` is the configured origin the
 /// caller already matched against the saved ownership binding.
+#[cfg(test)]
 async fn open_management_with(
     state: &AppState,
     client: &reqwest::Client,
@@ -800,6 +877,18 @@ async fn open_management_with(
     secret: &[u8; OWNER_SECRET_LEN],
     open: impl FnOnce(&str) -> Result<(), SharingError>,
 ) -> Result<(), SharingError> {
+    let url = create_management_url(state, client, base, submission_id, live, secret).await?;
+    open(&url)
+}
+
+async fn create_management_url(
+    state: &AppState,
+    client: &reqwest::Client,
+    base: &reqwest::Url,
+    submission_id: &str,
+    live: &LiveGuard,
+    secret: &[u8; OWNER_SECRET_LEN],
+) -> Result<String, SharingError> {
     ensure_live(state, submission_id, live)?;
     let handoff = abortable_request(
         submission_id,
@@ -816,7 +905,7 @@ async fn open_management_with(
     // A cancel or measurement start during the request must not still
     // open a page carrying a live ticket.
     ensure_live(state, submission_id, live)?;
-    open(&url)
+    Ok(url)
 }
 
 #[tauri::command]
@@ -830,24 +919,21 @@ pub(crate) async fn benchmark_sharing_open_management(
     let benchmarks = benchmarks_root()?;
     // Ownership records restored from a backup have no known body but still
     // carry full owner authority, so management does not require one.
-    let (secret, _) = tokio::task::spawn_blocking({
-        let origin = origin.clone();
-        let submission_id = submission_id.clone();
-        move || load_bound_secret(&vault::OsVault, &benchmarks, &origin, &submission_id, None)
+    let management_submission = submission_id.clone();
+    let (secret, _) = spawn_privileged_blocking(&state, move || {
+        ensure_generation_live(&management_submission, &live)?;
+        load_bound_secret(
+            &vault::OsVault,
+            &benchmarks,
+            &origin,
+            &management_submission,
+            None,
+        )
     })
-    .await
-    .map_err(|_| join_error())??;
+    .await?;
     let client = transport::shared_client()?;
-    open_management_with(
-        &state,
-        &client,
-        &base,
-        &submission_id,
-        &live,
-        &secret,
-        open_browser,
-    )
-    .await
+    let url = create_management_url(&state, &client, &base, &submission_id, &live, &secret).await?;
+    open_browser_async(&state, &submission_id, &live, url).await
 }
 
 #[cfg(test)]
@@ -855,6 +941,10 @@ mod tests {
     use super::*;
     use crate::benchmark::sharing::errors::code;
     use crate::benchmark::sharing::vault::MockVault;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Condvar, Mutex,
+    };
 
     const ORIGIN: &str = "http://127.0.0.1:4317";
 
@@ -862,6 +952,106 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aiolm-sharing-cmd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    struct BlockingVault {
+        inner: MockVault,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<ReleaseGate>,
+        block_once: AtomicBool,
+    }
+
+    struct ReleaseGate {
+        released: Mutex<bool>,
+        changed: Condvar,
+    }
+
+    impl ReleaseGate {
+        fn new() -> Self {
+            Self {
+                released: Mutex::new(false),
+                changed: Condvar::new(),
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+
+        fn wait(&self) -> bool {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            let mut released = self.released.lock().unwrap();
+            while !*released {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next, result) = self.changed.wait_timeout(released, remaining).unwrap();
+                released = next;
+                if result.timed_out() && !*released {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    impl BlockingVault {
+        fn new(entered: Arc<tokio::sync::Notify>, release: Arc<ReleaseGate>) -> Self {
+            Self {
+                inner: MockVault::open(),
+                entered,
+                release,
+                block_once: AtomicBool::new(true),
+            }
+        }
+
+        fn successful_sets(&self) -> u64 {
+            self.inner.successful_sets()
+        }
+    }
+
+    impl Vault for BlockingVault {
+        fn get_secret(&self, user: &str) -> Result<[u8; OWNER_SECRET_LEN], vault::VaultError> {
+            if self.block_once.swap(false, Ordering::AcqRel) {
+                self.entered.notify_one();
+                if !self.release.wait() {
+                    return Err(vault::VaultError::Platform(
+                        "test release barrier timed out".into(),
+                    ));
+                }
+            }
+            self.inner.get_secret(user)
+        }
+
+        fn set_secret(
+            &self,
+            user: &str,
+            secret: &[u8; OWNER_SECRET_LEN],
+        ) -> Result<(), vault::VaultError> {
+            self.inner.set_secret(user, secret)
+        }
+    }
+
+    async fn wait_entered(entered: &tokio::sync::Notify, release: &ReleaseGate) {
+        if tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+            .await
+            .is_err()
+        {
+            release.release();
+            panic!("privileged blocking work did not reach its release barrier");
+        }
+    }
+
+    async fn wait_completed(completed: &AtomicBool) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !completed.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the blocking closure must finish after its release barrier is released");
     }
 
     fn submission(tag: u128) -> String {
@@ -874,6 +1064,311 @@ mod tests {
 
     fn legacy_body(id: &str) -> String {
         format!(r#"{{"submission_id":"{id}","rows":[]}}"#)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prepare_privileged_work_keeps_operation_gate_until_vault_returns() {
+        let state = Arc::new(AppState::default());
+        let root = benchmarks();
+        let id = submission(900);
+        let body = wrapper_body(&id);
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(ReleaseGate::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let vault = Arc::new(BlockingVault::new(entered.clone(), release.clone()));
+        let task = {
+            let state = state.clone();
+            let vault = vault.clone();
+            let root = root.clone();
+            let id = id.clone();
+            let body = body.clone();
+            let completed = completed.clone();
+            tokio::spawn(async move {
+                spawn_privileged_blocking(&state, move || {
+                    let result = prepare_inner(vault.as_ref(), &root, ORIGIN, &id, &body);
+                    completed.store(true, Ordering::Release);
+                    result
+                })
+                .await
+            })
+        };
+        wait_entered(&entered, &release).await;
+        let gate_stayed_held = state.operation.clone().try_lock().is_err();
+        release.release();
+        let prepared = task.await.unwrap().unwrap();
+        assert!(
+            gate_stayed_held,
+            "benchmark entry must fail fast while prepare still owns the gate"
+        );
+        assert_eq!(prepared.body_sha256.len(), 64);
+        wait_completed(&completed).await;
+        assert_eq!(vault.successful_sets(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_import_privileged_work_keeps_operation_gate_until_vault_returns() {
+        let state = Arc::new(AppState::default());
+        let root = benchmarks();
+        let id = submission(901);
+        let secret = [23u8; OWNER_SECRET_LEN];
+        let path = root.join("recovery.txt");
+        std::fs::write(&path, recovery::encode_recovery(ORIGIN, &id, &secret)).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(ReleaseGate::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let vault = Arc::new(BlockingVault::new(entered.clone(), release.clone()));
+        let task = {
+            let state = state.clone();
+            let vault = vault.clone();
+            let root = root.clone();
+            let path = path.clone();
+            let completed = completed.clone();
+            tokio::spawn(async move {
+                spawn_privileged_blocking(&state, move || {
+                    let result = import_path_inner(vault.as_ref(), &root, ORIGIN, &path);
+                    completed.store(true, Ordering::Release);
+                    result
+                })
+                .await
+            })
+        };
+        wait_entered(&entered, &release).await;
+        let gate_stayed_held = state.operation.clone().try_lock().is_err();
+        release.release();
+        let imported = task.await.unwrap().unwrap();
+        assert!(
+            gate_stayed_held,
+            "benchmark entry must fail fast while recovery import still owns the gate"
+        );
+        assert_eq!(imported.submission_id, id);
+        wait_completed(&completed).await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_parent_keeps_privileged_gate_until_blocking_work_finishes() {
+        let state = Arc::new(AppState::default());
+        let root = benchmarks();
+        let id = submission(902);
+        let body = wrapper_body(&id);
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(ReleaseGate::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let vault = Arc::new(BlockingVault::new(entered.clone(), release.clone()));
+        let task = {
+            let state = state.clone();
+            let vault = vault.clone();
+            let root = root.clone();
+            let id = id.clone();
+            let body = body.clone();
+            let completed = completed.clone();
+            tokio::spawn(async move {
+                spawn_privileged_blocking(&state, move || {
+                    let result = prepare_inner(vault.as_ref(), &root, ORIGIN, &id, &body);
+                    completed.store(true, Ordering::Release);
+                    result
+                })
+                .await
+            })
+        };
+        wait_entered(&entered, &release).await;
+        task.abort();
+        assert!(
+            task.await.is_err(),
+            "the parent task must report cancellation"
+        );
+        let gate_stayed_held = state.operation.clone().try_lock().is_err();
+        release.release();
+        wait_completed(&completed).await;
+        assert!(
+            gate_stayed_held,
+            "cancelling the parent future must not release the gate early"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if state.operation.clone().try_lock().is_ok() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the gate must be released after blocking work finishes");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn operation_owned_by_measurement_rejects_prepare_before_vault_side_effects() {
+        let state = Arc::new(AppState::default());
+        let operation_lock = state.operation.clone();
+        let operation = operation_lock.try_lock().unwrap();
+        let root = benchmarks();
+        let work_root = root.clone();
+        let id = submission(903);
+        let body = wrapper_body(&id);
+        let vault = Arc::new(MockVault::open());
+        let work_vault = vault.clone();
+        let work_id = id.clone();
+        let result = spawn_privileged_blocking(&state, move || {
+            prepare_inner(work_vault.as_ref(), &work_root, ORIGIN, &work_id, &body)
+        })
+        .await;
+        assert_eq!(result.unwrap_err().code, code::MEASUREMENT_ACTIVE);
+        assert_eq!(vault.successful_sets(), 0);
+        assert!(registry::read_binding(&root, &id).unwrap().is_none());
+        drop(operation);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Test-only serialization across awaits (see permits.rs): unique
+    // submissions per test keep the shared generation assertions meaningful.
+    #[allow(clippy::await_holding_lock)]
+    async fn queued_browser_open_rechecks_cancel_before_dispatch() {
+        let _serial = permits::test_serial();
+        let state = AppState::default();
+        let id = submission(904);
+        let live = snapshot_live(&id);
+        permits::cancel_submission(&id);
+        let opened = Arc::new(AtomicBool::new(false));
+        let marker = opened.clone();
+        let result = open_browser_async_with(
+            &state,
+            &id,
+            &live,
+            "https://127.0.0.1:4317/verify".to_string(),
+            move |_| {
+                marker.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code, code::CANCELLED);
+        assert!(!opened.load(Ordering::Acquire));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Test-only serialization across awaits (see permits.rs): unique
+    // submissions per test keep the shared generation assertions meaningful.
+    #[allow(clippy::await_holding_lock)]
+    async fn queued_browser_open_fails_fast_while_measurement_owns_gate() {
+        let _serial = permits::test_serial();
+        let state = AppState::default();
+        let operation = state.operation.try_lock().unwrap();
+        let id = submission(905);
+        let live = snapshot_live(&id);
+        let opened = Arc::new(AtomicBool::new(false));
+        let marker = opened.clone();
+        let result = open_browser_async_with(
+            &state,
+            &id,
+            &live,
+            "https://127.0.0.1:4317/verify".to_string(),
+            move |_| {
+                marker.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code, code::MEASUREMENT_ACTIVE);
+        assert!(!opened.load(Ordering::Acquire));
+        drop(operation);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Test-only serialization across awaits (see permits.rs): unique
+    // submissions per test keep the shared generation assertions meaningful.
+    #[allow(clippy::await_holding_lock)]
+    async fn queued_browser_open_allows_normal_ready_serving() {
+        let _serial = permits::test_serial();
+        let state = AppState::default();
+        state.server.lock().unwrap().lifecycle = crate::server::Lifecycle::Ready;
+        let id = submission(906);
+        let live = snapshot_live(&id);
+        let opened = Arc::new(AtomicBool::new(false));
+        let marker = opened.clone();
+        open_browser_async_with(
+            &state,
+            &id,
+            &live,
+            "https://127.0.0.1:4317/verify".to_string(),
+            move |_| {
+                marker.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert!(opened.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn queued_browser_open_rechecks_cancel_after_enqueue_before_dispatch() {
+        let _serial = permits::test_serial();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let state = Arc::new(AppState::default());
+            let id = submission(907);
+            let live = snapshot_live(&id);
+            let blocker_started = Arc::new(tokio::sync::Notify::new());
+            let blocker_release = Arc::new(ReleaseGate::new());
+            let blocker = {
+                let blocker_started = blocker_started.clone();
+                let blocker_release = blocker_release.clone();
+                tokio::task::spawn_blocking(move || {
+                    blocker_started.notify_one();
+                    assert!(blocker_release.wait(), "blocking-pool occupier timed out");
+                })
+            };
+            wait_entered(&blocker_started, &blocker_release).await;
+
+            let opened = Arc::new(AtomicBool::new(false));
+            let marker = opened.clone();
+            let mut open_task = Box::pin(open_browser_async_with(
+                state.as_ref(),
+                &id,
+                &live,
+                "https://127.0.0.1:4317/verify".to_string(),
+                move |_| {
+                    marker.store(true, Ordering::Release);
+                    Ok(())
+                },
+            ));
+            let waker = std::task::Waker::noop();
+            let mut context = std::task::Context::from_waker(waker);
+            let first_poll = open_task.as_mut().poll(&mut context);
+            if !first_poll.is_pending() {
+                blocker_release.release();
+                tokio::time::timeout(std::time::Duration::from_secs(1), blocker)
+                    .await
+                    .expect("blocking-pool occupier must finish after release")
+                    .expect("blocking-pool occupier must not panic");
+                panic!("browser work must remain pending behind the occupier");
+            }
+            assert!(
+                state.operation.clone().try_lock().is_err(),
+                "browser work must own the operation gate before dispatch"
+            );
+            permits::cancel_submission(&id);
+            blocker_release.release();
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), blocker)
+                .await
+                .expect("blocking-pool occupier must finish after release")
+                .expect("blocking-pool occupier must not panic");
+            let result = tokio::time::timeout(std::time::Duration::from_secs(1), open_task)
+                .await
+                .expect("queued browser task must finish after the occupier");
+            assert_eq!(result.unwrap_err().code, code::CANCELLED);
+            assert!(!opened.load(Ordering::Acquire));
+            assert!(state.operation.clone().try_lock().is_ok());
+        });
     }
 
     fn prepare(vault: &dyn Vault, root: &std::path::Path, id: &str, body: &str) -> Prepared {
@@ -1182,7 +1677,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         });
         let client = transport::http_client().unwrap();
-        let body_bytes = body.clone().into_bytes();
+        let body_bytes = body.into_bytes();
         let live = snapshot_live(&id);
         let canceller = id.clone();
         tokio::spawn(async move {
@@ -1200,7 +1695,7 @@ mod tests {
                     &secret,
                     None,
                     &id,
-                    &body_bytes,
+                    body_bytes.clone(),
                 ),
             ),
         )
@@ -1244,7 +1739,7 @@ mod tests {
         let outcome = abortable_request(
             &id,
             &snapshot_live(&id),
-            transport::submit_benchmark_run(&client, &live_url, &secret, None, &id, &body_bytes),
+            transport::submit_benchmark_run(&client, &live_url, &secret, None, &id, body_bytes),
         )
         .await
         .unwrap();
@@ -1279,7 +1774,7 @@ mod tests {
             permits::note_measurement_start();
         });
         let secret = [1u8; OWNER_SECRET_LEN];
-        let empty: &[u8] = b"{}";
+        let empty = b"{}".to_vec();
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             abortable_request(

@@ -1,6 +1,12 @@
 import { readBoundedResponseText } from "./http.ts";
 import { trackInitialRead } from "../ui/initialLayout.ts";
 import type { LocalModelInfo, ServerLoraAdapter } from "./types.ts";
+import { invoke } from './transport.ts';
+import type { ModelArtifact } from './providers.ts';
+
+/** App-owned immutable snapshots, including interrupted transfers available to retry. */
+export const hfInstalledSnapshots = (repoId: string, modelsDir: string) =>
+  invoke<ModelArtifact[]>('hf_installed_snapshots', { repoId, modelsDir });
 
 /**
  * Orders the Hugging Face model listing can be ranked in. These are the

@@ -34,6 +34,42 @@ const metadata = (): BenchmarkModelMetadata => ({
 });
 
 describe('public benchmark boundary', () => {
+  it.each(['vllm', 'mlx-vlm'] as const)('publishes %s identity and format without private interpreter, snapshot or companion arguments', provider => {
+    const original = sample(provenance());
+    const result = toPublicBenchmark({ ...original, result: { ...original.result, provider,
+      model_format: provider === 'vllm' ? 'hf-safetensors' : 'mlx', runtime_version: provider === 'vllm' ? '0.31.0' : '0.7.6', runtime_accelerator: provider === 'vllm' ? 'cuda' : 'metal',
+      args: ['/synthetic/private/python', '-m', 'engine.server', 'serve', '/synthetic/private/model', '--host', '127.0.0.1', '--port', '9090',
+        '--embedding-model', '/synthetic/private/encoder', '--adapter-path', '/synthetic/private/adapter', '--speculative-config', '{"model":"/synthetic/private/draft"}', '--max-model-len', '8192'],
+    } }, submissionId);
+    expect(result.schema_version).toBe(2);
+    expect(result.runtime).toMatchObject({ name: provider, backend: provider === 'vllm' ? 'cuda' : 'metal' });
+    expect(result.model.format).toBe(provider === 'vllm' ? 'hf-safetensors' : 'mlx');
+    expect(result.execution.settings).toBeNull();
+    expect(result.method?.version).toBe(2);
+    expect(result.execution.effective_args).toEqual(['--max-model-len', '8192']);
+    expect(JSON.stringify(result)).not.toContain('/synthetic');
+    expect(() => validatePublicBenchmark({ ...result, schema_version: 1 })).toThrow();
+    expect(() => validatePublicBenchmark({ ...result, model: { ...result.model, format: 'gguf' } })).toThrow();
+    const withoutPrefix = toPublicBenchmark({ ...original, result: { ...original.result, provider, model_format: 'hf-safetensors', args: ['/synthetic/private/python', 'credential-token'] } }, submissionId);
+    expect(withoutPrefix.execution).not.toHaveProperty('effective_args');
+  });
+  it.each(['hf-safetensors', 'mlx', 'gguf'] as const)('publishes the measured vllm-metal plugin and %s format independently of Linux vLLM', format => {
+    const original = sample(provenance());
+    const result = toPublicBenchmark({ ...original, result: { ...original.result, provider: 'vllm', model_format: format,
+      runtime_version: '0.30.0', runtime_accelerator: 'metal', runtime_variant: 'vllm-metal', runtime_plugin_version: '0.30.0',
+    } }, submissionId);
+    expect(result.runtime).toEqual({ name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' });
+    expect(result.model.format).toBe(format);
+    expect(result.execution.settings).toBeNull();
+    expect(result.model).not.toHaveProperty('metadata');
+    for (const runtime of [{ ...result.runtime, name: 'mlx-vlm' }, { ...result.runtime, backend: 'cuda' },
+      { ...result.runtime, plugin_version: undefined }, { ...result.runtime, variant: undefined }, { ...result.runtime, plugin_version: '/private/plugin' }]) {
+      expect(() => validatePublicBenchmark({ ...result, runtime })).toThrow();
+    }
+    expect(() => validatePublicBenchmark({ ...result, schema_version: 1 })).toThrow();
+    expect(() => validatePublicBenchmark({ ...result, model: { ...result.model, metadata: metadata() } })).toThrow();
+    expect(JSON.stringify(result)).not.toMatch(/private|owner-secret/);
+  });
   it('rejects incomplete runs and failed measurements without changing the local record', () => {
     for (const status of ['partial', 'failed', 'cancelled'] as const) {
       const record = sample();

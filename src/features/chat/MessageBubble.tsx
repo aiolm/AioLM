@@ -1,13 +1,16 @@
+import ModelName from '../../shared/ui/ModelName';
+import MediaPreview from './MediaPreview';
 import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
-import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import Badge from "../../shared/ui/Badge";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import ChatMarkdown from "./ChatMarkdown";
 import ResponseMetrics from "./ResponseMetrics";
+import { chatReplyStateCopy } from "./chatRetryCopy";
 
 interface MessageBubbleProps {
   message: ChatHistoryMessage;
@@ -33,6 +36,8 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, index, messageCount, phase, copied, compact, locale, onCopy }: MessageBubbleProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
   const isUser = message.role === "user";
+  const replyState = chatReplyStateCopy[locale];
+  const withoutOutput = !message.content && !message.reasoning;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} px-1`}>
       <div
@@ -60,21 +65,23 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             >{message.reasoning}</div>
           </details>
         )}
-        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <img key={image.dataUrl} src={image.dataUrl} alt={normalizeDisplayText(image.name)} loading="lazy" decoding="async" width={144} height={144} className="h-36 w-36 max-h-40 max-w-40 rounded-lg border object-contain ui-border-color-border ui-background-mono-bg"  />)}</div> : null}
+        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <MediaPreview locale={locale} key={image.ref ?? image.dataUrl} attachment={image} />)}</div> : null}
         {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <Badge key={document.path}>{text("document")} · {normalizeDisplayText(document.name)}</Badge>)}</div> : null}
         {/* Only the assistant's side is markdown. What the user typed is shown
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser
           ? <ChatMarkdown source={message.content} />
           : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
-        {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
-        {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}
+        {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{withoutOutput ? replyState.stoppedEmpty : text("interrupted")}</div>}
+        {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{withoutOutput ? replyState.failedEmpty : text("partialFailed")}</div>}
+        {!isUser && message.toolRound && <div className="mt-2 text-xs ui-color-warning" role="status">{message.toolRound === 'failed' ? replyState.toolFailed : replyState.toolCancelled}</div>}
+        {!isUser && message.finishReason === 'length' && !message.interrupted && !message.failed && <div className="mt-2 text-xs ui-color-warning" role="status">{text("outputLimitReached")}</div>}
         </div>
         {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
           {message.model && <ModelIcon model={message.model} />}
           <span className="min-w-0 [overflow-wrap:anywhere]">
             <span className="sr-only">{translate(locale, "ui.responseModel")}: </span>
-            {message.model ? modelDisplayName(message.model) : translate(locale, "ui.responseModelUnknown")}
+            {message.model ? <ModelName model={message.model} /> : translate(locale, "ui.responseModelUnknown")}
           </span>
         </div>}
         {/* One closing row for the answer: measurements along the left, the copy

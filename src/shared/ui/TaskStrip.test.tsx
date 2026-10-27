@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n/i18n";
 import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY_MS, updateTask } from "../state/taskRegistry";
@@ -11,7 +11,7 @@ function clearTasks() {
 }
 
 function task(id: string, cancel = vi.fn()) {
-  const kind = id === "runtime-operation" ? "runtime" : id === "performance-benchmark-active" ? "benchmark" : "other";
+  const kind = id === "runtime-operation" || id === "deep-verification" ? "runtime" : id === "performance-benchmark-active" ? "benchmark" : "other";
   registerTask({ id, kind, label: "Preparing model", phase: "Loading weights", received: 25, total: 100, interruptible: true, cancel });
   return cancel;
 }
@@ -42,7 +42,7 @@ describe("task cancellation ownership", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it.each(["runtime-operation", "performance-benchmark-active", "session-load-work"])("keeps progress visible with only the mounted workspace cancellation for %s", (id) => {
+  it.each(["runtime-operation", "deep-verification", "performance-benchmark-active", "session-load-work", "provider-environment-operation", "entrypoint-help-synthetic", "runtime-adapter-registration", "adapter-setup-synthetic", "runtime-help-review-synthetic", "future-adapter-task"])("keeps progress visible with only the mounted workspace cancellation for %s", (id) => {
     const globalCancel = task(id);
     const localCancel = vi.fn();
     render(<View taskId={id} onCancel={localCancel} />);
@@ -56,17 +56,40 @@ describe("task cancellation ownership", () => {
     expect(globalCancel).not.toHaveBeenCalled();
   });
 
-  it("restores working global cancellation when its mounted workspace becomes inactive", () => {
-    const cancel = task("performance-benchmark-active");
+  it.each(['performance-benchmark-active', 'provider-environment-operation', 'entrypoint-help-synthetic', 'runtime-adapter-registration', 'adapter-setup-synthetic', 'runtime-help-review-synthetic'])("restores working global cancellation when the %s workspace becomes inactive", id => {
+    const cancel = task(id);
     const localCancel = vi.fn();
-    const view = render(<View taskId="performance-benchmark-active" onCancel={localCancel} />);
-    view.rerender(<View taskId="performance-benchmark-active" active={false} onCancel={localCancel} />);
+    const view = render(<View taskId={id} onCancel={localCancel} />);
+    view.rerender(<View taskId={id} active={false} onCancel={localCancel} />);
     const button = screen.getByRole("button", { name: "Cancel" });
     expect(screen.getByRole("complementary", { name: "Background tasks" })).toContainElement(button);
     fireEvent.click(button);
     expect(cancel).toHaveBeenCalledOnce();
     expect(localCancel).not.toHaveBeenCalled();
     expect(button).toBeDisabled();
+  });
+
+  it('restores global cancellation when a still-mounted local editor is hidden or its disclosure is closed', async () => {
+    const cancel = task('runtime-help-review-synthetic');
+    const view = (hidden: boolean, open: boolean, inert = false) => <I18nProvider initialLocale="en"><TaskCancellationProvider><TaskStrip />
+      <div hidden={hidden} inert={inert}><details open={open}><summary>Command tools</summary>
+        <LocalTaskCancelButton taskId="runtime-help-review-synthetic" onClick={cancel}>Cancel</LocalTaskCancelButton>
+      </details></div>
+    </TaskCancellationProvider></I18nProvider>;
+    const rendered = render(view(false, true));
+    const global = () => within(screen.getByRole('complementary', { name: 'Background tasks' }));
+    expect(global().queryByRole('button')).not.toBeInTheDocument();
+    rendered.rerender(view(true, true));
+    await waitFor(() => expect(global().getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    rendered.rerender(view(false, true));
+    await waitFor(() => expect(global().queryByRole('button')).not.toBeInTheDocument());
+    rendered.rerender(view(false, false));
+    await waitFor(() => expect(global().getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    rendered.rerender(view(false, true, true));
+    await waitFor(() => expect(global().getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    expect(cancel).not.toHaveBeenCalled();
+    fireEvent.click(global().getByRole('button', { name: 'Cancel' }));
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("restores global cancellation while the active workspace's local control is unmounted", () => {
@@ -99,16 +122,15 @@ describe("task cancellation ownership", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("retains global cancellation for a generic task even when a local control shares its ID", () => {
+  it("uses active local ownership for new task kinds without an ID allowlist", () => {
     const cancel = task("document-index");
     const localCancel = vi.fn();
     render(<View taskId="document-index" onCancel={localCancel} />);
     const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
-    fireEvent.click(strip.getByRole("button", { name: "Cancel" }));
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(localCancel).not.toHaveBeenCalled();
-    expect(strip.getByRole("button", { name: "Cancelling" })).toBeDisabled();
-    expect(within(screen.getByRole("region", { name: "Task workspace" })).getByRole("button", { name: "Cancelling" })).toBeDisabled();
+    expect(strip.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(localCancel).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("keeps a usable global action while the local control is disabled until cancellation is pending", () => {
@@ -170,6 +192,39 @@ describe("task cancellation ownership", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("collapses a long failed-task diagnostic while keeping status and stored detail intact", () => {
+    const firstLine = "server exited before ready (1). error while handling argument --chat-template-file: failed to open file [synthetic D15 missing path]";
+    const full = [
+      firstLine,
+      "usage: synthetic-engine [options] --chat-template-file PATH",
+      ...Array.from({ length: 16 }, (_, index) => `  synthetic-template-${index} (synthetic variant)`),
+      "한글 합성 진단 · 日本語の合成診断 · 中文合成诊断",
+    ].join("\n");
+    registerTask({ id: "benchmark-synthetic", kind: "benchmark", label: "Synthetic benchmark", interruptible: true });
+    act(() => finishTask("benchmark-synthetic", "failed", full));
+    render(<View taskId="benchmark-synthetic" />);
+    const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
+    // Truthful Failed status stays separately exposed, not merged into the detail.
+    expect(strip.getByText("Failed")).toBeVisible();
+    expect(strip.getByText(firstLine)).toBeVisible();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).toBeInTheDocument();
+    expect(document.querySelector("pre.app-diagnostic-full")?.textContent).toBe(full);
+    // Stored registry detail is untouched by the collapsed presentation.
+    expect(getTaskSnapshot().find((item) => item.id === "benchmark-synthetic")?.detail).toBe(full);
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss/ }));
+    expect(getTaskSnapshot()).toHaveLength(0);
+  });
+
+  it("keeps a short failed-task detail inline without collapsing", () => {
+    registerTask({ id: "benchmark-short", kind: "benchmark", label: "Synthetic benchmark", interruptible: true });
+    act(() => finishTask("benchmark-short", "failed", "disk full"));
+    render(<View taskId="benchmark-short" />);
+    const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
+    expect(strip.getByText("Failed")).toBeVisible();
+    expect(strip.getByText("disk full")).toBeVisible();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).not.toBeInTheDocument();
   });
 
   it("shows transferred bytes and speed while a download is running", () => {

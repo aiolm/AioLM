@@ -61,6 +61,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Performance benchmark workflow", () => {
+
+  it('lets a narrow result table reveal its hidden phase columns with the keyboard', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    const table = (await screen.findByRole('table', { name: 'Single requests' })).parentElement!;
+    Object.defineProperties(table, { clientWidth: { configurable: true, value: 320 }, scrollWidth: { configurable: true, value: 960 } });
+    fireEvent(window, new Event('resize'));
+    table.focus();
+    fireEvent.keyDown(table, { key: 'ArrowRight' });
+    expect(table.scrollLeft).toBeGreaterThan(0);
+    expect(within(table).getAllByText('100.0')).toHaveLength(2);
+    expect(within(table).getByText('40960.0')).toBeVisible();
+    fireEvent.keyDown(table, { key: 'End' });
+    expect(table.scrollLeft).toBe(640);
+    fireEvent.keyDown(table, { key: 'Home' });
+    expect(table.scrollLeft).toBe(0);
+  });
+
   const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null };
 
   it('confirms deletion, selects a remaining result and clears the last result from storage and the screen', async () => {
@@ -181,7 +199,7 @@ describe("Performance benchmark workflow", () => {
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
     expect(runConfig).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: revised.id, profile_revision: 2 });
-    expect(runConfig.settings_profiles?.entries[0]).toEqual(revised);
+    expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual({ ...revised, provider: 'llama.cpp' });
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -200,7 +218,7 @@ describe("Performance benchmark workflow", () => {
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
     expect(runConfig).toMatchObject({ active_model: original.config.active_model, ngl: 16, ctx_size: 8192, temperature: 0.2 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: 'profile-fallback' });
-    expect(runConfig.settings_profiles?.entries.map(profile => profile.id)).toEqual(['profile-fallback']);
+    expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(['profile-fallback']);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -385,6 +403,17 @@ describe("Performance benchmark workflow", () => {
     expect(getTaskSnapshot().find((task) => task.id === "performance-benchmark-active")?.state).toBe("completed");
   });
 
+  it('retains unreadable browser history and offers the current successful measurement for export', async () => {
+    const original = '{unreadable-history-kept-for-recovery';
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, original);
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await screen.findByText('The result could not be saved to history. It remains on this screen and can be exported to a file.');
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(original);
+    expect(screen.getByRole('button', { name: 'Export result' })).toBeEnabled();
+    expect(screen.getByRole('table', { name: 'Single requests' }).querySelector('.performance-metric-primary')).toHaveTextContent('100.0');
+  });
+
   it("offers one file export and no redundant history selector for the only current result", async () => {
     const csv = vi.spyOn(performanceRecords, "performanceCsv");
     vi.stubGlobal("URL", class extends URL {
@@ -414,7 +443,7 @@ describe("Performance benchmark workflow", () => {
     }));
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
-    const summary = await screen.findByText("Effective llama-server arguments");
+    const summary = await screen.findByText("Effective runtime arguments");
     // A negative value belongs to its option; a switch stays on a line of its own.
     expect(summary.parentElement?.querySelector("code")?.textContent).toBe([
       '"--model" "C:/models/test.gguf"',
@@ -476,6 +505,39 @@ describe("Performance benchmark workflow", () => {
     expect(writeText.mock.calls[0][0]).toContain('|');
     expect(writeText.mock.calls[0][0]).not.toContain('run_id,created_at,model');
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it.each(['success', 'failure'] as const)('ignores a delayed clipboard %s after selecting another history result', async ending => {
+    const saved = (id: string): PerformanceBenchmarkRecord => ({
+      schemaVersion: 1, id, createdAt: 1, model: `models/${id}.gguf`, backend: 'cpu', build: 'b1',
+      request: { run_id: id, prompt_lengths: [4096], generation_length: 128, batch_sizes: [], repetitions: 1, context_profile: 'novel_ko', warmup: true },
+      result: result(id, [row()]),
+    });
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([saved('first'), saved('second')]));
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    const writeText = vi.fn().mockReturnValueOnce(pending).mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    renderPanel();
+    const choose = (model: string) => {
+      fireEvent.click(screen.getByRole('combobox', { name: 'Result history' }));
+      fireEvent.click(screen.getByRole('option', { name: new RegExp(model) }));
+    };
+    choose('first.gguf');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Markdown' }));
+    expect(writeText.mock.calls[0][0]).toContain('first.gguf');
+    const copying = screen.getByRole('button', { name: 'Copy Markdown' });
+    expect(copying).toBeDisabled();
+    fireEvent.click(copying);
+    expect(writeText).toHaveBeenCalledOnce();
+    choose('second.gguf');
+    await act(async () => { if (ending === 'success') resolve(); else reject(new Error('Clipboard unavailable for first')); });
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Clipboard unavailable for first')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Markdown' }));
+    await screen.findByRole('button', { name: 'Copied' });
+    expect(writeText.mock.calls[1][0]).toContain('second.gguf');
   });
 
   it("localizes loading and cleanup progress instead of showing backend English messages", async () => {

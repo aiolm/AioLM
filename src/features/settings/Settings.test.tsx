@@ -22,6 +22,8 @@ describe("desktop settings", () => {
     render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole("tab", { name: "Server" }));
     const toggle = screen.getByRole("switch", { name: "Close to system tray" });
+    const description = "Closing the window hides AioLM in the system tray and leaves running servers up. Use the tray icon to bring the window back or to quit.";
+    expect(toggle).toHaveAccessibleDescription(description);
     // A configuration saved before the setting existed carries no field, and
     // the window still closes the application.
     expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -34,6 +36,7 @@ describe("desktop settings", () => {
     vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error("failed to create the tray icon"));
     fireEvent.click(screen.getByRole("switch", { name: "Close to system tray" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("failed to create the tray icon");
+    expect(screen.getByRole("switch", { name: "Close to system tray" })).toHaveAccessibleDescription(description);
     expect(store.cfg?.close_to_tray).toBe(true);
   });
 
@@ -50,7 +53,7 @@ describe("desktop settings", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Server" }));
     expect(screen.queryByRole("switch", { name: "Unload model on app exit" })).not.toBeInTheDocument();
     expect(screen.getByText("Managed processes stop on exit")).toBeInTheDocument();
-    expect(screen.getByText(/Switching tabs does not stop them/)).toBeInTheDocument();
+    expect(screen.getByText(/switching tabs does not stop them/i)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
   });
 

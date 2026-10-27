@@ -9,11 +9,22 @@ import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializ
 import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor, profileLibraryConfigPatch, SettingsDeliveryError } from './profileEditor';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
-import { resetProfileSettings } from './profileResetState';
+import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
+import { ORDER_KEY } from '../runtimes/optionOrder';
+import { registerTask, removeTask } from '../../shared/state/taskRegistry';
+import { LocalTaskCancelButton, TaskCancellationProvider } from '../../shared/ui/TaskCancellation';
+import TaskStrip from '../../shared/ui/TaskStrip';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
+  providerRuntimeOptions: vi.fn(async () => []),
+  providerOptionIssues: vi.fn(async () => []),
+  providerOptionSchema: vi.fn(async () => effectiveSchema([])),
+  runtimeHelpTarget: vi.fn(() => new Promise(() => undefined)),
+  providerCatalog: async () => [{ id: 'llama.cpp', engine: 'llama.cpp', server: 'llama-server', availability: { supported: true, detail: '' }, options: [] }],
+  providerRuntimes: async () => [{ id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', version: 'b123', accelerator: 'cpu', installation: 'managed', location: 'runtime', available: true, problems: [] }],
   listModels: vi.fn(async () => ({ models: [
     { name: 'a.gguf', path: 'models/a.gguf', size_mb: 3000, is_vision: false },
     { name: 'b.gguf', path: 'models/b.gguf', size_mb: 1500, is_vision: false },
@@ -39,17 +50,487 @@ function mount(props: Partial<ModelSettingsDialogProps> = {}, locale: Locale = '
   const onReloadProfile = props.onReloadProfile ?? vi.fn(async () => ({ config: persisted, application: appliedProfile(persisted)! }));
   function Harness() {
     const [open, setOpen] = useState(true);
-    return <ModelSettingsDialog open={open} initialConfig={structuredClone(cfg)} mode="default" targetLabel="Default execution"
+    return <ModelSettingsDialog open={open} initialConfig={structuredClone(cfg)} mode="default" targetLabel="Default execution" initialSection="model"
       {...props} onProfileCommit={onProfileCommit} onReloadProfile={onReloadProfile} onApply={onApply} onClose={() => { onClose(); setOpen(false); }} />;
   }
   render(<I18nProvider initialLocale={locale}><Harness /></I18nProvider>);
   return { onApply, onClose, onProfileCommit, onReloadProfile, getSaved: () => persisted };
 }
+function rawChat() {
+  const direct = screen.getByRole('button', { name: 'Enter arguments directly', hidden: true });
+  if (direct.getAttribute('aria-pressed') !== 'true') fireEvent.click(direct);
+  return screen.getByLabelText('Extra request JSON');
+}
 function numeric(key: string) { return document.querySelector<HTMLInputElement>(`input[id$="-${key}"]`)!; }
+function openOptions() {
+  const runtimeNext = screen.queryByRole('button', { name: 'Continue to profile' });
+  if (runtimeNext) fireEvent.click(runtimeNext);
+  const profileNext = screen.queryByRole('button', { name: 'Use this profile and adjust options' });
+  if (profileNext) fireEvent.click(profileNext);
+}
 
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('keeps profile-library preparation bounded while editing a model option with many saved profiles', () => {
+    const base = captureProfile(cfg, 'Saved settings', 'global', 'Keep these instructions');
+    const entries = [defaultSettingsProfile(), ...Array.from({ length: 64 }, (_, index) => ({
+      ...base, id: `saved-${index}`, name: `Saved settings ${index}`,
+    }))];
+    const library = { ...emptyProfileLibrary(), entries };
+    const before = structuredClone(library);
+    mount({ initialSection: 'tuning', initialConfig: { ...cfg, settings_profiles: library } });
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    const libraryCopies = clone.mock.calls.filter(([value]) =>
+      value && typeof value === 'object' && 'entries' in value && Array.isArray(value.entries) && value.entries.length >= entries.length);
+    expect(libraryCopies).toHaveLength(0);
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    expect(library).toEqual(before);
+  });
+  it('guides ordinary entry through runtime and profile before exposing option editors', async () => {
+    const { onApply, onProfileCommit } = mount({ initialSection: undefined });
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(document.querySelector('.settings-profile-chips')).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Model' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Profiles' })).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+  it('requires a runtime selection before profile or option navigation', () => {
+    const onManageRuntimes = vi.fn();
+    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' }, initialSection: 'advanced', onManageRuntimes });
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_backend: '', active_build: '' }));
+  });
+
+  it('shares cancellation with the inline runtime manager and restores it when that retained manager is hidden', async () => {
+    const cancel = vi.fn();
+    const commit = vi.fn(); const reload = vi.fn();
+    registerTask({ id: 'runtime-adapter-registration', kind: 'runtime', label: 'Synthetic registration', interruptible: true, cancel });
+    try {
+      render(<I18nProvider initialLocale="en"><TaskCancellationProvider><TaskStrip /><ModelSettingsDialog open initialConfig={cfg}
+        mode="default" targetLabel="Synthetic execution" onApply={vi.fn()} onClose={vi.fn()} onProfileCommit={commit} onReloadProfile={reload}
+        renderRuntimeManager={() => <LocalTaskCancelButton taskId="runtime-adapter-registration" onClick={cancel}>Cancel registration</LocalTaskCancelButton>} />
+      </TaskCancellationProvider></I18nProvider>);
+      const strip = () => within(screen.getByRole('complementary', { name: 'Background tasks' }));
+      expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+      expect(await screen.findByRole('button', { name: 'Cancel registration' })).toBeVisible();
+      await waitFor(() => expect(strip().queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
+      await waitFor(() => expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled());
+      expect(screen.queryByRole('button', { name: 'Cancel registration' })).not.toBeInTheDocument();
+      fireEvent.click(strip().getByRole('button', { name: 'Cancel' }));
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(commit).not.toHaveBeenCalled(); expect(reload).not.toHaveBeenCalled();
+    } finally { act(() => removeTask('runtime-adapter-registration')); }
+  });
+  it('manages runtimes inside the same modal, retains both drafts and waits for active operations', async () => {
+    const inventory = vi.spyOn(api, 'providerRuntimes');
+    const onManageRuntimes = vi.fn();
+    function Manager({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
+      return <div><input aria-label="Registration draft" defaultValue="" />
+        <button type="button" onClick={() => onBusyChange(true)}>Begin operation</button>
+        <button type="button" onClick={() => { inventory.mockResolvedValue([
+          { id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+          { id: 'b456-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b456', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+        ]); onBusyChange(false); }}>Finish operation</button></div>;
+    }
+    const { onClose, onApply, onProfileCommit } = mount({ initialSection: 'tuning', onManageRuntimes,
+      renderRuntimeManager: ({ onBusyChange }) => <Manager onBusyChange={onBusyChange} /> });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.blur(numeric('ctx_size'));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    const modal = screen.getByRole('dialog', { name: 'Model & settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(screen.getByRole('dialog', { name: 'Manage runtimes' })).toBe(modal);
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    const registration = screen.getByLabelText('Registration draft');
+    registration.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(registration).toHaveFocus();
+    fireEvent.change(screen.getByLabelText('Registration draft'), { target: { value: 'Unsaved entry point' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Begin operation' }));
+    expect(screen.getByRole('button', { name: 'Back to runtime' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent(modal, new Event('cancel', { cancelable: true }));
+    expect(screen.getByLabelText('Registration draft')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish operation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
+    expect(await screen.findByRole('radio', { name: /^b456/ })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /^b123/ })).toBeChecked();
+    openOptions();
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(screen.getByLabelText('Registration draft')).toHaveValue('Unsaved entry point');
+    fireEvent(modal, new Event('cancel', { cancelable: true }));
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(onManageRuntimes).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+  it('keeps the option draft on backward navigation and confirms before replacing it with another profile', async () => {
+    const alternate = captureProfile({ ...cfg, ctx_size: 12288 }, 'Alternate settings', 'global', '');
+    const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg,
+      settings_profiles: { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), alternate] } } });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.blur(numeric('ctx_size'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Alternate settings' }));
+    expect(screen.getByRole('button', { name: 'Use this profile and adjust options' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    expect(screen.getByText('Discard unsaved changes?')).toBeVisible();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    expect(numeric('ctx_size')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Alternate settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument());
+    openOptions();
+    expect(numeric('ctx_size')).toHaveValue(12288);
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+  });
+  it('focuses the new stage heading and exposes the current stage to assistive technology', async () => {
+    mount({ initialSection: undefined });
+    const stage = document.querySelector<HTMLElement>('.model-settings-body')!;
+    stage.scrollTo = ((options: ScrollToOptions) => { stage.scrollTop = options.top ?? stage.scrollTop; }) as typeof stage.scrollTo;
+    // The new stage arrives focused and at its top in the same update, before a
+    // frame can paint it elsewhere and move what the next pointer press aims at.
+    const navigate = (button: string | RegExp, heading: string) => {
+      stage.scrollTop = 302;
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(screen.getByRole('heading', { name: heading })).toHaveFocus();
+      expect(stage.scrollTop).toBe(0);
+    };
+    expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveAttribute('aria-current', 'step');
+    navigate('Continue to profile', 'Choose profile');
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toHaveAttribute('aria-current', 'step');
+    navigate('Use this profile and adjust options', 'Adjust options');
+    navigate('Back to profile', 'Choose profile');
+    // A control used once the stage has arrived keeps its focus in later frames.
+    const chip = document.querySelector<HTMLButtonElement>('.settings-profile-chip')!;
+    chip.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(chip).toHaveFocus();
+    navigate(/^Choose runtime/, 'Choose runtime');
+  });
+  it('shows only the chosen external engine profiles and reconfirms after changing runtime builds', async () => {
+    const provider = 'custom.new-engine';
+    const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };
+    const own = captureProfile(selected, 'New engine profile', 'global', '');
+    const other = captureProfile(cfg, 'Other engine profile', 'global', '');
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'New engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['build-one', 'build-two'].map(id => ({
+      id, provider, engine: 'New engine', server: 'openai-v1', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [],
+    })));
+    const { onApply, onProfileCommit } = mount({ initialSection: undefined, initialConfig: { ...selected,
+      settings_profiles: { ...emptyProfileLibrary(), entries: [own, other] } } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    expect(screen.getByRole('button', { name: /^New engine profile/ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Other engine profile/ })).not.toBeInTheDocument();
+    openOptions();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
+    await screen.findByRole('radio', { name: /^build-two · synthetic · Registered installation/ });
+    expect(screen.getByRole('radio', { name: /^build-two/ })).toBeEnabled();
+    // Use the latest inventory after the asynchronous refresh.
+    fireEvent.click(screen.getByRole('radio', { name: /^build-two · synthetic · Registered installation/ }));
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^build-two/ })).toBeChecked());
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('radio', { name: /^build-one · synthetic · Registered installation/ }));
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    openOptions();
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+  it('does not steal focus from a control used before the stage focus frame', async () => {
+    mount({ initialSection: undefined });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    const picker = document.querySelector<HTMLButtonElement>('.settings-profile-chip')!;
+    picker.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(picker).toHaveFocus();
+  });
+  it('shows external schema options together without assuming performance or reasoning categories', async () => {
+    const provider = 'custom.unfamiliar';
+    const options = [
+      schemaOption({ key: 'fresh-cache', flag: '--fresh-cache', target: 'launch', group: 'memory', kind: { type: 'integer' } }),
+      schemaOption({ key: 'fresh-policy', flag: '--fresh-policy', target: 'launch', group: 'engine-specific', kind: { type: 'text' } }),
+      schemaOption({ key: 'fresh-budget', flag: '--fresh-budget', target: 'launch', group: 'reasoning', kind: { type: 'integer' } }),
+    ];
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'reasoning' });
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime options', 'Conversation instructions']);
+    const tab = screen.getByRole('tab', { name: 'Runtime options' });
+    expect(tab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab.id);
+    for (const flag of ['--fresh-cache', '--fresh-policy', '--fresh-budget']) expect(await screen.findByLabelText(new RegExp(`^${flag}`))).toBeVisible();
+    expect(screen.queryByLabelText('Default system prompt')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Conversation instructions' }));
+    expect(screen.getByLabelText('Default system prompt')).toBeVisible();
+    expect(screen.getByText(/AioLM conversation instructions/)).toBeVisible();
+  });
+  it('opens external runtime setup at selection and keeps runtime management beside the selectors', async () => {
+    const onManageRuntimes = vi.fn();
+    mount({ initialConfig: { ...cfg, active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }, initialSection: 'setup', onManageRuntimes });
+    expect(screen.queryByRole('tab', { name: 'Runtime connection' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    const context = document.querySelector<HTMLElement>('.model-settings-runtime-selection')!;
+    fireEvent.click(within(context).getByRole('button', { name: 'Manage runtimes' }));
+    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }));
+  });
+  it('offers an external unknown model to launch validation without claiming compatibility', async () => {
+    const provider = 'custom.unfamiliar';
+    const candidate: api.GgufModel = { name: 'Unverified family model', path: 'models/unverified.gguf', size_mb: 1, is_vision: false,
+      compatibility: [{ provider, status: 'unknown' as const, tasks: [], modalities: { text: false, image: false, audio: false, video: false },
+        reasons: [], limitations: [], readiness: [], evidence: 'adapter-manifest' }] };
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'Unfamiliar engine', server: 'openai-v1', options: [], availability: { supported: true, detail: '' } }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'specific-build', provider, engine: 'Unfamiliar engine', server: 'openai-v1', accelerator: 'unverified', installation: 'external', location: 'synthetic', available: true, problems: [] }]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    const onApply = vi.fn(async () => { throw new Error('This installed engine cannot load this model.'); });
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [candidate], truncated: false });
+    const { onClose } = mount({ initialConfig: { ...cfg, active_model: '', active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'model', onApply });
+    const row = await screen.findByRole('button', { name: /Unverified family model/ });
+    expect(api.modelLoadable(candidate, provider)).toBe(false);
+    fireEvent.click(row);
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_provider: provider, active_runtime: 'specific-build', active_model: candidate.path }), 'start', expect.anything()));
+    expect(await screen.findByText(/This installed engine cannot load this model/)).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+  it('keeps the first save-as click available when a checked runtime option loses focus', async () => {
+    const option = schemaOption({ key: 'fresh-label', flag: '--fresh-label', target: 'launch', group: 'advanced', kind: { type: 'text' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));
+    const check = vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    const { onProfileCommit } = mount({ initialSection: 'advanced' });
+    const field = await screen.findByLabelText(/^--fresh-label/);
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'quoted "label" ; & 공백' } });
+    const saveAs = screen.getByRole('button', { name: 'Save as new' });
+    await waitFor(() => expect(saveAs).toBeEnabled());
+    expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+    }));
+    const checksBeforeBlur = check.mock.calls.length;
+    // A real pointer activation blurs the input between mouse down and click.
+    fireEvent.mouseDown(saveAs);
+    fireEvent.blur(field);
+    fireEvent.mouseUp(saveAs);
+    fireEvent.click(saveAs);
+    expect(screen.getByLabelText('Profile name')).toBeVisible();
+    expect(screen.queryByText('Checking runtime options…')).not.toBeInTheDocument();
+    expect(check).toHaveBeenCalledTimes(checksBeforeBlur);
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Fresh runtime options' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({
+      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+    }), expect.anything(), true);
+  });
+  it.each(['vllm', 'mlx-vlm'] as const)('keeps an unedited %s profile clean and blocks saving while its option check is pending', async provider => {
+    let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+    const { onClose, onProfileCommit, onApply } = mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic', provider_options: {} }, initialSection: 'sampling' });
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalled());
+    expect(screen.getByText('Checking runtime options…')).toBeVisible();
+    expect(screen.queryByText(/Correct invalid fields/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unsaved changes/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
+    await act(async () => { finish([]); });
+  });
+  it('previews and applies a common profile from the single list before selecting a primary model', async () => {
+    const initialConfig = { ...cfg, active_model: '', settings_profiles: undefined };
+    const first = { ...captureProfile(initialConfig, 'Initial setup', 'global', ''), id: 'initial-setup' };
+    const selected = { ...captureProfile({ ...initialConfig, temperature: 0.3 }, 'Selected setup', 'global', ''), id: 'selected-setup' };
+    const library = { ...emptyProfileLibrary(), entries: [first, selected], default_profile_id: first.id, legacy_imported: true };
+    const { onProfileCommit } = mount({ initialConfig: { ...initialConfig, settings_profiles: library }, initialSection: 'profiles' });
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Selected setup' }));
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalled());
+    expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ active_model: '', temperature: 0.3 }), expect.anything(), true);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Selected setup · Selected' })).toBeVisible());
+  });
+
+  it('offers GGUF language models as llama draft companions and excludes snapshot directories', async () => {
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [
+      { name: 'language.gguf', path: 'models/language.gguf', size_mb: 1, is_vision: false },
+      { name: 'Snapshot model', path: 'models/snapshot', size_mb: 1, is_vision: false },
+      { name: 'mmproj.gguf', path: 'models/mmproj.gguf', size_mb: 1, is_vision: true },
+    ], truncated: false });
+    mount({ initialSection: 'adapters' });
+    await waitFor(() => expect(api.listModels).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    expect(screen.getByRole('option', { name: 'language.gguf' })).toBeVisible();
+    expect(screen.queryByRole('option', { name: 'Snapshot model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'mmproj.gguf' })).not.toBeInTheDocument();
+  });
+
+  it('edits each companion model once, retaining arbitrary Unicode paths in the saved profile', async () => {
+    const { onProfileCommit } = mount({ initialSection: 'adapters' });
+    const projector = screen.getByRole('combobox', { name: 'Vision projector' });
+    const draft = screen.getByRole('combobox', { name: 'Draft model' });
+    expect(screen.queryByRole('textbox', { name: /Draft model|projector/i })).not.toBeInTheDocument();
+    expect(document.querySelector('input[id$="-spec-draft-model"]')).not.toBeInTheDocument();
+    expect(document.querySelector('input[id$="-spec-draft-device"]')).not.toBeInTheDocument();
+    fireEvent.change(projector, { target: { value: 'models/별도 폴더/projector.gguf' } });
+    fireEvent.change(draft, { target: { value: 'models/별도 폴더/draft.gguf' } });
+    expect(draft).toHaveValue('models/별도 폴더/draft.gguf');
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({
+      mmproj: 'models/별도 폴더/projector.gguf', spec_draft_model: 'models/별도 폴더/draft.gguf',
+    }), expect.anything(), true));
+  });
+
+  it('keeps one broad reset and one llama command importer while preserving field reset', async () => {
+    mount({ initialSection: 'tuning' });
+    expect(screen.getAllByRole('button', { name: 'Reset options to defaults' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Reset to runtime defaults' })).not.toBeInTheDocument();
+    const fieldReset = document.querySelector<HTMLButtonElement>('[data-default-field="ctx_size"] button')!;
+    expect(fieldReset).toBeEnabled();
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.click(fieldReset);
+    expect(numeric('ctx_size')).toHaveValue(4096);
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    expect(screen.queryByRole('button', { name: 'Import command' })).not.toBeInTheDocument();
+    const paste = document.querySelector<HTMLTextAreaElement>('#model-settings-paste')!;
+    expect(paste).toBeVisible();
+    fireEvent.change(paste, { target: { value: 'llama-server --ctx-size 8192 --temp 0.4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply pasted settings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
+    expect(numeric('temperature')).toHaveValue(0.4);
+  });
+
+  it('keeps native Windows path prefixes when choosing a catalog companion while displaying a readable path', async () => {
+    const path = String.raw`\\?\C:\Synthetic Models\한글 draft.gguf`;
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{ name: 'Catalog draft', path, size_mb: 1, is_vision: false }], truncated: false });
+    const { onProfileCommit } = mount({ initialSection: 'adapters' });
+    await waitFor(() => expect(api.listModels).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Catalog draft' }));
+    const input = screen.getByRole('combobox', { name: 'Draft model' });
+    expect(input).toHaveValue(String.raw`C:\Synthetic Models\한글 draft.gguf`);
+    // A no-op edit must not replace the native access path with its display form.
+    fireEvent.change(input, { target: { value: String.raw`C:\Synthetic Models\한글 draft.gguf` } });
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ spec_draft_model: path }), expect.anything(), true));
+  });
+
+  it.each(['unsupported', 'readiness'] as const)('keeps a saved model visible and blocks launch for a newly selected runtime %s failure', async failure => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['wide', 'narrow'].map(id => ({
+      id, provider: 'vllm' as const, engine: 'vllm', server: 'vllm', accelerator: 'synthetic',
+      installation: 'external', location: 'synthetic-runtime', available: true, problems: [],
+    })));
+    const scan: typeof api.listModels = async (_directory, _scan, selection) => ({ models: [{
+      name: 'Saved snapshot', path: 'models/snapshot', size_mb: 1, is_vision: false,
+      compatibility: [{ provider: 'vllm', status: selection?.runtime === 'narrow' && failure === 'unsupported' ? 'unsupported' : 'supported',
+        tasks: ['generate'], modalities: { text: true, image: false, audio: false, video: false },
+        limitations: [], readiness: selection?.runtime === 'narrow' && failure === 'readiness' ? ['Selected runtime cannot load this snapshot.'] : [], evidence: 'runtime-probe',
+        reasons: selection?.runtime === 'narrow' && failure === 'unsupported' ? [{ code: 'architecture-not-registered', detail: 'Selected runtime cannot load this snapshot.' }] : [],
+      }],
+    }], truncated: false });
+    vi.mocked(api.listModels).mockImplementationOnce(scan).mockImplementationOnce(scan);
+    const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · Registered installation/ }));
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    openOptions();
+    await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('models/snapshot');
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('restores unsaved system prompts independently when switching inference engines', async () => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue(['llama.cpp', 'vllm', 'mlx-vlm'].map(id => ({ id: id as api.ProviderId,
+      engine: id, server: 'synthetic-server', availability: { supported: true, detail: '' }, options: [] })));
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([
+      { id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+      { id: 'synthetic', provider: 'vllm', engine: 'vllm', server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [] },
+    ]);
+    mount({ initialSection: 'sampling' });
+    fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved llama prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('radio', { name: /^synthetic · synthetic · Registered installation/ }));
+    openOptions();
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue(''));
+    fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved vLLM prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^llama\.cpp/ }));
+    openOptions();
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved llama prompt'));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
+    openOptions();
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved vLLM prompt'));
+  });
+
+  it.each(['vllm', 'mlx-vlm'] as const)('reports only the selected %s runtime inputs for a multimodal snapshot', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic-server', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic-runtime', provider, engine: provider, server: 'synthetic-server', accelerator: 'synthetic', installation: 'external', location: 'synthetic-runtime', available: true, problems: [] }]);
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{
+      name: 'Multimodal snapshot', path: 'models/snapshot', size_mb: 1, is_vision: false,
+      artifact: { name: 'Multimodal snapshot', path: 'models/snapshot', format: 'mlx', role: 'model', size_bytes: 1024, file_count: 2,
+        architectures: ['SyntheticVisionModel'], modalities: { text: true, image: true, audio: true, video: true }, missing: [], incomplete: false, ownership: 'external', notes: [] },
+      compatibility: [{ provider, status: 'partial', tasks: ['generate'], modalities: { text: true, image: true, audio: false, video: false },
+        limitations: ['Native audio and video are unavailable.'], readiness: [], reasons: [], evidence: 'synthetic-runtime-probe' }],
+    }], truncated: false });
+    mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic-runtime', active_model: 'models/snapshot' } });
+    await waitFor(() => expect(screen.getByText('Supported inputs: text, image')).toBeVisible());
+    expect(document.querySelector('.model-settings-footer-bar')).not.toHaveTextContent(/audio|video/);
+  });
 
   it('keeps the selected model summary compact and exposes all metadata without changing settings', async () => {
     vi.mocked(api.modelMetadata).mockResolvedValueOnce({ architecture: 'future-architecture', author: 'Synthetic Author',
@@ -113,9 +594,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(applyTarget).toBe(true);
     expect(next.ngl).toBe(25);
     expect(edit.application.profile_id).toBe(source.id);
-    expect(edit.library.entries).toHaveLength(1);
-    expect(edit.library.entries[0]).toMatchObject({ id: source.id, name: source.name, settings: { ngl: 25 } });
-    expect(getSaved().settings_profiles?.entries[0]).toMatchObject({ id: source.id, settings: { ngl: 25 } });
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: source.id, name: source.name, settings: { ngl: 25 } });
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: source.id, settings: { ngl: 25 } });
     expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
     expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
   });
@@ -140,7 +621,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
     expect(screen.getByRole('tab', { name: 'Performance & memory' })).toHaveAttribute('aria-selected', 'true');
     expect(numeric('ctx_size')).toHaveValue(8192);
 
@@ -154,7 +635,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(onProfileCommit).toHaveBeenCalledTimes(2);
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
     expect(appliedProfile(getSaved())).toMatchObject({ profile_id: source.id, profile_revision: source.revision + 2, system_prompt: 'Updated prompt' });
     expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -163,11 +644,15 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument();
   });
 
-  it('places reset before profile save in the full profile banner', () => {
+  it('offers reset and save in the profile selection detail and keeps them in option editing', () => {
     mount({ initialSection: 'profiles' });
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Save profile' })).toBeVisible();
+    expect(current.getByRole('button', { name: 'Reset options to defaults' })).toBeVisible();
+    openOptions();
     const banner = screen.getByRole('button', { name: 'Save profile' }).closest('.settings-profile-banner')!;
     expect(within(banner as HTMLElement).getAllByRole('button').map(button => button.textContent)).toEqual([
-      'Reset all to defaults', 'Save profile', 'Save as new',
+      'Reset options to defaults', 'Save profile', 'Save as new',
     ]);
   });
 
@@ -175,10 +660,10 @@ describe('model settings editor', { timeout: 45000 }, () => {
     mount({ initialConfig: { ...cfg, active_model: '' }, initialSection: 'profiles' });
     expect(document.querySelectorAll('.settings-profile-chip')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Default · Selected · Default profile' }));
-    const preview = within(screen.getByRole('region', { name: 'Preview' }));
-    expect(preview.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
-    expect(preview.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
+    expect(current.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
+    expect(current.getByRole('button', { name: 'Save profile' })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Preset profiles' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
@@ -192,6 +677,22 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancelStart).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('exposes preflight progress and cancellation before a server starts', () => {
+    const onCancelStart = vi.fn();
+    const { onClose } = mount({ busy: true, liveState: 'stopped', preflightState: 'checking', onCancelStart });
+    expect(screen.getByText('Checking the selected engine and model…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancelStart).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('reports preflight cancellation while preventing repeated cancellation', () => {
+    mount({ busy: true, liveState: 'stopped', preflightState: 'cancelling', onCancelStart: vi.fn() });
+    expect(screen.getByText('Cancelling the engine and model check…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   });
 
   it('offers unloading instead of loading while the target holds a model', () => {
@@ -227,6 +728,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.change(numeric('temperature'), { target: { value: '0.9' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     expect(screen.getByText('The running model was started from this profile. Stop it, or save to another profile, to change these settings.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeEnabled();
   });
 
   it('leaves inherited numeric and text values unchanged when navigating through their inputs', async () => {
@@ -285,18 +789,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('requires a managed runtime before starting and never offers a system runtime', async () => {
     mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
-    fireEvent.click(within(screen.getByRole('tablist', { name: 'Model & settings' })).getByRole('tab', { name: 'Runtime & GPU' }));
-    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toHaveTextContent('Select a runtime');
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime & GPU' }));
-    const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
-    expect(options).toContain('cpu · ?(123)');
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    const options = within(screen.getByRole('group', { name: 'Runtime' })).getAllByRole('radio').map(option => option.closest('label')?.textContent ?? '');
+    expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · Installed by AioLM'))).toBe(true);
     expect(options.some(option => /system/i.test(option))).toBe(false);
-    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
-    // The disabled start says why, and offers the section that fixes it.
+    expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(screen.getByText('No runtime is selected.')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Choose a runtime' }));
-    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /^b123/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
   });
 
   it('reports a selected runtime as missing when the installed list loads empty', async () => {
@@ -304,8 +804,87 @@ describe('model settings editor', { timeout: 45000 }, () => {
     // not loaded yet, so the selected runtime must be reported as missing.
     vi.mocked(api.rtList).mockResolvedValueOnce([]);
     mount();
-    expect(await screen.findByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
+    expect(await screen.findByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+  });
+
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('waits for the %s inventory before reporting a selected runtime as missing', async provider => {
+    let finish!: () => void;
+    if (provider === 'llama.cpp') {
+      vi.mocked(api.rtList).mockReturnValueOnce(new Promise(resolve => {
+        finish = () => resolve([{ backend: 'cpu', build: 'b123', dir: 'runtime', size_mb: 30 }]);
+      }));
+    } else {
+      vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+      vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+      vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+      vi.spyOn(api, 'providerRuntimes').mockReturnValue(new Promise(resolve => {
+        finish = () => resolve([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+      }));
+    }
+    const { onApply, onProfileCommit } = mount({ initialSection: 'gpu', initialConfig: {
+      ...cfg, active_provider: provider, active_runtime: provider === 'llama.cpp' ? '' : 'synthetic',
+    } });
+    await waitFor(() => expect(api.deviceProfile).toHaveBeenCalled());
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
+  });
+
+  it.each(['vllm', 'mlx-vlm'] as const)('asks to select a %s runtime without claiming an unselected runtime is missing', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: '' } });
+    expect(await screen.findByText('No runtime is selected.')).toBeVisible();
+    await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
+  it.each(['vllm', 'mlx-vlm'] as const)('reports a missing %s runtime after its inventory successfully loads empty', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    const { onApply } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
+    expect(await screen.findByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).toBeVisible();
+    openOptions();
+    expect(screen.getByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('keeps a registered but unprobed runtime blocked without describing it as uninstalled', async () => {
+    const provider = 'custom.unprobed';
+    const entry: api.RuntimeInstance = { provider, id: 'build-one', engine: 'external', server: 'openai-v1',
+      accelerator: '', installation: 'external', location: 'synthetic-runtime', available: false, problems: [] };
+    const initialConfig: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: entry.id, active_backend: '', active_build: '' };
+    const before = structuredClone({ entry, initialConfig });
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'Synthetic engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([entry]);
+    const { onApply, onProfileCommit, getSaved } = mount({ initialSection: 'runtime', initialConfig });
+    const selected = await screen.findByRole('radio', { name: /build-one/ });
+    expect(selected).toBeChecked(); expect(selected).toBeDisabled();
+    expect(await screen.findByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).toBeVisible();
+    openOptions();
+    expect(screen.getByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    expect(start).toBeDisabled(); fireEvent.click(start);
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(before.initialConfig);
+    expect({ entry, initialConfig }).toEqual(before);
   });
 
   it('keeps numeric edits out of persistence until apply, and discards them on cancel', async () => {
@@ -347,6 +926,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onProfileCommit } = mount();
     fireEvent.click(await screen.findByRole('button', { name: /b.gguf/ }));
+    openOptions();
     fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
     expect(numeric('ctx_size').value).toBe('16384');
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
@@ -409,7 +989,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onReloadProfile } = mount({ initialSection: 'tuning', initialConfig: { ...saved, settings_profiles: { ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ctx_size'), { target: { value: '16384' } });
     expect(screen.getByRole('heading', { name: 'Base profile · Editing' })).toBeVisible();
-    expect(screen.getByText('Model profile · unsaved changes')).toBeVisible();
+    expect(screen.getByText('Global profile · unsaved changes')).toBeVisible();
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
     expect(screen.getByRole('heading', { name: 'Base profile' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
@@ -429,24 +1009,24 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await act(async () => { fireEvent.click(screen.getByText('Create new profile', { selector: 'button' })); });
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ name: 'Default' }), expect.objectContaining({ name: 'Recovered profile' }), expect.objectContaining({ name: 'Concise', system_prompt: 'Use concise answers.' })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ name: 'Default' }), expect.objectContaining({ name: 'Recovered profile' }), expect.objectContaining({ name: 'Concise', system_prompt: 'Use concise answers.' })]);
     const assignment = appliedProfile(getSaved())!;
     expect(assignment.profile_id).toBe(getSaved().settings_profiles?.entries.find(profile => profile.name === 'Concise')?.id);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
-    expect(getSaved().settings_profiles?.entries).toHaveLength(3);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(3);
   });
 
   it('keeps invalid inputs while browsing profile previews and allows reverting the working draft', async () => {
     const { onProfileCommit } = mount({ initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.change(rawChat(), { target: { value: '{' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     expect(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' })).toBeDisabled();
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
+    expect(rawChat()).toHaveValue('{');
     expect(onProfileCommit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
-    await waitFor(() => expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}'));
+    await waitFor(() => expect(rawChat()).toHaveValue('{}'));
   });
 
   it('preserves benchmark workload values and inherits the other tuning fields when applying the Default profile', async () => {
@@ -482,19 +1062,21 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, '', copy);
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source, copy, orphan], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ngl'), { target: { value: '25' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
-    expect(screen.getAllByRole('button', { name: /Shared settings/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(document.querySelectorAll('.settings-profile-chip')).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Shared settings · Selected · Editing' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Shared settings · Default profile' }));
-    expect(screen.getByRole('button', { name: 'Save profile' })).toHaveAccessibleDescription('Save to: Shared settings');
+    expect(screen.getByRole('button', { name: 'Use this profile and adjust options' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Recovered settings' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    expect(screen.getByRole('button', { name: 'Save profile' })).toHaveAccessibleDescription('Save to: Shared settings');
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     const edit = vi.mocked(onProfileCommit).mock.calls[0][1];
     expect(edit.application.profile_id).toBe(copy.id);
-    expect(edit.library.entries.find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
-    expect(edit.library.entries.find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
   });
 
   it('reloads saved target values after renaming a profile without storing the working edits', async () => {
@@ -502,15 +1084,16 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, 'Saved prompt', profile);
     const { getSaved } = mount({ initialSection: 'sampling', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Renamed profile' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Saved profile · Editing' })).not.toBeInTheDocument());
+    openOptions();
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
-    expect(getSaved().settings_profiles?.entries[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
   });
 
   it('preserves Working profile values and invalid drafts when only the default designation changes', async () => {
@@ -523,18 +1106,19 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.blur(numeric('temperature'));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.change(rawChat(), { target: { value: '{' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
     await waitFor(() => expect(getSaved().settings_profiles?.default_profile_id).toBe(profile.id));
     expect(onProfileCommit).toHaveBeenCalledOnce();
     expect(getSaved().temperature).toBe(cfg.temperature);
     expect(appliedProfile(getSaved())).toMatchObject({ system_prompt: 'Saved prompt', settings: { temperature: cfg.temperature } });
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(numeric('temperature')).toHaveValue(1.3);
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Working prompt');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
+    expect(rawChat()).toHaveValue('{');
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByText('Discard unsaved changes?')).toBeVisible();
@@ -554,7 +1138,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Settings were saved');
     expect(screen.getByRole('heading', { name: 'Saved once' })).toBeVisible();
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     expect(screen.getByRole('button', { name: 'Saved once · Selected' })).toBeVisible();
     expect(onProfileCommit).toHaveBeenCalledOnce();
   });
@@ -577,38 +1161,40 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(custom, 'Saved prompt', source);
     const saved = { ...custom, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(custom.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.change(rawChat(), { target: { value: '{' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
-    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
+    expect(rawChat()).toHaveValue('{}');
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
     expect(numeric('ctx_size')).toHaveValue(4096);
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' }), document.querySelector('.model-settings-footer')?.textContent ?? '').toBeEnabled());
     expect(getSaved()).toEqual(saved);
     expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Original settings · Editing' })).not.toBeInTheDocument());
     expect(numeric('ctx_size')).toHaveValue(16384);
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
+    expect(rawChat()).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
   });
 
   it('confirms that untouched profile values already use defaults without marking them as edited', () => {
     const defaults = resetProfileSettings(cfg, false);
-    const source = captureProfile(defaults, 'Default values', 'model', '');
-    const application = materializeProfileApplication(defaults, '', source);
+    const source = captureProfile(defaults, 'Default values', 'model', 'Keep these instructions');
+    const application = materializeProfileApplication(defaults, 'Keep these instructions', source);
     const saved = { ...defaults, settings_profiles: { ...emptyProfileLibrary(), entries: [source],
       applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onApply, onProfileCommit, onClose, getSaved } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    openOptions();
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(screen.queryByText(/Reset all options in the selected profile/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Already using defaults.');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options already use defaults.');
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Default values · Editing' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
@@ -626,39 +1212,316 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...defaults, settings_profiles: { ...emptyProfileLibrary(), entries: [source],
       applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    fireEvent.change(rawChat(), { target: { value: '{' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
+    expect(rawChat()).toHaveValue('{}');
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(getSaved()).toEqual(saved);
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Already using defaults.');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options already use defaults.');
   });
 
-  it('saves a full reset and empty prompt into the selected profile without detaching its identity', async () => {
+  it('saves external option defaults only on explicit profile save, keeping the model, runtime and conversation settings', async () => {
+    const provider = 'custom.defaults';
+    const external = { ...cfg, active_provider: provider as api.ProviderId, active_runtime: 'synthetic', request_timeout_seconds: 123,
+      provider_options: { [provider]: { workers: 8 }, 'llama.cpp': { keep: 9 } } };
+    const source = captureProfile(external, 'Engine options', 'model', 'Keep this prompt');
+    const application = materializeProfileApplication(external, 'Keep this prompt', source);
+    const saved = { ...external, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(external.active_model)]: application } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' }, runtime_default: '4' })]));
+    const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
+    const reset = await screen.findByRole('button', { name: 'Reset options to defaults' });
+    expect(screen.getAllByRole('button', { name: 'Reset options to defaults' })).toHaveLength(1);
+    await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
+    expect(screen.getByLabelText(/^--workers/)).toHaveValue('');
+    expect(getSaved()).toEqual(saved);
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model,
+      request_timeout_seconds: 123, provider_options: { [provider]: {}, 'llama.cpp': { keep: 9 } } });
+    expect(draft.provider_options).toEqual({ [provider]: {}, 'llama.cpp': { keep: 9 } });
+    expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: 'Keep this prompt',
+      settings: { request_timeout_seconds: 123, provider_options: { [provider]: {} } } });
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('resets and saves the selected external profile from profile selection without starting the engine', async () => {
+    const provider = 'custom.profile-edit';
+    const external = { ...cfg, active_provider: provider as api.ProviderId, active_runtime: 'synthetic', provider_options: { [provider]: { workers: 8 } } };
+    const source = captureProfile(external, 'Editable engine profile', 'global', 'Saved prompt');
+    const application = materializeProfileApplication(external, 'Saved prompt', source);
+    const saved = { ...external, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(external.active_model)]: application } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Save profile' })).toHaveLength(1);
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled());
+    fireEvent.click(reset);
+    expect(screen.getByRole('region', { name: 'Current values' })).toHaveTextContent('Options reset to defaults.');
+    expect(getSaved()).toEqual(saved); expect(onProfileCommit).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model });
+    expect(draft.provider_options?.[provider]).toEqual({});
+    expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: 'Saved prompt' });
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+  });
+
+  it('shares one runtime verification across profile details, option edits, full reset and save confirmation', async () => {
+    const provider = 'custom.shared-schema';
+    const read = vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    read.mockClear();
+    const { onProfileCommit } = mount({ initialSection: 'profiles', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic', provider_options: { [provider]: { workers: 2 } } } });
+    expect(await within(screen.getByRole('region', { name: 'Current values' })).findByText('--workers')).toBeVisible();
+    expect(read).toHaveBeenCalledOnce();
+    openOptions();
+    fireEvent.change(screen.getByLabelText(/^--workers/), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('9')).toBeVisible();
+    expect(read).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    expect(screen.getByRole('dialog', { name: /^Save these changes/ })).toBeVisible();
+    expect(read).toHaveBeenCalledOnce(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
+  it.each(['custom.profile-edit', 'vllm'] as const)('validates %s options before saving from profile selection without visiting the option tab', async provider => {
+    let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    const check = vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const { onProfileCommit, onApply } = mount({ initialSection: 'profiles', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reset options to defaults' })).toBeEnabled();
+    await act(async () => { finish([{ key: 'workers', code: 'synthetic-review', message: 'Synthetic option needs review' }]); });
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
+    check.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled());
+  });
+
+  it('resets options while retaining the saved prompt and profile identity', async () => {
     const source = captureProfile({ ...cfg, ctx_size: 12288 }, 'Source settings', 'model', 'Saved prompt');
     const application = materializeProfileApplication(cfg, 'Saved prompt', source);
     const saved = { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onProfileCommit } = mount({ initialConfig: saved, initialSection: 'profiles' });
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
+    openOptions();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     const [draft, edit, applyTarget] = vi.mocked(onProfileCommit).mock.calls[0];
-    expect(draft).toMatchObject(resetProfileSettings(saved, false));
+    expect(draft).toMatchObject(resetProfileOptions(saved, false));
     expect(applyTarget).toBe(true);
-    expect(edit.application.system_prompt).toBe('');
+    expect(edit.application.system_prompt).toBe('Saved prompt');
     expect(edit.application.profile_id).toBe(source.id);
     expect(edit.application.profile_name).toBe(source.name);
-    expect(edit.library.entries).toEqual([expect.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: '', settings: expect.objectContaining({ runtime_defaults: expect.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: 'Saved prompt', settings: expect.objectContaining({ runtime_defaults: expect.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
     const stored = edit.library.entries[0];
     expect(stored.settings).toEqual(edit.application.settings);
     expect(source.settings.ctx_size).toBe(12288);
     expect(source.system_prompt).toBe('Saved prompt');
+  });
+
+  it.each(['llama.cpp', 'custom.prompt-preservation'] as const)('keeps unsaved instructions through %s option reset, explicit save and reopening', async provider => {
+    const original = { ...cfg, active_provider: provider, active_runtime: 'synthetic', ctx_size: 12288, port: 9100,
+      provider_options: { [provider]: { workers: 8 } } };
+    const source = captureProfile(original, 'Prompt and options', 'global', 'Saved instructions');
+    const application = materializeProfileApplication(original, 'Saved instructions', source);
+    const saved = { ...original, settings_profiles: { ...emptyProfileLibrary(), entries: [source],
+      applied: { [profileTargetKey(original.active_model, 'default', provider)]: application } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    const { onProfileCommit, onApply, getSaved } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    expect(screen.getAllByRole('button', { name: 'Reset options to defaults' })).toHaveLength(1);
+    openOptions();
+    fireEvent.click(screen.getByRole('tab', { name: provider === 'llama.cpp' ? 'Generation' : 'Conversation instructions' }));
+    const prompt = screen.getByRole('textbox', { name: 'Default system prompt' });
+    const instructions = '  Keep my edited instructions.\nSecond line.  ';
+    fireEvent.change(prompt, { target: { value: instructions } });
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled());
+    fireEvent.click(reset);
+    expect(screen.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue(instructions);
+    expect(screen.getAllByRole('button', { name: 'Reset options to defaults' })).toHaveLength(1);
+    expect(getSaved()).toEqual(saved);
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: original.active_model, port: 9100 });
+    expect(edit.application.system_prompt).toBe(instructions);
+    expect(edit.library.entries.find(entry => entry.id === source.id)?.system_prompt).toBe(instructions);
+    expect(onApply).not.toHaveBeenCalled();
+    const persisted = getSaved();
+    cleanup();
+    mount({ initialConfig: persisted, initialSection: 'prompt' });
+    expect(screen.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue(instructions);
+  });
+
+  it.each(['stale', 'unchecked'] as const)('does not offer an option reset before a %s engine schema is checked', async help_state => {
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [], { help_state }));
+    mount({ initialConfig: { ...cfg, active_provider: 'custom.unchecked', active_runtime: 'synthetic' }, initialSection: 'profiles' });
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    expect(reset).toBeDisabled();
+    await within(screen.getByRole('region', { name: 'Current values' })).findByText('The engine’s options need to be checked again. Reload its help before using these saved settings.');
+    expect(reset).toBeDisabled();
+  });
+
+  it('retains malformed option order and reports review without claiming the reset succeeded', async () => {
+    const provider = 'custom.order-review';
+    const values = { workers: 8, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } };
+    const saved: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'synthetic', provider_options: { [provider]: values } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    const { onProfileCommit, onApply, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
+    expect(await screen.findByText('Check the saved option order, then try resetting again.')).toBeVisible();
+    expect(screen.queryByText('Options reset to defaults.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Options already use defaults.')).not.toBeInTheDocument();
+    expect(getSaved()).toEqual(saved);
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { draft: 'clean', confirmation: 'native composition', dirty: false, isComposing: true, keyCode: 13 },
+    { draft: 'edited', confirmation: 'native composition', dirty: true, isComposing: true, keyCode: 13 },
+    { draft: 'clean', confirmation: '229 fallback', dirty: false, isComposing: false, keyCode: 229 },
+    { draft: 'edited', confirmation: '229 fallback', dirty: true, isComposing: false, keyCode: 229 },
+    { draft: 'clean', confirmation: 'compositionend before Enter', dirty: false, isComposing: false, keyCode: 13, committed: true },
+    { draft: 'edited', confirmation: 'compositionend before Enter', dirty: true, isComposing: false, keyCode: 13, committed: true },
+  ] as const)('keeps the $draft model preview during $confirmation Enter and loads only after confirmation', async scenario => {
+    const { dirty, isComposing, keyCode } = scenario;
+    const committed = 'committed' in scenario;
+    const nextPath = 'models/模型-한글-🦊.gguf';
+    vi.spyOn(api, 'listModels').mockResolvedValue({ models: [
+      { name: 'a.gguf', path: cfg.active_model, size_mb: 3000, is_vision: false },
+      { name: '模型-한글-🦊.gguf', path: nextPath, size_mb: 1500, is_vision: false },
+    ], truncated: false });
+    vi.spyOn(api, 'modelMetadata').mockResolvedValue({});
+    rememberExecution({ ...cfg, active_model: nextPath, ctx_size: 16384 });
+    const stored = localStorage.getItem('aiolm-model-execution');
+    const initial = structuredClone(cfg);
+    const initialBefore = structuredClone(initial);
+    const { onApply, onClose, onProfileCommit, onReloadProfile, getSaved } = mount({ initialSection: 'tuning', initialConfig: initial });
+    const savedBefore = structuredClone(getSaved());
+    if (dirty) {
+      fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+      fireEvent.blur(numeric('ctx_size'));
+    }
+    fireEvent.click(screen.getByRole('tab', { name: 'Model' }));
+    const oldModel = await screen.findByRole('button', { name: /^a\.gguf/ });
+    const nextModel = screen.getByRole('button', { name: /^模型-한글-🦊\.gguf/ });
+    const path = screen.getByRole('textbox', { name: 'Model path' });
+    fireEvent.change(path, { target: { value: nextPath } });
+    if (committed) {
+      // Native WebKit can omit compositionstart and finish composition before Enter.
+      fireEvent.keyDown(path, { key: 'Unidentified', keyCode: 229 });
+      fireEvent.input(path, { target: { value: nextPath }, inputType: 'insertFromComposition', isComposing: true });
+      fireEvent.compositionEnd(path, { data: '한글' });
+    }
+    let nativeDefaultAvailable = false;
+    await act(async () => { nativeDefaultAvailable = fireEvent.keyDown(path, { key: 'Enter', keyCode, isComposing }); });
+    const header = () => document.querySelector('.model-settings-header p[title]');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    expect(header()).toHaveAttribute('title', cfg.active_model);
+    expect(oldModel).toHaveAttribute('aria-pressed', 'true');
+    expect(nextModel).toHaveAttribute('aria-pressed', 'false');
+    expect(numeric('ctx_size')).toHaveValue(dirty ? 8192 : cfg.ctx_size);
+    expect(path).toHaveValue(nextPath);
+    expect(screen.getByRole('button', { name: 'Load into editor' })).toBeEnabled();
+    expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onReloadProfile).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(savedBefore);
+    expect(initial).toEqual(initialBefore);
+    expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
+    expect(nativeDefaultAvailable).toBe(!committed);
+
+    fireEvent.keyUp(path, { key: 'Enter', keyCode: 13 });
+    await act(async () => {
+      expect(fireEvent.keyDown(path, { key: 'Enter', keyCode: 13, isComposing: false })).toBe(false);
+    });
+    if (dirty) {
+      expect(screen.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+      expect(header()).toHaveAttribute('title', cfg.active_model);
+      expect(numeric('ctx_size')).toHaveValue(8192);
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument());
+      expect(header()).toHaveAttribute('title', cfg.active_model);
+      expect(numeric('ctx_size')).toHaveValue(8192);
+      expect(path).toHaveValue(nextPath);
+      fireEvent.click(screen.getByRole('button', { name: 'Load into editor' }));
+      expect(screen.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    }
+    await waitFor(() => expect(nextModel).toHaveAttribute('aria-pressed', 'true'));
+    openOptions();
+    await waitFor(() => expect(header()).toHaveAttribute('title', nextPath));
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    expect(oldModel).toHaveAttribute('aria-pressed', 'false');
+    expect(nextModel).toHaveAttribute('aria-pressed', 'true');
+    expect(numeric('ctx_size')).toHaveValue(16384);
+    expect(path).toHaveValue(nextPath);
+    expect(screen.queryByRole('button', { name: 'Load into editor' })).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onReloadProfile).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(savedBefore);
+    expect(initial).toEqual(initialBefore);
+    expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
+  });
+  it.each(['runtime', 'engine'] as const)('loads a typed model path without treating %s selection as profile edits', async selection => {
+    const provider = 'custom.new-engine';
+    const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };
+    const profile = captureProfile(selected, 'Engine profile', 'global', '');
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'New engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] },
+      { id: 'custom.previous-engine', engine: 'Previous engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['build-one', 'build-two'].map(id => ({
+      id, provider, engine: 'New engine', server: 'openai-v1', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [],
+    })));
+    const initial = selection === 'engine' ? { ...selected, active_provider: 'custom.previous-engine' as api.ProviderId } : selected;
+    const { onApply, onClose, onProfileCommit } = mount({ initialSection: undefined, initialConfig: { ...initial, settings_profiles: { ...emptyProfileLibrary(), entries: [profile] } } });
+    if (selection === 'engine') fireEvent.click(await screen.findByRole('radio', { name: 'New engine' }));
+    await screen.findByRole('radio', { name: /^build-two/ });
+    fireEvent.click(screen.getByRole('radio', { name: /^build-two/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    // Runtime selection is not a profile-owned setting; it must not make the
+    // profile look edited or turn a local path load into a discard prompt.
+    expect(screen.getByRole('heading', { name: selection === 'engine' ? 'Default' : 'Engine profile' })).toBeVisible();
+    expect(screen.queryByText('Global profile · unsaved changes')).not.toBeInTheDocument();
+    const path = screen.getByRole('textbox', { name: 'Model path' });
+    fireEvent.change(path, { target: { value: 'models/next.gguf' } });
+    await act(async () => { fireEvent.keyDown(path, { key: 'Enter', keyCode: 13 }); });
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load into editor' })).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /^build-two/, hidden: true })).toBeChecked();
+    expect(path).toHaveValue('models/next.gguf');
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
   });
 });
 
@@ -781,11 +1644,46 @@ describe('context size bounds', () => {
     expect(numeric('ctx_size')).toHaveValue(262144);
   });
 
-  it('still refuses an entry that is garbage rather than large', async () => {
+  it('still refuses an entry that is garbage rather than large and names the field in plain language', async () => {
     mount({ initialSection: 'tuning' });
     await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
     fireEvent.change(numeric('ctx_size'), { target: { value: '99999999' } });
-    await waitFor(() => expect(screen.getByText(/Correct invalid fields/)).toBeVisible());
+    await waitFor(() => expect(screen.getByText('Correct invalid fields before applying. (Context size)')).toBeVisible());
+    expect(screen.queryByText(/ctx_size/)).not.toBeInTheDocument();
+  });
+
+  it('localizes invalid field names, unknown model format badges, and model picker modalities in Korean while preserving unknown modality keys', async () => {
+    vi.mocked(api.listModels).mockResolvedValueOnce({
+      models: [{
+        name: 'mystery.bin',
+        path: 'models/mystery.bin',
+        size_mb: 500,
+        is_vision: false,
+        artifact: {
+          name: 'mystery.bin',
+          path: 'models/mystery.bin',
+          format: 'unknown',
+          role: 'model',
+          size_bytes: 500 * 1024 * 1024,
+          file_count: 1,
+          modalities: Object.assign({ text: true, image: true, audio: false, video: false }, { depth: true, constructor: true }),
+          incomplete: false,
+          missing: [],
+          architectures: [],
+          ownership: 'external',
+          notes: [],
+        },
+      }],
+      truncated: false,
+    });
+    mount({ initialSection: 'model', initialConfig: { ...cfg, active_model: 'models/mystery.bin' } }, 'ko');
+    expect((await screen.findAllByText(/형식 미확인/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/형식 미확인 · 텍스트, 이미지, depth, constructor · —/)).toBeVisible();
+    expect(screen.queryByText('unknown', { exact: true })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: '성능·메모리' }));
+    await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '99999999' } });
+    await waitFor(() => expect(screen.getByText('잘못 입력된 항목을 수정한 뒤 적용하세요. (컨텍스트 크기)')).toBeVisible());
   });
 
   it('bounds the control at what the model states it was trained for', async () => {

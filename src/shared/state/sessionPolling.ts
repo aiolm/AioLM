@@ -43,7 +43,9 @@ export function createSessionPoller(load: (details: boolean) => Promise<SessionS
       }
     }, error => {
       if (requestedGeneration !== generation) return;
-      for (const subscriber of subscribers) subscriber.onError?.(error);
+      for (const subscriber of subscribers) {
+        if (!subscriber.details || requestedDetails) subscriber.onError?.(error);
+      }
     }).finally(() => {
       pending = undefined;
       pendingHasDetails = false;

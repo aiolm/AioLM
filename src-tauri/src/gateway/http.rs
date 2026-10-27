@@ -187,7 +187,15 @@ async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
     let mut buffer = [0_u8; 8192];
     let header_end = loop {
         if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break index + 4;
+            let header_end = index + 4;
+            if header_end > MAX_HEADER_BYTES {
+                return Err(ApiError::new(
+                    431,
+                    "headers_too_large",
+                    "request headers exceed the 64 KiB limit",
+                ));
+            }
+            break header_end;
         }
         if bytes.len() > MAX_HEADER_BYTES {
             return Err(ApiError::new(
@@ -395,10 +403,18 @@ pub(super) async fn write_event(
     event: &str,
     value: Value,
 ) -> Result<(), String> {
-    let data = serde_json::to_string(&value)
+    // One buffer sized for the framing, the event name and a typical token
+    // event's JSON, which is serialized straight into it; larger events grow
+    // it. The whole frame still goes out in one write.
+    let mut frame = Vec::with_capacity(event.len() + 144);
+    frame.extend_from_slice(b"event: ");
+    frame.extend_from_slice(event.as_bytes());
+    frame.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut frame, &value)
         .map_err(|error| format!("gateway SSE encode failed: {error}"))?;
+    frame.extend_from_slice(b"\n\n");
     stream
-        .write_all(format!("event: {event}\ndata: {data}\n\n").as_bytes())
+        .write_all(&frame)
         .await
         .map_err(|error| format!("gateway SSE write failed: {error}"))
 }
@@ -419,6 +435,20 @@ mod tests {
         let (mut client, mut server) = connected_pair().await;
         client.write_all(raw).await.unwrap();
         read_request(&mut server).await
+    }
+
+    fn complete_head_of_length(length: usize) -> Vec<u8> {
+        let prefix = b"GET /v1/models HTTP/1.1\r\nX-Filler: ";
+        let suffix = b"\r\n\r\n";
+        assert!(length >= prefix.len() + suffix.len());
+        let mut raw = Vec::with_capacity(length);
+        raw.extend_from_slice(prefix);
+        raw.extend(std::iter::repeat_n(
+            b'a',
+            length - prefix.len() - suffix.len(),
+        ));
+        raw.extend_from_slice(suffix);
+        raw
     }
 
     #[tokio::test]
@@ -496,6 +526,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_complete_header_limit_is_inclusive_and_rejects_one_byte_over() {
+        let request = parse(&complete_head_of_length(MAX_HEADER_BYTES))
+            .await
+            .unwrap();
+        assert_eq!(request.path, "/v1/models");
+
+        let error = parse(&complete_head_of_length(MAX_HEADER_BYTES + 1))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!((error.status, error.code), (431, "headers_too_large"));
+    }
+
+    #[tokio::test]
+    async fn a_header_that_crosses_the_limit_in_a_later_chunk_is_refused() {
+        let raw = complete_head_of_length(MAX_HEADER_BYTES + 1);
+        let (mut client, mut server) = connected_pair().await;
+        client
+            .write_all(&raw[..MAX_HEADER_BYTES - 1])
+            .await
+            .unwrap();
+        let reader = tokio::spawn(async move { read_head(&mut server).await });
+        tokio::task::yield_now().await;
+        client
+            .write_all(&raw[MAX_HEADER_BYTES - 1..])
+            .await
+            .unwrap();
+
+        let error = reader.await.unwrap().err().unwrap();
+        assert_eq!((error.status, error.code), (431, "headers_too_large"));
+    }
+
+    #[tokio::test]
+    async fn a_small_head_can_share_a_read_with_a_large_body() {
+        let body = vec![b'b'; MAX_HEADER_BYTES + 1];
+        let mut raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+
+        let request = parse(&raw).await.unwrap();
+        assert_eq!(request.body, body);
+    }
+
+    #[tokio::test]
     async fn a_client_that_disconnects_mid_body_gets_a_bad_request() {
         let (mut client, mut server) = connected_pair().await;
         client
@@ -525,6 +602,34 @@ mod tests {
         assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
         client.write_all(b"{}").await.unwrap();
         assert_eq!(reader.await.unwrap().unwrap().body, b"{}");
+    }
+
+    #[tokio::test]
+    async fn an_event_frame_is_compact_escaped_json_and_a_closed_stream_fails_to_write() {
+        let (mut client, mut server) = connected_pair().await;
+        write_event(
+            &mut server,
+            "response.output_text.delta",
+            json!({"type":"response.output_text.delta","delta":"q\"b\\s\n\r\t\u{1}\u{7f}\u{e9}\u{1f600}\u{2028}</"}),
+        )
+        .await
+        .unwrap();
+        server.shutdown().await.unwrap();
+        let error = write_event(&mut server, "message_stop", json!({"type":"message_stop"}))
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("gateway SSE write failed: "), "{error}");
+
+        let mut wire = Vec::new();
+        client.read_to_end(&mut wire).await.unwrap();
+        let expected = concat!(
+            "event: response.output_text.delta\n",
+            r#"data: {"delta":"q\"b\\s\n\r\t\u0001"#,
+            "\u{7f}\u{e9}\u{1f600}\u{2028}</",
+            r#"","type":"response.output_text.delta"}"#,
+            "\n\n",
+        );
+        assert_eq!(String::from_utf8(wire).unwrap(), expected);
     }
 
     #[test]

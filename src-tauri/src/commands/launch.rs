@@ -11,6 +11,9 @@ use tauri::State;
 fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
     cfg.normalize();
     cfg.validate()?;
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        return crate::providers::execution::validate(cfg);
+    }
     if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
         return Err(
             "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
@@ -20,14 +23,17 @@ fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
         return Err("select a GGUF model before starting the server".into());
     }
     validate_adapter_file(&cfg.active_model, "model", &["gguf"])?;
+    validate_llama_model_role(&cfg.active_model, "model", false)?;
     if !cfg.mmproj.trim().is_empty() {
         validate_adapter_file(&cfg.mmproj, "projector", &["gguf", "mmproj"])?;
+        validate_llama_model_role(&cfg.mmproj, "projector", true)?;
     }
     for adapter in cfg.lora_adapters.iter().filter(|adapter| adapter.enabled) {
         validate_adapter_file(&adapter.path, "LoRA adapter", &["gguf"])?;
     }
     if tuning_defaults::speculative_enabled(cfg) && !cfg.spec_draft_model.trim().is_empty() {
         validate_adapter_file(&cfg.spec_draft_model, "draft model", &["gguf"])?;
+        validate_llama_model_role(&cfg.spec_draft_model, "draft model", false)?;
         let draft_name = Path::new(&cfg.spec_draft_model)
             .file_name()
             .and_then(|name| name.to_str())
@@ -67,10 +73,40 @@ pub(super) async fn validate_launch_config_with_cancel(
 
 #[tauri::command]
 pub(crate) async fn preflight_launch(
-    mut cfg: config::AppConfig,
+    state: State<'_, AppState>,
+    cfg: config::AppConfig,
+    operation_id: Option<String>,
 ) -> Result<config::AppConfig, String> {
-    validate_launch(&mut cfg, None, false).await?;
+    run_launch_preflight(&state, cfg, operation_id).await
+}
+
+async fn run_launch_preflight(
+    state: &AppState,
+    mut cfg: config::AppConfig,
+    operation_id: Option<String>,
+) -> Result<config::AppConfig, String> {
+    let job = state
+        .launch_preflights
+        .begin(operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))?;
+    if state.exiting.load(Ordering::Acquire) || job.cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    let result = validate_launch(&mut cfg, Some(&job.cancel), false).await;
+    // A cancellation racing a successful probe must not publish settings for
+    // the caller to save or use to replace a running model.
+    if state.exiting.load(Ordering::Acquire) || job.cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    result?;
     Ok(cfg)
+}
+
+#[tauri::command]
+pub(crate) fn preflight_launch_cancel(
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<(), String> {
+    state.launch_preflights.cancel(&operation_id)
 }
 
 /// Accept a blocked GPU placement and let it start anyway.
@@ -96,7 +132,16 @@ pub(crate) async fn verify_model_deeply(
     state: State<'_, AppState>,
     mut cfg: config::AppConfig,
 ) -> Result<crate::verify::Record, String> {
-    state.verify_cancel.store(false, Ordering::Release);
+    crate::providers::adapter::require_feature(
+        &cfg,
+        crate::providers::adapter::RuntimeFeature::DeepVerification,
+    )?;
+    let _operation = begin_deep_verification(&state)?;
+    cfg.normalize();
+    cfg.validate()?;
+    if crate::providers::provider_of(&cfg) != crate::providers::ProviderId::Llama {
+        return crate::verify::engine::run_deep(&cfg, state.verify_cancel.clone()).await;
+    }
     validate_start_config(&mut cfg)?;
     let capabilities = runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
     let profile = hardware::detect();
@@ -123,12 +168,45 @@ pub(crate) fn verify_cancel(state: State<'_, AppState>) {
     state.verify_cancel.store(true, Ordering::Release);
 }
 
+fn begin_deep_verification(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+    let operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "another model operation is in progress".to_string())?;
+    if state.exiting.load(Ordering::Acquire) {
+        return Err("application is exiting".into());
+    }
+    if state.runtime_busy.load(Ordering::Acquire) {
+        return Err("wait for the runtime operation to finish before deep verification".into());
+    }
+    if super::runtimes::runtime_resources_in_use(state)? {
+        return Err("stop all model sessions before deep verification".into());
+    }
+    // Only the run that owns the operation may clear a previous cancellation.
+    state.verify_cancel.store(false, Ordering::Release);
+    Ok(operation)
+}
+
 async fn validate_launch(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
     repair: bool,
 ) -> Result<gpu::ResolvedGpu, String> {
+    cfg.normalize();
+    cfg.validate()?;
+    crate::providers::adapter::refresh(cfg, cancel.cloned()).await?;
     validate_start_config(cfg)?;
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Err("server start cancelled".into());
+        }
+        // A stored deep failure for this exact engine, model and settings
+        // blocks the launch, as it does for llama.cpp placements.
+        if let Some(refusal) = crate::verify::engine::launch_refusal(cfg) {
+            return Err(refusal);
+        }
+        return Ok(gpu::ResolvedGpu::default());
+    }
     if repair {
         let repair_cancel = cancel
             .cloned()
@@ -189,6 +267,27 @@ fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result
     Ok(())
 }
 
+/// llama.cpp b10840 loads CLIP projectors through mtmd/clip.cpp, separately
+/// from primary and draft language models. Only an inspected architecture is
+/// used here; filenames cannot establish a matching projector/model pair.
+fn validate_llama_model_role(path: &str, label: &str, projector: bool) -> Result<(), String> {
+    let architecture = crate::gguf::read_metadata(Path::new(path))
+        .ok()
+        .and_then(|metadata| metadata.architecture);
+    if let Some(architecture) = architecture {
+        if (architecture == "clip") != projector {
+            return Err(if projector {
+                format!(
+                    "{label} must be a multimodal projector, not a {architecture} language model"
+                )
+            } else {
+                format!("{label} cannot be a multimodal projector; attach it through mmproj")
+            });
+        }
+    }
+    Ok(())
+}
+
 fn runtime_has_flag(capabilities: &runtime::RuntimeCapabilities, aliases: &[&str]) -> bool {
     aliases.iter().any(|alias| {
         capabilities.flags.iter().any(|flag| {
@@ -241,6 +340,115 @@ fn validate_runtime_adapter_capabilities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_queued_preflight_cancel_stops_before_validation_and_releases_its_owner() {
+        let state = AppState::default();
+        state.launch_preflights.cancel("queued-launch").unwrap();
+        let result = run_launch_preflight(
+            &state,
+            config::AppConfig::default(),
+            Some("queued-launch".into()),
+        )
+        .await;
+        assert_eq!(result.err().as_deref(), Some("server start cancelled"));
+        let retry = state
+            .launch_preflights
+            .begin("queued-launch".into())
+            .unwrap();
+        assert!(!retry.cancel.load(Ordering::Acquire));
+        // Existing cfg-only clients still enter the ordinary validation gate.
+        let legacy = run_launch_preflight(&state, config::AppConfig::default(), None).await;
+        assert!(legacy.is_err());
+        assert_ne!(legacy.err().as_deref(), Some("server start cancelled"));
+    }
+
+    #[tokio::test]
+    async fn an_exiting_app_refuses_a_preflight_before_executing_the_runtime() {
+        let state = AppState::default();
+        state.begin_normal_exit();
+        let result = run_launch_preflight(
+            &state,
+            config::AppConfig::default(),
+            Some("exit-launch".into()),
+        )
+        .await;
+        assert_eq!(result.err().as_deref(), Some("server start cancelled"));
+    }
+
+    #[test]
+    fn deep_verification_excludes_active_sessions_and_preserves_an_existing_run_cancellation() {
+        let state = AppState::default();
+        let first = begin_deep_verification(&state).unwrap();
+        state.verify_cancel.store(true, Ordering::Release);
+        assert!(begin_deep_verification(&state).is_err());
+        assert!(state.verify_cancel.load(Ordering::Acquire));
+        drop(first);
+        let named = state
+            .sessions
+            .get_or_create("synthetic", "Synthetic")
+            .unwrap();
+        named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Ready;
+        assert!(begin_deep_verification(&state)
+            .err()
+            .unwrap()
+            .contains("all model sessions"));
+        assert!(state.verify_cancel.load(Ordering::Acquire));
+        named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Stopped;
+        state.runtime_busy.store(true, Ordering::Release);
+        assert!(begin_deep_verification(&state).is_err());
+        state.runtime_busy.store(false, Ordering::Release);
+        state.exiting.store(true, Ordering::Release);
+        assert!(begin_deep_verification(&state).is_err());
+        state.exiting.store(false, Ordering::Release);
+        let recovered = begin_deep_verification(&state).unwrap();
+        assert!(!state.verify_cancel.load(Ordering::Acquire));
+        drop(recovered);
+    }
+
+    #[test]
+    fn primary_projector_and_draft_bindings_follow_inspected_gguf_roles() {
+        use crate::gguf::fixture::{file, Value};
+        let root = std::env::temp_dir().join(format!("aiolm-model-roles-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let primary = root.join("language.gguf");
+        let projector = root.join("vision.gguf");
+        for (path, architecture) in [(&primary, "llama"), (&projector, "clip")] {
+            fs::write(
+                path,
+                file(
+                    &[("general.architecture".into(), Value::Str(architecture))],
+                    &[],
+                ),
+            )
+            .unwrap();
+        }
+        let mut cfg = config::AppConfig {
+            active_model: primary.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
+            mmproj: projector.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        validate_start_config(&mut cfg)
+            .expect("a language model and projector pass role validation");
+        cfg.active_model = projector.to_string_lossy().into_owned();
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("model cannot be a multimodal projector"));
+        cfg.active_model = primary.to_string_lossy().into_owned();
+        cfg.mmproj = primary.to_string_lossy().into_owned();
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("projector must be a multimodal projector"));
+        cfg.mmproj.clear();
+        cfg.spec_type = "draft".into();
+        cfg.spec_draft_model = projector.to_string_lossy().into_owned();
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("draft model cannot be a multimodal projector"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn start_validation_rejects_incomplete_model_shards() {

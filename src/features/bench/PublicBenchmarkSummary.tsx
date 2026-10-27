@@ -1,3 +1,4 @@
+import BenchmarkTableScroll from './BenchmarkTableScroll';
 import { formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
 import { summarizePublicBenchmarkRows } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import type { PublicBenchmarkSubmission } from '../../shared/contracts/benchmark/publicBenchmark.ts';
@@ -90,7 +91,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
         <h4>{copy.shareResults}</h4>
         <p>{copy.shareStatus}: {copy[snapshot.measurements.status] ?? snapshot.measurements.status}</p>
         {summaries.length > 0 && (
-          <div className="performance-table-scroll" role="region" aria-label={copy.shareResults} tabIndex={0}>
+          <BenchmarkTableScroll label={copy.shareResults} copy={copy}>
             <table>
               <thead><tr>
                 <th scope="col">{copy.test}</th>
@@ -115,7 +116,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
                 </tr>
               ))}</tbody>
             </table>
-          </div>
+          </BenchmarkTableScroll>
         )}
       </section>
       <p>{copy.publicUnknown}</p>

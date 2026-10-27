@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppConfig, GpuPlacement, SessionDefinition } from "../api/types";
-import { gpuTensorSplitDrafts, parseGpuTensorSplits, resolvedGpuPlacement, runtimeGpuDevices, sessionConfig, toggleGpuSelection } from "./sessionUtils";
+import { resolvedGpuPlacement, runtimeGpuDevices, sessionConfig, sessionDefinitionFromStatus, toggleGpuSelection } from "./sessionUtils";
 
 const placement: GpuPlacement = {
   gpu_ids: ["gpu-a", "gpu-b"],
@@ -10,7 +10,7 @@ const placement: GpuPlacement = {
   draft_gpu_id: null,
 };
 
-describe("GPU tensor split drafts", () => {
+describe("GPU placement", () => {
   it("preserves current and legacy Metal device IDs with unified memory", () => {
     const current = runtimeGpuDevices("metal", ["MTL0: Apple Test Chip", "Vulkan0: Other GPU"]);
     expect(current).toMatchObject([{ stable_id: "runtime:metal:MTL0", vendor: "apple", integrated: true }]);
@@ -21,20 +21,15 @@ describe("GPU tensor split drafts", () => {
     expect(devices.map((gpu) => gpu.stable_id)).toEqual(["runtime:rocm:ROCm1", "runtime:rocm:ROCm0"]);
     expect(toggleGpuSelection(placement, "runtime:rocm:ROCm1", devices)).toEqual({ ...placement, gpu_ids: ["runtime:rocm:ROCm1"], main_gpu: null, tensor_split: [] });
   });
-  it("keeps ratios associated with stable GPU IDs when selection order changes", () => {
-    const drafts = gpuTensorSplitDrafts(placement);
-    expect(parseGpuTensorSplits(drafts, ["gpu-b", "gpu-a"])).toEqual([0.75, 0.25]);
-  });
-
-  it("rejects incomplete ratios and clears splits for a single GPU", () => {
-    expect(parseGpuTensorSplits({ "gpu-a": "1", "gpu-b": "" }, ["gpu-a", "gpu-b"])).toBeNull();
-    expect(parseGpuTensorSplits({ "gpu-a": "0.5" }, ["gpu-a"])).toEqual([]);
-  });
 });
 
 describe("session execution settings", () => {
   const config = { active_model: "default.gguf", mmproj: "default-projector.gguf", spec_draft_model: "", temperature: 0.8, ctx_size: 4096, models_dir: "models", port: 8080, gpu: placement, chat_options: { stop: ["end"] } } as unknown as AppConfig;
   const definition: SessionDefinition = { id: "work", name: "Work", enabled: true, models: { primary_model: "work.gguf", mmproj: "", draft_model: "draft.gguf" }, gpu: { ...placement, gpu_ids: ["gpu-c"] } };
+
+  it('imports a running session using the loaded artifact rather than its public model alias', () => {
+    expect(sessionDefinitionFromStatus({ id: 'work', name: 'Work', state: 'running', model: 'served-alias', execution: { active_model: '/synthetic/loaded-model' } }, config).models.primary_model).toBe('/synthetic/loaded-model');
+  });
 
   it("inherits the existing defaults when a stored session has no execution override", () => {
     expect(sessionConfig(config, definition)).toMatchObject({ active_model: "work.gguf", mmproj: "", temperature: 0.8, ctx_size: 4096, port: 8080, gpu: definition.gpu });

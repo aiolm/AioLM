@@ -98,4 +98,3 @@ export function importPreferences(raw: string): AppPreferences {
   if (envelope.schemaVersion !== 1 || !envelope.preferences || typeof envelope.preferences !== "object") throw new Error("Unsupported settings export format.");
   return validatePreferences(envelope.preferences as Partial<AppPreferences>);
 }
-export { KEY as PREFERENCES_STORAGE_KEY };

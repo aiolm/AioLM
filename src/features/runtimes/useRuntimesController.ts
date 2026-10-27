@@ -3,9 +3,12 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { defaultPrBackendForDevice, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import { publishInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
+import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
-import { isServerRunning } from "../../shared/lib/serverLifecycle";
+import { isServerBusy } from "../../shared/lib/serverLifecycle";
+import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
+import { useSessionTransitionInProgress } from "../../shared/state/sessionTransitions";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { updateTask } from "../../shared/state/taskRegistry";
 import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
@@ -17,7 +20,7 @@ import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, 
  * The panel manages installed builds and nothing else: it probes exactly the
  * build the user asks about and never reads the execution configuration, which
  * belongs to the profile a model is launched with. */
-export function useRuntimesController(store: AppStore, active: boolean) {
+export function useRuntimesController(store: AppStore, active: boolean, native = true) {
   const { locale, t } = useI18n();
   const [rows, setRows] = useState<BackendRow[]>(initialRows);
   const [flash, flashT] = useFlashMessage();
@@ -52,7 +55,12 @@ export function useRuntimesController(store: AppStore, active: boolean) {
   const probeGeneration = useRef(0);
   const prBackendTouched = useRef(false);
   const prInstallInFlight = useRef(false);
-  const serverRunning = isServerRunning(store.status.state);
+  const [sessionsInUse, setSessionsInUse] = useState(false);
+  const transitionInProgress = useSessionTransitionInProgress();
+  useSessionPolling({ active, onData: sessions => setSessionsInUse(sessions.some(session => isServerBusy(session.state))) });
+  // Runtime mutations share the native lock across the default model and
+  // named sessions, including their starting/stopping transitions.
+  const serverRunning = isServerBusy(store.status.state) || sessionsInUse || transitionInProgress;
   const runtimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
 
   // A probe names the build it describes, so a later one always wins and a
@@ -93,14 +101,31 @@ export function useRuntimesController(store: AppStore, active: boolean) {
       const installed = await api.rtList();
       if (generation !== refreshGeneration.current) return;
       publishInstalledRuntimes(installed);
+      const updateRows = (
+        latestFor: (backend: string) => api.LatestInfo | null,
+        latestErrorFor: (backend: string) => string | null,
+      ) => setRows((previous) => {
+        // The published list is shared and mutable; observe it when React
+        // applies the row update, not before the latest probes await.
+        const installedByBackend = new Map<string, api.InstalledRuntime[]>();
+        for (const item of installed) {
+          const backendItems = installedByBackend.get(item.backend);
+          if (backendItems) backendItems.push(item);
+          else installedByBackend.set(item.backend, [item]);
+        }
+        return mergeBackendRows(previous, installed).map((row) => ({
+          ...row,
+          installed: installedByBackend.get(row.backend) ?? [],
+          latest: latestFor(row.backend),
+          latestErr: latestErrorFor(row.backend),
+        }));
+      });
       const cached = force ? null : readLatestCache();
       if (cached) {
-        setRows((previous) => mergeBackendRows(previous, installed).map((row) => ({
-          ...row,
-          installed: installed.filter((item) => item.backend === row.backend),
-          latest: cached.infos[row.backend] ?? null,
-          latestErr: cached.infos[row.backend] ? null : cached.errors?.[row.backend] ?? null,
-        })));
+        updateRows(
+          backend => cached.infos[backend] ?? null,
+          backend => cached.infos[backend] ? null : cached.errors?.[backend] ?? null,
+        );
         return;
       }
       const probes = await Promise.all(BACKENDS.map(async (backend) => {
@@ -113,17 +138,17 @@ export function useRuntimesController(store: AppStore, active: boolean) {
       if (generation !== refreshGeneration.current) return;
       const infos: Record<string, api.LatestInfo> = {};
       const errors: Record<string, string> = {};
+      const latestErrors = new Map<string, string | null>();
       for (const probeResult of probes) {
+        if (!latestErrors.has(probeResult.backend)) latestErrors.set(probeResult.backend, probeResult.error);
         if (probeResult.info) infos[probeResult.backend] = probeResult.info;
         else if (probeResult.error) errors[probeResult.backend] = probeResult.error;
       }
       if (Object.keys(infos).length > 0 || Object.keys(errors).length > 0) writeLatestCache(infos, errors);
-      setRows((previous) => mergeBackendRows(previous, installed).map((row) => ({
-        ...row,
-        installed: installed.filter((item) => item.backend === row.backend),
-        latest: infos[row.backend] ?? null,
-        latestErr: probes.find((probeResult) => probeResult.backend === row.backend)?.error ?? null,
-      })));
+      updateRows(
+        backend => infos[backend] ?? null,
+        backend => latestErrors.get(backend) ?? null,
+      );
     } catch (error) {
       if (generation !== refreshGeneration.current) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -140,9 +165,9 @@ export function useRuntimesController(store: AppStore, active: boolean) {
         setDevice(report);
         if (!prBackendTouched.current) setPrBackend(defaultPrBackendForDevice(report));
       }).catch(() => setDevice(null));
-      void refresh();
+      if (native) void refresh();
     }
-  }, [active, refresh]);
+  }, [active, native, refresh]);
 
   // Keep the native progress subscription for the lifetime of the mounted
   // panel. App keeps the panel mounted after first visit, so navigating away
@@ -214,6 +239,7 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     setUninstallBusy(true);
     try {
       await api.rtUninstall(backend, build);
+      notifyRuntimeInventoryChanged();
       flashT(t("ui.uninstalledOk", { backend, build: formatRuntimeVersion(build, installedVersion(backend, build)) }));
       // Removing a build clears it from every profile that named it, so the
       // panel reloads the configuration rather than keeping a selection that

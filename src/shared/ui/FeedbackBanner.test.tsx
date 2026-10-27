@@ -85,4 +85,37 @@ describe("FeedbackBanner", () => {
     );
     expect(screen.getByRole("status")).toHaveClass("app-feedback", "app-feedback--info", "custom-test-class");
   });
+
+  it("collapses a long multiline engine diagnostic behind details while keeping alert semantics", () => {
+    const firstLine = "server exited before ready (1). error while handling argument --chat-template-file: failed to open file [synthetic D15 missing path]";
+    const full = [
+      firstLine,
+      "usage: synthetic-engine [options] --chat-template-file PATH",
+      ...Array.from({ length: 12 }, (_, index) => `  synthetic-template-${index}`),
+    ].join("\n");
+    const handleDismiss = vi.fn();
+    renderWithI18n(
+      <FeedbackBanner tone="error" onDismiss={handleDismiss}>
+        {full}
+      </FeedbackBanner>
+    );
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveAttribute("aria-live", "assertive");
+    // Concise actionable first line stays visible; the dump collapses.
+    expect(screen.getByText(firstLine)).toBeInTheDocument();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).toBeInTheDocument();
+    expect(document.querySelector("pre.app-diagnostic-full")?.textContent).toBe(full);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(handleDismiss).toHaveBeenCalledOnce();
+  });
+
+  it("keeps mixed JSX children with links inline without collapsing", () => {
+    renderWithI18n(
+      <FeedbackBanner tone="warning">
+        Synthetic short notice <a href="#synthetic-docs">synthetic docs</a>
+      </FeedbackBanner>
+    );
+    expect(screen.getByRole("link", { name: "synthetic docs" })).toBeInTheDocument();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).not.toBeInTheDocument();
+  });
 });

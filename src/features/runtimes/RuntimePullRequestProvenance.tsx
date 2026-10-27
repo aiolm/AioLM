@@ -4,6 +4,8 @@ import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import type * as api from "../../shared/api/types";
 import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
+import type { Locale } from '../../shared/i18n/i18n';
+import { pullRequestStateText } from '../../shared/i18n/statusDisplayCopy';
 
 /**
  * What the user is agreeing to. Building a pull request compiles and runs code
@@ -11,14 +13,15 @@ import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified"
  * code actually comes from, the branch, and the exact commit — rather than
  * only the PR number the user typed, which says nothing about any of that.
  */
-export default function PullRequestProvenance({ t, preview, backend }: { t: (key: UnifiedKey, vars?: TranslationVars) => string; preview: api.PullRequestPreview; backend: string }) {
+export default function PullRequestProvenance({ t, locale = 'en', preview, backend }: { t: (key: UnifiedKey, vars?: TranslationVars) => string; locale?: Locale; preview: api.PullRequestPreview; backend: string }) {
+  const state = pullRequestStateText(preview.state, locale);
   const rows: [string, string][] = [
     [t("ui.prFieldTitle"), preview.title || "—"],
     [t("ui.prFieldAuthor"), preview.author || "—"],
     [t("ui.prFieldRepository"), preview.repository],
     [t("ui.prFieldHeadRef"), preview.head_ref || "—"],
     [t("ui.prFieldCommit"), preview.commit],
-    [t("ui.prFieldState"), preview.draft ? t("ui.prStateDraft", { state: preview.state }) : preview.state],
+    [t("ui.prFieldState"), preview.draft ? t("ui.prStateDraft", { state }) : state],
     [t("ui.prFieldUpdated"), preview.updated_at || "—"],
     [t("ui.prFieldBackend"), backend],
   ];

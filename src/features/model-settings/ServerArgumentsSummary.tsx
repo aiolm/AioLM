@@ -1,12 +1,17 @@
 import type { OptionOccurrence, ServerOption } from '../../shared/config/serverOptions';
 
+const NEGATIVE_NUMERIC_TOKEN = /^-(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[+-]?\d+)?$/i;
+
+function isFlagToken(token: string): boolean {
+  return token.startsWith('-') && !NEGATIVE_NUMERIC_TOKEN.test(token);
+}
+
 /** Group the stored argv for display without changing its order or token contents. */
 function argumentRows(args: readonly string[], options: readonly ServerOption[]): OptionOccurrence[] {
   const rows: OptionOccurrence[] = [];
-  const switchPattern = /^--?[a-zA-Z][\w.-]*/;
   for (let index = 0; index < args.length; index++) {
     const token = args[index];
-    if (!switchPattern.test(token)) {
+    if (!isFlagToken(token)) {
       rows.push({ flag: '', values: [token] });
       continue;
     }
@@ -17,7 +22,7 @@ function argumentRows(args: readonly string[], options: readonly ServerOption[])
     // following values with an unknown option, as the profile change list does.
     const arity = options.find(option => option.flags.includes(flag))?.arity ?? Infinity;
     // Like the argument editor, preserve negative numbers and stop at the next switch.
-    while (values.length < arity && index + 1 < args.length && !switchPattern.test(args[index + 1])) {
+    while (values.length < arity && index + 1 < args.length && !isFlagToken(args[index + 1])) {
       values.push(args[++index]);
     }
     rows.push({ flag, values });

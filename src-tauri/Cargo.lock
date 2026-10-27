@@ -50,15 +50,17 @@ dependencies = [
 
 [[package]]
 name = "aiolm"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "apple-native-keyring-store",
  "arboard",
  "base64 0.22.1",
+ "encoding_rs",
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "gio",
+ "gtk",
  "keyring-core",
  "libc",
  "open",
@@ -79,6 +81,7 @@ dependencies = [
  "which",
  "windows-native-keyring-store",
  "windows-sys 0.61.2",
+ "zbus",
  "zbus-secret-service-keyring-store",
  "zip",
 ]

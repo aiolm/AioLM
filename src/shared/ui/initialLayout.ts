@@ -22,7 +22,10 @@ export function afterInitialLayout(
 ): () => void {
   let frameId = 0;
   let disposed = false;
-  const waiting = () => [...pending].some(id => id > afterRead);
+  const waiting = () => {
+    for (const id of pending) if (id > afterRead) return true;
+    return false;
+  };
   const dispose = () => { disposed = true; cancel(frameId); listeners.delete(check); };
   const check = () => {
     cancel(frameId);

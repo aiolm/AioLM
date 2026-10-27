@@ -5,6 +5,8 @@ export interface RuntimeVersionLabelInput {
   version?: string | null;
   /** The caller's build identity: a build number, a `bNNNN` tag or an opaque local/PR id. */
   build?: string | number | null;
+  variant?: string | null;
+  plugin_version?: string | null;
 }
 
 const UNKNOWN = '?';
@@ -17,7 +19,7 @@ const LEGACY_TAG = /^b?(\d+)(?:-[\da-f]+)?$/i;
 function text(value: string | number | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   const trimmed = String(value).trim();
-  return trimmed && trimmed.toLowerCase() !== 'unknown' ? trimmed : null;
+  return trimmed && trimmed !== UNKNOWN && trimmed.toLowerCase() !== 'unknown' ? trimmed : null;
 }
 
 function isLlamaCpp(name: string | null | undefined): boolean {
@@ -57,7 +59,8 @@ function llamaVersion(version: string | null): { version: string | null; build: 
  * that actually ran, so it wins over the caller's `build`; the caller's
  * `bNNNN` tag gives its number, and a PR or local id is shown as it is. Build
  * 0 is llama.cpp's "compiled without git" value and counts as no number. A
- * missing half is `?`: `0.3.0-dev(?)`, `?(10638)`. Nothing known gives `null`,
+ * missing semantic version leaves the build tag: `b10638`; a missing build
+ * leaves the reported version: `0.3.0-dev`. Nothing known gives `null`,
  * so the caller can show its own localized "unavailable".
  *
  * Other engines keep their own version strings untouched: no banner parsing and
@@ -68,13 +71,17 @@ function llamaVersion(version: string | null): { version: string | null; build: 
  */
 export function formatRuntimeVersionLabel(input: RuntimeVersionLabelInput): string | null {
   const reported = text(input.version);
+  if (input.name === 'vllm' && input.variant === 'vllm-metal') {
+    return `vllm-metal ${text(input.plugin_version) ?? UNKNOWN} · vLLM ${reported ?? UNKNOWN}`;
+  }
   if (!isLlamaCpp(input.name)) {
     const build = text(input.build);
-    if (!reported) return build ? `${UNKNOWN}(${build})` : null;
+    if (!reported) return build;
     return build ? `${reported}(${build})` : reported;
   }
   const parsed = llamaVersion(reported);
   const build = parsed.build ?? llamaBuild(input.build);
   if (!parsed.version && !build) return null;
-  return `${parsed.version ?? UNKNOWN}(${build ?? UNKNOWN})`;
+  if (!parsed.version) return /^\d+$/.test(build!) ? `b${build}` : build;
+  return build ? `${parsed.version}(${build})` : parsed.version;
 }

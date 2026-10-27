@@ -1,34 +1,35 @@
 @media (max-width: 1199px) {
- .aiolm-runtime-context { max-width: 300px; }
+ .aiolm-runtime-context { flex-basis: 440px; max-width: 440px; }
 }
 @media (max-width: 959px) {
  .app-shell { grid-template-columns: minmax(0,1fr); }
  .aiolm-sidebar { display: none; }
  .aiolm-menu-trigger { display: inline-flex; }
- .aiolm-header { padding: 0 8px; gap: 8px; }
- .aiolm-runtime-context { max-width: 260px; }
+ .aiolm-header { padding-inline: var(--ui-canvas-padding); gap: 8px; }
+ .aiolm-runtime-context { flex-basis: 260px; max-width: 260px; }
+ .aiolm-context-runtime { flex: 0 0 auto; }
  .aiolm-context-runtime .aiolm-context-label { display: none; }
  .app-feedback-layer, .app-task-strip { margin-inline: 16px; }
 }
 @media (max-width: 639px) {
  :root { --ui-page-padding: 16px; --ui-canvas-padding: 16px; }
- .profile-snapshot { padding: 16px; }
  .settings-row { padding: var(--ui-row-space) 12px; }
- .tuning-redesign__header { padding: 16px; flex-wrap: wrap; }
  /* Phone width: location and server state on the first line, the model pill
     gets the full second line so its name stays readable. */
- .aiolm-header { grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
+ .aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
  .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; max-width: none; width: 100%; }
  .aiolm-server { grid-column: 2; grid-row: 1; }
  .app-feedback { flex-wrap: wrap; }
  .app-task-strip { flex-direction: column; gap: 8px; }
+ /* The copy takes the whole row; progress and buttons wrap below it. */
+ .app-task-strip__item { flex-wrap: wrap; }
+ .app-task-strip__copy { flex: 1 1 100%; }
  .app-confirm-dialog__panel { padding: 20px; }
  .tuning-sampler-chain__add { flex-wrap: wrap; }
 }
 /* Break at the width of the page, after sidebar, padding and scrollbar space. */
 @container workspace (min-width: 720px) {
  .app-master-detail { grid-template-columns: clamp(224px,26%,280px) minmax(0,1fr); }
- .app-balanced-columns { grid-template-columns: repeat(2,minmax(0,1fr)); }
  .discover-columns { grid-template-columns: minmax(0,.85fr) minmax(0,1.15fr); }
  .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: 224px; box-shadow: none; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
@@ -42,25 +43,22 @@
 @container workspace (max-width: 599px) {
  .chat-conversation-heading { gap: 8px; }
 }
+/* Keep the title readable beside both controls without adding a header row. */
+@container workspace (max-width: 399px) {
+ .chat-settings-summary { --ui-control-pad-inline: 6px; inline-size: 32px; min-inline-size: 32px; block-size: 32px; gap: 0; }
+ .chat-settings-summary-label, .chat-settings-summary::after { display: none; }
+ .chat-settings-summary[data-icon]::before { display: block; }
+}
 @container workspace (max-width: 719px) {
  .chat-layout { min-height: 240px; }
 }
 @container fields (max-width: 719px) {
  .tuning-field-list > .tuning-default-field { grid-template-columns: minmax(0,1fr); gap: 12px; }
 }
-@container tuning (max-width: 599px) {
- .tuning-apply-footer { grid-template-columns: minmax(0,1fr); align-items: stretch; padding: 8px 16px; gap: 8px; }
-}
 /* Short windows scroll the editor as one region; reserve its gutter only once. */
 @media (max-height: 640px) {
  .chat-message-log { min-height: 48px; }
  .chat-composer-actions textarea { height: 52px; min-height: 52px; padding-block: 4px; }
- .tuning-redesign { overflow-y: auto; scrollbar-gutter: stable; }
- .tuning-redesign__body { flex: 0 0 auto; }
- .tuning-redesign__content { min-height: 240px; overflow: visible; }
- .tuning-redesign__content > .tuning-panel-scroll { height: auto; overflow: visible; }
- .tuning-navigation, .tuning-apply-footer { scrollbar-gutter: auto; }
- .tuning-apply-footer { position: sticky; bottom: 0; z-index: 10; }
 }
 
 /* Narrow model rows reserve the name column; action groups wrap below it. */

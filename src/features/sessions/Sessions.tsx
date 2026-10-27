@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import StatusBadge from "../../shared/ui/StatusBadge";
@@ -5,21 +6,23 @@ import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import EmptyState from "../../shared/ui/EmptyState";
 import Switch from "../../shared/ui/Switch";
 import "./sessions.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { finishTask, getTaskSnapshot, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from "../../shared/state/taskRegistry";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
+import { profileTargetKey } from "../../shared/config/settingsProfiles";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
-import { runtimeVersionLabel, useInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import {
   DEFAULT_SESSION_ID,
   cloneGpuPlacement,
@@ -76,7 +79,6 @@ function modelLabel(path: string, empty: string): string {
 }
 
 export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
-  const installedRuntimes = useInstalledRuntimes();
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const cfg = store.cfg;
@@ -88,16 +90,22 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const [stopExisting, setStopExisting] = useState(cfg?.stop_existing_sessions_on_load ?? true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const loadCancelling = useSyncExternalStore(subscribeTasks,
+    () => loadingId !== null && getTaskSnapshot().some(task => task.id === `session-load-${loadingId}` && task.state === 'cancelling'),
+    () => false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const currentEdit = useRef("");
   currentEdit.current = JSON.stringify([selectedId, editing]);
+  const currentSelection = useRef(selectedId);
+  currentSelection.current = selectedId;
+  const currentLoad = useRef<object | null>(null);
   const saving = useRef(false);
   const legacyState = store.status.state;
   const legacyUrl = store.status.url;
-  const legacyModel = store.status.model;
+  const legacyModel = loadedModelPath(store.status);
   const legacyMmproj = store.status.mmproj;
   const legacyPid = store.status.pid;
   const legacyActiveRequests = store.status.active_requests;
@@ -122,7 +130,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       .map((status): api.SessionDefinition => cfg ? sessionDefinitionFromStatus(status, cfg) : ({
         id: status.id,
         name: status.name || status.id,
-        models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
+        models: { primary_model: loadedModelPath(status), mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
         gpu: cloneGpuPlacement(status.gpu),
         enabled: true,
       }));
@@ -171,11 +179,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     setStopExisting(cfg.stop_existing_sessions_on_load ?? true);
   }, [cfg, cfg?.sessions, cfg?.stop_existing_sessions_on_load]);
 
-  const persist = async (next: api.SessionDefinition[]) => {
-    await store.updateConfig({ sessions: next });
-    setDefinitions(next);
-  };
-
   const performSelection = (definition: api.SessionDefinition) => {
     setSelectedId(definition.id);
     setDetailsOpen(true);
@@ -203,17 +206,19 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     saving.current = true;
     setSavingId(editing.id);
     const trimmed = normalizedEditing.name.trim();
-    const latestDefinitions = (store.getConfig?.() ?? cfg)?.sessions ?? definitions;
-    const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
-    const nextDefinition = {
-      ...(latestDefinition ?? normalizedEditing),
-      name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
-    };
-    const next = [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition];
     try {
-      await persist(next);
+      const saved = await store.updateConfig(current => {
+        const latestDefinitions = current.sessions ?? [];
+        const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
+        const nextDefinition = {
+          ...(latestDefinition ?? normalizedEditing),
+          name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
+        };
+        return { sessions: [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition] };
+      });
+      setDefinitions(saved.sessions ?? []);
       if (currentEdit.current === snapshot) {
-        setEditing(nextDefinition);
+        setEditing(saved.sessions?.find((definition) => definition.id === normalizedEditing.id) ?? null);
         setNotice(t("ui.sessionSaved"));
       }
     } catch (error) {
@@ -241,7 +246,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const load = async (definition: api.SessionDefinition) => {
     if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
-      setFailure("Stop the active response before loading a model.");
+      setFailure(t("ui.sessionActiveResponseLoad"));
       return;
     }
     const runnableDefinition = definition;
@@ -250,7 +255,11 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       return;
     }
     if (!cfg) return;
+    const editSnapshot = currentEdit.current;
+    const cleanEditor = editing?.id === runnableDefinition.id && !hasUnsavedChanges;
     let launchConfig = store.getConfig?.() ?? cfg;
+    const loadOperation = {};
+    currentLoad.current = loadOperation;
     const taskId = `session-load-${runnableDefinition.id}`;
     setBusyId(runnableDefinition.id);
     setLoadingId(runnableDefinition.id);
@@ -274,18 +283,33 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       phase: t("ui.sessionStarting"),
       interruptible: true,
       cancel: async () => {
-        await api.sessionStop(runnableDefinition.id);
+        if (currentLoad.current !== loadOperation) return;
+        try { await api.sessionStop(runnableDefinition.id); }
+        catch (error) { if (currentLoad.current === loadOperation) throw error; }
       },
     });
     try {
       launchConfig = await prepareSessionProfile(store, runnableDefinition);
+      // Profile preparation persists resolved execution settings. Keep an untouched
+      // editor aligned with that save, while retaining user edits and later selections.
+      if (cleanEditor) {
+        const prepared = (store.getConfig?.() ?? store.cfg)?.sessions?.find(item => item.id === runnableDefinition.id);
+        if (prepared) setEditing(current => currentSelection.current === runnableDefinition.id
+          && JSON.stringify([runnableDefinition.id, current]) === editSnapshot ? structuredClone(prepared) : current);
+      }
       if (getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new Error('Session load cancelled.');
       const loaded = await api.sessionStart(runnableDefinition.id, launchConfig, stopExisting);
       notifySessionStatusChanged();
       setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
       finishTask(taskId, "completed");
     } catch (error) {
-      const cancelled = errorText(error).toLowerCase().includes("cancel");
+      const message = errorText(error);
+      // Launch validation also forwards probe/dependency cancellation. Runtime
+      // diagnostics and model paths containing "cancel" remain visible failures.
+      const cancelled = [
+        'Session load cancelled.', 'server start cancelled', 'runtime probe cancelled',
+        'runtime installation cancelled', 'runtime install cancelled',
+      ].includes(message);
       if (cancelled) {
         setNotice(t("ui.taskCancelled"));
         finishTask(taskId, "cancelled");
@@ -300,11 +324,11 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           finishTask(taskId, "failed", message);
         }
       } else {
-        const message = errorText(error);
         setFailure(message);
         finishTask(taskId, "failed", message);
       }
     } finally {
+      if (currentLoad.current === loadOperation) currentLoad.current = null;
       setBusyId(null);
       setLoadingId(null);
       await refresh();
@@ -313,7 +337,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const stop = async (id: string, unload = false) => {
     if (sessionHasActivity(id)) {
-      setFailure("Stop the active response before unloading its model.");
+      setFailure(t("ui.sessionActiveResponseUnload"));
       return;
     }
     setBusyId(id);
@@ -342,22 +366,24 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   };
 
   const cancelLoad = async (id: string) => {
+    const loadOperation = currentLoad.current;
     updateTask(`session-load-${id}`, { state: "cancelling", phase: t("ui.taskCancelling") });
     setStatuses((current) => current[id]
       ? { ...current, [id]: { ...current[id], state: "stopping" } }
       : current);
     try {
       await api.sessionStop(id);
+      if (currentLoad.current !== loadOperation) return;
       notifySessionStatusChanged();
     } catch (error) {
-      setFailure(errorText(error));
+      if (currentLoad.current === loadOperation) setFailure(errorText(error));
     }
   };
 
   const remove = async (definition: api.SessionDefinition) => {
     if (definition.id === DEFAULT_SESSION_ID) return;
     if (sessionHasActivity(definition.id)) {
-      setFailure("Stop the active response before removing its session.");
+      setFailure(t("ui.sessionActiveResponseRemove"));
       return;
     }
     setBusyId(definition.id);
@@ -366,11 +392,21 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     try {
       await api.sessionUnload(definition.id);
       notifySessionStatusChanged();
-      const next = ((store.getConfig?.() ?? cfg)?.sessions ?? definitions).filter((item) => item.id !== definition.id);
-      await persist(next);
-      setSelectedId(DEFAULT_SESSION_ID);
-      setDetailsOpen(false);
-      setEditing(null);
+      const saved = await store.updateConfig(current => {
+        const sessions = (current.sessions ?? []).filter(item => item.id !== definition.id);
+        const library = current.settings_profiles;
+        const key = profileTargetKey(definition.models.primary_model, definition.id);
+        if (!library || !Object.prototype.hasOwnProperty.call(library.applied, key)) return { sessions };
+        const applied = { ...library.applied };
+        delete applied[key];
+        return { sessions, settings_profiles: { ...library, applied, revision: library.revision + 1 } };
+      });
+      setDefinitions(saved.sessions ?? []);
+      if (currentSelection.current === definition.id) {
+        setSelectedId(DEFAULT_SESSION_ID);
+        setDetailsOpen(false);
+        setEditing(null);
+      }
       setNotice(t("ui.sessionDeleted"));
     } catch (error) {
       setFailure(errorText(error));
@@ -386,7 +422,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     ? cfg ? sessionDefinitionFromStatus(statuses[editing.id], cfg) : {
         id: statuses[editing.id].id,
         name: statuses[editing.id].name || statuses[editing.id].id,
-        models: { primary_model: statuses[editing.id].model ?? "", mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
+        models: { primary_model: loadedModelPath(statuses[editing.id]), mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
         gpu: cloneGpuPlacement(statuses[editing.id].gpu),
         enabled: true,
       }
@@ -437,22 +473,26 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       <div className="app-card app-card--tight sessions-list">
         {visibleDefinitions.map((definition) => {
           const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-          const rowState = rowStatus?.state ?? "stopped";
+          const polledState = rowStatus?.state ?? "stopped";
+          // Preparation can precede creation of a native session. A stopped
+          // poll must not erase the local load/cancellation already in flight.
+          const rowState = loadingId === definition.id && (polledState === 'stopped' || loadCancelling && polledState === 'starting')
+            ? loadCancelling ? 'stopping' : 'starting' : polledState;
           const expanded = detailsOpen && selectedId === definition.id;
           const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
           const rowName = normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
           const live = rowState === "running" || rowState === "starting" || rowState === "stopping";
-          const model = live ? rowStatus?.model || rowDefinition.models.primary_model : rowDefinition.models.primary_model;
+          const model = live ? loadedModelPath(rowStatus, rowDefinition.models.primary_model) : rowDefinition.models.primary_model;
           const runtime = live ? rowStatus?.execution ?? rowDefinition.execution : rowDefinition.execution;
-          const backend = runtime?.active_backend ?? cfg?.active_backend ?? "PATH";
-          const build = runtime?.active_build ?? cfg?.active_build;
+          const runtimeConfig = { ...cfg, ...runtime, ...(live && rowStatus?.engine
+            ? { active_provider: rowStatus.engine.provider, active_runtime: rowStatus.engine.runtime_id } : {}) };
           const controlsDisabled = busyId !== null || savingId !== null || store.busy;
           return (
             <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={rowName}>
               <div className="session-entry-main">
                 <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
                   <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
-                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{modelLabel(model, t("ui.sessionNoModel"))}</span><ModelBadges mode="compact" model={model} localPath={model} /></span>
+                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{<ModelName model={model} empty={t("ui.sessionNoModel")} />}</span><ModelBadges mode="compact" model={model} localPath={model} /></span>
                 </button>
                 <StatusBadge tone={statusTone(rowState)} label={statusCopy(rowState, t)} labels={SESSION_STATES.map(state => statusCopy(state, t))} />
                 <div className="session-entry-actions">
@@ -464,7 +504,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                     ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
                     : rowState === "running"
                       ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
-                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
+                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
                 </div>
               </div>
               {rowStatus?.error && <FeedbackBanner tone="error" className="session-entry-error">{normalizeDisplayText(rowStatus.error)}</FeedbackBanner>}
@@ -473,7 +513,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                   <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                 </div>}
                 <div className="session-entry-diagnostics text-xs ui-color-muted">
-                  <span>{backend}{build ? ` / ${runtimeVersionLabel(installedRuntimes, backend, build)}` : ""}</span>
+                  <span><RuntimeSelectionLabel config={runtimeConfig} /></span>
                   {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus) || "—" })}</span>}
                   {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
                   {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}

@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::fs;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{Manager, State};
 use zip::ZipArchive;
 
 const MAX_DOCUMENT_BYTES: u64 = 8 * 1024 * 1024;
@@ -82,16 +82,33 @@ fn document_extension(path: &Path) -> bool {
         .is_some_and(|value| DOCUMENT_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str()))
 }
 
-fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+enum AttachmentSelection {
+    Media,
+    Document,
+}
+
+fn resolve_attachment_selection(path: &Path) -> Result<(PathBuf, AttachmentSelection), String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("cannot select attachment: {error}"))?;
-    let selection = if image_mime_type(&canonical).is_some() {
-        &state.selected_image
+    let selection = if crate::media::mime(&canonical).is_some() {
+        AttachmentSelection::Media
     } else if document_extension(&canonical) {
-        &state.selected_document
+        AttachmentSelection::Document
     } else {
         return Err("unsupported attachment type; choose an image or document".into());
+    };
+    Ok((canonical, selection))
+}
+
+fn grant_canonical_attachment(
+    state: &AppState,
+    canonical: PathBuf,
+    selection: AttachmentSelection,
+) -> Result<String, String> {
+    let selection = match selection {
+        AttachmentSelection::Media => &state.selected_image,
+        AttachmentSelection::Document => &state.selected_document,
     };
     let mut selected = selection
         .lock()
@@ -100,18 +117,16 @@ fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, St
     Ok(canonical.to_string_lossy().into_owned())
 }
 
+fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+    let (canonical, selection) = resolve_attachment_selection(path)?;
+    grant_canonical_attachment(state, canonical, selection)
+}
+
 #[tauri::command]
 pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    *state
-        .selected_image
-        .lock()
-        .map_err(|_| "image selection state was poisoned".to_string())? = None;
-    *state
-        .selected_document
-        .lock()
-        .map_err(|_| "document selection state was poisoned".to_string())? = None;
+    clear_attachment_selection(&state)?;
     let path = tokio::task::spawn_blocking(|| {
-        let extensions: Vec<&str> = IMAGE_EXTENSIONS
+        let extensions: Vec<&str> = crate::media::EXTENSIONS
             .iter()
             .chain(DOCUMENT_EXTENSIONS)
             .copied()
@@ -127,6 +142,92 @@ pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option
     .map_err(|error| format!("attachment picker task failed: {error}"))?;
     path.map(|path| grant_selected_attachment(&state, &path))
         .transpose()
+}
+
+fn clear_attachment_selection(state: &AppState) -> Result<(), String> {
+    *state
+        .selected_image
+        .lock()
+        .map_err(|_| "image selection state was poisoned".to_string())? = None;
+    *state
+        .selected_document
+        .lock()
+        .map_err(|_| "document selection state was poisoned".to_string())? = None;
+    Ok(())
+}
+
+#[cfg(test)]
+fn claim_dropped_attachment(
+    state: &AppState,
+    window: &str,
+    id: &str,
+    now: std::time::Instant,
+) -> Result<Option<String>, String> {
+    claim_dropped_attachment_with(state, window, id, || now, resolve_attachment_selection)
+}
+
+fn claim_dropped_attachment_with(
+    state: &AppState,
+    window: &str,
+    id: &str,
+    clock: impl Fn() -> std::time::Instant,
+    resolve: impl FnOnce(&Path) -> Result<(PathBuf, AttachmentSelection), String>,
+) -> Result<Option<String>, String> {
+    let claim = state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?
+        .claim(window, id, clock())?;
+    // Filesystem resolution runs without holding the selection store lock.
+    let resolved = resolve(claim.path());
+    let mut drops = state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?;
+    drops.complete(window, &claim, clock())?;
+    // Publication is linearized with discard. Invalid/cancelled tickets never
+    // clear grants; genuine live failures behave like a failed native picker.
+    clear_attachment_selection(state)?;
+    let result = resolved.and_then(|(canonical, selection)| {
+        grant_canonical_attachment(state, canonical, selection).map(Some)
+    });
+    drop(drops);
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn claim_attachment_drop(
+    webview: tauri::Webview,
+    id: String,
+) -> Result<Option<String>, String> {
+    crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
+    let app = webview.app_handle().clone();
+    // Canonicalization belongs on a worker, never the GUI Drop callback.
+    tokio::task::spawn_blocking(move || {
+        claim_dropped_attachment_with(
+            &app.state::<AppState>(),
+            "main",
+            &id,
+            std::time::Instant::now,
+            resolve_attachment_selection,
+        )
+    })
+    .await
+    .map_err(|error| format!("attachment drop selection task failed: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) fn discard_attachment_drop(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
+    state
+        .attachment_drops
+        .lock()
+        .map_err(|_| "attachment drop state was poisoned".to_string())?
+        .discard("main", &id, std::time::Instant::now())
 }
 
 fn xml_text(value: &str) -> String {
@@ -152,6 +253,9 @@ fn xml_text(value: &str) -> String {
             '&' => output.push('&'),
             _ => output.push(character),
         }
+    }
+    if !output.contains('&') {
+        return output;
     }
     output
         .replace("&amp;", "&")
@@ -200,18 +304,21 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     extraction.map_err(|error| {
         format!("PDF text extraction failed; scanned/image-only PDFs need OCR: {error}")
     })?;
-    Ok(String::from_utf8_lossy(&writer.bytes).into_owned())
+    Ok(match String::from_utf8(writer.bytes) {
+        Ok(text) => text,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    })
 }
 
-fn extract_document_text(path: &Path, bytes: &[u8]) -> Result<String, String> {
+fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> {
     match path
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
         .as_deref()
     {
-        Some("docx") => extract_docx_text(bytes),
-        Some("pdf") => extract_pdf_text(bytes),
+        Some("docx") => extract_docx_text(&bytes),
+        Some("pdf") => extract_pdf_text(&bytes),
         _ => {
             if bytes.contains(&0) {
                 return Err(
@@ -219,7 +326,10 @@ fn extract_document_text(path: &Path, bytes: &[u8]) -> Result<String, String> {
                         .into(),
                 );
             }
-            Ok(String::from_utf8_lossy(bytes).into_owned())
+            Ok(match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+            })
         }
     }
 }
@@ -292,7 +402,7 @@ async fn read_document_path(canonical: PathBuf) -> Result<String, String> {
         if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
             return Err("document exceeds the 8 MiB limit".into());
         }
-        let text = extract_document_text(&canonical, &bytes)?;
+        let text = extract_document_text(&canonical, bytes)?;
         if text.trim().is_empty() {
             return Err(
                 "document has no extractable text; scanned/image-only PDFs need OCR".into(),
@@ -381,6 +491,88 @@ pub(crate) async fn read_image_data(
     .map_err(|error| format!("image read task failed: {error}"))?
 }
 
+#[tauri::command]
+pub(crate) async fn import_media(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::media::Attachment, String> {
+    let canonical = {
+        let mut selected = state
+            .selected_image
+            .lock()
+            .map_err(|_| "media selection state was poisoned")?;
+        let canonical = ensure_selected_image_path(selected.as_deref(), Path::new(&path))?;
+        *selected = None;
+        canonical
+    };
+    tokio::task::spawn_blocking(move || {
+        let file = open_verified_file(&canonical, &canonical, "media")?;
+        crate::media::import_selected(&canonical, file)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn resolve_media(
+    reference: String,
+    provider_id: String,
+) -> Result<serde_json::Value, String> {
+    let provider =
+        crate::providers::ProviderId::parse(&provider_id).ok_or("unknown media provider")?;
+    tokio::task::spawn_blocking(move || crate::media::resolve(&reference, provider))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn cancel_media_operation(
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<(), String> {
+    state.media_jobs.cancel(&operation_id)
+}
+
+#[tauri::command]
+pub(crate) async fn transcribe_media(
+    state: State<'_, AppState>,
+    reference: String,
+    session_id: String,
+    operation_id: String,
+) -> Result<crate::gateway::Transcription, String> {
+    if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("application is exiting".into());
+    }
+    let job = state.media_jobs.begin(operation_id)?;
+    if job.cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("media preparation cancelled".into());
+    }
+    let audio = tokio::task::spawn_blocking(move || crate::media::read_owned_audio(&reference))
+        .await
+        .map_err(|error| error.to_string())??;
+    crate::gateway::transcribe_audio(state.model_source(), session_id, audio, job.cancel.clone())
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn extract_video_frames(
+    state: tauri::State<'_, crate::state::AppState>,
+    reference: String,
+    operation_id: String,
+    max_frames: Option<usize>,
+) -> Result<crate::media::preprocessing::VideoFrames, String> {
+    if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("application is exiting".into());
+    }
+    let job = state.media_jobs.begin(operation_id)?;
+    crate::media::preprocessing::extract_video_frames(
+        &reference,
+        max_frames.unwrap_or(4),
+        job.cancel.clone(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +633,203 @@ mod tests {
     }
 
     #[test]
+    fn invalid_drop_claims_and_discards_preserve_existing_reader_grants() {
+        let root = std::env::temp_dir().join(format!("aiolm-drop-grants-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let document = root.join("selected.txt");
+        let image = root.join("selected.png");
+        let dropped = root.join("합성 문서.txt");
+        for path in [&document, &image, &dropped] {
+            fs::write(path, b"synthetic selection").unwrap();
+        }
+        let state = AppState::default();
+        grant_selected_attachment(&state, &document).unwrap();
+        grant_selected_attachment(&state, &image).unwrap();
+        let now = std::time::Instant::now();
+        let id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&dropped), now)
+            .unwrap();
+        assert!(claim_dropped_attachment(&state, "main", "forged", now).is_err());
+        assert!(
+            claim_dropped_attachment(&state, "main", &uuid::Uuid::new_v4().to_string(), now)
+                .is_err()
+        );
+        assert!(claim_dropped_attachment(&state, "other", &id, now).is_err());
+        assert!(state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("other", &id, now)
+            .is_err());
+        state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("main", &uuid::Uuid::new_v4().to_string(), now)
+            .unwrap();
+        let later = now + std::time::Duration::from_secs(120);
+        assert!(claim_dropped_attachment(&state, "main", &id, later).is_err());
+        {
+            let selected = state.selected_document.lock().unwrap();
+            assert!(ensure_selected_document_path(selected.as_deref(), &document).is_ok());
+            assert!(ensure_selected_document_path(selected.as_deref(), &dropped).is_err());
+        }
+        assert!(ensure_selected_image_path(
+            state.selected_image.lock().unwrap().as_deref(),
+            &image
+        )
+        .is_ok());
+
+        let next = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&dropped), later)
+            .unwrap();
+        assert_eq!(
+            claim_dropped_attachment(&state, "main", &next, later)
+                .unwrap()
+                .unwrap(),
+            dropped.canonicalize().unwrap().to_string_lossy()
+        );
+        assert!(claim_dropped_attachment(&state, "main", &next, later).is_err());
+        state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .discard("main", &next, later)
+            .unwrap();
+        assert!(ensure_selected_document_path(
+            state.selected_document.lock().unwrap().as_deref(),
+            &dropped
+        )
+        .is_ok());
+        assert!(state.selected_image.lock().unwrap().is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn genuine_unsupported_drop_consumes_selection_and_clears_stale_grants() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-drop-failure-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let document = root.join("selected.txt");
+        let image = root.join("selected.png");
+        let unsupported = root.join("program.exe");
+        for path in [&document, &image, &unsupported] {
+            fs::write(path, b"synthetic selection").unwrap();
+        }
+        let state = AppState::default();
+        grant_selected_attachment(&state, &document).unwrap();
+        grant_selected_attachment(&state, &image).unwrap();
+        let now = std::time::Instant::now();
+        let id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", &[unsupported], now)
+            .unwrap();
+        assert!(claim_dropped_attachment(&state, "main", &id, now)
+            .unwrap_err()
+            .contains("unsupported attachment type"));
+        assert!(state.selected_document.lock().unwrap().is_none());
+        assert!(state.selected_image.lock().unwrap().is_none());
+        assert!(claim_dropped_attachment(&state, "main", &id, now).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn cancelled_drop_keeps_newer_reader_grant(expired: bool) {
+        let root = std::env::temp_dir().join(format!("aiolm-drop-cancel-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join("old.txt");
+        let new = root.join("new.txt");
+        fs::write(&old, b"old selection").unwrap();
+        fs::write(&new, b"new selection").unwrap();
+        let state = std::sync::Arc::new(AppState::default());
+        let now = std::time::Instant::now();
+        let old_id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", &[old], now)
+            .unwrap();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let old_state = state.clone();
+        let old_token = old_id.clone();
+        let publication_time = if expired {
+            now + std::time::Duration::from_secs(120)
+        } else {
+            now
+        };
+        let clock_calls = std::sync::atomic::AtomicUsize::new(0);
+        let worker = std::thread::spawn(move || {
+            claim_dropped_attachment_with(
+                &old_state,
+                "main",
+                &old_token,
+                || {
+                    if clock_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        now
+                    } else {
+                        publication_time
+                    }
+                },
+                |path| {
+                    entered.send(()).unwrap();
+                    resume.recv().unwrap();
+                    resolve_attachment_selection(path)
+                },
+            )
+        });
+        waiting
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        if !expired {
+            state
+                .attachment_drops
+                .lock()
+                .unwrap()
+                .discard("main", &old_id, now)
+                .unwrap();
+        }
+        let new_id = state
+            .attachment_drops
+            .lock()
+            .unwrap()
+            .capture("main", std::slice::from_ref(&new), publication_time)
+            .unwrap();
+        claim_dropped_attachment(&state, "main", &new_id, publication_time).unwrap();
+        release.send(()).unwrap();
+        let old_result = worker.join().unwrap();
+        let new_grant_preserved =
+            ensure_selected_document_path(state.selected_document.lock().unwrap().as_deref(), &new)
+                .is_ok();
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            new_grant_preserved,
+            "new selection was overwritten: expired={expired}"
+        );
+        assert!(
+            old_result.is_err(),
+            "cancelled/expired claim published: expired={expired}"
+        );
+    }
+
+    #[test]
+    fn discarded_drop_cannot_publish_over_a_newer_reader_grant() {
+        cancelled_drop_keeps_newer_reader_grant(false);
+    }
+
+    #[test]
+    fn expired_drop_cannot_publish_over_a_newer_reader_grant() {
+        cancelled_drop_keeps_newer_reader_grant(true);
+    }
+
+    #[test]
     fn image_read_requires_the_path_returned_by_the_native_picker() {
         let root = std::env::temp_dir().join(format!("aiolm-image-path-{}", std::process::id()));
         fs::create_dir_all(&root).expect("create image test directory");
@@ -458,8 +847,46 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn document_read_requires_native_selection_and_text_extension() {
+    /// One page using the standard Helvetica font, so text extraction relies on the
+    /// built-in font metrics and encoding rather than data embedded in the file.
+    fn synthetic_pdf(content: &[u8]) -> Vec<u8> {
+        use pdf_extract::{Dictionary, Document, Object, Stream};
+
+        let mut document = Document::with_version("1.5");
+        let mut font = Dictionary::new();
+        font.set("Type", "Font");
+        font.set("Subtype", "Type1");
+        font.set("BaseFont", "Helvetica");
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", document.add_object(font));
+        let mut resources = Dictionary::new();
+        resources.set("Font", fonts);
+        let contents = document.add_object(Stream::new(Dictionary::new(), content.to_vec()));
+        let pages_id = document.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", "Page");
+        page.set("Parent", pages_id);
+        page.set("MediaBox", [0, 0, 612, 792].map(Object::Integer).to_vec());
+        page.set("Resources", resources);
+        page.set("Contents", contents);
+        let page_id = document.add_object(page);
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1);
+        document.set_object(pages_id, pages);
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", "Catalog");
+        catalog.set("Pages", pages_id);
+        let catalog_id = document.add_object(catalog);
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("write PDF fixture");
+        bytes
+    }
+
+    #[tokio::test]
+    async fn document_read_requires_native_selection_and_text_extension() {
         let root =
             std::env::temp_dir().join(format!("aiolm-document-path-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create document test directory");
@@ -481,6 +908,102 @@ mod tests {
         assert!(ensure_selected_document_path(Some(&canonical), &other).is_err());
         assert!(ensure_selected_document_path(None, &selected).is_err());
         assert!(ensure_selected_document_path(Some(&canonical), &binary).is_err());
+
+        for (bytes, expected) in [
+            (
+                "\u{feff}한글\r\nAlpha & beta\n".as_bytes(),
+                "\u{feff}한글\r\nAlpha & beta\n",
+            ),
+            (b"a\xff\xc3(b".as_slice(), "a\u{fffd}\u{fffd}(b"),
+        ] {
+            fs::write(&selected, bytes).expect("write text encoding fixture");
+            assert_eq!(
+                read_document_binding(canonical.to_string_lossy().into_owned())
+                    .await
+                    .expect("read document text"),
+                expected
+            );
+        }
+        for (bytes, expected) in [
+            (
+                b"text\0data".as_slice(),
+                "binary documents are not supported; choose a text, DOCX, or PDF document",
+            ),
+            (
+                b" \r\n\t".as_slice(),
+                "document has no extractable text; scanned/image-only PDFs need OCR",
+            ),
+        ] {
+            fs::write(&selected, bytes).expect("write rejected text fixture");
+            assert_eq!(
+                read_document_binding(canonical.to_string_lossy().into_owned())
+                    .await
+                    .expect_err("reject unusable document"),
+                expected
+            );
+        }
+        fs::write(&selected, vec![b'x'; MAX_DOCUMENT_BYTES as usize + 1])
+            .expect("write oversized document");
+        assert_eq!(
+            read_document_binding(canonical.to_string_lossy().into_owned())
+                .await
+                .expect_err("reject oversized document"),
+            "document exceeds the 8 MiB limit"
+        );
+
+        let docx = root.join("manual.docx");
+        for (xml, expected) in [
+            ("<w:p><w:t>한글 Alpha</w:t><w:tab/><w:t>Beta</w:t></w:p>", "한글 Alpha\tBeta\n"),
+            ("<w:p><w:t>&amp;lt; &amp;amp; &amp;gt; &amp;quot; &amp;apos; &lt;w:p&gt;</w:t></w:p>", "< &amp; > \" ' <w:p>\n"),
+        ] {
+            let file = fs::File::create(&docx).expect("create DOCX fixture");
+            let mut archive = zip::ZipWriter::new(file);
+            archive.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
+                .expect("start document.xml");
+            archive.write_all(xml.as_bytes()).expect("write DOCX XML");
+            archive.finish().expect("finish DOCX fixture");
+            assert_eq!(
+                read_document_binding(docx.to_string_lossy().into_owned())
+                    .await
+                    .expect("read DOCX document"),
+                expected
+            );
+        }
+
+        // Plain-text layout puts two newlines before the first line and one newline before
+        // a following line placed less than 1.5 font sizes below it. Rewriting the bound
+        // path must return only the new document's text.
+        let pdf = root.join("manual.pdf");
+        for (content, expected) in [
+            (
+                b"BT /F1 12 Tf 72 712 Td (Alpha beta 1) Tj 0 -14 Td (Line two.) Tj ET".as_slice(),
+                "\n\nAlpha beta 1\nLine two.",
+            ),
+            (
+                b"BT /F1 12 Tf 72 712 Td (Gamma 22 delta) Tj 0 -14 Td (End.) Tj ET".as_slice(),
+                "\n\nGamma 22 delta\nEnd.",
+            ),
+        ] {
+            fs::write(&pdf, synthetic_pdf(content)).expect("write PDF fixture");
+            assert_eq!(
+                read_document_binding(pdf.to_string_lossy().into_owned())
+                    .await
+                    .expect("read PDF document"),
+                expected
+            );
+        }
+        fs::write(&pdf, synthetic_pdf(b"q Q")).expect("write PDF fixture without text");
+        assert_eq!(
+            read_document_binding(pdf.to_string_lossy().into_owned())
+                .await
+                .expect_err("reject PDF without text"),
+            "document has no extractable text; scanned/image-only PDFs need OCR"
+        );
+        fs::write(&pdf, b"%PDF-1.7\nnot a complete PDF document\n").expect("write malformed PDF");
+        let error = read_document_binding(pdf.to_string_lossy().into_owned())
+            .await
+            .expect_err("reject malformed PDF");
+        assert!(error.starts_with("cannot load PDF: "), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 

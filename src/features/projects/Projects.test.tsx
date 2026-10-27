@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
-import { projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
+import { ACTIVE_PROJECT_KEY, PROJECTS_KEY, activeProjectId, exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
@@ -12,17 +12,273 @@ vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi
 
 vi.mock("../../shared/api/index", () => ({
   pickDocument: vi.fn(async () => null),
+  projectExportJson: vi.fn(async () => true),
+  projectImportJson: vi.fn(async () => null),
   mcpListServers: vi.fn(async () => []),
   mcpListTools: vi.fn(async () => []),
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', executable: 'llama-server', state: 'available', version: 'test', flags: [], devices: [], diagnostics: [], server_help: '' })),
   isNativeRuntimeAvailable: vi.fn(() => false),
   rtList: vi.fn(async () => []),
+  providerRuntimes: vi.fn(async () => []),
 }));
 
 const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("Project configuration snapshots", () => {
-  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); });
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); mockedApi.isNativeRuntimeAvailable.mockReturnValue(false); mockedApi.providerRuntimes.mockResolvedValue([]); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const failWrites = (failedKey = PROJECTS_KEY) => {
+    const original = Storage.prototype.setItem;
+    return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === failedKey) throw new DOMException('Synthetic project storage failure', 'QuotaExceededError');
+      original.call(this, key, value);
+    });
+  };
+
+  it('imports a same-name copy and preserves the active project and its document bindings', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const original = projectFromConfig('Research', 'Keep citations', store.cfg!, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['local:lookup'], '', 100);
+    writeProjects([original]); setActiveProjectId(original.id);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(original));
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByText('Imported “Research (2)”.');
+    expect(readProjects()).toHaveLength(2);
+    expect(readProjects().find(item => item.id === original.id)).toEqual(original);
+    expect(activeProjectId()).toBe(original.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Research (2)');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([PROJECTS_KEY, ACTIVE_PROJECT_KEY])('keeps the edited project and reports failed persistence of %s before a successful retry', key => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Keep citations', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited project' } });
+    const failure = failWrites(key);
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Edited project');
+    expect(screen.queryByText('Saved project “Edited project”.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    failure.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    expect(readProjects()[0].name).toBe('Edited project');
+    expect(screen.queryByText(/Synthetic project storage failure/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a project visible and active when its deletion cannot be persisted', () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', '', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Research');
+    expect(screen.queryByText('Deleted “Research”.')).not.toBeInTheDocument();
+  });
+
+  it('handles import storage failure after discard confirmation without losing the current draft', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Research', '', store.cfg!, [], [], '', 100);
+    const imported = projectFromConfig('Imported', '', store.cfg!, [], [], '', 200);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved draft' } });
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByRole('dialog', { name: 'Unsaved settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved draft');
+    expect(screen.queryByText(/Imported “/)).not.toBeInTheDocument();
+  });
+
+  it('reports project state failure after runtime configuration is applied without claiming the project was applied', async () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Project prompt', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    expect(await screen.findByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(readProjects()).toEqual([project]);
+    expect(screen.queryByText(/^Applied “Research”\./)).not.toBeInTheDocument();
+  });
+
+  it.each(['name', 'description', 'documents', 'tools', 'model settings'] as const)('keeps unsaved %s edits when creating another project is cancelled', async field => {
+    const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Cite the source', store.cfg!, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['synthetic:search'], 'Original description', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    if (field === 'name') fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited name' } });
+    if (field === 'description') fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Edited description' } });
+    if (field === 'documents') fireEvent.click(screen.getByRole('button', { name: 'Remove notes.md' }));
+    if (field === 'tools') fireEvent.click(screen.getByRole('checkbox', { name: 'synthetic:search · Unavailable' }));
+    if (field === 'model settings') {
+      fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
+      await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...store.cfg!, ctx_size: 8192 }); });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue(field === 'name' ? 'Edited name' : 'Research');
+    if (field === 'description') expect(screen.getByLabelText('Description')).toHaveValue('Edited description');
+    if (field === 'documents') expect(screen.getByText('No documents yet.')).toBeVisible();
+    if (field === 'tools') expect(screen.queryByRole('checkbox', { name: 'synthetic:search · Unavailable' })).not.toBeInTheDocument();
+    if (field === 'model settings') expect(screen.getByText('8,192')).toBeVisible();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('switches presets only after discarding edits, and does not interrupt selection after saving', () => {
+    const store = createTestStore();
+    const first = projectFromConfig('First project', 'First prompt', store.cfg!, [], [], 'First description', 100);
+    const second = projectFromConfig('Second project', 'Second prompt', store.cfg!, [], [], 'Second description', 200);
+    writeProjects([first, second]); setActiveProjectId(first.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: /First project.*model\.gguf/ }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved name');
+    fireEvent.click(screen.getByRole('button', { name: /Second project.*model\.gguf/ }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved name');
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Second project');
+    expect(readProjects()).toEqual([first, second]);
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Saved description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    fireEvent.click(screen.getByRole('button', { name: /First project.*model\.gguf/ }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('First project');
+    expect(readProjects().find(project => project.id === second.id)?.description).toBe('Saved description');
+  });
+
+  it('protects a new draft and accepts import only after its edits are explicitly discarded', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const imported = projectFromConfig('Imported project', 'Imported prompt', store.cfg!, [], [], '', 100);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved draft' } });
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(readProjects()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved draft');
+    expect(readProjects()).toEqual([]);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByRole('dialog', { name: 'Unsaved settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Imported project');
+    expect(readProjects()).toHaveLength(1);
+    expect(readProjects()[0]).toMatchObject({ name: imported.name, systemPrompt: imported.systemPrompt, config: imported.config });
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('checks the latest edits when an asynchronous import finishes', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const imported = projectFromConfig('Imported project', 'Imported prompt', store.cfg!, [], [], '', 100);
+    let finish!: (value: string) => void;
+    mockedApi.projectImportJson.mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve; }));
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited during import' } });
+    await act(async () => { finish(exportProject(imported)); });
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(screen.getByLabelText('Project name')).toHaveValue('Edited during import');
+    expect(readProjects()).toEqual([]);
+  });
+
+  it('does not mark a successful runtime assignment as an unsaved user edit', async () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Project prompt', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('');
+  });
+
+  it('uses the native JSON save dialog and retains the saved project after cancellation or failure', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Native workspace', 'Keep citations', store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    mockedApi.projectExportJson.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Export JSON' })).toBeEnabled());
+    expect(mockedApi.projectExportJson).toHaveBeenCalledWith(expect.any(String), 'native-workspace.json');
+    expect(JSON.parse(mockedApi.projectExportJson.mock.calls[0][0]).project).toMatchObject({ name: project.name, systemPrompt: project.systemPrompt });
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectExportJson.mockRejectedValueOnce(new Error('Destination is not writable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect(await screen.findByText('Destination is not writable')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectExportJson.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect(await screen.findByText('Saved')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+  });
+
+  it('imports from the native picker while leaving saved projects intact on cancel or invalid input', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Existing workspace', 'Keep citations', store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    mockedApi.projectImportJson.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Import JSON' })).toBeEnabled());
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectImportJson.mockResolvedValueOnce('{}');
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByText('The selected file is not a valid aiolm project preset.')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    const imported = projectFromConfig('Imported native workspace', 'Imported prompt', store.cfg!);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByText('Imported “Imported native workspace”.')).toBeVisible();
+    expect(readProjects()).toHaveLength(2);
+    expect(readProjects().find(item => item.id === project.id)).toEqual(project);
+  });
+
+  it('displays the Python runtime and its context instead of stale llama settings', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    mockedApi.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
+    const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
+      provider_options: { vllm: { max_model_len: 512 } } });
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · Installed by AioLM')).toBeVisible();
+    expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent('512');
+    expect(screen.getByTestId('project-prompt-preview')).not.toHaveTextContent('stale-build');
+  });
 
   it("applies model settings to the project editor before explicit project save", async () => {
     const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
@@ -94,8 +350,8 @@ describe("Project configuration snapshots", () => {
     expect(saved).toMatchObject({ ctx_size: 16384, temperature: 0.3, chat_options: { stop: ['finished'] } });
     expect(application).toMatchObject({ model: saved.active_model, system_prompt: 'Project prompt', settings: { ctx_size: 16384, temperature: 0.3 } });
     expect(application.profile_id).not.toBe(existing.id);
-    expect(saved.settings_profiles!.entries.find(profile => profile.id === application.profile_id)).toMatchObject({ settings: { ctx_size: 16384 }, system_prompt: 'Project prompt' });
-    expect(saved.settings_profiles!.entries.find(profile => profile.id === existing.id)).toEqual(existing);
+    expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === application.profile_id)).toMatchObject({ settings: { ctx_size: 16384 }, system_prompt: 'Project prompt' });
+    expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === existing.id)).toEqual(existing);
     expect(readProjects()[0].profileApplication?.profile_id).toBe(application.profile_id);
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -114,7 +370,7 @@ describe("Project configuration snapshots", () => {
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
     const library = store.getConfig()!.settings_profiles!;
     expect(library.applied[profileTargetKey(projectCfg.active_model)]).toMatchObject({ profile_id: savedProfile.id, profile_name: 'Research', system_prompt: 'Research prompt' });
-    expect(library.entries).toEqual([defaultSettingsProfile(), active, savedProfile]);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile(), active, savedProfile]);
     expect(store.start).not.toHaveBeenCalled();
   });
 
@@ -154,7 +410,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
     await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBe(fallback.id));
     expect(store.getConfig()).toMatchObject({ ctx_size: 8192, temperature: 0.4 });
-    expect(store.getConfig()!.settings_profiles!.entries).toEqual([fallback, active]);
+    expect(store.getConfig()!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([fallback, active]);
     expect(store.getConfig()!.settings_profiles!.applied[profileTargetKey(project.config.active_model)]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default instruction' });
     expect(readProjects()[0]).toMatchObject({ config: { ctx_size: 8192, temperature: 0.4 }, systemPrompt: 'Default instruction', profileApplication: { profile_id: fallback.id } });
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Default instruction');
@@ -180,6 +436,35 @@ describe("Project configuration snapshots", () => {
     await act(async () => { finish(); });
     expect(readProjects()[0].name).toBe('Updated name');
     expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy();
+  });
+
+  it.each([true, false])('does not reactivate a deleted project when its pending runtime assignment finishes (remaining project: %s)', async hasRemaining => {
+    const store = createTestStore();
+    const project = projectFromConfig('Pending project', 'Pending prompt', { ...store.cfg!, ctx_size: 8192 }, [], [], '', 100);
+    const remaining = projectFromConfig('Remaining project', 'Remaining prompt', store.cfg!, [], [], '', 200);
+    const afterDeletion = hasRemaining ? [remaining] : [];
+    writeProjects([project, ...afterDeletion]); setActiveProjectId(project.id);
+    const update = store.updateConfig;
+    let finish!: () => void;
+    store.updateConfig = vi.fn(async patch => {
+      const saved = await update(patch);
+      await new Promise<void>(resolve => { finish = resolve; });
+      return saved;
+    });
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(store.getConfig()?.ctx_size).toBe(8192);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    expect(readProjects()).toEqual(afterDeletion);
+    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    await act(async () => { finish(); });
+    expect(readProjects()).toEqual(afterDeletion);
+    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    expect(screen.getByLabelText('Project name')).toHaveValue(hasRemaining ? 'Remaining project' : '');
+    expect(store.getConfig()?.ctx_size).toBe(8192);
+    expect(screen.queryByText(/^Applied “Pending project”\./)).not.toBeInTheDocument();
   });
 
   it("keeps saved tuning when only project metadata changes", () => {
@@ -208,7 +493,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Current saved instruction', config: { ctx_size: 8192 },
       profileApplication: { profile_id: profile.id, profile_revision: profile.revision } });
-    expect(store.cfg!.settings_profiles.entries).toEqual(entries);
+    expect(store.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(store.cfg!.ctx_size).toBe(4096);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -225,15 +510,70 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile instruction');
-    expect(screen.getByText('vulkan · ?(456)')).toBeVisible();
+    expect(screen.getByText('llama.cpp · cpu · b123')).toBeVisible();
     expect(screen.getByText('32,768')).toBeVisible();
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
-    await waitFor(() => expect(store.getConfig()).toMatchObject({ ctx_size: 32768, temperature: 0.3, active_backend: 'vulkan', active_build: 'b456' }));
+    await waitFor(() => expect(store.getConfig()).toMatchObject({ ctx_size: 32768, temperature: 0.3, active_backend: 'cpu', active_build: 'b123' }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Revised profile instruction', config: { ctx_size: 32768 },
       profileApplication: { profile_id: revised.id, profile_revision: 2 }, toolIds: ['docs:search'], documentBindings: [{ name: 'notes.md', path: 'notes.md' }] });
-    expect(store.cfg!.settings_profiles!.entries).toEqual(entries);
+    expect(store.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(entries.map(profile => profile.id));
+    expect(store.cfg!.settings_profiles!.entries.find(profile => profile.id === revised.id)).toMatchObject({ revision: 2, legacy_runtime: { active_backend: 'vulkan', active_build: 'b456' } });
     expect(store.start).not.toHaveBeenCalled();
+  });
+
+  it('does not reclone a large profile library for metadata or export-notice rerenders', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    mockedApi.projectExportJson.mockResolvedValue(true);
+    const store = createTestStore({ active_model: 'models/synthetic.gguf' });
+    const syntheticProfiles = Array.from({ length: 1000 }, (_, index) => ({
+      ...captureProfile({ ...store.cfg!, temperature: index / 1000 }, `Synthetic ${index}`, 'model', `Prompt ${index}`),
+      id: `synthetic-${index}`,
+      revision: 1,
+    }));
+    const selectedProfile = syntheticProfiles[500];
+    store.cfg!.settings_profiles = {
+      ...emptyProfileLibrary(),
+      default_profile_id: defaultSettingsProfile().id,
+      entries: [defaultSettingsProfile(), ...syntheticProfiles],
+      applied: {},
+    };
+    const application = materializeProfileApplication(store.cfg!, selectedProfile.system_prompt!, selectedProfile);
+    store.cfg!.settings_profiles.applied[profileTargetKey(store.cfg!.active_model)] = application;
+    const project = projectFromConfig('Synthetic project', application.system_prompt, store.cfg!, [], [], '', 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    await screen.findByText('Synthetic project');
+    const profileLibraryClones = () => clone.mock.calls.filter(([value]) => value === store.cfg!.settings_profiles).length;
+    const initialClones = profileLibraryClones();
+    expect(initialClones).toBe(1);
+    fireEvent.change(screen.getByDisplayValue('Synthetic project'), { target: { value: 'Renamed project' } });
+    expect(profileLibraryClones()).toBe(initialClones);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await screen.findByText('Saved');
+    expect(profileLibraryClones()).toBe(initialClones);
+    view.unmount();
+  });
+
+  it('refreshes the displayed profile when the live configuration revision changes', () => {
+    const store = createTestStore({ active_model: 'models/revision.gguf' });
+    const profile = captureProfile(store.cfg!, 'Revision setup', 'model', 'Original profile prompt');
+    const application = materializeProfileApplication(store.cfg!, profile.system_prompt!, profile);
+    store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey(store.cfg!.active_model)]: application } };
+    const project = projectFromConfig('Revision project', application.system_prompt, store.cfg!, [], [], '', 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    let revision = 1;
+    store.getConfig = () => store.cfg;
+    store.getConfigRevision = () => revision;
+    const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Original profile prompt');
+    const revised = { ...profile, revision: 2, system_prompt: 'Revised profile prompt' };
+    store.cfg = { ...store.cfg!, settings_profiles: { ...store.cfg!.settings_profiles!, revision: 2, entries: [defaultSettingsProfile(), revised] } };
+    revision = 2;
+    view.rerender(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile prompt');
+    view.unmount();
   });
 
   it("hides prefixes in restored document editors and model tooltips while preserving saved paths", () => {
@@ -244,7 +584,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: document }]);
     writeProjects([project]); setActiveProjectId(project.id);
     const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent(displayDocument);
+    expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent(displayDocument);
     expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
@@ -259,7 +599,7 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByText("No documents yet.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add document" }));
-    await waitFor(() => expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent("picked.md"));
+    await waitFor(() => expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent("picked.md"));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
   });
@@ -312,5 +652,18 @@ describe("Project configuration snapshots", () => {
     // Documented app default (4096) with its source, never a stale stored number.
     expect(await screen.findByText("4096 (using app default)")).toBeVisible();
     expect(screen.queryByText("default", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("localizes the fallback tools/docs summary and profile version label in Korean without raw rN shorthand", () => {
+    const store = createTestStore();
+    const profile = { ...captureProfile(store.cfg!, "Shared setup", "model", "Prompt"), revision: 2 };
+    const application = materializeProfileApplication(store.cfg!, "Prompt", profile);
+    store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey(store.cfg!.active_model)]: application } };
+    const project = projectFromConfig("Research", "Prompt", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"], "", 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="ko"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByText("도구 1개 · 문서 1개")).toBeVisible();
+    expect(screen.getByText("Shared setup · 버전 2")).toBeVisible();
+    expect(screen.queryByText(/· r2/)).not.toBeInTheDocument();
   });
 });

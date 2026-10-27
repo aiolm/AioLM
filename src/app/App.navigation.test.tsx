@@ -14,6 +14,15 @@ let store: AppStore;
 let showBenchmarkCancel = false;
 let benchmarkLoading: Promise<void> | null = null;
 const cancelBenchmark = vi.fn();
+const onboardingLoad = vi.hoisted(() => ({
+  started: vi.fn(),
+  wait: null as Promise<void> | null,
+}));
+vi.mock("../features/onboarding/Onboarding", async importOriginal => {
+  onboardingLoad.started();
+  if (onboardingLoad.wait) await onboardingLoad.wait;
+  return importOriginal<typeof import("../features/onboarding/Onboarding")>();
+});
 vi.mock("../shared/state/store", () => ({ useAppStore: () => store }));
 let chatRenders = 0;
 vi.mock("../features/chat/Chat", () => ({ default: () => { chatRenders += 1; return <input aria-label="Conversation draft" />; } }));
@@ -24,7 +33,6 @@ vi.mock("../features/runtimes/Runtimes", () => ({ default: ({ onOpenProfiles }: 
 vi.mock("../features/sessions/Sessions", () => ({ default: () => <p>Sessions content</p> }));
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
 vi.mock("../features/developer/Developer", () => ({ default: ({ section, onNavigate }: { section?: string; onNavigate?: (view: ViewId) => void }) => <><p>Developer section: {section}</p><button onClick={() => onNavigate?.("models")}>Load a model</button></> }));
-vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => {
   if (benchmarkLoading) throw benchmarkLoading;
   return <><input aria-label="Benchmark result" />{showBenchmarkCancel && <LocalTaskCancelButton taskId="performance-benchmark-active" onClick={cancelBenchmark}>Cancel benchmark</LocalTaskCancelButton>}</>;
@@ -38,27 +46,48 @@ describe("Workspace navigation", () => {
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
   it('waits for configuration and completes first-run setup before mounting the workspace', async () => {
+    const returning = mount();
+    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+    expect(onboardingLoad.started).not.toHaveBeenCalled();
+    returning.unmount();
+    localStorage.clear();
+
     store = createTestStore({ onboarding_completed: false });
     const pendingConfig = store.cfg;
     store.cfg = null; store.bootState = 'loading';
-    const view = mount();
-    expect(screen.queryByRole('navigation', { name: 'Primary navigation' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
-    store.cfg = pendingConfig; store.bootState = 'ready';
-    view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
-    expect(screen.getByRole('heading', { name: 'Choose your language' })).toBeVisible();
-    expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
-    fireEvent.click(screen.getByRole('radio', { name: /Dark/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
-    expect(store.updateConfig).toHaveBeenCalledWith({ models_dir: 'models', onboarding_completed: true });
-    expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values).toMatchObject({ locale: 'en', theme: 'dark' });
-    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
-    view.unmount();
-    mount();
-    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
-    expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+    let release!: () => void;
+    onboardingLoad.wait = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const view = mount();
+      expect(screen.queryByRole('navigation', { name: 'Primary navigation' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+      expect(onboardingLoad.started).not.toHaveBeenCalled();
+      store.cfg = pendingConfig; store.bootState = 'ready';
+      view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+      await waitFor(() => expect(onboardingLoad.started).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole('status', { name: 'AioLM' })).toBeVisible();
+      expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+      expect(store.updateConfig).not.toHaveBeenCalled();
+      expect(localStorage.getItem('aiolm-preferences')).toBeNull();
+      await act(async () => { release(); });
+      expect(await screen.findByRole('heading', { name: 'Choose your language' })).toBeVisible();
+      expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+      fireEvent.click(screen.getByRole('radio', { name: /Dark/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
+      expect(store.updateConfig).toHaveBeenCalledWith({ models_dir: 'models', onboarding_completed: true });
+      expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values).toMatchObject({ locale: 'en', theme: 'dark' });
+      expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+      view.unmount();
+      mount();
+      expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+      expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+      expect(onboardingLoad.started).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      onboardingLoad.wait = null;
+    }
   });
 
   it('preserves the system language of an existing user who never saved a language preference', async () => {
@@ -73,6 +102,7 @@ describe("Workspace navigation", () => {
     store = createTestStore({ onboarding_completed: false });
     vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error('disk full'));
     mount();
+    await screen.findByRole('heading', { name: 'Choose your language' });
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
@@ -88,6 +118,7 @@ describe("Workspace navigation", () => {
     store = createTestStore({ onboarding_completed: false });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
     mount();
+    await screen.findByRole('heading', { name: 'Choose your language' });
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
@@ -104,7 +135,12 @@ describe("Workspace navigation", () => {
       return new Promise((_, reject) => { rejectSave = reject; });
     });
     const view = mount();
+    await screen.findByRole('heading', { name: 'Choose your language' });
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Dark/ }));
+    view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+    expect(screen.getByRole('radio', { name: /Dark/ })).toBeChecked();
+    expect(screen.getByRole('heading', { name: 'Make yourself at home' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
     fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ }));
     view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
@@ -130,6 +166,43 @@ describe("Workspace navigation", () => {
     expect(drawer.querySelector("summary")).toBeVisible();
     fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
     expect(store.clearErrors).toHaveBeenCalledOnce();
+  });
+
+  it('acknowledges a runtime failure across polls and announces later failures', async () => {
+    const originalError = 'Synthetic KV cache capacity failure';
+    store.status = { state: 'failed', error: originalError, log_tail: 'Synthetic allocation detail' };
+    store.actionError = 'Model load failed: synthetic allocation failure';
+    vi.mocked(store.clearErrors).mockImplementation(() => {
+      store.bootError = null; store.actionError = null; store.statusPollError = null;
+    });
+    const view = mount();
+    const rerender = () => view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+    const dismiss = () => {
+      fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+      rerender();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    };
+    dismiss();
+    for (let poll = 0; poll < 3; poll += 1) {
+      store.status = { ...store.status, log_tail: `Synthetic diagnostic update ${poll}` };
+      rerender();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(store.status.error).toBe(originalError);
+    }
+    store.actionError = 'Synthetic configuration save failed';
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent(store.actionError);
+    dismiss();
+    store.status = { state: 'failed', error: 'Synthetic new runtime failure' };
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent('Synthetic new runtime failure');
+    dismiss();
+    store.status = { state: 'running' };
+    rerender();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    store.status = { state: 'failed', error: originalError };
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent(originalError);
   });
 
   it("keeps global cancellation through panel loading and restores it after leaving the owner page", async () => {
@@ -187,6 +260,19 @@ describe("Workspace navigation", () => {
     await screen.findByRole('dialog', { name: 'Model settings editor' });
     expect(screen.getByLabelText('Editor model')).toHaveValue('models/loaded.gguf');
     expect(store.cfg?.active_model).toBe('models/next.gguf');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('names the default execution controls and opens runtime settings within that group', async () => {
+    store = createTestStore({ active_model: 'models/next.gguf' });
+    store.status = { state: 'running', model: 'models/loaded.gguf' };
+    mount();
+    const execution = screen.getByRole('group', { name: 'Default execution' });
+    expect(within(execution).getByRole('button', { name: 'Choose model: loaded.gguf' })).toBeEnabled();
+    fireEvent.click(within(execution).getByRole('button', { name: 'Model settings' }));
+    const settings = await screen.findByRole('dialog', { name: 'Model settings editor' });
+    expect(settings).toHaveTextContent('runtime');
+    expect(store.start).not.toHaveBeenCalled();
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -301,11 +387,11 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(11);
-    fireEvent.click(mainTab("Manage runtimes"));
+    fireEvent.click(mainTab("Inference engines"));
     await screen.findByText("Saved runtime settings");
     fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
     expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
-    expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
+    expect(mainTab("Inference engines")).toHaveAttribute("aria-current", "page");
   });
 
   it("collapses the desktop sidebar to a named icon rail that survives page changes", async () => {
@@ -363,16 +449,67 @@ describe("Workspace navigation", () => {
     expect(store.start).not.toHaveBeenCalled();
   });
 
+  it('names the loaded snapshot in the header even when the public model ID and next selected model differ', () => {
+    const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    store = createTestStore({ active_model: '/synthetic/next-model' });
+    store.status = { state: 'running', model: 'served-alias', execution: { active_model: path } };
+    mount();
+    expect(screen.getByRole('button', { name: 'Choose model: Qwen-model' })).toHaveAttribute('title', path);
+    expect(document.querySelector('.aiolm-context-model')).toHaveTextContent('Qwen-model');
+    expect(store.status.model).toBe('served-alias');
+  });
+
   it("keeps benchmark state when changing tuning sections", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));
     fireEvent.click(mainTab("Benchmark"));
     fireEvent.change(await screen.findByLabelText("Benchmark result"), { target: { value: "completed 24 t/s" } });
-    fireEvent.click(mainTab("Manage runtimes"));
+    fireEvent.click(mainTab("Inference engines"));
     fireEvent.click(await screen.findByText('Saved runtime settings'));
     expect(await screen.findByText("profiles")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(mainTab("Benchmark"));
     expect(screen.getByLabelText("Benchmark result")).toHaveValue("completed 24 t/s");
+  });
+
+  it('keeps first-run settings untouched when the setup module fails and retries by reloading', async () => {
+    // Use a fresh registry only after the real-wizard cases, so a rejected
+    // import cannot poison their cached module or replace their real behavior.
+    vi.resetModules();
+    const moduleLoaded = vi.fn();
+    const reload = vi.fn();
+    vi.doMock("../features/onboarding/Onboarding", () => {
+      moduleLoaded();
+      throw new Error("Setup module unavailable");
+    });
+    vi.stubGlobal("location", { ...window.location, reload });
+    try {
+      const [{ default: FreshApp }, { I18nProvider: FreshI18nProvider }] = await Promise.all([
+        import("./App"),
+        import("../shared/i18n/i18n"),
+      ]);
+      store = createTestStore({ onboarding_completed: false });
+      const view = render(<FreshI18nProvider initialLocale="en"><FreshApp /></FreshI18nProvider>);
+      // Vitest wraps the deliberately rejected factory in this outer Error.
+      expect(await screen.findByRole('alert')).toHaveTextContent('There was an error when mocking a module');
+      expect(moduleLoaded).toHaveBeenCalledTimes(1);
+      expect(reload).not.toHaveBeenCalled();
+      expect(store.updateConfig).not.toHaveBeenCalled();
+      expect(store.cfg?.onboarding_completed).toBe(false);
+      expect(localStorage.getItem('aiolm-preferences')).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+
+      view.rerender(<FreshI18nProvider initialLocale="en"><FreshApp /></FreshI18nProvider>);
+      expect(moduleLoaded).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(moduleLoaded).toHaveBeenCalledTimes(1);
+      expect(store.updateConfig).not.toHaveBeenCalled();
+      expect(localStorage.getItem('aiolm-preferences')).toBeNull();
+    } finally {
+      vi.doUnmock("../features/onboarding/Onboarding");
+      vi.unstubAllGlobals();
+    }
   });
 });

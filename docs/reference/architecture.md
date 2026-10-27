@@ -10,18 +10,19 @@ src/
   app/                      Bootstrap, app shell, navigation, shell tests
   features/
     chat/                   Conversations, attachments, document retrieval, streaming
-    models/                 GGUF library and remembered per-model settings
-    model-settings/         Shared model selection and execution settings editor
+    models/                 Local model library and remembered per-model settings
+    model-settings/         Runtime, profile and execution-option editing journey
     discover/               Hugging Face search and download UI
-    runtimes/               Runtime installation and device assignment UI
+    runtimes/               Engine registration, installation and device assignment UI
     sessions/               Independent running sessions
     tuning/                 Configuration editors and their controllers
-    profiles/               Saved execution profiles
     projects/               Project bindings and persistence
     bench/                  Benchmark UI and result records
     developer/              API server and diagnostics views
     mcp/                    Tool servers and approval policy
     settings/               User preference editor
+    onboarding/             First-launch setup and recovery
+    updates/                Application update workflow
   shared/
     api/                    Native/HTTP boundary and wire types
     config/                 Defaults, option catalogs, validation, preferences
@@ -59,7 +60,7 @@ folder put in its place would hide the models behind it. `list_models` reports
 why the application's own folder could not be created.
 
 Closing the main window exits the application and stops every managed
-llama-server, the gateway and the background jobs, unless `close_to_tray` is
+inference process, the gateway and the background jobs, unless `close_to_tray` is
 on. That setting is saved in `config.json`, defaults to off, and is absent from
 configurations written before it existed, so an upgrade keeps closing the way it
 always has. While it is on, a tray icon is present and closing the main window
@@ -85,10 +86,19 @@ On macOS, Dock and Finder reopen events restore the existing window as well.
 ## Model processes and the local API
 
 Desktop model sessions and the external API listener have separate lifecycles.
-`start_server` and the session commands load models into private `llama-server`
-processes. Their ports are selected at launch, and their live URLs are used by
+`start_server` and the session commands resolve the selected runtime adapter and
+launch its inference process. The adapter supplies the executable, arguments,
+environment and working directory; AioLM owns process cleanup. Private ports
+are selected at launch, and the live session URLs are used by
 internal chat. The configured `port` belongs to the external API; private ports
 are never written back to saved configuration or execution profiles.
+
+Model setup keeps runtime discovery separate from installation status. Pending
+or failed inventory reads do not establish that a saved runtime is missing;
+successful empty inventories establish absence only for a selected runtime.
+An empty selection asks the user to choose a runtime. Start remains blocked until
+the selection is confirmed, and refresh withdraws cached readiness without
+changing saved values.
 
 The app-owned API listener starts without a loaded model, routes each inference
 request to a ready session, and authenticates clients with an app-lifetime key
@@ -113,12 +123,16 @@ and the distinction from the standalone CLI.
   Use explicit imports when features collaborate; avoid feature-wide barrels that
   accidentally load unrelated screens or create import cycles.
 - Production `shared` modules do not import `app`, `features`, or test helpers.
-  ESLint checks these boundaries for static imports, including type imports.
+  Production features do not import `app` or test helpers. ESLint checks both
+  boundaries for static imports, including type imports, and inline
+  `import(...).Type` references. Tests retain their exemptions, and explicit
+  collaboration between features remains allowed.
 - Shared UI owns its input contracts. For example, `TooltipContent` belongs to
   `Tooltip`, while tuning metadata supplies values that implement that contract.
-- Use `import type` for contracts. Chat attachment, chunk and citation types live
-  in `features/chat/chatTypes.ts` so history and document utilities do not depend
-  on each other.
+- Use `import type` for contracts. Media attachment/preparation contracts live
+  in `shared/api/mediaTypes.ts`, allowing native commands and chat to share them
+  without a shared-to-feature dependency. `features/chat/chatTypes.ts` retains
+  compatible type exports and owns document, chunk and citation types.
 
 ## Frontend API
 
@@ -129,6 +143,7 @@ Internal API modules import their dependencies directly, never through the facad
 | Module | Responsibility |
 | --- | --- |
 | `types.ts` | Native and HTTP request/response contracts |
+| `mediaTypes.ts` | Shared attachment, media preparation and video-frame contracts |
 | `transport.ts` | Native-runtime check, invoke wrapper and native initial-read tracking |
 | `http.ts` | UI-independent bounded responses, cancellation, deadlines and typed HTTP failures |
 | `commands.ts` | Tauri commands and event subscriptions |
@@ -140,6 +155,18 @@ Internal API modules import their dependencies directly, never through the facad
 The bootstrap migrates storage **before** dynamically importing the application,
 preferences and translation catalogs. Preserve that ordering: some modules read
 stored values during initialization. `App` also keeps feature screens lazy-loaded.
+
+The app store publishes its configuration reference, local publication count and
+React snapshot together through one synchronous operation. That count gates
+first-load auto-start and is independent of the persisted profile-library revision.
+The save queue still owns optimistic publication, accepted responses and rollback;
+the outer save serialization keeps conflict reload and retry in the same operation.
+
+Profile metadata saves compare the earlier library reference with the queue's
+returned configuration after persistence. That accepted result determines
+deleted-profile request fallbacks and live-profile cache eviction; neither the
+editor payload nor a helper-local merge result can replace it. Merge-local
+indexes do not persist across calls or bypass normalization and copy boundaries.
 
 ## Native command layer
 
@@ -158,6 +185,12 @@ validation functions used by the CLI and integration tests.
   buffers discard old bytes without shifting the retained log on each read.
   Readers continue draining a child's pipes after the retention limit is reached;
   output limits must not block the child or discard diagnostics on cancellation.
+  Desktop and benchmark server diagnostics retain independent 4 KiB tails for
+  stdout and stderr, so an API wrapper traceback cannot erase a core error from
+  the other stream. Stream labels identify provenance rather than chronology;
+  both tails share credential redaction and ANSI cleanup. On teardown, readers
+  drain a snapshot of buffered pipe bytes without waiting for a live inherited
+  writer to close or consuming output written after that snapshot.
 - Document retrieval splits only the searchable prefix for vector requests and
   shares one ranking between prompt context, source labels and citations. Cache
   lookup hashes each document once per request and indexes its stored offsets.

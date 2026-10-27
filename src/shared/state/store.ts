@@ -5,6 +5,7 @@ import { isLifecycleCancellation, lifecycleErrorMessage, nextPollDelay, shouldAu
 import { normalizeAppConfig, normalizeConfigPatch } from "./storeConfig";
 import { withManualOverrides } from "../config/tuningDefaults";
 import { migrateProfileLibrary } from "../config/profileMigration";
+import { trackInitialRead } from "../ui/initialLayout";
 
 export interface AppStore {
   cfg: api.AppConfig | null;
@@ -71,7 +72,7 @@ function sameServerStatus(left: api.ServerStatus, right: api.ServerStatus): bool
   return keys.length === Object.keys(right).length && keys.every((key) => {
     if (key === "memory") return shallowEqual(left.memory, right.memory);
     if (key === "lifecycle") return shallowEqual(left.lifecycle, right.lifecycle);
-    if (key === 'execution') return JSON.stringify(left.execution) === JSON.stringify(right.execution);
+    if (key === 'execution' || key === 'engine') return JSON.stringify(left[key]) === JSON.stringify(right[key]);
     return Object.is(left[key], right[key]);
   });
 }
@@ -89,6 +90,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const saveConfigQueue = useRef<((patch: ConfigPatch<api.AppConfig>) => Promise<api.AppConfig>) | null>(null);
   const saveMutex = useRef<Promise<unknown>>(Promise.resolve());
   const pollInFlight = useRef(false);
+  // The initial attempt exposes either data or its error; later polls refresh it.
+  const initialStatusSettled = useRef(false);
   const operationInFlight = useRef(false);
   const autoStartConsumedRef = useRef(false);
   const statusGeneration = useRef(0);
@@ -96,6 +99,13 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const pollTimer = useRef<number | null>(null);
   const pollStopped = useRef(false);
   const configLoadInFlight = useRef<Promise<void> | null>(null);
+
+  // Local publications gate first-load auto-start; profile revisions remain independent.
+  const publishConfigSnapshot = useCallback((next: api.AppConfig) => {
+    cfgRef.current = next;
+    configRevisionRef.current += 1;
+    setCfg(next);
+  }, []);
 
   const loadConfig = useCallback((): Promise<void> => {
     if (configLoadInFlight.current) return configLoadInFlight.current;
@@ -105,9 +115,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       return Promise.resolve();
     }
     const pending = loadMigratedConfig().then(normalized => {
-        cfgRef.current = normalized;
-        configRevisionRef.current += 1;
-        setCfg(normalized);
+        publishConfigSnapshot(normalized);
         setBootError(null);
         setBootState("ready");
       }).catch(error => {
@@ -118,14 +126,15 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       }).finally(() => { configLoadInFlight.current = null; });
     configLoadInFlight.current = pending;
     return pending;
-  }, []);
+  }, [publishConfigSnapshot]);
 
   const refreshStatus = useCallback(async () => {
     if (!api.isNativeRuntimeAvailable() || pollInFlight.current || operationInFlight.current || !shouldPoll(typeof document === "undefined" ? "unknown" : document.visibilityState)) return;
     pollInFlight.current = true;
     const generation = statusGeneration.current;
     try {
-      const next = await api.serverStatus();
+      const read = () => api.serverStatus("refresh");
+      const next = await (initialStatusSettled.current ? read() : trackInitialRead(read));
       if (generation === statusGeneration.current && !operationInFlight.current) setStatus((current) => sameServerStatus(current, next) ? current : next);
       if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(null);
       pollFailures.current = 0;
@@ -133,6 +142,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       pollFailures.current += 1;
       if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(`Model status unavailable: ${errorMessage(error)}`);
     } finally {
+      initialStatusSettled.current = true;
       pollInFlight.current = false;
     }
   }, []);
@@ -141,7 +151,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     if (!saveConfigQueue.current) {
       saveConfigQueue.current = createConfigSaveQueue(
         () => cfgRef.current,
-        (next) => { cfgRef.current = next; configRevisionRef.current += 1; setCfg(next); },
+        publishConfigSnapshot,
         (next) => api.saveConfig(next),
         (error) => setActionError(`Configuration was not saved: ${errorMessage(error)}`),
       );
@@ -163,14 +173,12 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       } catch {
         throw error;
       }
-      cfgRef.current = reloaded;
-      configRevisionRef.current += 1;
-      setCfg(reloaded);
+      publishConfigSnapshot(reloaded);
       const saved = await attempt();
       setActionError(null);
       return saved;
     }
-  }, []);
+  }, [publishConfigSnapshot]);
 
   const updateConfig = useCallback(async (patch: ConfigPatch<api.AppConfig>) => {
     // Serialize whole saves (not just persistence) so a conflict recovery
@@ -245,7 +253,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const clearActionError = useCallback(() => setActionError(null), []);
   const getConfig = useCallback(() => cfgRef.current, []);
   const getConfigRevision = useCallback(() => configRevisionRef.current, []);
-  const clearErrors = useCallback(() => { setBootError(null); setActionError(null); setStatusPollError(null); setStatus((current) => ({ ...current, error: undefined })); }, []);
+  // Runtime failures remain authoritative diagnostics; the shell acknowledges their notice.
+  const clearErrors = useCallback(() => { setBootError(null); setActionError(null); setStatusPollError(null); }, []);
 
   useEffect(() => {
     void loadConfig().catch(() => undefined);

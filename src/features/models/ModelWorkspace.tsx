@@ -1,3 +1,4 @@
+import { registeredProviderIds, modelLoadable, modelSelectable, providerOf } from '../../shared/api/providers';
 import { useState } from 'react';
 import type { AppStore } from '../../shared/state/store';
 import type { ViewId } from '../../shared/types/navigation';
@@ -17,7 +18,14 @@ export default function ModelWorkspace({ store, onSelectModel, active }: Props) 
   const select = async (model: GgufModel) => {
     if (!store.cfg || model.shards?.missing.length) return;
     try {
-      if (settings) settings.open({ target: { kind: 'default' }, config: { ...store.cfg, ...previewExecution(store.cfg, model.path), active_model: model.path } });
+      if (settings) {
+        const provider = providerOf(store.cfg);
+        const selectable = modelSelectable(model, provider);
+        const active_provider = selectable ? provider : registeredProviderIds().find(candidate => modelLoadable(model, candidate)) ?? provider;
+        const selected = { ...store.cfg, active_provider };
+        settings.open({ target: { kind: 'default' }, config: { ...selected, ...previewExecution(selected, model.path), active_model: model.path,
+          active_runtime: selectable ? store.cfg.active_runtime : '' } });
+      }
       else await onSelectModel(model.path);
     } catch (cause) { setError(String(cause)); }
   };

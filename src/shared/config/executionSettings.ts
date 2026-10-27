@@ -1,7 +1,9 @@
 import type { AppConfig, SessionDefinition } from '../api/types';
+import { providerRequestKeys } from './providerRequestSettings';
 
 /** Only model execution fields cross the settings editor boundary. */
 export const EXECUTION_KEYS = [
+  'active_provider', 'active_runtime', 'provider_options',
   'active_model', 'active_backend', 'active_build', 'runtime_defaults', 'ngl', 'ctx_size',
   'batch_size', 'ubatch_size', 'keep', 'cache_type_k', 'cache_type_v', 'flash_attn', 'n_cpu_moe',
   'threads', 'temperature', 'top_p', 'top_k', 'spec_type', 'spec_draft_n_max', 'spec_draft_n_min',
@@ -65,6 +67,19 @@ export class ExecutionConflictError extends Error {
 export function serverSettingsChanged(base: AppConfig, draft: AppConfig): boolean {
   return EXECUTION_KEYS.some(key => {
     if ((REQUEST_KEYS as readonly string[]).includes(key)) return false;
+    if (key === 'provider_options') {
+      const provider = draft.active_provider ?? 'llama.cpp';
+      if (equal(base.provider_options?.[provider] ?? {}, draft.provider_options?.[provider] ?? {})) return false;
+      let request: readonly string[];
+      try { request = provider === 'llama.cpp' ? [] : [...providerRequestKeys(provider, draft.active_runtime), ...(provider === 'vllm' ? ['request_lora'] : [])]; }
+      catch {
+        // A cold editor has not fetched an external installation's schema yet.
+        // Keep changes pending a reload instead of crashing or claiming request-only.
+        return true;
+      }
+      const launch = (cfg: AppConfig) => Object.fromEntries(Object.entries(cfg.provider_options?.[provider] ?? {}).filter(([key]) => !request.includes(key)));
+      return !equal(launch(base), launch(draft));
+    }
     if (key === 'gpu') return !equal(comparableGpu(base.gpu), comparableGpu(draft.gpu));
     if (key === 'runtime_defaults') return !equal((base[key] ?? []).filter(name => !requestDefaultKeys.includes(name)).sort(), (draft[key] ?? []).filter(name => !requestDefaultKeys.includes(name)).sort());
     return !equal(base[key], draft[key]);

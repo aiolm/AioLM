@@ -1,0 +1,191 @@
+{
+  "vllm": [
+    {
+      "key": "runner",
+      "flag": "--runner",
+      "kind": "choice"
+    },
+    {
+      "key": "max_model_len",
+      "flag": "--max-model-len",
+      "kind": "integer"
+    },
+    {
+      "key": "gpu_memory_utilization",
+      "flag": "--gpu-memory-utilization",
+      "kind": "number"
+    },
+    {
+      "key": "kv_cache_dtype",
+      "flag": "--kv-cache-dtype",
+      "kind": "choice"
+    },
+    {
+      "key": "cpu_offload_gb",
+      "flag": "--cpu-offload-gb",
+      "kind": "number"
+    },
+    {
+      "key": "dtype",
+      "flag": "--dtype",
+      "kind": "choice"
+    },
+    {
+      "key": "quantization",
+      "flag": "--quantization",
+      "kind": "text"
+    },
+    {
+      "key": "enforce_eager",
+      "flag": "--enforce-eager",
+      "kind": "flag"
+    },
+    {
+      "key": "generation_config",
+      "flag": "--generation-config",
+      "kind": "text"
+    },
+    {
+      "key": "seed",
+      "flag": "--seed",
+      "kind": "integer"
+    },
+    {
+      "key": "tensor_parallel_size",
+      "flag": "--tensor-parallel-size",
+      "kind": "integer"
+    },
+    {
+      "key": "pipeline_parallel_size",
+      "flag": "--pipeline-parallel-size",
+      "kind": "integer"
+    },
+    {
+      "key": "max_num_seqs",
+      "flag": "--max-num-seqs",
+      "kind": "integer"
+    },
+    {
+      "key": "max_num_batched_tokens",
+      "flag": "--max-num-batched-tokens",
+      "kind": "integer"
+    },
+    {
+      "key": "enable_prefix_caching",
+      "flag": "--enable-prefix-caching",
+      "kind": "toggle"
+    },
+    {
+      "key": "enable_chunked_prefill",
+      "flag": "--enable-chunked-prefill",
+      "kind": "toggle"
+    },
+    {
+      "key": "enable_lora",
+      "flag": "--enable-lora",
+      "kind": "flag"
+    },
+    {
+      "key": "max_loras",
+      "flag": "--max-loras",
+      "kind": "integer"
+    },
+    {
+      "key": "max_lora_rank",
+      "flag": "--max-lora-rank",
+      "kind": "integer"
+    },
+    {
+      "key": "reasoning_parser",
+      "flag": "--reasoning-parser",
+      "kind": "text"
+    },
+    {
+      "key": "enable_auto_tool_choice",
+      "flag": "--enable-auto-tool-choice",
+      "kind": "flag"
+    },
+    {
+      "key": "tool_call_parser",
+      "flag": "--tool-call-parser",
+      "kind": "text"
+    },
+    {
+      "key": "enable_prompt_tokens_details",
+      "flag": "--enable-prompt-tokens-details",
+      "kind": "flag"
+    },
+    {
+      "key": "enable_per_request_metrics",
+      "flag": "--enable-per-request-metrics",
+      "kind": "flag"
+    }
+  ],
+  "mlx-vlm": [
+    {
+      "key": "max_tokens",
+      "flag": "--max-tokens",
+      "kind": "integer"
+    },
+    {
+      "key": "max_kv_size",
+      "flag": "--max-kv-size",
+      "kind": "integer"
+    },
+    {
+      "key": "prefill_step_size",
+      "flag": "--prefill-step-size",
+      "kind": "integer"
+    },
+    {
+      "key": "kv_bits",
+      "flag": "--kv-bits",
+      "kind": "number"
+    },
+    {
+      "key": "kv_quant_scheme",
+      "flag": "--kv-quant-scheme",
+      "kind": "choice"
+    },
+    {
+      "key": "kv_group_size",
+      "flag": "--kv-group-size",
+      "kind": "integer"
+    },
+    {
+      "key": "quantized_kv_start",
+      "flag": "--quantized-kv-start",
+      "kind": "integer"
+    },
+    {
+      "key": "vision_cache_size",
+      "flag": "--vision-cache-size",
+      "kind": "integer"
+    },
+    {
+      "key": "max_num_seqs",
+      "flag": "--max-num-seqs",
+      "kind": "integer"
+    },
+    {
+      "key": "enable_thinking",
+      "flag": "--enable-thinking",
+      "kind": "flag"
+    },
+    {
+      "key": "thinking_budget",
+      "flag": "--thinking-budget",
+      "kind": "integer"
+    },
+    {
+      "key": "draft_kind",
+      "flag": "--draft-kind",
+      "kind": "choice"
+    },
+    {
+      "key": "draft_block_size",
+      "flag": "--draft-block-size",
+      "kind": "integer"
+    }
+  ]
+}

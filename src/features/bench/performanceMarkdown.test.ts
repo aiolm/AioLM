@@ -30,6 +30,13 @@ const dataLines = (markdown: string) => markdown.split('\n').filter((line) => li
 const cells = (line: string) => line.slice(1, -1).split(/(?<!\\)\|/).map((cell) => cell.trim());
 
 describe('performance Markdown', () => {
+  it('names the measured Metal plugin and core versions independently of legacy llama.cpp builds', () => {
+    const markdown = performanceMarkdown(record([row()], { backend: 'metal', result: {
+      provider: 'vllm', runtime_version: '0.30.0', runtime_variant: 'vllm-metal', runtime_plugin_version: '0.30.0',
+    } }), 'en');
+    expect(markdown).toContain('vllm-metal 0.30.0 · vLLM 0.30.0');
+    expect(markdown).not.toContain('10840');
+  });
   it('summarizes a single and a concurrent request under the model file name', () => {
     const markdown = performanceMarkdown(record([
       row({ peak_memory_bytes: 3 * 1024 ** 3 }),
@@ -39,7 +46,7 @@ describe('performance Markdown', () => {
     expect(markdown).toBe([
       '# Benchmark · Qwen3-8B-Q4_K_M.gguf',
       '',
-      'Completed · vulkan · ?(10840)',
+      'Completed · vulkan · b10840',
       '',
       '- Prompt content: Prose · English',
       '- Input tokens: 1,024',
@@ -108,14 +115,14 @@ describe('performance Markdown', () => {
   it('describes failed, cancelled and empty runs without inventing a table', () => {
     const failed = record([], { result: { status: 'failed', message: 'server exited with code 1', runtime_version: '', context_size: 0, parallel: 0, args: [] } });
     const markdown = performanceMarkdown(failed, 'en');
-    expect(markdown).toContain('Failed · vulkan · ?(10840)');
+    expect(markdown).toContain('Failed · vulkan · b10840');
     expect(markdown).toContain('Message: server exited with code 1');
     expect(markdown).toContain('- Total trials: 0 / 2');
     expect(markdown).toContain('No measurements were recorded.');
     expect(markdown).not.toMatch(/Server context tokens|Server request slots|^\|/m);
 
     const cancelled = performanceMarkdown(record([row()], { result: { status: 'cancelled' } }), 'en');
-    expect(cancelled).toContain('Cancelled · vulkan · ?(10840)');
+    expect(cancelled).toContain('Cancelled · vulkan · b10840');
     expect(cancelled).toContain('- Total trials: 1 / 2');
     expect(cancelled).toContain('## Single requests');
     expect(cancelled).not.toContain('## Concurrent requests');
@@ -151,7 +158,7 @@ describe('performance Markdown', () => {
     expect(lines.slice(3).map((line) => cells(line).length)).toEqual([batchColumns, batchColumns, batchColumns]);
     // The escaped model name is a single heading line.
     expect(markdown.split('\n')[0]).toBe('# Benchmark · Evil\\|Model&lt;img src=x onerror=alert(1)&gt;.gguf');
-    expect(markdown.split('\n')[2]).toBe('Completed · vulkan\\|&lt;b&gt; · ?(10840)');
+    expect(markdown.split('\n')[2]).toBe('Completed · vulkan\\|&lt;b&gt; · b10840');
   });
 
   it('reduces local paths in error text to file names and bounds its length', () => {
@@ -174,7 +181,7 @@ describe('performance Markdown', () => {
     ], { result: { status: 'partial', message: '일부 요청이 실패했습니다.' } }, { context_profile: 'novel_ko', repetitions: 2, warmup: false }), 'ko');
 
     expect(markdown).toContain('# 벤치마크 · Qwen3-8B-Q4_K_M.gguf');
-    expect(markdown).toContain('부분 결과 · vulkan · ?(10840)');
+    expect(markdown).toContain('부분 결과 · vulkan · b10840');
     expect(markdown).toContain('메시지: 일부 요청이 실패했습니다.');
     expect(markdown).toContain('- 입력 내용: 산문 · 한국어');
     expect(markdown).toContain('- 측정 전 워밍업: 사용 안 함');

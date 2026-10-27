@@ -28,6 +28,9 @@ describe("model family icons", () => {
     ["/models/qwen/unknown.gguf", "huggingface"],
     ["Qwen/unknown.gguf", "huggingface"],
     ["Qwen/QwQ-32B", "qwen"],
+    ['/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40), 'qwen'],
+    ['/synthetic/library/hf/community/gemma-model/snapshots/' + 'b'.repeat(40), 'gemma'],
+    ['/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40) + '/unknown.gguf', 'huggingface'],
   ])("identifies %s", (id, expected) => {
     expect(modelIconName(id)).toBe(expected);
   });

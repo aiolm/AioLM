@@ -6,6 +6,19 @@
 //! and unavailable process counters produce `None` rather than an estimate.
 //! Linux uses the kernel's lightweight RSS counter, whose asynchronous accounting
 //! can lag actual residency; walking all model pages would perturb the benchmark.
+//!
+//! Python engines do their work in child processes (vLLM's engine core and
+//! workers), so on Linux and macOS each sample adds the resident memory of every
+//! other member of the server's own process group, which the launcher creates
+//! with the server as its leader. Pages shared between members are counted once
+//! per member. A member that leaves the group, and any process on Windows other
+//! than the server itself, is not counted.
+//!
+//! Metal's unified memory does not turn RSS into a full GPU allocation counter.
+//! MLX active/cache/peak counters are local to the worker holding its allocator;
+//! querying MLX in a separate helper would measure that helper. Until the serving
+//! engine exposes those counters with ownership and timing, this field remains
+//! sampled process-group RSS and must not be labelled unified GPU memory.
 
 #[cfg(target_os = "linux")]
 use linux::ProcessMemoryReader;
@@ -176,6 +189,19 @@ fn resident_bytes_from_statm(contents: &str, page_size: u64) -> Option<u64> {
     pages.checked_mul(page_size)
 }
 
+/// The process group in `/proc/<pid>/stat`. The command name is parenthesized
+/// and may itself contain spaces and `)`, so fields are read after the last `)`.
+#[cfg(any(target_os = "linux", test))]
+fn process_group_from_stat(stat: &str) -> Option<u32> {
+    // After the name: state, ppid, pgrp, ...
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(2)?
+        .parse()
+        .ok()
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::io::{Read, Seek};
@@ -183,6 +209,7 @@ mod linux {
     pub(super) struct ProcessMemoryReader {
         statm: std::fs::File,
         page_size: u64,
+        pid: u32,
     }
 
     impl ProcessMemoryReader {
@@ -195,6 +222,7 @@ mod linux {
             (page_size > 0).then_some(Self {
                 statm,
                 page_size: page_size as u64,
+                pid,
             })
         }
 
@@ -202,8 +230,39 @@ mod linux {
             self.statm.rewind().ok()?;
             let mut contents = String::new();
             self.statm.read_to_string(&mut contents).ok()?;
-            super::resident_bytes_from_statm(&contents, self.page_size)
+            let mut bytes = super::resident_bytes_from_statm(&contents, self.page_size)?;
+            if bytes == 0 {
+                return None;
+            }
+            // Members are counted only while the leader's own procfs descriptor
+            // is live, so a recycled leader PID cannot adopt another group.
+            for pid in group_members(self.pid) {
+                if let Ok(statm) = std::fs::read_to_string(format!("/proc/{pid}/statm")) {
+                    bytes = bytes.saturating_add(
+                        super::resident_bytes_from_statm(&statm, self.page_size).unwrap_or(0),
+                    );
+                }
+            }
+            Some(bytes)
         }
+    }
+
+    /// Processes other than `leader` in the process group `leader` leads.
+    pub(super) fn group_members(leader: u32) -> Vec<u32> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| *pid != leader)
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| super::process_group_from_stat(&stat))
+                    == Some(leader)
+            })
+            .collect()
     }
 }
 
@@ -246,8 +305,51 @@ mod macos {
             // Identity and RSS come from one query, preventing a recycled PID
             // from supplying a different process's resident memory.
             let started = (info.pbsd.pbi_start_tvsec, info.pbsd.pbi_start_tvusec);
-            (started == self.started).then_some(info.ptinfo.pti_resident_size)
+            if started != self.started {
+                return None;
+            }
+            let members = group_members(self.pid as u32)
+                .into_iter()
+                .filter_map(|pid| resident_size(pid as libc::pid_t))
+                .fold(0u64, u64::saturating_add);
+            Some(info.ptinfo.pti_resident_size.saturating_add(members))
         }
+    }
+
+    /// `PROC_PGRP_ONLY` from `<sys/proc_info.h>`; the libc crate does not export it.
+    const PROC_PGRP_ONLY: u32 = 2;
+
+    /// Processes other than `leader` in the process group `leader` leads.
+    pub(super) fn group_members(leader: u32) -> Vec<u32> {
+        let mut pids = vec![0 as libc::pid_t; 4096];
+        let capacity = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+        // SAFETY: the buffer is writable for `capacity` bytes; the call returns
+        // the number of bytes it filled, or 0 on failure.
+        let filled = unsafe {
+            libc::proc_listpids(PROC_PGRP_ONLY, leader, pids.as_mut_ptr().cast(), capacity)
+        };
+        let count = usize::try_from(filled).unwrap_or(0) / std::mem::size_of::<libc::pid_t>();
+        pids.truncate(count.min(pids.len()));
+        pids.into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0 && *pid != leader)
+            .collect()
+    }
+
+    fn resident_size(pid: libc::pid_t) -> Option<u64> {
+        let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: as in task_info, with the smaller task-only record.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        (written == size).then(|| unsafe { info.assume_init() }.pti_resident_size)
     }
 }
 
@@ -290,6 +392,51 @@ mod tests {
             super::resident_bytes_from_statm("50 0 0 0 0 0 0", 4096),
             Some(0)
         );
+    }
+
+    #[test]
+    fn process_group_is_read_after_a_command_name_with_spaces_and_parentheses() {
+        let stat = "4242 (python3 (vllm) worker) S 4100 4100 4100 0 -1 4194560 0 0";
+        assert_eq!(super::process_group_from_stat(stat), Some(4100));
+        assert_eq!(
+            super::process_group_from_stat("4242 (python) S 1 777 777"),
+            Some(777)
+        );
+        assert_eq!(super::process_group_from_stat("4242 (python) S"), None);
+        assert_eq!(super::process_group_from_stat("truncated"), None);
+    }
+
+    /// A child the server spawns into its own process group is a measured member.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_child_in_the_server_process_group_is_a_measured_member() {
+        #[cfg(target_os = "linux")]
+        use super::linux::group_members;
+        #[cfg(target_os = "macos")]
+        use super::macos::group_members;
+        use std::os::unix::process::CommandExt;
+        let mut leader = std::process::Command::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = leader.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut members = group_members(pid);
+        while members.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            members = group_members(pid);
+        }
+        let sampled = PeakMemorySampler::start(pid).finish();
+        // SAFETY: signals only the process group this test created.
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+        let _ = leader.wait();
+        assert!(
+            !members.is_empty(),
+            "the backgrounded sleep is in the leader's group"
+        );
+        assert!(!members.contains(&pid));
+        assert!(sampled.is_some_and(|bytes| bytes > 0));
     }
 
     #[test]

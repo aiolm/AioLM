@@ -17,6 +17,8 @@ interface ChatMessageLogProps {
   status: api.ServerStatus;
   model: string;
   serverOn: boolean;
+  /** The selected session can answer chat; Retry stays unavailable otherwise. */
+  canGenerate: boolean;
   msgs: ChatHistoryMessage[];
   streamingDraft: { content: string; reasoning: string; metrics?: ResponseMetrics } | null;
   phase: "idle" | "thinking" | "streaming";
@@ -26,6 +28,12 @@ interface ChatMessageLogProps {
   onCopy: (index: number, text: string) => void;
   error: string | null;
   canRetry: boolean;
+  /** The last reply is unfinished and nothing is in flight or awaiting approval. */
+  recoverable: boolean;
+  /** Shown instead of Retry when the unfinished reply cannot be resent exactly. */
+  retryNotice: string | null;
+  /** Shown instead of Retry while the MCP tools the reply depends on are not offered. */
+  retryToolsAction?: { notice: string; label: string; onClick: () => void; disabled: boolean } | null;
   onRetry: () => void;
   ct: (key: ChatTextKey) => string;
   onOpenModels?: () => void;
@@ -36,11 +44,12 @@ interface ChatMessageLogProps {
 }
 
 export default function ChatMessageLog({
-  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, msgs, streamingDraft, phase,
-  copiedIndex, compactMessages, locale, onCopy, error, canRetry, onRetry, ct,
+  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
+  copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
   onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
+  const isStarting = !serverOn && (starting || status.state === "starting");
   return (
     <div
       ref={scrollRef}
@@ -61,12 +70,12 @@ export default function ChatMessageLog({
             ) : (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M10 3.5 11.8 8.2H16.5L12.6 10.9 13.9 15.5 10 12.8 6.1 15.5 7.4 10.9 3.5 8.2H8.2L10 3.5Z" /></svg>
             )}
-            title={isFailed ? ct("requestFailed") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
-            description={isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
+            title={isFailed ? ct("requestFailed") : isStarting ? ct("startingServer") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
+            description={isFailed ? ct("blockedFailedDescription") : isStarting ? ct("blockedStartingDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
           >
           <div className="app-empty-actions">
-            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting}>{modelSettingsLabel ?? ct("openModels")}</button>}
-            {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={starting || status.state === "starting" ? ct("startingServer") : ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
+            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting || isStarting}>{modelSettingsLabel ?? ct("openModels")}</button>}
+            {model && !serverOn && !isFailed && !isStarting && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
             {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" data-icon="probe" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
           </EmptyState>
@@ -99,8 +108,18 @@ export default function ChatMessageLog({
 
       {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
-        {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
+        {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
+      {!error && recoverable && canRetry && (
+        <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
+      )}
+      {!error && recoverable && !canRetry && retryNotice && <p role="status" className="mt-2.5 text-xs ui-color-muted">{retryNotice}</p>}
+      {recoverable && retryToolsAction && (
+        <div role="status" className="mt-2.5 text-xs ui-color-muted">
+          <p>{retryToolsAction.notice}</p>
+          <button type="button" data-icon="refresh" onClick={retryToolsAction.onClick} disabled={retryToolsAction.disabled} className="app-button app-button--secondary app-button--sm mt-1.5">{retryToolsAction.label}</button>
+        </div>
+      )}
     </div>
   );
 }

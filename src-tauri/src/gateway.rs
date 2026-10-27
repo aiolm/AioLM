@@ -8,6 +8,7 @@
 #[cfg(test)]
 mod api_tests;
 mod http;
+mod multipart;
 mod routing;
 
 pub use routing::ModelSource;
@@ -118,10 +119,67 @@ impl GatewayHandle {
 
 const MAX_RESPONSES: usize = 128;
 
+/// Return one complete SSE line and advance a cursor without moving the
+/// buffered suffix. The caller compacts the consumed prefix once per chunk.
+fn take_sse_line<'a>(pending: &'a str, cursor: &mut usize) -> Option<&'a str> {
+    let relative = pending[*cursor..].find('\n')?;
+    let end = *cursor + relative;
+    let line = pending[*cursor..end].trim_end_matches('\r');
+    *cursor = end + 1;
+    Some(line)
+}
+
+struct HistoryNode {
+    parent: Option<Arc<HistoryNode>>,
+    turn: Vec<Value>,
+}
+
+impl HistoryNode {
+    fn append(
+        parent: Option<Arc<HistoryNode>>,
+        mut turn: Vec<Value>,
+        assistant: Value,
+    ) -> Arc<Self> {
+        turn.push(assistant);
+        Arc::new(Self { parent, turn })
+    }
+
+    fn flatten(&self) -> Vec<Value> {
+        let mut nodes = Vec::new();
+        let mut current = Some(self);
+        let mut capacity = 0;
+        while let Some(node) = current {
+            capacity += node.turn.len();
+            nodes.push(node);
+            current = node.parent.as_deref();
+        }
+        let mut messages = Vec::with_capacity(capacity);
+        for node in nodes.into_iter().rev() {
+            messages.extend(node.turn.iter().cloned());
+        }
+        messages
+    }
+}
+
+impl Drop for HistoryNode {
+    fn drop(&mut self) {
+        let mut parent = self.parent.take();
+        // Detach unique ancestors before each node drops so a deep chain does
+        // not recurse through Arc's field destructor. `into_inner` consumes a
+        // non-unique Arc without a separate failed-unwrapping drop race.
+        while let Some(node) = parent {
+            match Arc::into_inner(node) {
+                Some(mut owned) => parent = owned.parent.take(),
+                None => break,
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct StoredResponse {
     response: Value,
-    messages: Vec<Value>,
+    history: Arc<HistoryNode>,
 }
 
 struct Ctx {
@@ -318,6 +376,12 @@ async fn route(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
         }
         ("POST", "/v1/completions") => proxy_openai(stream, ctx, request, "completions").await,
         ("POST", "/v1/embeddings") => proxy_openai(stream, ctx, request, "embeddings").await,
+        ("POST", "/v1/audio/transcriptions") => {
+            proxy_audio(stream, ctx, request, "audio/transcriptions").await
+        }
+        ("POST", "/v1/audio/translations") => {
+            proxy_audio(stream, ctx, request, "audio/translations").await
+        }
         ("POST", "/v1/messages") => handle_messages(stream, ctx, request).await,
         (_, "/v1/responses") => handle_responses(stream, ctx, request).await,
         (_, path) if path.starts_with("/v1/responses/") => {
@@ -329,6 +393,8 @@ async fn route(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
             | "/v1/chat/completions"
             | "/v1/completions"
             | "/v1/embeddings"
+            | "/v1/audio/transcriptions"
+            | "/v1/audio/translations"
             | "/v1/messages",
         ) => Err(ApiError::new(
             405,
@@ -409,7 +475,7 @@ async fn proxy_openai(
     request: Request,
     endpoint: &str,
 ) -> Handled {
-    let parsed: Value = serde_json::from_slice(&request.body).map_err(|error| {
+    let mut parsed: Value = serde_json::from_slice(&request.body).map_err(|error| {
         ApiError::new(
             400,
             "invalid_json",
@@ -427,11 +493,64 @@ async fn proxy_openai(
         stream,
         upstream_post(&lease, endpoint)
             .header("Content-Type", "application/json")
-            .body(request.body)
+            .json({
+                lease.adapt(endpoint, &mut parsed)?;
+                &parsed
+            })
             .send(),
     )
     .await?
     .map_err(upstream_failure)?;
+    relay_openai_response(stream, response).await
+}
+
+async fn proxy_audio(
+    stream: &mut TcpStream,
+    ctx: &Ctx,
+    request: Request,
+    endpoint: &str,
+) -> Handled {
+    let content_type = request
+        .headers
+        .get("content-type")
+        .map(String::as_str)
+        .unwrap_or_default();
+    let mut form = multipart::AudioForm::parse(content_type, &request.body)
+        .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
+    let mut fields = Value::Object(std::mem::take(&mut form.fields));
+    let lease = ctx
+        .models
+        .acquire(requested_model(&fields)?)
+        .map_err(RouteError::into_api_error)?;
+    lease.adapt(endpoint, &mut fields)?;
+    let fields = match fields {
+        Value::Object(fields) => fields,
+        _ => {
+            return Err(ApiError::new(
+                400,
+                "invalid_audio_form",
+                "audio fields must remain an object",
+            )
+            .into())
+        }
+    };
+    form.fields = fields;
+    let body = form
+        .encode()
+        .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
+    let response = unless_client_leaves(
+        stream,
+        upstream_post(&lease, endpoint)
+            .header("Content-Type", form.content_type())
+            .body(body)
+            .send(),
+    )
+    .await?
+    .map_err(upstream_failure)?;
+    relay_openai_response(stream, response).await
+}
+
+async fn relay_openai_response(stream: &mut TcpStream, response: reqwest::Response) -> Handled {
     let status = response.status().as_u16();
     let content_type = response
         .headers()
@@ -454,6 +573,88 @@ async fn proxy_openai(
         .await
         .map_err(|error| format!("gateway shutdown failed: {error}"))?;
     Ok(())
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Transcription {
+    pub text: String,
+    pub session_id: String,
+    pub model: String,
+}
+
+/// Local attachment transcription uses the same selected-session lease and
+/// protocol adapter as the public API, with no caller-controlled URL or key.
+pub(crate) async fn transcribe_audio(
+    models: ModelSource,
+    session_id: String,
+    audio: crate::media::OwnedAudio,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<Transcription, String> {
+    let lease = models
+        .acquire_session(&session_id)
+        .map_err(|error| error.message)?;
+    let mut form = multipart::AudioForm::from_audio(audio);
+    let mut fields = json!({"response_format":"json"});
+    lease
+        .adapt("audio/transcriptions", &mut fields)
+        .map_err(|error| error.message)?;
+    let fields = match fields {
+        Value::Object(fields) => fields,
+        _ => return Err("transcription fields must be an object".into()),
+    };
+    let model = fields
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    form.fields = fields;
+    let body = form.encode()?;
+    let work = async {
+        let response = upstream_post(&lease, "audio/transcriptions")
+            .header("Content-Type", form.content_type())
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| upstream_failure(error).message)?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "transcription failed (HTTP {}): {}",
+                response.status().as_u16(),
+                bounded_upstream_text(response).await
+            ));
+        }
+        let bytes = bounded_upstream_bytes(response, 1024 * 1024).await?;
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid transcription response: {error}"))?;
+        let text = response
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty() && text.len() <= 64 * 1024)
+            .ok_or("transcription returned empty or oversized text")?
+            .to_owned();
+        Ok(Transcription {
+            text,
+            session_id,
+            model,
+        })
+    };
+    let cancelled = async {
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("media preparation cancelled".into());
+    }
+    tokio::select! {
+        result = work => result,
+        _ = cancelled => Err("media preparation cancelled".into()),
+        _ = tokio::time::sleep(Duration::from_secs(600)) => Err("transcription did not finish within ten minutes".into()),
+    }
 }
 
 async fn handle_messages(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
@@ -482,6 +683,8 @@ async fn handle_messages(stream: &mut TcpStream, ctx: &Ctx, request: Request) ->
         .models
         .acquire(requested_model(&body)?)
         .map_err(RouteError::into_api_error)?;
+    let mut openai_request = openai_request;
+    lease.adapt("chat/completions", &mut openai_request)?;
     let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
@@ -560,26 +763,28 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
     })?;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
     let previous_id = body.get("previous_response_id").and_then(Value::as_str);
-    let history = if let Some(previous_id) = previous_id {
+    let parent_history = if let Some(previous_id) = previous_id {
         let history = responses
             .lock()
             .await
             .get(previous_id)
-            .map(|stored| stored.messages.clone());
+            .map(|stored| Arc::clone(&stored.history));
         let Some(history) = history else {
             write_json_response(stream, 404, json!({"error":{"type":"not_found","message":format!("previous_response_id {previous_id} was not found")}})).await?;
             return Ok(());
         };
-        history
+        Some(history)
     } else {
-        Vec::new()
+        None
     };
-    let mut messages = history;
-    messages.extend(
-        responses_input_to_openai(&body)
-            .map_err(|message| ApiError::new(400, "invalid_request", message))?,
-    );
-    let openai_request = responses_to_openai(&body, messages.clone())
+    let turn_messages = responses_input_to_openai(&body)
+        .map_err(|message| ApiError::new(400, "invalid_request", message))?;
+    let mut request_messages = parent_history
+        .as_deref()
+        .map(HistoryNode::flatten)
+        .unwrap_or_default();
+    request_messages.extend(turn_messages.iter().cloned());
+    let openai_request = responses_to_openai(&body, request_messages)
         .map_err(|message| ApiError::new(400, "invalid_request", message))?;
     let stream_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     // The lease counts this request as active on its model until the handler
@@ -589,6 +794,8 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
         .models
         .acquire(requested_model(&body)?)
         .map_err(RouteError::into_api_error)?;
+    let mut openai_request = openai_request;
+    lease.adapt("chat/completions", &mut openai_request)?;
     let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
@@ -608,7 +815,8 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
             response,
             &body,
             response_id,
-            messages,
+            parent_history,
+            turn_messages,
             Arc::clone(responses),
         )
         .await?;
@@ -617,9 +825,9 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
             .await?
             .map_err(|message| ApiError::new(502, "bad_upstream_response", message))?;
         let assistant = openai_assistant_message(&value);
-        messages.push(assistant);
         let response_value = openai_to_responses(&value, &body, &response_id);
-        remember_response(responses, response_id, response_value.clone(), messages).await;
+        let history = HistoryNode::append(parent_history, turn_messages, assistant);
+        remember_response(responses, response_id, response_value.clone(), history).await;
         write_json_response(stream, 200, response_value).await?;
     }
     Ok(())
@@ -677,10 +885,11 @@ fn response_content_to_openai(value: &Value) -> Result<Value, String> {
             "input_image" | "image" => {
                 let image = block.get("image_url").or_else(|| block.get("url")).cloned().unwrap_or(Value::Null);
                 let url = image.as_str().map(str::to_owned).or_else(|| block.get("image_url").and_then(|value| value.get("url")).and_then(Value::as_str).map(str::to_owned));
-                if let Some(url) = url { output.push(json!({"type":"image_url","image_url":{"url":url}})); }
+                let url = url.ok_or_else(|| "Responses image input requires an image URL or data URI".to_string())?;
+                output.push(json!({"type":"image_url","image_url":{"url":url}}));
             }
             "function_call_output" => output.push(json!({"type":"text","text":block.get("output").cloned().unwrap_or(Value::String(String::new()))})),
-            _ => {}
+            _ => return Err(format!("Responses input type {kind} cannot be represented by this adapter; use /v1/chat/completions for supported audio and video input")),
         }
     }
     Ok(
@@ -710,6 +919,9 @@ fn responses_to_openai(request: &Value, messages: Vec<Value>) -> Result<Value, S
         "stream".into(),
         request.get("stream").cloned().unwrap_or(Value::Bool(false)),
     );
+    if request.get("stream").and_then(Value::as_bool) == Some(true) {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     for (source, target) in [
         ("temperature", "temperature"),
         ("top_p", "top_p"),
@@ -802,10 +1014,10 @@ async fn remember_response(
     responses: &Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
     id: String,
     response: Value,
-    messages: Vec<Value>,
+    history: Arc<HistoryNode>,
 ) {
     let mut guard = responses.lock().await;
-    guard.insert(id, StoredResponse { response, messages });
+    guard.insert(id, StoredResponse { response, history });
     while guard.len() > MAX_RESPONSES {
         if let Some(key) = guard.keys().next().cloned() {
             guard.remove(&key);
@@ -820,7 +1032,8 @@ async fn stream_responses(
     response: reqwest::Response,
     request: &Value,
     response_id: String,
-    mut messages: Vec<Value>,
+    parent_history: Option<Arc<HistoryNode>>,
+    turn_messages: Vec<Value>,
     responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
 ) -> Result<(), String> {
     write_stream_head(stream, 200, "text/event-stream", None).await?;
@@ -837,6 +1050,7 @@ async fn stream_responses(
     .await?;
     let mut state = ResponseStreamState::default();
     let mut pending = String::new();
+    let mut pending_cursor = 0;
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk =
@@ -845,9 +1059,7 @@ async fn stream_responses(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(index) = pending.find('\n') {
-            let line = pending[..index].trim_end_matches('\r').to_string();
-            pending.drain(..=index);
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
             if let Some(data) = line.strip_prefix("data:") {
                 if data.trim() == "[DONE]" {
                     continue;
@@ -857,6 +1069,10 @@ async fn stream_responses(
                 }
             }
         }
+        if pending_cursor > 0 {
+            pending.drain(..pending_cursor);
+            pending_cursor = 0;
+        }
     }
     if !pending.trim().is_empty() {
         if let Some(data) = pending.trim().strip_prefix("data:") {
@@ -865,8 +1081,6 @@ async fn stream_responses(
             }
         }
     }
-    messages
-        .push(json!({"role":"assistant","content":state.text,"reasoning_content":state.reasoning}));
     let completed = response_value(
         &response_id,
         model,
@@ -875,7 +1089,12 @@ async fn stream_responses(
         state.usage.unwrap_or_else(|| json!({})),
         "completed",
     );
-    remember_response(&responses, response_id, completed.clone(), messages).await;
+    let history = HistoryNode::append(
+        parent_history,
+        turn_messages,
+        json!({"role":"assistant","content":state.text,"reasoning_content":state.reasoning}),
+    );
+    remember_response(&responses, response_id, completed.clone(), history).await;
     write_event(
         stream,
         "response.completed",
@@ -897,9 +1116,8 @@ struct ResponseStreamState {
 
 impl ResponseStreamState {
     async fn apply(&mut self, value: &Value, stream: &mut TcpStream) -> Result<(), String> {
-        if let Some(usage) = value.get("usage") {
+        if value.get("usage").is_some_and(Value::is_object) {
             self.usage = Some(response_usage(value));
-            let _ = usage;
         }
         let Some(choice) = value
             .get("choices")
@@ -952,6 +1170,7 @@ async fn stream_response(
     write_event(stream, "message_start", json!({"type":"message_start","message":{"id":message_id,"type":"message","role":"assistant","model":request.get("model").and_then(Value::as_str).unwrap_or("local-model"),"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})).await?;
     let mut parser = OpenAiStream::default();
     let mut pending = String::new();
+    let mut pending_cursor = 0;
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk = chunk.map_err(|error| format!("upstream SSE read failed: {error}"))?;
@@ -959,9 +1178,7 @@ async fn stream_response(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(index) = pending.find('\n') {
-            let line = pending[..index].trim_end_matches('\r').to_string();
-            pending.drain(..=index);
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
             if let Some(data) = line.strip_prefix("data:") {
                 if data.trim() == "[DONE]" {
                     break;
@@ -970,6 +1187,10 @@ async fn stream_response(
                     parser.apply(&value, stream).await?;
                 }
             }
+        }
+        if pending_cursor > 0 {
+            pending.drain(..pending_cursor);
+            pending_cursor = 0;
         }
     }
     if !pending.trim().is_empty() && pending.trim() != "data: [DONE]" {
@@ -986,14 +1207,13 @@ async fn stream_response(
 struct OpenAiStream {
     thinking_index: Option<u32>,
     text_index: Option<u32>,
-    output_tokens: u64,
     finish_reason: Option<String>,
     usage: Option<Value>,
 }
 
 impl OpenAiStream {
     async fn apply(&mut self, value: &Value, stream: &mut TcpStream) -> Result<(), String> {
-        if let Some(usage) = value.get("usage") {
+        if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
             self.usage = Some(usage.clone());
         }
         let Some(choice) = value
@@ -1023,7 +1243,6 @@ impl OpenAiStream {
                 write_event(stream, "content_block_start", json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":""}})).await?;
                 index
             };
-            self.output_tokens += text.chars().count() as u64;
             write_event(stream, "content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":text}})).await?;
         }
         if let Some(text) = delta
@@ -1039,7 +1258,6 @@ impl OpenAiStream {
                 write_event(stream, "content_block_start", json!({"type":"content_block_start","index":index,"content_block":{"type":"text","text":""}})).await?;
                 index
             };
-            self.output_tokens += text.chars().count() as u64;
             write_event(stream, "content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}})).await?;
         }
         Ok(())
@@ -1068,8 +1286,24 @@ impl OpenAiStream {
             Some("content_filter") => "refusal",
             _ => "end_turn",
         };
-        write_event(stream, "message_delta", json!({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":null},"usage":{"output_tokens":self.usage.as_ref().and_then(|v| v.get("completion_tokens")).and_then(Value::as_u64).unwrap_or(self.output_tokens)}})).await?;
-        write_event(stream, "message_stop", json!({"type":"message_stop"})).await?;
+        let input_tokens = self
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.get("prompt_tokens"))
+            .and_then(Value::as_u64);
+        let output_tokens = self
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.get("completion_tokens"))
+            .and_then(Value::as_u64);
+        if let (Some(input_tokens), Some(output_tokens)) = (input_tokens, output_tokens) {
+            write_event(stream, "message_delta", json!({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":null},"usage":{"input_tokens":input_tokens,"output_tokens":output_tokens}})).await?;
+            write_event(stream, "message_stop", json!({"type":"message_stop"})).await?;
+        } else {
+            // Anthropic completion requires token counts; character counts
+            // cannot replace an engine's missing usage report.
+            write_event(stream, "error", json!({"type":"error","error":{"type":"api_error","message":"The inference engine did not report token usage for this streamed response."}})).await?;
+        }
         stream
             .shutdown()
             .await
@@ -1106,7 +1340,7 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                 converted.push(json!({
                     "role": "tool",
                     "tool_call_id": block.get("tool_use_id").cloned().unwrap_or(Value::Null),
-                    "content": block.get("content").cloned().unwrap_or(Value::String(String::new()))
+                    "content": content_blocks_to_openai(block.get("content").unwrap_or(&Value::String(String::new())))?
                 }));
             }
             let tool_calls: Vec<Value> = blocks
@@ -1123,10 +1357,12 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                     })
                 })
                 .collect();
+            let remaining = content_blocks_to_openai(&content)?;
             if !tool_calls.is_empty() {
-                converted.push(json!({"role":"assistant","content":content_blocks_to_openai(&content)?,"tool_calls":tool_calls}));
-            } else if !had_tool_result {
-                converted.push(json!({"role":role,"content":content_blocks_to_openai(&content)?}));
+                converted
+                    .push(json!({"role":"assistant","content":remaining,"tool_calls":tool_calls}));
+            } else if !had_tool_result || remaining.as_str().is_none_or(|text| !text.is_empty()) {
+                converted.push(json!({"role":role,"content":remaining}));
             }
         } else {
             converted.push(json!({"role":role,"content":content_blocks_to_openai(&content)?}));
@@ -1145,6 +1381,9 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
         "stream".into(),
         request.get("stream").cloned().unwrap_or(Value::Bool(false)),
     );
+    if request.get("stream").and_then(Value::as_bool) == Some(true) {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     for field in ["temperature", "top_p", "stop", "max_tokens"] {
         if let Some(value) = request.get(field) {
             body.insert(field.into(), value.clone());
@@ -1166,7 +1405,9 @@ fn content_blocks_to_openai(value: &Value) -> Result<Value, String> {
         match block.get("type").and_then(Value::as_str).unwrap_or_default() {
             "text" | "thinking" => if let Some(value) = block.get(if block.get("type").and_then(Value::as_str) == Some("thinking") { "thinking" } else { "text" }).and_then(Value::as_str) { text.push_str(value); },
             "image" => output.push(json!({"type":"image_url","image_url":{"url":block.get("source").and_then(|source| source.get("data")).and_then(Value::as_str).map(|data| format!("data:{};base64,{}", block.get("source").and_then(|source| source.get("media_type")).and_then(Value::as_str).unwrap_or("image/png"), data)).or_else(|| block.get("source").and_then(|source| source.get("url")).and_then(Value::as_str).map(str::to_owned))}})),
-            _ => {}
+            // These blocks are translated to separate OpenAI tool messages above.
+            "tool_use" | "tool_result" => {}
+            kind => return Err(format!("Anthropic input type {kind} cannot be represented by this adapter; use /v1/chat/completions for supported audio and video input")),
         }
     }
     if output.is_empty() {
@@ -1226,6 +1467,129 @@ fn openai_to_anthropic(value: &Value) -> Value {
 mod tests {
     use super::*;
 
+    #[test]
+    fn history_nodes_flatten_in_order_and_share_branch_ancestors() {
+        let root = HistoryNode::append(
+            None,
+            vec![json!({"role":"user","content":"one"})],
+            json!({"role":"assistant","content":"one answer"}),
+        );
+        let left = HistoryNode::append(
+            Some(Arc::clone(&root)),
+            vec![json!({"role":"user","content":"left"})],
+            json!({"role":"assistant","content":"left answer"}),
+        );
+        let right = HistoryNode::append(
+            Some(Arc::clone(&root)),
+            vec![json!({"role":"user","content":"right"})],
+            json!({"role":"assistant","content":"right answer"}),
+        );
+
+        assert_eq!(Arc::strong_count(&root), 3);
+        assert_eq!(
+            left.flatten(),
+            vec![
+                json!({"role":"user","content":"one"}),
+                json!({"role":"assistant","content":"one answer"}),
+                json!({"role":"user","content":"left"}),
+                json!({"role":"assistant","content":"left answer"}),
+            ]
+        );
+        assert_eq!(
+            right.flatten(),
+            vec![
+                json!({"role":"user","content":"one"}),
+                json!({"role":"assistant","content":"one answer"}),
+                json!({"role":"user","content":"right"}),
+                json!({"role":"assistant","content":"right answer"}),
+            ]
+        );
+        drop(right);
+        assert_eq!(Arc::strong_count(&root), 2);
+        drop(left);
+        assert_eq!(Arc::strong_count(&root), 1);
+    }
+
+    #[test]
+    fn dropping_a_deep_history_chain_does_not_recurse_through_parents() {
+        let mut history = None;
+        for index in 0..(MAX_RESPONSES * 64) {
+            history = Some(HistoryNode::append(
+                history,
+                vec![json!({"role":"user","content":index})],
+                json!({"role":"assistant","content":index}),
+            ));
+        }
+        let history = history.unwrap();
+        assert_eq!(history.flatten().len(), MAX_RESPONSES * 64 * 2);
+        drop(history);
+    }
+
+    #[test]
+    fn a_descendant_keeps_history_after_its_parent_entry_is_removed() {
+        let parent = HistoryNode::append(
+            None,
+            vec![json!({"role":"user","content":"parent"})],
+            json!({"role":"assistant","content":"answer"}),
+        );
+        let descendant = HistoryNode::append(
+            Some(Arc::clone(&parent)),
+            vec![json!({"role":"user","content":"next"})],
+            json!({"role":"assistant","content":"next answer"}),
+        );
+        drop(parent);
+        assert_eq!(
+            descendant.flatten(),
+            vec![
+                json!({"role":"user","content":"parent"}),
+                json!({"role":"assistant","content":"answer"}),
+                json!({"role":"user","content":"next"}),
+                json!({"role":"assistant","content":"next answer"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn concurrent_deep_branch_owner_drops_are_bounded() {
+        const DEPTH: usize = MAX_RESPONSES * 4;
+        let mut shared = None;
+        for index in 0..DEPTH {
+            shared = Some(HistoryNode::append(
+                shared,
+                vec![json!({"role":"user","content":index})],
+                json!({"role":"assistant","content":index}),
+            ));
+        }
+        let shared = shared.unwrap();
+        let branches = (0..3)
+            .map(|index| {
+                HistoryNode::append(
+                    Some(Arc::clone(&shared)),
+                    vec![json!({"role":"user","content":format!("branch-{index}")})],
+                    json!({"role":"assistant","content":format!("answer-{index}")}),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(Arc::strong_count(&shared), 4);
+
+        let barrier = Arc::new(std::sync::Barrier::new(branches.len() + 1));
+        let owners = branches
+            .into_iter()
+            .map(|branch| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    drop(branch);
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        drop(shared);
+        for owner in owners {
+            owner.join().unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn active_stream_can_outlive_the_idle_read_timeout() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -1266,6 +1630,39 @@ mod tests {
         let output = anthropic_to_openai(&request).unwrap();
         assert_eq!(output["messages"][0]["content"], "hello");
         assert_eq!(output["tools"][0]["function"]["name"], "search");
+    }
+
+    #[test]
+    fn wire_adapters_refuse_unrepresentable_media_instead_of_dropping_it() {
+        for kind in ["input_audio", "input_video", "future_media"] {
+            let content = json!([{"type":"text","text":"describe"},{"type":kind}]);
+            assert!(response_content_to_openai(&content)
+                .unwrap_err()
+                .contains(kind));
+            assert!(content_blocks_to_openai(&content)
+                .unwrap_err()
+                .contains(kind));
+        }
+        assert!(response_content_to_openai(&json!([{"type":"input_image"}])).is_err());
+        // A tool result must not suppress validation of other blocks in the same message.
+        assert!(
+            anthropic_to_openai(&json!({"messages":[{"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"call","content":"done"},
+                {"type":"input_audio"}
+            ]}]}))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn anthropic_tool_results_preserve_other_user_content() {
+        let output = anthropic_to_openai(&json!({"messages":[{"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"call","content":[{"type":"text","text":"done"}]},
+            {"type":"text","text":"next question"}
+        ]}]}))
+        .unwrap();
+        assert_eq!(output["messages"][0]["content"], "done");
+        assert_eq!(output["messages"][1]["content"], "next question");
     }
 
     #[test]

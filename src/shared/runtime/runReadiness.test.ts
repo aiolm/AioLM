@@ -34,6 +34,6 @@ describe("run setup gaps", () => {
       }
     }
     expect(runSetupGapMessage("model", "en")).toBe("No model is selected.");
-    expect(runSetupGapMessage("runtimeMissing", "en")).toBe("This runtime is not installed. Install it or select another runtime.");
+    expect(runSetupGapMessage("runtimeMissing", "en")).toBe("This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.");
   });
 });

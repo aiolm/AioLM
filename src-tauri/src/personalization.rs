@@ -139,7 +139,7 @@ pub(crate) fn load(roots: &Roots) -> ChatPersonalization {
             Err(error) => warnings.push(error),
         }
     }
-    let skills = catalog(roots, &mut warnings)
+    let skills = catalog(roots, Some(&mut warnings))
         .into_iter()
         .map(|entry| entry.skill)
         .collect();
@@ -219,11 +219,10 @@ pub(crate) fn read_skill(roots: &Roots, id: &str) -> Result<SkillContent, String
     if !is_safe_id(id) {
         return Err(unknown());
     }
-    let mut ignored = Vec::new();
     let folders = [Source::Agents, Source::Aiolm].map(|source| {
         roots
             .get(source)
-            .map(|root| skill_folders(root, &mut ignored))
+            .map(|root| skill_folders(root, None))
             .unwrap_or_default()
     });
     // With no more folders than offered skills the cap cannot leave this
@@ -232,7 +231,7 @@ pub(crate) fn read_skill(roots: &Roots, id: &str) -> Result<SkillContent, String
         let (skill, content) = listed_skill(source, id, &folders).ok_or_else(unknown)?;
         return Ok(SkillContent { skill, content });
     }
-    let entry = catalog(roots, &mut ignored)
+    let entry = catalog(roots, None)
         .into_iter()
         .find(|entry| entry.skill.id == id)
         .ok_or_else(unknown)?;
@@ -259,12 +258,14 @@ fn read_instructions(root: &Path, source: Source) -> Result<AgentInstructionsFil
         }
         Err(error) => return Err(file_error(&path, error)),
     };
+    let file_digest = Sha256::digest(&bytes);
+    let content = decode(&path, bytes)?;
     Ok(AgentInstructionsFile {
         source,
         path: display,
         exists: true,
-        content: decode(&path, &bytes)?,
-        revision: Some(revision(&bytes)),
+        content,
+        revision: Some(format!("{file_digest:x}")),
     })
 }
 
@@ -302,8 +303,9 @@ struct CatalogEntry {
 }
 
 /// The skills offered to the chat, sorted by name. A skill in AioLM's root
-/// replaces a shared skill of the same name.
-fn catalog(roots: &Roots, warnings: &mut Vec<String>) -> Vec<CatalogEntry> {
+/// replaces a shared skill of the same name. Body reads omit diagnostics,
+/// but still validate every candidate that determines the catalog.
+fn catalog(roots: &Roots, mut warnings: Option<&mut Vec<String>>) -> Vec<CatalogEntry> {
     let mut by_name = BTreeMap::new();
     for source in [Source::Agents, Source::Aiolm] {
         let Ok(root) = roots.get(source) else {
@@ -311,20 +313,24 @@ fn catalog(roots: &Roots, warnings: &mut Vec<String>) -> Vec<CatalogEntry> {
             continue;
         };
         let mut seen = BTreeMap::new();
-        for (folder_name, folder) in skill_folders(root, warnings) {
+        for (folder_name, folder) in skill_folders(root, warnings.as_deref_mut()) {
             let skill = match read_entry(source, &folder_name, &folder) {
                 Ok((skill, _)) => skill,
                 Err(error) => {
-                    warnings.push(format!("Skill skipped: {error}"));
+                    if let Some(warnings) = &mut warnings {
+                        warnings.push(format!("Skill skipped: {error}"));
+                    }
                     continue;
                 }
             };
             let name = skill.name.clone();
             if let Some(first) = seen.get(&name) {
-                warnings.push(format!(
-                    "Skill skipped: {} uses the name \"{name}\" already used by the {first} folder.",
-                    skill.path
-                ));
+                if let Some(warnings) = &mut warnings {
+                    warnings.push(format!(
+                        "Skill skipped: {} uses the name \"{name}\" already used by the {first} folder.",
+                        skill.path
+                    ));
+                }
                 continue;
             }
             seen.insert(name.clone(), folder_name.clone());
@@ -333,16 +339,18 @@ fn catalog(roots: &Roots, warnings: &mut Vec<String>) -> Vec<CatalogEntry> {
     }
     let mut entries = by_name.into_values().collect::<Vec<_>>();
     if entries.len() > MAX_SKILLS {
-        let left_out = entries
-            .split_off(MAX_SKILLS)
-            .into_iter()
-            .map(|entry| entry.skill.name)
-            .collect::<Vec<_>>();
-        warnings.push(format!(
-            "Only the first {MAX_SKILLS} skills by name are offered; {} more were left out: {}.",
-            left_out.len(),
-            left_out.join(", ")
-        ));
+        let left_out = entries.split_off(MAX_SKILLS);
+        if let Some(warnings) = &mut warnings {
+            let left_out = left_out
+                .into_iter()
+                .map(|entry| entry.skill.name)
+                .collect::<Vec<_>>();
+            warnings.push(format!(
+                "Only the first {MAX_SKILLS} skills by name are offered; {} more were left out: {}.",
+                left_out.len(),
+                left_out.join(", ")
+            ));
+        }
     }
     entries
 }
@@ -402,13 +410,15 @@ fn listed_skill(
 
 /// Direct subfolders of `<root>/skills`, sorted by name. Linked folders are
 /// included; hidden folders and plain files are not skills.
-fn skill_folders(root: &Path, warnings: &mut Vec<String>) -> Vec<(String, PathBuf)> {
+fn skill_folders(root: &Path, mut warnings: Option<&mut Vec<String>>) -> Vec<(String, PathBuf)> {
     let dir = root.join(SKILLS_DIR);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == ErrorKind::NotFound => return Vec::new(),
         Err(error) => {
-            warnings.push(format!("Skills skipped: {}", file_error(&dir, error)));
+            if let Some(warnings) = &mut warnings {
+                warnings.push(format!("Skills skipped: {}", file_error(&dir, error)));
+            }
             return Vec::new();
         }
     };
@@ -417,7 +427,9 @@ fn skill_folders(root: &Path, warnings: &mut Vec<String>) -> Vec<(String, PathBu
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                warnings.push(format!("Skills skipped: {}", file_error(&dir, error)));
+                if let Some(warnings) = &mut warnings {
+                    warnings.push(format!("Skills skipped: {}", file_error(&dir, error)));
+                }
                 continue;
             }
         };
@@ -426,10 +438,12 @@ fn skill_folders(root: &Path, warnings: &mut Vec<String>) -> Vec<(String, PathBu
             .is_ok_and(|kind| kind.is_dir() || kind.is_symlink());
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             if is_folder {
-                warnings.push(format!(
-                    "Skill skipped: {} has a name that is not valid Unicode.",
-                    entry.path().display()
-                ));
+                if let Some(warnings) = &mut warnings {
+                    warnings.push(format!(
+                        "Skill skipped: {} has a name that is not valid Unicode.",
+                        entry.path().display()
+                    ));
+                }
             }
             continue;
         };
@@ -440,7 +454,8 @@ fn skill_folders(root: &Path, warnings: &mut Vec<String>) -> Vec<(String, PathBu
     folders.sort();
     if folders.len() > MAX_SKILL_DIRECTORIES {
         let left_out = folders.split_off(MAX_SKILL_DIRECTORIES);
-        warnings.push(format!(
+        if let Some(warnings) = &mut warnings {
+            warnings.push(format!(
             "Only the first {MAX_SKILL_DIRECTORIES} skill folders in {} were read; {} more were left out: {}.",
             dir.display(),
             left_out.len(),
@@ -450,6 +465,7 @@ fn skill_folders(root: &Path, warnings: &mut Vec<String>) -> Vec<(String, PathBu
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+        }
     }
     folders
 }
@@ -472,7 +488,7 @@ fn read_skill_file(folder: &Path) -> Result<String, String> {
         ));
     }
     let bytes = read_bounded(&file).map_err(|error| file_error(&display, error))?;
-    decode(&display, &bytes)
+    decode(&display, bytes)
 }
 
 /// `<source>:<folder>` when that is a safe id, otherwise `<source>:#` and the
@@ -520,10 +536,16 @@ fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
         options.custom_flags(libc::O_NONBLOCK);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(not_a_file());
     }
-    let mut bytes = Vec::new();
+    // The opened handle's length is only an allocation hint; the bounded read
+    // still observes the current bytes and enforces the limit below.
+    let capacity = usize::try_from(metadata.len())
+        .unwrap_or(MAX_FILE_BYTES + 1)
+        .min(MAX_FILE_BYTES + 1);
+    let mut bytes = Vec::with_capacity(capacity);
     file.take(MAX_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_FILE_BYTES {
@@ -589,9 +611,11 @@ fn file_error(path: &Path, error: std::io::Error) -> String {
 }
 
 /// UTF-8 text, with a leading byte-order mark removed.
-fn decode(path: &Path, bytes: &[u8]) -> Result<String, String> {
-    String::from_utf8(bytes.strip_prefix(BOM).unwrap_or(bytes).to_vec())
-        .map_err(|_| format!("{} is not UTF-8 text.", path.display()))
+fn decode(path: &Path, mut bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.starts_with(BOM) {
+        drop(bytes.drain(..BOM.len()));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text.", path.display()))
 }
 
 fn revision(bytes: &[u8]) -> String {
@@ -910,6 +934,24 @@ mod tests {
         assert_eq!(agents.revision.as_deref(), Some(revision(shared).as_str()));
         assert_eq!(loaded.instructions[1].source, Source::Aiolm);
         assert_eq!(loaded.instructions[1].content, "AioLM rules.");
+    }
+
+    #[test]
+    fn decoded_text_preserves_empty_bom_and_utf8_error_behavior() {
+        let path = Path::new("AGENTS.md");
+        assert_eq!(decode(path, Vec::new()).unwrap(), "");
+        assert_eq!(
+            decode(path, b"Plain text.".to_vec()).unwrap(),
+            "Plain text."
+        );
+        assert_eq!(
+            decode(path, [BOM, b"Marked text."].concat()).unwrap(),
+            "Marked text."
+        );
+        assert_eq!(
+            decode(path, vec![0xff]),
+            Err("AGENTS.md is not UTF-8 text.".to_string())
+        );
     }
 
     #[test]

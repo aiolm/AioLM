@@ -1,5 +1,6 @@
+import { isProviderId } from '../../shared/api/providerIdentity.ts';
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
-import type { JsonObject } from "../../shared/config/tuningValidation";
+import { CACHE_TYPE_OPTIONS, type JsonObject } from "../../shared/config/tuningValidation.ts";
 import type { ProfileApplication } from "../../shared/config/settingsProfiles";
 import type { ExecutionKey, ExecutionSettings } from "../../shared/config/executionSettings";
 
@@ -71,7 +72,7 @@ function safeClone<T>(value: T): T {
   }
 }
 
-const PROJECT_CACHE_TYPES = new Set(["f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1"]);
+const PROJECT_CACHE_TYPES: ReadonlySet<string> = new Set(CACHE_TYPE_OPTIONS);
 
 function stringList(value: unknown, limit: number): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, limit) : [];
@@ -102,10 +103,15 @@ function normalizeConfig(value: unknown): ProjectConfig {
   const keep = clampInt(source.keep, 0, 0, 131072);
   const cache_type_k = typeof source.cache_type_k === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_k) ? source.cache_type_k : "f16";
   const cache_type_v = typeof source.cache_type_v === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_v) ? source.cache_type_v : "f16";
+  const selectedProvider = stringValue(source.active_provider);
+  if (selectedProvider && !isProviderId(selectedProvider)) throw new Error('Unknown inference engine in project settings.');
   return {
     runtime_defaults: stringList(source.runtime_defaults, MAX_PROJECT_RUNTIME_DEFAULTS),
     ...(source.gpu ? { gpu: safeClone(source.gpu) } : {}),
     active_model: stringValue(source.active_model),
+    active_provider: isProviderId(selectedProvider) ? selectedProvider : 'llama.cpp',
+    active_runtime: stringValue(source.active_runtime),
+    provider_options: source.provider_options && typeof source.provider_options === 'object' && !Array.isArray(source.provider_options) ? safeClone(source.provider_options) : {},
     active_backend: stringValue(source.active_backend),
     active_build: stringValue(source.active_build),
     mmproj: stringValue(source.mmproj),
@@ -145,6 +151,26 @@ function normalizeConfig(value: unknown): ProjectConfig {
   };
 }
 
+/** What a linked profile owns of a project snapshot, as settings profiles
+ * capture it: never runtime selections; for llama.cpp its typed settings and
+ * its own option map; for other engines only their option map and server
+ * timeouts. (Kept local: this store also runs without the app bundler.) */
+function ownedProfileSettings(settings: Omit<ProjectConfig, "active_model">): Partial<ExecutionSettings> {
+  const provider = settings.active_provider ?? "llama.cpp";
+  const options = settings.provider_options?.[provider];
+  if (provider !== "llama.cpp") {
+    return {
+      provider_options: { [provider]: safeClone(options ?? {}) },
+      request_timeout_seconds: settings.request_timeout_seconds,
+      sleep_idle_seconds: settings.sleep_idle_seconds,
+    };
+  }
+  const owned: Record<string, unknown> = safeClone(settings);
+  for (const key of ["active_provider", "active_runtime", "active_backend", "active_build", "provider_options"]) delete owned[key];
+  if (options && Object.keys(options).length) owned.provider_options = { [provider]: safeClone(options) };
+  return owned as Partial<ExecutionSettings>;
+}
+
 function normalizeProject(value: unknown): ProjectPreset | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Partial<ProjectPreset>;
@@ -155,13 +181,20 @@ function normalizeProject(value: unknown): ProjectPreset | null {
   const systemPrompt = stringValue(source.systemPrompt, "You are a helpful assistant.").slice(0, 32_768);
   const application = source.profileApplication;
   const { active_model: model, ...settings } = config;
+  // A linked profile belongs to the project's engine. Its engine is kept
+  // (absent means llama.cpp, so a missing one is restored for other engines)
+  // and its settings are the project snapshot narrowed to what a profile of
+  // that engine owns, never runtime selections or another engine's fields.
+  const provider = config.active_provider;
   const profileApplication: ProfileApplication | undefined = application && typeof application === 'object'
     && application.model === model && typeof application.profile_id === 'string' && application.profile_id.trim()
+    && (application.provider === undefined || application.provider === provider)
     ? {
+      ...(application.provider !== undefined || provider !== 'llama.cpp' ? { provider } : {}),
       model, profile_id: application.profile_id.trim().slice(0, 256),
       ...(typeof application.profile_name === 'string' ? { profile_name: application.profile_name.slice(0, 120) } : {}),
       ...(Number.isSafeInteger(application.profile_revision) && application.profile_revision! >= 0 ? { profile_revision: application.profile_revision } : {}),
-      settings: safeClone(settings), system_prompt: systemPrompt,
+      settings: ownedProfileSettings(settings), system_prompt: systemPrompt,
     } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings
@@ -205,31 +238,46 @@ export function readProjects(store: Storage | null = storage()): ProjectPreset[]
   return projects;
 }
 
-export function writeProjects(projects: ProjectPreset[], store: Storage | null = storage()): void {
-  if (!store) return;
+/** Publish only persisted state; an active-project change belongs to the same user operation. */
+export function writeProjects(projects: ProjectPreset[], store: Storage | null = storage(), activeId?: string | null): void {
+  if (!store) throw new Error('Project storage is unavailable.');
+  const contents = JSON.stringify(projects.slice(0, MAX_PROJECTS));
+  const previous = activeId === undefined ? undefined : store.getItem(PROJECTS_KEY);
+  let written = false;
   try {
-    store.setItem(PROJECTS_KEY, JSON.stringify(projects.slice(0, MAX_PROJECTS)));
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
-  } catch {
-    // Storage quota or restricted WebView must not break the chat client.
+    store.setItem(PROJECTS_KEY, contents);
+    written = true;
+    if (activeId !== undefined) {
+      if (activeId) store.setItem(ACTIVE_PROJECT_KEY, activeId);
+      else store.removeItem(ACTIVE_PROJECT_KEY);
+    }
+  } catch (cause) {
+    if (written && previous !== undefined) {
+      try {
+        if (previous === null) store.removeItem(PROJECTS_KEY);
+        else store.setItem(PROJECTS_KEY, previous);
+      } catch {
+        throw new Error(`${cause instanceof Error ? cause.message : String(cause)} The previous project list could not be restored.`);
+      }
+    }
+    throw cause;
   }
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
 }
 
 export function activeProjectId(store: Storage | null = storage()): string | null {
   if (!store) return null;
-  const value = store.getItem(ACTIVE_PROJECT_KEY);
-  return value?.trim() || null;
+  try {
+    const value = store.getItem(ACTIVE_PROJECT_KEY);
+    return value?.trim() || null;
+  } catch { return null; }
 }
 
 export function setActiveProjectId(id: string | null, store: Storage | null = storage()): void {
-  if (!store) return;
-  try {
-    if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
-    else store.removeItem(ACTIVE_PROJECT_KEY);
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
-  } catch {
-    // best effort only
-  }
+  if (!store) throw new Error('Project storage is unavailable.');
+  if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
+  else store.removeItem(ACTIVE_PROJECT_KEY);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
 }
 
 export function projectFromConfig(
@@ -261,8 +309,14 @@ export function projectFromConfig(
 export function upsertProject(project: ProjectPreset, projects = readProjects()): ProjectPreset[] {
   const normalized = normalizeProject(project);
   if (!normalized) throw new Error("Invalid project preset.");
-  const byId = projects.filter((item) => item.id !== normalized.id && item.name.toLocaleLowerCase() !== normalized.name.toLocaleLowerCase());
-  return [normalized, ...byId].slice(0, MAX_PROJECTS);
+  const byId = projects.filter((item) => item.id !== normalized.id);
+  if (byId.some(item => item.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
+    throw new Error('A project with this name already exists. Choose another name.');
+  }
+  if (byId.length >= MAX_PROJECTS) {
+    throw new Error('The project library is full. Export and remove a project before adding another.');
+  }
+  return [normalized, ...byId];
 }
 
 export function deleteProject(id: string, projects = readProjects()): ProjectPreset[] {
@@ -274,6 +328,7 @@ const SENSITIVE_NAME_PARTS = new Set([
   "connection_string", "credential", "credentials", "password", "private-key",
   "private_key", "privatekey", "secret", "secrets", "token", "tokens",
 ]);
+const TOKEN_BUDGET_FIELDS = new Set(['max_tokens', 'max_completion_tokens', 'max_output_tokens', 'min_tokens']);
 
 function sensitiveExportName(name: string): boolean {
   const normalized = name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
@@ -291,6 +346,7 @@ function isFlagLike(value: string): boolean {
 }
 
 function redactExportValue(value: unknown, key = ""): unknown {
+  if (TOKEN_BUDGET_FIELDS.has(key) && typeof value === 'number' && Number.isFinite(value)) return value;
   if (sensitiveExportName(key)) return "[REDACTED]";
   if (Array.isArray(value)) {
     let redactNext = false;
@@ -322,12 +378,20 @@ export function exportProject(project: ProjectPreset): string {
   return JSON.stringify({ schema: "aiolm.project.v1", project: redactExportValue(project) }, null, 2);
 }
 
-export function importProject(raw: string): ProjectPreset {
+export function importProject(raw: string, projects = readProjects()): ProjectPreset {
   const parsed: unknown = JSON.parse(raw);
   const source = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed;
   const project = normalizeProject(source);
   if (!project) throw new Error("The selected file is not a valid aiolm project preset.");
-  return { ...project, id: `project-${Date.now().toString(36)}`, updatedAt: Date.now() };
+  // Imports are independent copies. Never replace an existing identity (which
+  // may still be referenced by the active workspace or conversation history).
+  const names = new Set(projects.map(item => item.name.toLocaleLowerCase()));
+  let name = project.name;
+  for (let copy = 2; names.has(name.toLocaleLowerCase()); copy += 1) {
+    const suffix = ` (${copy})`;
+    name = `${project.name.slice(0, 128 - suffix.length)}${suffix}`;
+  }
+  return { ...project, name, id: `project-${crypto.randomUUID()}`, updatedAt: Date.now() };
 }
 
 export function projectConfigPatch(project: ProjectPreset): Partial<AppConfig> {

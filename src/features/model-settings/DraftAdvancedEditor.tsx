@@ -11,6 +11,7 @@ import DefaultValue from '../../shared/ui/DefaultValue';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import Switch from '../../shared/ui/Switch';
+import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 
 const EXCLUDED = new Set(['--help', '--version', '--cache-list', '--completion-bash', '--list-devices']);
 /**
@@ -82,9 +83,12 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   const id = useId();
   const copy = modelSettingsCopy[locale];
   const help = advancedSettingsHelp[locale];
+  const choice = controlChoiceCopy[locale];
+  const [direct, setDirect] = useState(false);
+  const [invalidFields, setInvalidFields] = useState<ReadonlySet<string>>(new Set());
   const [args, setArgs] = useState<string | null>(null);
   const [chat, setChat] = useState<string | null>(null);
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [query, setQuery] = useState('');
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   // Held in refs so the row callbacks keep one identity: props that change every
@@ -115,22 +119,34 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   const draftOption = useCallback((optionId: string, raw: string) => {
     setOptionDrafts(previous => ({ ...previous, [optionId]: raw }));
   }, []);
-  const markInvalid = useCallback((key: string, invalid: boolean) => invalidRef.current(key, invalid), []);
+  const markInvalid = useCallback((key: string, invalid: boolean) => {
+    setInvalidFields(previous => { const next = new Set(previous); if (invalid) next.add(key); else next.delete(key); return next; });
+    invalidRef.current(key, invalid);
+  }, []);
+  const switchMode = (next: boolean) => {
+    if (disabled || invalidFields.size > 0) return;
+    setDirect(next); setOptionDrafts({}); setArgs(null); setChat(null);
+  };
 
   return <div className="model-settings-fields">
-    {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
-    <div><label htmlFor={`${id}-args`}>{copy.rawArgs}</label>
+    <div role="group" aria-label={choice.editor}>
+      <button type="button" className="app-button app-button--secondary" aria-pressed={!direct} disabled={disabled || invalidFields.size > 0} onClick={() => switchMode(false)}>{choice.guided}</button>
+      <button type="button" className="app-button app-button--secondary" aria-pressed={direct} disabled={disabled || invalidFields.size > 0} onClick={() => switchMode(true)}>{choice.direct}</button>
+    </div>
+    {invalidFields.size > 0 && <p role="status" className="app-section-hint">{choice.fixBeforeSwitch}</p>}
+    {Object.entries(errors).filter(([, message]) => message).map(([key, message]) => <FeedbackBanner key={key} tone="error">{message}</FeedbackBanner>)}
+    {direct ? <><div><label htmlFor={`${id}-args`}>{copy.rawArgs}</label>
     <textarea id={`${id}-args`} aria-describedby={`${id}-args-help`} className="app-textarea font-mono" rows={6} spellCheck={false} disabled={disabled} value={args ?? serverArgsToText(cfg.server_args, options)} onChange={event => {
       const raw = event.target.value; setArgs(raw);
-      try { const server_args = serverArgsFromText(raw, options); onChange({ server_args }); onInvalid('server_args', false); setError(''); }
-      catch (cause) { onInvalid('server_args', true); setError(String(cause)); }
+      try { const server_args = serverArgsFromText(raw, options); onChange({ server_args }); markInvalid('server_args', false); setErrors(previous => ({ ...previous, server_args: '' })); }
+      catch (cause) { markInvalid('server_args', true); setErrors(previous => ({ ...previous, server_args: String(cause) })); }
     }} /><p id={`${id}-args-help`} className="app-section-hint">{help.args}</p></div>
     {!benchmark && <div><label htmlFor={`${id}-chat`}>{copy.rawChat}</label>
     <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
       const raw = event.target.value; setChat(raw);
-      try { const chat_options = parseChatOptions(raw); onChange({ chat_options }); onInvalid('chat_options', false); setError(''); }
-      catch (cause) { onInvalid('chat_options', true); setError(String(cause)); }
-    }} /><p id={`${id}-chat-help`} className="app-section-hint">{help.chat}</p></div>}
+      try { const chat_options = parseChatOptions(raw); onChange({ chat_options }); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); }
+      catch (cause) { markInvalid('chat_options', true); setErrors(previous => ({ ...previous, chat_options: String(cause) })); }
+    }} /><p id={`${id}-chat-help`} className="app-section-hint">{help.chat}</p></div>}</> : <>
     <div><h3>{copy.options}</h3><p className="app-section-hint">{help.options}</p></div>
     <div><input className="app-input" type="search" aria-label={copy.optionSearch} aria-describedby={`${id}-search-help`} placeholder={copy.optionSearch} value={query} onChange={event => setQuery(event.target.value)} />
       <p id={`${id}-search-help`} className="app-section-hint">{help.search}</p></div>
@@ -141,6 +157,6 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
         checked={occurrences.length > 0} disabled={disabled} idPrefix={id} help={help} enabledLabel={copy.enabled} defaultInfo={occurrences.length || optionDrafts[option.id] ? defaultInfo : inheritedInfo}
         onSet={setOption} onDraft={draftOption} onInvalid={markInvalid} />;
     })}{visible.length === 0 && <p className="app-section-hint" role="status">{help.noResults}</p>}
-      {matching.length > visible.length && <p className="app-section-hint" role="status">{copy.optionsTruncated.replace('{shown}', String(visible.length)).replace('{total}', String(matching.length))}</p>}</div>
+      {matching.length > visible.length && <p className="app-section-hint" role="status">{copy.optionsTruncated.replace('{shown}', String(visible.length)).replace('{total}', String(matching.length))}</p>}</div></>}
   </div>;
 }

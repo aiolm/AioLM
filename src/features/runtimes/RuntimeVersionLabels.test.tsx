@@ -23,8 +23,8 @@ describe("runtime version labels", () => {
 
   it("never lends another build's version to the latest release", () => {
     const { container } = renderRow([{ backend: "cuda", build: "b10600", dir: "runtimes/cuda-b10600", size_mb: 512, version: { semver: "0.2.9", build: 10600, commit: "abc" } }]);
-    expect(container.querySelector(".runtime-group__latest")).toHaveTextContent("Latest ?(10638)");
-    expect(screen.getByRole("button", { name: "Install ?(10638): CUDA (NVIDIA)" })).toBeInTheDocument();
+    expect(container.querySelector(".runtime-group__latest")).toHaveTextContent("Latest b10638");
+    expect(screen.getByRole("button", { name: "Install b10638: CUDA (NVIDIA)" })).toBeInTheDocument();
   });
 
   it("shows the probed version as one label, not the raw banner beside it", () => {
@@ -33,7 +33,7 @@ describe("runtime version labels", () => {
       version: "version: 0.3.0-dev (build 10638, commit bf9421646)\nbuilt with Clang 20.1.8 for x86_64",
       flags: [], devices: [], diagnostics: [],
     };
-    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeBusy={false} serverRunning={false} probeTarget={null} onProbe={vi.fn()} />);
+    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} serverRunning={false} probeTarget={null} />);
     expect(screen.getAllByText("0.3.0-dev(10638)", { exact: false }).length).toBeGreaterThan(0);
     expect(container.textContent).not.toContain("built with");
     expect(container.textContent).not.toContain("commit bf9421646");

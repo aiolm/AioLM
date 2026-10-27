@@ -13,6 +13,27 @@ const source = (args: string[] = []): BenchmarkProfileSource => ({
 });
 
 describe('benchmark settings profiles', () => {
+  it('restores a Metal benchmark into vLLM profiles without selecting another installation', () => {
+    const local = { backend: 'metal', build: '0.30.0', result: {
+      provider: 'vllm', runtime_version: '0.30.0', runtime_accelerator: 'metal', runtime_variant: 'vllm-metal', runtime_plugin_version: '0.30.0',
+      context_size: 8192, parallel: 1, status: 'complete', args: ['--max-model-len', '8192'],
+    } } as PerformanceBenchmarkRecord;
+    const projected = localBenchmarkProfileSource(local);
+    expect(projected.runtime).toMatchObject({ name: 'vllm', variant: 'vllm-metal', plugin_version: '0.30.0' });
+    const { profile } = benchmarkSettingsProfile(projected, 'metal');
+    expect(profile.provider).toBe('vllm');
+    expect(profile.settings).toEqual({ provider_options: { vllm: { max_model_len: 8192 } } });
+  });
+  it('imports only vLLM options and preserves explicit false flags independently of llama.cpp settings', () => {
+    const python: BenchmarkProfileSource = { runtime: { name: 'vllm', version: '0.31.0', backend: 'cuda', build: '0.31.0' },
+      execution: { context_size: 8192, parallel: 2, settings: null, effective_args: ['--max-model-len', '8192', '--enable-prefix-caching=false', '--unknown-option', 'discard'] } };
+    const { profile, omitted } = benchmarkSettingsProfile(python, 'vllm-1');
+    expect(profile.provider).toBe('vllm');
+    expect(profile.settings).toEqual({ provider_options: { vllm: { max_model_len: 8192, enable_prefix_caching: false } } });
+    expect(profile.settings).not.toHaveProperty('ctx_size');
+    expect(profile.settings).not.toHaveProperty('active_runtime');
+    expect(omitted).toBe(true);
+  });
   it('restores measured settings, ordered portable options and inherited defaults without capturing another profile', () => {
     const { profile, omitted } = benchmarkSettingsProfile(source([
       '--ctx-size', '8192', '--batch-size=1024', '-ub', '256', '--threads', '8',
@@ -23,7 +44,7 @@ describe('benchmark settings profiles', () => {
       spec_draft_model: '/synthetic/old-draft.gguf', server_args: ['--unknown', 'old'], temperature: 1.5,
       gpu: { gpu_ids: ['synthetic-device'], main_gpu: 'synthetic-device', split_mode: 'row', tensor_split: [1], draft_gpu_id: null } }, profile);
     expect(applied).toMatchObject({ active_model: testConfig.active_model, ctx_size: 32768, parallel: 4,
-      ngl: 0, threads: 12, batch_size: 1024, ubatch_size: 256, active_backend: 'cpu', active_build: 'b123',
+      ngl: 0, threads: 12, batch_size: 1024, ubatch_size: 256, active_backend: 'vulkan', active_build: 'b123',
       spec_draft_model: '', gpu: { gpu_ids: [], main_gpu: null },
       server_args: ['--no-webui', '--rope-scaling', 'yarn', '--threads-batch', '16'] });
     expect(applied.runtime_defaults).toContain('temperature');

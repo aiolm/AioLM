@@ -168,7 +168,7 @@ export interface AnthropicTextBlock {
 
 export interface AnthropicImageBlock {
   type: "image";
-  source: { type: "base64"; media_type: string; data: string };
+  source: { type: "base64"; media_type: string; data: string } | { type: "url"; url: string };
 }
 
 export interface AnthropicThinkingBlock {
@@ -258,11 +258,15 @@ function toAnthropicContent(content: string | ChatContentPart[]): string | Anthr
       blocks.push({ type: "text", text: part.text });
       continue;
     }
+    if (part.type !== 'image_url') throw new Error(`Anthropic wire format does not accept ${part.type}; use the OpenAI endpoint for audio and video.`);
     const parsed = dataUrlParts(part.image_url.url);
     if (parsed) {
+      if (!parsed.mediaType.startsWith('image/')) throw new Error('Anthropic image input requires an image data URI.');
       blocks.push({ type: "image", source: { type: "base64", media_type: parsed.mediaType, data: parsed.data } });
     } else {
-      blocks.push({ type: "text", text: `[image: ${part.image_url.url}]` });
+      const url = new URL(part.image_url.url);
+      if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Anthropic image input requires an HTTP URL or image data URI.');
+      blocks.push({ type: 'image', source: { type: 'url', url: part.image_url.url } });
     }
   }
   return blocks;
@@ -283,6 +287,7 @@ function toAnthropicMessage(message: ChatMessage): AnthropicMessage {
     const blocks: AnthropicContentBlock[] = [];
     const text = toAnthropicContent(message.content);
     if (typeof text === "string" && text) blocks.push({ type: "text", text });
+    else if (Array.isArray(text)) blocks.push(...text);
     for (const call of message.tool_calls) {
       let input: Record<string, unknown> = {};
       try {

@@ -1,6 +1,6 @@
 {
   "name": "@aiolm/benchmark-contracts",
-  "version": "0.6.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Versioned AioLM benchmark data contracts and comparison utilities",
   "type": "module",
@@ -9,17 +9,31 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
     "./schema": "./schema/public-benchmark.schema.json",
     "./openapi": "./schema/openapi.json",
     "./package.json": "./package.json"
   },
-  "files": ["dist/*.js", "dist/*.d.ts", "schema/*.json", "README.md", "LICENSE"],
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "schema/*.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepack": "npm run build",
     "test": "npm run build && node --experimental-vm-modules tests/package-smoke.mjs"
   },
-  "devDependencies": { "typescript": "~5.8.3" },
-  "engines": { "node": ">=18" }
+  "devDependencies": {
+    "typescript": "~5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }

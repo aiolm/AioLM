@@ -7,7 +7,7 @@
 //! the app handle, so turning the setting on and off does not need a handle
 //! parked in shared state.
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuEvent, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -25,9 +25,42 @@ const QUIT_LABEL: &str = "Quit AioLM";
 /// hidden window can be in: hidden, minimized, and merely behind other windows.
 pub(crate) fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        #[cfg(target_os = "linux")]
+        {
+            // GTK handles showing, deiconifying and activating as one request.
+            // Separate queued requests can discard focus while the window's
+            // minimized state is still being updated by the window manager.
+            let restore = window.clone();
+            let _ = window.run_on_main_thread(move || {
+                use gtk::prelude::GtkWindowExt;
+                if let Ok(native) = restore.gtk_window() {
+                    native.present_with_time(gtk::current_event_time());
+                }
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
+/// Carry out a choice from the tray menu. It is registered once on the
+/// application builder rather than with each tray icon: Tauri keeps a tray
+/// icon's menu handler in an application-wide list that removing the icon does
+/// not shorten, so each time the setting was turned back on another copy would
+/// run for every click.
+pub(crate) fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
+    match event.id.as_ref() {
+        SHOW_ITEM => restore_main_window(app),
+        // The only way out of the application once its window lives in the
+        // tray. It goes through the normal exit, so `RunEvent::Exit` still
+        // stops every managed llama-server, the gateway and the background
+        // jobs before the process ends.
+        QUIT_ITEM => app.exit(0),
+        _ => {}
     }
 }
 
@@ -116,15 +149,6 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
         // right button opens the menu. Without this the left button would open
         // the menu instead and there would be no one-click way back.
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            SHOW_ITEM => restore_main_window(app),
-            // The only way out of the application once its window lives in the
-            // tray. It goes through the normal exit, so `RunEvent::Exit` still
-            // stops every managed llama-server, the gateway and the background
-            // jobs before the process ends.
-            QUIT_ITEM => app.exit(0),
-            _ => {}
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,

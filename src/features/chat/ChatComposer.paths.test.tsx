@@ -18,12 +18,12 @@ describe('chat path presentation', () => {
       refreshMcpTools={vi.fn()} mcpDefinitions={[]}
       pendingToolCall={{ serverId: 'files', serverName: 'Files', toolName: 'read', argumentsValue,
         call: { id: 'call-1', type: 'function', function: { name: 'read', arguments: JSON.stringify(argumentsValue) } } }}
-      onApproveTool={() => approved(argumentsValue)} onRejectTool={vi.fn()}
+      toolCallInProgress={false} onApproveTool={() => approved(argumentsValue)} onRejectTool={vi.fn()}
       attachments={[{ name: raw, dataUrl: 'data:image/png;base64,AA==' }]} onRemoveAttachment={vi.fn()} attachmentStatus="ready"
       documents={[{ name: raw, path: raw, text: 'Notes' }]} onRemoveDocument={removeDocument}
       input="" setInput={vi.fn()} onKeyDown={vi.fn()} disabled={false} phase="idle"
       {...attachmentActions} onStop={vi.fn()} aborting={false} onSend={vi.fn()} canSend={false}
-      msgsLength={0} ct={key => key}
+      msgsLength={0} responseState="none" ct={key => key}
     /></I18nProvider>);
     expect(container.textContent).toContain(`Cannot read ${display}`);
     expect(container.textContent).not.toContain('\\\\?\\');

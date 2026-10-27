@@ -106,6 +106,13 @@ fn delta(text: &str) -> Chunk {
     sse_data(json!({"choices":[{"delta":{"content":text},"finish_reason":null}]}))
 }
 
+fn delta_line(text: &str, line_ending: &str) -> String {
+    format!(
+        "data: {}{line_ending}{line_ending}",
+        json!({"choices":[{"delta":{"content":text},"finish_reason":null}]}),
+    )
+}
+
 fn finish() -> Chunk {
     sse_data(
         json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
@@ -234,6 +241,88 @@ struct TestApi {
     default: Arc<Mutex<ServerState>>,
     sessions: Arc<SessionManager>,
     http: reqwest::Client,
+}
+
+#[tokio::test]
+async fn python_engine_routes_apply_loaded_capabilities_and_keep_media_and_model_identity() {
+    use crate::providers::{artifacts::Modalities, protocol::EngineInfo, ProviderId};
+    for provider in [ProviderId::Vllm, ProviderId::MlxVlm] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::json(200, completion("answer")).await;
+        api.load_default(
+            &upstream,
+            "private-worker-key",
+            "/synthetic/models/vision-model",
+        );
+        api.default.lock().unwrap().engine = Some(EngineInfo {
+            provider,
+            runtime_id: "synthetic-runtime".into(),
+            runtime_variant: String::new(),
+            speech_model_type: None,
+            upstream_model: "loaded-model-alias".into(),
+            modalities: Modalities {
+                text: true,
+                image: true,
+                audio: true,
+                video: false,
+            },
+            tasks: vec!["generate".into()],
+            chat_supported: None,
+            request_option_keys: Vec::new(),
+            request_fields: json!({"temperature":0.3}).as_object().unwrap().clone(),
+            request_lora: None,
+            embedding_model: Some("loaded-embedding-alias".into()),
+            embedding_namespace: Some("synthetic-revision".into()),
+            tools_auto: true,
+            tool_parser: true,
+        });
+        let request = json!({"model":"vision-model","messages":[{"role":"user","content":[
+            {"type":"text","text":"describe"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}},
+            {"type":"input_audio","input_audio":{"data":"data:audio/wav;base64,AA=="}}
+        ]}]});
+        let response = api
+            .post("/v1/chat/completions", &request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{provider:?}");
+        let seen = upstream.requests()[0].json();
+        assert_eq!(seen["model"], "loaded-model-alias");
+        assert_eq!(seen["temperature"], 0.3);
+        assert_eq!(seen["messages"][0]["content"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            seen["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AA=="
+        );
+        let response = api
+            .post(
+                "/v1/embeddings",
+                &json!({"model":"vision-model","input":"document"}),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            upstream.requests()[1].json()["model"],
+            "loaded-embedding-alias"
+        );
+        let response = api.post("/v1/chat/completions", &json!({"model":"vision-model","messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AA=="}}]}]})).send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "unsupported_input");
+        assert_eq!(
+            upstream.count(),
+            2,
+            "unsupported input must not reach the engine"
+        );
+        assert_eq!(
+            api.active(),
+            0,
+            "rejected requests release their model lease"
+        );
+    }
 }
 
 impl TestApi {
@@ -1079,7 +1168,35 @@ async fn anthropic_streams_are_translated_event_by_event() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    let events = sse_events(&drain(&mut response).await);
+    let body = drain(&mut response).await;
+    // Everything after the randomly identified message_start frame is exact.
+    let (start, rest) = body.split_once("\n\n").unwrap();
+    assert!(
+        start.starts_with(concat!(
+            "event: message_start\n",
+            r#"data: {"message":{"content":[],"id":"msg_"#,
+        )),
+        "{start}"
+    );
+    assert_eq!(
+        rest,
+        concat!(
+            "event: content_block_start\n",
+            r#"data: {"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"}"#,
+            "\n\nevent: content_block_delta\n",
+            r#"data: {"delta":{"text":"Hel","type":"text_delta"},"index":0,"type":"content_block_delta"}"#,
+            "\n\nevent: content_block_delta\n",
+            r#"data: {"delta":{"text":"lo","type":"text_delta"},"index":0,"type":"content_block_delta"}"#,
+            "\n\nevent: content_block_stop\n",
+            r#"data: {"index":0,"type":"content_block_stop"}"#,
+            "\n\nevent: message_delta\n",
+            r#"data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":3,"output_tokens":2}}"#,
+            "\n\nevent: message_stop\n",
+            r#"data: {"type":"message_stop"}"#,
+            "\n\n",
+        )
+    );
+    let events = sse_events(&body);
     let names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
@@ -1096,6 +1213,198 @@ async fn anthropic_streams_are_translated_event_by_event() {
     assert_eq!(events[2].1["delta"]["text"], "Hel");
     assert_eq!(events[5].1["delta"]["stop_reason"], "end_turn");
     eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn translated_streams_request_and_preserve_native_usage() {
+    for route in ["messages", "responses"] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::spawn(|request| {
+            let mut chunks = vec![delta("5")];
+            if request.json()["stream_options"]["include_usage"] == true {
+                chunks.push(sse_data(json!({"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":2,"total_tokens":44}})));
+            }
+            // A null usage field on another chunk never erases known totals.
+            chunks.push(sse_data(json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":null})));
+            chunks.push(done());
+            Reply::sse(chunks)
+        })
+        .await;
+        api.load_default(&upstream, "worker", "m.gguf");
+        let mut response = request_for(&api, route, true).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        let events = sse_events(&drain(&mut response).await);
+        let usage = if route == "messages" {
+            assert_eq!(events.last().unwrap().0, "message_stop");
+            &events
+                .iter()
+                .find(|(name, _)| name == "message_delta")
+                .unwrap()
+                .1["usage"]
+        } else {
+            assert_eq!(events.last().unwrap().0, "response.completed");
+            &events.last().unwrap().1["response"]["usage"]
+        };
+        assert_eq!(usage["input_tokens"], 42, "{route}");
+        assert_eq!(usage["output_tokens"], 2, "{route}");
+        eventually(|| api.active() == 0).await;
+    }
+}
+
+#[tokio::test]
+async fn anthropic_stream_without_native_usage_reports_an_error_instead_of_character_counts() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::spawn(|_| {
+        Reply::sse(vec![
+            delta("A synthetic answer with many characters"),
+            sse_data(json!({"choices":[{"delta":{},"finish_reason":"stop"}]})),
+            done(),
+        ])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+    let mut response = request_for(&api, "messages", true).send().await.unwrap();
+    let events = sse_events(&drain(&mut response).await);
+    assert!(events.iter().any(|(name, _)| name == "content_block_delta"));
+    assert!(!events
+        .iter()
+        .any(|(name, _)| name == "message_delta" || name == "message_stop"));
+    let (_, error) = events.last().unwrap();
+    assert_eq!(error["type"], "error");
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("did not report token usage"));
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_stream_parser_handles_dense_lines_and_continues_after_done() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::spawn(|_| {
+        let mut body = String::new();
+        for _ in 0..256 {
+            body.push_str(&delta_line("x", "\n"));
+        }
+        body.push_str("data: [DONE]\n\n");
+        body.push_str(&delta_line("tail", "\n"));
+        Reply::sse(vec![Chunk::Data(body)])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let mut response = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","stream":true,"input":"hi"}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let events = sse_events(&drain(&mut response).await);
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|(name, _)| name == "response.output_text.delta")
+        .map(|(_, value)| value["delta"].as_str().unwrap())
+        .collect();
+    assert_eq!(deltas.len(), 257);
+    assert_eq!(deltas[..256], vec!["x"; 256]);
+    assert_eq!(deltas[256], "tail");
+    assert_eq!(
+        events.last().unwrap().1["response"]["output_text"],
+        format!("{}tail", "x".repeat(256))
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn anthropic_stream_parser_preserves_crlf_chunk_boundaries_and_done_leftovers() {
+    let api = TestApi::start().await;
+    let gate = Arc::new(Notify::new());
+    let held = gate.clone();
+    let before = delta_line("before", "\r\n");
+    let after_value = json!({
+        "choices":[{"delta":{"content":"after"},"finish_reason":null}]
+    });
+    let first = format!("{before}data: [DONE]\r\n\r\ndata: {after_value}",);
+    let finish_line = format!(
+        "data: {}\r\n\r\n",
+        json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})
+    );
+    let second = format!("\r\n\r\n{finish_line}data: [DONE]\r\n\r\n");
+    let first_output = first.clone();
+    let second_output = second.clone();
+    let upstream = Upstream::spawn(move |_| {
+        Reply::sse(vec![
+            Chunk::Data(first_output.clone()),
+            Chunk::Wait(held.clone()),
+            Chunk::Data(second_output.clone()),
+        ])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let mut response = api
+        .post_messages(&json!({
+            "model":"m.gguf","max_tokens":16,"stream":true,
+            "messages":[{"role":"user","content":"hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = String::new();
+    while !body.contains("\"text\":\"before\"") {
+        body.push_str(&next_chunk(&mut response).await.unwrap());
+    }
+    gate.notify_one();
+    body.push_str(&drain(&mut response).await);
+    let events = sse_events(&body);
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|(name, _)| name == "content_block_delta")
+        .map(|(_, value)| value["delta"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(deltas, ["before", "after"]);
+    assert_eq!(
+        events.last().map(|(_, value)| value["type"].as_str()),
+        Some(Some("message_stop"))
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn oversized_sse_lines_close_streams_without_completing_them() {
+    for route in ["messages", "responses"] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::spawn(|_| {
+            Reply::sse(vec![Chunk::Data(format!(
+                "data: {}",
+                "x".repeat(MAX_STREAM_PENDING_BYTES + 1)
+            ))])
+        })
+        .await;
+        api.load_default(&upstream, "worker", "m.gguf");
+
+        let mut response = request_for(&api, route, true).send().await.unwrap();
+        assert_eq!(response.status(), 200, "{route}");
+        let body = drain(&mut response).await;
+        assert!(
+            body.contains(if route == "messages" {
+                "event: message_start"
+            } else {
+                "event: response.created"
+            }),
+            "{route}: {body}"
+        );
+        assert!(!body.contains("event: message_stop"), "{route}: {body}");
+        assert!(
+            !body.contains("event: response.completed"),
+            "{route}: {body}"
+        );
+        eventually(|| api.active() == 0).await;
+    }
 }
 
 #[tokio::test]
@@ -1156,11 +1465,22 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
     let mut streamed = api
         .post(
             "/v1/responses",
-            &json!({"model":"m.gguf","input":"three","stream":true}),
+            &json!({"model":"m.gguf","input":"three","stream":true,"previous_response_id":second["id"]}),
         )
         .send()
         .await
         .unwrap();
+    let streamed_request = upstream.requests()[2].json();
+    assert_eq!(
+        streamed_request["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"}
+        ])
+    );
     let events = sse_events(&drain(&mut streamed).await);
     let names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
@@ -1174,6 +1494,29 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
     );
     assert_eq!(events[3].1["response"]["output_text"], "Hello");
     let streamed_id = events[3].1["response"]["id"].as_str().unwrap();
+    let fourth: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"four","previous_response_id":streamed_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        upstream.requests()[3].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"Hello","reasoning_content":""},
+            {"role":"user","content":"four"}
+        ])
+    );
     assert_eq!(
         api.get(&format!("/v1/responses/{streamed_id}"))
             .send()
@@ -1199,6 +1542,14 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
             .status(),
         404
     );
+    assert_eq!(
+        api.get(&format!("/v1/responses/{}", fourth["id"].as_str().unwrap()))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     let unknown_history = api
         .post(
             "/v1/responses",
@@ -1208,6 +1559,267 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
         .await
         .unwrap();
     assert_eq!(unknown_history.status(), 404);
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn a_responses_descendant_keeps_history_after_its_ancestor_is_deleted() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, completion("done")).await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let first: Value = api
+        .post("/v1/responses", &json!({"model":"m.gguf","input":"one"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_id = first["id"].as_str().unwrap().to_string();
+    let second: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"two","previous_response_id":first_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_id = second["id"].as_str().unwrap().to_string();
+
+    let removed = api
+        .http
+        .delete(api.url(&format!("/v1/responses/{first_id}")))
+        .bearer_auth(EXTERNAL_KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), 200);
+    assert_eq!(
+        api.get(&format!("/v1/responses/{first_id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let direct_ancestor = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"bad","previous_response_id":first_id}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(direct_ancestor.status(), 404);
+    assert_eq!(
+        upstream.count(),
+        2,
+        "removed history must not reach upstream"
+    );
+
+    let third: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"three","previous_response_id":second_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(third["output_text"], "done");
+    assert_eq!(
+        upstream.requests()[2].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"}
+        ])
+    );
+    let cancelled = api
+        .http
+        .post(api.url(&format!("/v1/responses/{second_id}/cancel")))
+        .bearer_auth(EXTERNAL_KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200);
+    assert_eq!(
+        api.get(&format!("/v1/responses/{second_id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let fourth_id = third["id"].as_str().unwrap();
+    let fourth: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"four","previous_response_id":fourth_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fourth["output_text"], "done");
+    assert_eq!(
+        upstream.requests()[3].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"four"}
+        ])
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_can_continue_across_loaded_sessions_without_moving_history_into_the_session() {
+    let api = TestApi::start().await;
+    let default = Upstream::json(200, completion("default")).await;
+    let named = Upstream::json(200, completion("named")).await;
+    api.load_default(&default, "worker-default", "default.gguf");
+    api.load_named("s-named", &named, "worker-named", "named.gguf");
+
+    let first: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"default.gguf","input":"one"}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second: Value = api
+        .post(
+            "/v1/responses",
+            &json!({
+                "model":"named.gguf",
+                "input":"two",
+                "previous_response_id":first["id"]
+            }),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        default.requests()[0].headers["authorization"],
+        "Bearer worker-default"
+    );
+    assert_eq!(
+        named.requests()[0].headers["authorization"],
+        "Bearer worker-named"
+    );
+    assert_eq!(
+        named.requests()[0].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"default"},
+            {"role":"user","content":"two"}
+        ])
+    );
+    assert_eq!(second["model"], "named.gguf");
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_eviction_keeps_the_entry_cap_and_complete_retained_histories() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, completion("answer")).await;
+    api.load_default(&upstream, "worker", "m.gguf");
+    let mut ids = Vec::with_capacity(MAX_RESPONSES + 1);
+    let mut previous_id = None;
+    for index in 0..MAX_RESPONSES {
+        let mut body = json!({"model":"m.gguf","input":format!("turn-{index}")});
+        if let Some(previous_id) = previous_id.as_deref() {
+            body["previous_response_id"] = json!(previous_id);
+        }
+        let response: Value = api
+            .post("/v1/responses", &body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = response["id"].as_str().unwrap().to_string();
+        previous_id = Some(id.clone());
+        ids.push(id);
+    }
+    let filler: Value = api
+        .post("/v1/responses", &json!({"model":"m.gguf","input":"filler"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    ids.push(filler["id"].as_str().unwrap().to_string());
+
+    let mut available = Vec::new();
+    for (index, id) in ids.iter().enumerate() {
+        let response = api
+            .get(&format!("/v1/responses/{id}"))
+            .send()
+            .await
+            .unwrap();
+        match response.status().as_u16() {
+            200 => available.push(index),
+            404 => {}
+            status => panic!("unexpected status {status} for response {index}"),
+        }
+    }
+    assert_eq!(available.len(), MAX_RESPONSES);
+    assert_eq!(ids.len() - available.len(), 1);
+
+    let retained_index = *available
+        .iter()
+        .filter(|index| **index < MAX_RESPONSES)
+        .max()
+        .unwrap();
+    let continuation: Value = api
+        .post(
+            "/v1/responses",
+            &json!({
+                "model":"m.gguf",
+                "input":"continuation",
+                "previous_response_id":ids[retained_index]
+            }),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(continuation["output_text"], "answer");
+    let messages = upstream.requests().last().unwrap().json()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(messages.len(), (retained_index + 1) * 2 + 1);
+    assert_eq!(messages.first().unwrap()["content"], "turn-0");
+    assert_eq!(messages.last().unwrap()["content"], "continuation");
     eventually(|| api.active() == 0).await;
 }
 
@@ -1482,4 +2094,777 @@ async fn cors_headers_accompany_every_kind_of_response_to_the_apps_origin_only()
     assert!(granted(&foreign).is_none());
     let no_origin = api.get("/v1/models").send().await.unwrap();
     assert!(granted(&no_origin).is_none());
+}
+
+// Synthetic audio-transcription coverage. Every session below is a ready
+// `ServerState` pointed at an in-process loopback upstream; no engine,
+// Python or device is used. `EngineInfo` fixtures only carry the verified
+// task lists (Whisper `transcription`+`translate`, Qwen3-ASR `transcription`
+// only) so the protocol adapter can be exercised through the gateway.
+
+const AUDIO_BOUNDARY: &str = "testaudioboundary123";
+
+fn stt_engine(tasks: &[&str], upstream_model: &str) -> crate::providers::protocol::EngineInfo {
+    crate::providers::protocol::EngineInfo {
+        provider: crate::providers::ProviderId::Vllm,
+        runtime_id: "synthetic-runtime".into(),
+        runtime_variant: String::new(),
+        speech_model_type: None,
+        upstream_model: upstream_model.into(),
+        modalities: crate::providers::artifacts::Modalities::default(),
+        tasks: tasks.iter().map(|task| task.to_string()).collect(),
+        chat_supported: None,
+        request_option_keys: Vec::new(),
+        request_fields: serde_json::Map::new(),
+        request_lora: None,
+        embedding_model: None,
+        embedding_namespace: None,
+        tools_auto: false,
+        tool_parser: false,
+    }
+}
+
+fn install_stt_engine(target: &Arc<Mutex<ServerState>>, tasks: &[&str], upstream_model: &str) {
+    target.lock().unwrap().engine = Some(stt_engine(tasks, upstream_model));
+}
+
+fn audio_body(boundary: &str, fields: &[(&str, &str)], file_bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+                .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"clip.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(file_bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn post_audio(
+    api: &TestApi,
+    endpoint: &str,
+    boundary: &str,
+    body: Vec<u8>,
+) -> reqwest::RequestBuilder {
+    api.http
+        .post(api.url(endpoint))
+        .bearer_auth(EXTERNAL_KEY)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+}
+
+fn parse_upstream_form(recorded: &Recorded) -> serde_json::Map<String, Value> {
+    let content_type = recorded
+        .headers
+        .get("content-type")
+        .expect("upstream content-type");
+    super::multipart::AudioForm::parse(content_type, &recorded.body)
+        .expect("upstream form parses")
+        .fields
+}
+
+fn body_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn synthetic_audio(bytes: &[u8]) -> crate::media::OwnedAudio {
+    crate::media::OwnedAudio {
+        filename: "clip.wav".into(),
+        mime: "audio/wav",
+        bytes: bytes.to_vec(),
+    }
+}
+
+fn native_models(api: &TestApi) -> ModelSource {
+    ModelSource::new(
+        api.default.clone(),
+        Arc::new(ErrBuf::default()),
+        api.sessions.clone(),
+    )
+}
+
+#[tokio::test]
+async fn audio_transcription_rewrites_public_alias_and_preserves_binary_and_timestamps() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "hello synthetic"})).await;
+    api.load_default(&upstream, "private-stt-key", "/synthetic/stt.gguf");
+    install_stt_engine(
+        &api.default,
+        &["transcription", "translate"],
+        "synthetic-stt-private",
+    );
+    let audio: &[u8] = b"RIFF\x00\xff\xfe synthetic-audio \r\n--testaudioboundary123-nearly";
+    let body = audio_body(
+        AUDIO_BOUNDARY,
+        &[
+            ("model", "stt.gguf"),
+            ("language", "en"),
+            ("response_format", "json"),
+            ("temperature", "0.0"),
+            ("timestamp_granularities[]", "word"),
+            ("timestamp_granularities[]", "segment"),
+        ],
+        audio,
+    );
+    let response = post_audio(&api, "/v1/audio/transcriptions", AUDIO_BOUNDARY, body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let transcript: Value = response.json().await.unwrap();
+    assert_eq!(transcript["text"], "hello synthetic");
+    assert_eq!(upstream.count(), 1);
+    let recorded = upstream.requests().pop().unwrap();
+    assert_eq!(
+        (recorded.method.as_str(), recorded.path.as_str()),
+        ("POST", "/v1/audio/transcriptions")
+    );
+    assert_eq!(
+        recorded.headers.get("authorization").map(String::as_str),
+        Some("Bearer private-stt-key")
+    );
+    assert!(
+        !recorded.headers["authorization"].contains(EXTERNAL_KEY),
+        "the external key must never travel upstream"
+    );
+    let fields = parse_upstream_form(&recorded);
+    assert_eq!(
+        fields["model"],
+        json!("synthetic-stt-private"),
+        "the public alias must be rewritten"
+    );
+    assert_eq!(fields["language"], json!("en"));
+    assert_eq!(
+        fields["timestamp_granularities"],
+        json!(["word", "segment"]),
+        "repeated timestamp fields travel as one array"
+    );
+    assert!(
+        body_contains(&recorded.body, audio),
+        "binary file bytes must travel unchanged"
+    );
+    assert_eq!(
+        recorded.body,
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[
+                ("language", "en"),
+                ("model", "synthetic-stt-private"),
+                ("response_format", "json"),
+                ("temperature", "0.0"),
+                ("timestamp_granularities[]", "word"),
+                ("timestamp_granularities[]", "segment"),
+            ],
+            audio,
+        ),
+        "the upstream form is re-encoded exactly in field order"
+    );
+    assert_eq!(api.active(), 0, "the audio lease must be released");
+}
+
+#[tokio::test]
+async fn audio_requests_route_to_the_selected_ready_session_with_its_private_key() {
+    let api = TestApi::start().await;
+    let default_upstream = Upstream::json(200, json!({"text": "base"})).await;
+    let named_upstream = Upstream::json(200, json!({"text": "named"})).await;
+    api.load_default(&default_upstream, "k-default-private", "/m/base.gguf");
+    api.load_named(
+        "s-stt",
+        &named_upstream,
+        "k-named-private",
+        "/m/stt-named.gguf",
+    );
+    install_stt_engine(
+        &api.default,
+        &["transcription", "translate"],
+        "private-base",
+    );
+    let named_state = api.sessions.get("s-stt").unwrap().state.clone();
+    install_stt_engine(
+        &named_state,
+        &["transcription", "translate"],
+        "private-named",
+    );
+    let audio: &[u8] = b"RIFF synthetic";
+
+    let response = post_audio(
+        &api,
+        "/v1/audio/transcriptions",
+        AUDIO_BOUNDARY,
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[("model", "stt-named.gguf"), ("response_format", "json")],
+            audio,
+        ),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(named_upstream.count(), 1);
+    assert_eq!(default_upstream.count(), 0);
+    let recorded = named_upstream.requests().pop().unwrap();
+    assert_eq!(recorded.path, "/v1/audio/transcriptions");
+    assert_eq!(recorded.headers["authorization"], "Bearer k-named-private");
+    assert_eq!(
+        parse_upstream_form(&recorded)["model"],
+        json!("private-named")
+    );
+
+    let response = post_audio(
+        &api,
+        "/v1/audio/translations",
+        AUDIO_BOUNDARY,
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[("model", "stt-named.gguf"), ("response_format", "json")],
+            audio,
+        ),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(named_upstream.count(), 2);
+    assert_eq!(
+        named_upstream.requests().pop().unwrap().path,
+        "/v1/audio/translations"
+    );
+
+    let response = post_audio(
+        &api,
+        "/v1/audio/transcriptions",
+        AUDIO_BOUNDARY,
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[("model", "base.gguf"), ("response_format", "json")],
+            audio,
+        ),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(default_upstream.count(), 1);
+    assert_eq!(
+        default_upstream.requests().pop().unwrap().headers["authorization"],
+        "Bearer k-default-private"
+    );
+
+    let before = (default_upstream.count(), named_upstream.count());
+    let valid = audio_body(AUDIO_BOUNDARY, &[("model", "stt-named.gguf")], audio);
+    let no_key = api
+        .http
+        .post(api.url("/v1/audio/transcriptions"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+        )
+        .body(valid.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_key.status(), 401);
+    let worker_key = api
+        .http
+        .post(api.url("/v1/audio/transcriptions"))
+        .bearer_auth("k-named-private")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+        )
+        .body(valid)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(worker_key.status(), 401);
+    assert_eq!(
+        (default_upstream.count(), named_upstream.count()),
+        before,
+        "rejected callers must not reach a model"
+    );
+    assert_eq!(api.active(), 0);
+    assert_eq!(named_state.lock().unwrap().active_requests, 0);
+}
+
+#[tokio::test]
+async fn audio_unsupported_task_and_translate_refusal_never_reach_upstream() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "ok"})).await;
+    api.load_default(&upstream, "k-gen", "/m/gen.gguf");
+    install_stt_engine(&api.default, &["generate"], "private-gen");
+    let audio: &[u8] = b"RIFF synthetic";
+
+    for endpoint in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        let response = post_audio(
+            &api,
+            endpoint,
+            AUDIO_BOUNDARY,
+            audio_body(AUDIO_BOUNDARY, &[("model", "gen.gguf")], audio),
+        )
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 400, "{endpoint}");
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "unsupported_task", "{endpoint}");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("speech-to-text"),
+            "{error}"
+        );
+    }
+    assert_eq!(upstream.count(), 0);
+    assert_eq!(api.active(), 0);
+
+    // Qwen3-ASR serves transcriptions only: transcription passes, translation is refused.
+    install_stt_engine(&api.default, &["transcription"], "private-asr");
+    let response = post_audio(
+        &api,
+        "/v1/audio/transcriptions",
+        AUDIO_BOUNDARY,
+        audio_body(AUDIO_BOUNDARY, &[("model", "gen.gguf")], audio),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(upstream.count(), 1);
+    let response = post_audio(
+        &api,
+        "/v1/audio/translations",
+        AUDIO_BOUNDARY,
+        audio_body(AUDIO_BOUNDARY, &[("model", "gen.gguf")], audio),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 400);
+    let error: Value = response.json().await.unwrap();
+    assert_eq!(error["error"]["code"], "unsupported_task");
+    assert_eq!(upstream.count(), 1, "the refused translation stays local");
+    assert_eq!(api.active(), 0);
+}
+
+#[tokio::test]
+async fn audio_malformed_duplicate_and_truncated_forms_are_refused_before_routing() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "ok"})).await;
+    api.load_default(&upstream, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private-stt");
+    let audio: &[u8] = b"RIFF synthetic";
+    let valid = audio_body(AUDIO_BOUNDARY, &[("model", "stt.gguf")], audio);
+
+    let cases: Vec<(&str, String, Vec<u8>)> = vec![
+        (
+            "non-multipart content type",
+            "application/json".into(),
+            br#"{"model":"stt.gguf"}"#.to_vec(),
+        ),
+        (
+            "missing boundary",
+            "multipart/form-data".into(),
+            valid.clone(),
+        ),
+        (
+            "duplicate model field",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            audio_body(
+                AUDIO_BOUNDARY,
+                &[("model", "stt.gguf"), ("model", "stt.gguf")],
+                audio,
+            ),
+        ),
+        (
+            "truncated closing boundary",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            valid[..valid.len() - 5].to_vec(),
+        ),
+        (
+            "missing file part",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            format!(
+                "--{AUDIO_BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nstt.gguf\r\n--{AUDIO_BOUNDARY}--\r\n"
+            )
+            .into_bytes(),
+        ),
+        (
+            "empty file part",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            audio_body(AUDIO_BOUNDARY, &[("model", "stt.gguf")], b""),
+        ),
+        (
+            "scalar timestamp field",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            audio_body(
+                AUDIO_BOUNDARY,
+                &[
+                    ("model", "stt.gguf"),
+                    ("timestamp_granularities", "word"),
+                ],
+                audio,
+            ),
+        ),
+        (
+            "duplicate boundary parameter",
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}; boundary=other"),
+            valid.clone(),
+        ),
+    ];
+    for (label, content_type, body) in cases {
+        let response = api
+            .http
+            .post(api.url("/v1/audio/transcriptions"))
+            .bearer_auth(EXTERNAL_KEY)
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "{label}");
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"]["code"], "invalid_audio_form", "{label}");
+    }
+    assert_eq!(upstream.count(), 0, "malformed forms stay local");
+    assert_eq!(api.active(), 0);
+}
+
+#[tokio::test]
+async fn audio_source_fields_cannot_smuggle_paths_urls_or_keys() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "ok"})).await;
+    api.load_default(&upstream, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private-stt");
+    let audio: &[u8] = b"RIFF synthetic";
+    // `file` without a filename is a text field smuggling a path, not binary audio.
+    let file_as_text = format!(
+        "--{AUDIO_BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nstt.gguf\r\n--{AUDIO_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"\r\n\r\n/etc/passwd\r\n--{AUDIO_BOUNDARY}--\r\n"
+    )
+    .into_bytes();
+    let mut cases: Vec<(String, String, Vec<u8>)> = vec![(
+        "file-as-text".into(),
+        format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+        file_as_text,
+    )];
+    for field in [
+        "url",
+        "key",
+        "api_key",
+        "stream",
+        "logit_bias",
+        "min_tokens",
+        "audio_url",
+    ] {
+        cases.push((
+            field.into(),
+            format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+            audio_body(
+                AUDIO_BOUNDARY,
+                &[("model", "stt.gguf"), (field, "/etc/passwd")],
+                audio,
+            ),
+        ));
+    }
+    // Translations additionally refuse a language field that would select nothing.
+    cases.push((
+        "translation-language".into(),
+        format!("multipart/form-data; boundary={AUDIO_BOUNDARY}"),
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[("model", "stt.gguf"), ("language", "en")],
+            audio,
+        ),
+    ));
+    for (label, content_type, body) in cases {
+        let endpoint = if label == "translation-language" {
+            "/v1/audio/translations"
+        } else {
+            "/v1/audio/transcriptions"
+        };
+        let response = api
+            .http
+            .post(api.url(endpoint))
+            .bearer_auth(EXTERNAL_KEY)
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "{label}");
+        let text = response.text().await.unwrap();
+        assert!(
+            text.contains("unsupported_field") || text.contains("invalid_audio"),
+            "{label}: {text}"
+        );
+        assert!(
+            !text.contains("/etc/passwd"),
+            "{label}: the refusal must not echo the smuggled path"
+        );
+    }
+    assert_eq!(upstream.count(), 0, "smuggled sources stay local");
+    assert_eq!(api.active(), 0);
+}
+
+#[tokio::test]
+async fn audio_client_disconnect_while_upstream_pending_releases_its_lease() {
+    for endpoint in ["audio/transcriptions", "audio/translations"] {
+        let api = TestApi::start().await;
+        let gate = Arc::new(Notify::new());
+        let held = gate.clone();
+        let upstream =
+            Upstream::spawn(move |_| Reply::json(200, json!({"text": "late"})).after(held.clone()))
+                .await;
+        api.load_default(&upstream, "worker", "m.gguf");
+        install_stt_engine(&api.default, &["transcription", "translate"], "private");
+        let body = audio_body(AUDIO_BOUNDARY, &[("model", "m.gguf")], b"RIFF synthetic");
+        let path = format!("/v1/{endpoint}");
+        let call = tokio::spawn(post_audio(&api, &path, AUDIO_BOUNDARY, body).send());
+        eventually(|| upstream.count() == 1).await;
+        assert_eq!(api.active(), 1, "{endpoint}: the model is busy with it");
+        call.abort();
+        released(&api, endpoint).await;
+    }
+}
+
+#[tokio::test]
+async fn native_transcribe_uses_the_exact_named_session_without_fallback() {
+    use std::sync::atomic::AtomicBool;
+
+    let api = TestApi::start().await;
+    let default_upstream = Upstream::json(200, json!({"text": "default hello"})).await;
+    let named_upstream = Upstream::json(200, json!({"text": "named hello"})).await;
+    api.load_default(&default_upstream, "k-default", "/m/base.gguf");
+    api.load_named("s-stt", &named_upstream, "k-named", "/m/stt.gguf");
+    install_stt_engine(
+        &api.default,
+        &["transcription", "translate"],
+        "private-base",
+    );
+    let named_state = api.sessions.get("s-stt").unwrap().state.clone();
+    install_stt_engine(
+        &named_state,
+        &["transcription", "translate"],
+        "private-named",
+    );
+    let models = native_models(&api);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let result = super::transcribe_audio(
+        models.clone(),
+        "s-stt".to_string(),
+        synthetic_audio(b"RIFF named"),
+        cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.text, "named hello");
+    assert_eq!(result.session_id, "s-stt");
+    assert_eq!(result.model, "private-named");
+    assert_eq!(named_upstream.count(), 1);
+    assert_eq!(
+        default_upstream.count(),
+        0,
+        "no fallback to the default session"
+    );
+    let recorded = named_upstream.requests().pop().unwrap();
+    assert_eq!(recorded.headers["authorization"], "Bearer k-named");
+    let boundary = recorded.headers["content-type"]
+        .strip_prefix("multipart/form-data; boundary=")
+        .unwrap();
+    assert_eq!(
+        recorded.body,
+        audio_body(
+            boundary,
+            &[("model", "private-named"), ("response_format", "json")],
+            b"RIFF named",
+        )
+    );
+
+    let before = (default_upstream.count(), named_upstream.count());
+    let missing = super::transcribe_audio(
+        models.clone(),
+        "s-missing".to_string(),
+        synthetic_audio(b"RIFF"),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    let error = missing.unwrap_err();
+    assert!(
+        error.contains("transcription_session_unavailable") || error.contains("not running"),
+        "{error}"
+    );
+    assert_eq!(
+        (default_upstream.count(), named_upstream.count()),
+        before,
+        "unknown sessions never contact a model"
+    );
+
+    TestApi::unload(&named_state);
+    let gone = super::transcribe_audio(
+        models.clone(),
+        "s-stt".to_string(),
+        synthetic_audio(b"RIFF"),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    assert!(
+        gone.is_err(),
+        "an unloaded session is not replaced by the default"
+    );
+    assert_eq!(
+        default_upstream.count(),
+        0,
+        "the default session must not serve as fallback"
+    );
+    assert_eq!(api.default.lock().unwrap().active_requests, 0);
+    assert_eq!(named_state.lock().unwrap().active_requests, 0);
+}
+
+#[tokio::test]
+async fn native_transcribe_returns_json_transcript_with_model_and_session_identity() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "hello synthetic"})).await;
+    api.load_named("s-stt", &upstream, "k-named", "/m/stt.gguf");
+    let named_state = api.sessions.get("s-stt").unwrap().state.clone();
+    install_stt_engine(&named_state, &["transcription", "translate"], "private-stt");
+    let models = native_models(&api);
+    let audio: &[u8] = b"RIFF\x00\xff synthetic-attachment";
+    let result = super::transcribe_audio(
+        models,
+        "s-stt".to_string(),
+        synthetic_audio(audio),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.text, "hello synthetic");
+    assert_eq!(result.session_id, "s-stt");
+    assert_eq!(result.model, "private-stt");
+    assert_eq!(upstream.count(), 1);
+    let recorded = upstream.requests().pop().unwrap();
+    assert_eq!(recorded.path, "/v1/audio/transcriptions");
+    assert_eq!(recorded.headers["authorization"], "Bearer k-named");
+    let fields = parse_upstream_form(&recorded);
+    assert_eq!(fields["model"], json!("private-stt"));
+    assert_eq!(fields["response_format"], json!("json"));
+    assert!(
+        body_contains(&recorded.body, audio),
+        "the owned attachment bytes travel unchanged"
+    );
+    assert_eq!(named_state.lock().unwrap().active_requests, 0);
+}
+
+#[tokio::test]
+async fn native_transcribe_cancellation_while_upstream_pending_releases_lease() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let api = TestApi::start().await;
+    let gate = Arc::new(Notify::new());
+    let held = gate.clone();
+    let upstream =
+        Upstream::spawn(move |_| Reply::json(200, json!({"text": "late"})).after(held.clone()))
+            .await;
+    api.load_default(&upstream, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private-stt");
+    let models = native_models(&api);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let work = tokio::spawn(super::transcribe_audio(
+        models.clone(),
+        "default".to_string(),
+        synthetic_audio(b"RIFF pending"),
+        cancel.clone(),
+    ));
+    eventually(|| upstream.count() == 1).await;
+    assert_eq!(api.active(), 1, "the transcription holds its lease");
+    cancel.store(true, Ordering::Release);
+    let result = work.await.unwrap();
+    let error = result.unwrap_err();
+    assert!(error.contains("media preparation cancelled"), "{error}");
+    eventually(|| api.active() == 0).await;
+
+    // A caller that is already cancelled never contacts the model.
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, json!({"text": "late"})).await;
+    api.load_default(&upstream, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private-stt");
+    let models = native_models(&api);
+    let error = super::transcribe_audio(
+        models,
+        "default".to_string(),
+        synthetic_audio(b"RIFF"),
+        Arc::new(AtomicBool::new(true)),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("media preparation cancelled"), "{error}");
+    assert_eq!(upstream.count(), 0);
+    assert_eq!(api.active(), 0);
+}
+
+#[tokio::test]
+async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
+    async fn failed_with(api: &TestApi, session: &str) -> String {
+        let models = native_models(api);
+        super::transcribe_audio(
+            models,
+            session.to_string(),
+            synthetic_audio(b"RIFF case"),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await
+        .unwrap_err()
+    }
+
+    let api = TestApi::start().await;
+    let failed = Upstream::json(500, json!({"error": "boom"})).await;
+    api.load_default(&failed, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private");
+    let error = failed_with(&api, "default").await;
+    assert!(error.contains("transcription failed (HTTP 500)"), "{error}");
+    assert_eq!(api.active(), 0);
+
+    for (label, body) in [
+        ("empty", json!({"text": ""})),
+        ("whitespace", json!({"text": "   "})),
+        ("missing-text", json!({"no_text": 1})),
+        ("oversize", json!({"text": "x".repeat(70 * 1024)})),
+    ] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::json(200, body).await;
+        api.load_default(&upstream, "worker", "/m/stt.gguf");
+        install_stt_engine(&api.default, &["transcription", "translate"], "private");
+        let error = failed_with(&api, "default").await;
+        assert!(error.contains("empty or oversized"), "{label}: {error}");
+        assert_eq!(upstream.count(), 1, "{label}");
+        assert_eq!(api.active(), 0, "{label}");
+    }
+
+    let api = TestApi::start().await;
+    let invalid = Upstream::spawn(|_| Reply {
+        status: 200,
+        content_type: "application/json",
+        with_length: true,
+        before_head: None,
+        chunks: vec![Chunk::Data("not json".into())],
+    })
+    .await;
+    api.load_default(&invalid, "worker", "/m/stt.gguf");
+    install_stt_engine(&api.default, &["transcription", "translate"], "private");
+    let error = failed_with(&api, "default").await;
+    assert!(error.contains("invalid transcription response"), "{error}");
+    assert_eq!(api.active(), 0);
 }

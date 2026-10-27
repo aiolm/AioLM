@@ -173,13 +173,10 @@ fn validate_record(record: &Record) -> Result<(), SharingError> {
             "The ownership registry is unavailable.",
         ));
     }
-    super::config::validate_base_url(&record.origin).map_err(|_| {
+    let origin_url = super::config::validate_base_url(&record.origin).map_err(|_| {
         SharingError::vault_unavailable_msg("The ownership registry is unavailable.")
     })?;
-    let origin =
-        super::config::origin_of(&super::config::validate_base_url(&record.origin).map_err(
-            |_| SharingError::vault_unavailable_msg("The ownership registry is unavailable."),
-        )?);
+    let origin = super::config::origin_of(&origin_url);
     super::config::validate_destination(&origin, &record.destination).map_err(|_| {
         SharingError::vault_unavailable_msg("The ownership registry is unavailable.")
     })?;

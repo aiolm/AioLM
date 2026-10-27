@@ -1,4 +1,5 @@
 import type { HfInstalledFile } from "../../shared/api/models.ts";
+import type { HfFile } from "../../shared/api/types.ts";
 
 const SAFE_HF_COMPONENT = /^[^<>:"|?*\u0000-\u001f]+$/;
 
@@ -36,9 +37,40 @@ export function quantLabel(path: string): string {
  */
 export function shardTotal(path: string): number | null {
   const name = path.split("/").pop() ?? path;
-  const match = name.match(/-\d{5}-of-(\d{5})\.gguf$/i);
-  const total = match ? Number.parseInt(match[1], 10) : Number.NaN;
-  return Number.isInteger(total) && total > 1 ? total : null;
+  const match = name.match(/^.+-(\d{5})-of-(\d{5})\.gguf$/i);
+  const index = match ? Number(match[1]) : 0;
+  const total = match ? Number(match[2]) : 0;
+  return total > 1 && index > 0 && index <= total ? total : null;
+}
+
+export function firstShard(path: string): string {
+  return shardTotal(path) ? path.replace(/-\d{5}-of-(\d{5})\.gguf$/i, '-00001-of-$1.gguf') : path;
+}
+
+export interface HfFileGroup {
+  file: HfFile;
+  files: HfFile[];
+  displayPath: string;
+  sizeBytes: number;
+}
+
+/** One download choice per model, keeping directories and quantizations separate. */
+export function groupHfFiles(files: readonly HfFile[]): HfFileGroup[] {
+  const groups = new Map<string, HfFileGroup>();
+  for (const file of files) {
+    const key = firstShard(file.path);
+    const group = groups.get(key);
+    if (group) {
+      if (group.files.some(part => part.path === file.path)) continue;
+      group.files.push(file);
+      group.sizeBytes += file.size_bytes;
+      if (file.path === key) group.file = file;
+    } else {
+      groups.set(key, { file: { ...file, path: key }, files: [file], sizeBytes: file.size_bytes,
+        displayPath: shardTotal(file.path) ? file.path.replace(/-\d{5}-of-\d{5}(\.gguf)$/i, '$1') : file.path });
+    }
+  }
+  return [...groups.values()].map(group => ({ ...group, files: group.files.sort((a, b) => a.path.localeCompare(b.path)) }));
 }
 
 /**
@@ -57,16 +89,20 @@ export function markInstalled(
   sizeBytes: number,
 ): Record<string, HfInstalledFile> {
   const name = path.split("/").pop() ?? path;
-  const sibling = Object.values(current).find((entry) => entry.missing_shards.includes(name));
+  const total = shardTotal(path);
+  const group = firstShard(path);
   const next: Record<string, HfInstalledFile> = {};
   for (const [key, entry] of Object.entries(current)) {
-    next[key] = { ...entry, missing_shards: entry.missing_shards.filter((part) => part !== name) };
+    next[key] = firstShard(key) === group
+      ? { ...entry, missing_shards: entry.missing_shards.filter((part) => part !== name) }
+      : entry;
   }
   next[path] = {
     path,
     local_path: localPath,
     size_bytes: sizeBytes,
-    missing_shards: sibling ? sibling.missing_shards.filter((part) => part !== name) : [],
+    missing_shards: total ? Array.from({ length: total }, (_, index) => path.replace(/-\d{5}-of-(\d{5})\.gguf$/i, `-${String(index + 1).padStart(5, '0')}-of-$1.gguf`))
+      .filter(part => part !== path && !current[part]).map(part => part.split('/').pop()!) : [],
   };
   return next;
 }

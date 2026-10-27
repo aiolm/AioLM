@@ -258,6 +258,7 @@ pub fn effective_port(requested: u16, excluded: &[u16]) -> Result<u16, String> {
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct SessionStatus {
+    pub engine: Option<crate::providers::protocol::EngineInfo>,
     pub id: String,
     pub name: String,
     pub state: String,
@@ -323,6 +324,7 @@ pub fn build_status(
     let summary = build_summary(id, name, state, err);
     let log_tail = err.tail();
     SessionStatus {
+        engine: state.engine.clone(),
         id: summary.id,
         name: summary.name,
         state: summary.state,

@@ -12,8 +12,6 @@ export interface BenchmarkRecoveryPayload {
   secret: string;
 }
 
-const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
-
 export function base64UrlEncode(bytes: Uint8Array): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   let output = '';
@@ -111,9 +109,6 @@ export function decodeRecoveryCode(code: string, expectedOrigin?: string): Bench
   const secret = validateSecret(record.secret);
   if (expectedOrigin !== undefined && normalizeServiceOrigin(expectedOrigin) !== origin) {
     throw new Error('Recovery code does not belong to this service.');
-  }
-  if (!hasOwn(record, 'version') || !hasOwn(record, 'origin') || !hasOwn(record, 'submission_id') || !hasOwn(record, 'secret')) {
-    throw new Error('Invalid recovery code.');
   }
   return { version: 1, origin, submission_id: record.submission_id, secret };
 }

@@ -1,13 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiolm:benchmark:public:1",
-  "title": "AioLM public benchmark submission v1",
+  "title": "AioLM public benchmark submission",
   "description": "A reviewed public snapshot. Null means unknown. Local paths, raw arguments, diagnostics and persistent hardware identifiers are excluded. Model status sha256 requires a hash; unidentified and multipart require null.",
   "type": "object",
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "submission_id": {
       "type": "string",
@@ -33,7 +36,10 @@
         },
         "version": {
           "type": "integer",
-          "const": 1
+          "enum": [
+            1,
+            2
+          ]
         }
       },
       "required": [
@@ -271,6 +277,15 @@
               }
             }
           ]
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "gguf",
+            "hf-safetensors",
+            "mlx",
+            "unknown"
+          ]
         }
       },
       "required": [
@@ -309,7 +324,11 @@
       "properties": {
         "name": {
           "type": "string",
-          "const": "llama.cpp"
+          "enum": [
+            "llama.cpp",
+            "vllm",
+            "mlx-vlm"
+          ]
         },
         "version": {
           "type": [
@@ -332,6 +351,16 @@
             "string",
             "null"
           ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "variant": {
+          "type": "string",
+          "const": "vllm-metal"
+        },
+        "plugin_version": {
+          "type": "string",
+          "minLength": 1,
           "maxLength": 256,
           "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
         }
@@ -397,7 +426,10 @@
           "additionalProperties": false
         },
         "system_memory_bytes": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1,
           "maximum": 9007199254740991
         },
@@ -759,5 +791,248 @@
       ],
       "additionalProperties": false
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "name": {
+                "const": "llama.cpp"
+              }
+            }
+          },
+          "model": {
+            "not": {
+              "required": [
+                "format"
+              ]
+            }
+          },
+          "method": {
+            "properties": {
+              "version": {
+                "const": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "model": {
+            "required": [
+              "format"
+            ]
+          },
+          "method": {
+            "properties": {
+              "version": {
+                "const": 2
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "name": {
+                "enum": [
+                  "vllm",
+                  "mlx-vlm"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          },
+          "execution": {
+            "properties": {
+              "settings": {
+                "type": "null"
+              }
+            }
+          },
+          "model": {
+            "properties": {
+              "metadata": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "name": {
+                "const": "vllm"
+              }
+            },
+            "not": {
+              "required": [
+                "variant"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "model": {
+            "properties": {
+              "format": {
+                "const": "hf-safetensors"
+              }
+            }
+          },
+          "runtime": {
+            "properties": {
+              "backend": {
+                "not": {
+                  "const": "metal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "name": {
+                "const": "mlx-vlm"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "model": {
+            "properties": {
+              "format": {
+                "enum": [
+                  "hf-safetensors",
+                  "mlx"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          },
+          "runtime": {
+            "properties": {
+              "name": {
+                "const": "llama.cpp"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "model": {
+            "properties": {
+              "format": {
+                "const": "gguf"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "required": [
+              "variant"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          },
+          "runtime": {
+            "properties": {
+              "name": {
+                "const": "vllm"
+              },
+              "backend": {
+                "const": "metal"
+              }
+            },
+            "required": [
+              "plugin_version"
+            ]
+          },
+          "model": {
+            "properties": {
+              "format": {
+                "enum": [
+                  "hf-safetensors",
+                  "mlx",
+                  "gguf"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "runtime": {
+            "not": {
+              "required": [
+                "plugin_version"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

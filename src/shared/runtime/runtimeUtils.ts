@@ -1,4 +1,5 @@
 import { formatRuntimeVersionLabel } from "@aiolm/benchmark-contracts";
+import type { PerformanceBenchmarkResult } from '../api/types.ts';
 
 export type CapabilityState = "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
 
@@ -21,15 +22,15 @@ export interface RuntimeVersion {
   commit: string;
 }
 
-/** Every runtime AioLM manages today is a llama.cpp build; other engines name themselves. */
+/** Binary runtime version helpers default to llama.cpp; Python engines name themselves. */
 const RUNTIME_ENGINE = "llama.cpp";
 
 /**
  * An installed runtime as `version(build)`: `0.3.0-dev(10638)`.
  *
  * llama.cpp tags every CI build as `bNNNN` and only the binary itself knows
- * the semantic version, so a half nobody recorded stays `?` — `?(10638)` —
- * rather than being invented. The build number the binary reported names it
+ * the semantic version, so an unrecorded version leaves the known build tag
+ * (`b10638`). The build number the binary reported names it
  * ahead of the storage id, which for a PR or local build is no build number;
  * a reported 0 is llama.cpp's "built without git" and leaves the storage id.
  */
@@ -46,6 +47,13 @@ export function formatRecordedRuntimeVersion(version: string | null | undefined,
   return formatRuntimeVersionLabel({ name: engine, version, build }) ?? unavailable;
 }
 
+/** Historical Python results keep their measured core/plugin identity. */
+export function formatBenchmarkRuntimeVersion(result: Pick<PerformanceBenchmarkResult, 'provider' | 'runtime_version' | 'runtime_variant' | 'runtime_plugin_version'>, build: string, unavailable: string): string {
+  if (!result.provider || result.provider === 'llama.cpp') return formatRecordedRuntimeVersion(result.runtime_version, build, unavailable);
+  return formatRuntimeVersionLabel({ name: result.provider, version: result.runtime_version,
+    variant: result.runtime_variant, plugin_version: result.runtime_plugin_version }) ?? unavailable;
+}
+
 export function extractFlagNames(help: string): string[] {
   const seen = new Set<string>();
   const flags: string[] = [];
@@ -58,6 +66,15 @@ export function extractFlagNames(help: string): string[] {
 
 export function parseDeviceLines(output: string): string[] {
   return output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && line.length <= 256).slice(0, 100);
+}
+
+/** Count the indexed entries in llama.cpp's device list, retaining raw probe output separately. */
+export function countRuntimeDeviceEntries(lines: readonly string[]): number {
+  const ids = lines.flatMap(line => {
+    const id = line.trim().match(/^([A-Za-z][A-Za-z0-9_-]*\d+):\s+\S/)?.[1];
+    return id ? [id] : [];
+  });
+  return new Set(ids).size;
 }
 
 export function capabilityLabel(state: CapabilityState): string {
@@ -121,13 +138,6 @@ export function readLoadingProfiles(key = "aiolm.loading-profiles.v1"): LoadingP
   }
 }
 
-export function writeLoadingProfiles(profiles: LoadingProfile[], key = "aiolm.loading-profiles.v1"): void {
-  try {
-    const storage = localStorageSafe();
-    if (storage) storage.setItem(key, JSON.stringify(profiles.filter(validLoadingProfile).slice(0, 20)));
-  } catch { /* restricted WebView */ }
-}
-
 /**
  * Backends a local pull-request build can honestly produce. Mirrors
  * `SOURCE_BUILD_BACKENDS` in `src-tauri/src/runtime.rs`, which refuses the
@@ -172,6 +182,11 @@ const BUILD_PHASE_LABELS = {
   building: "buildPhaseBuilding",
   packaging: "buildPhasePackaging",
   preflight: "buildPhasePreflight",
+  preparing: "buildPhasePreparing",
+  installing: "buildPhaseInstalling",
+  verifying: "buildPhaseVerifying",
+  exporting: "buildPhaseExporting",
+  importing: "buildPhaseImporting",
   installed: "buildPhaseInstalled",
   "cleaning up": "buildPhaseCleaningUp",
 } as const;

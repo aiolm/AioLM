@@ -45,6 +45,11 @@ assert.equal(anthropic.max_tokens, 128);
 assert.equal((anthropic.messages[0].content as Array<{ type: string }>)[1].type, "image");
 assert.equal(anthropicMessagesUrl("http://127.0.0.1:1234/v1"), "http://127.0.0.1:1234/v1/messages");
 
+const urlImage = buildAnthropicMessagesRequestBody('local-model', [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.invalid/image.png' } }] }], sampling);
+assert.deepEqual(urlImage.messages[0].content, [{ type: 'image', source: { type: 'url', url: 'https://example.invalid/image.png' } }]);
+assert.throws(() => buildAnthropicMessagesRequestBody('local-model', [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: 'AA==', format: 'wav' } }] }], sampling), /OpenAI endpoint/);
+assert.throws(() => buildAnthropicMessagesRequestBody('local-model', [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///synthetic/image.png' } }] }], sampling), /HTTP URL/);
+
 const toolMessages = [
   { role: "assistant" as const, content: "", tool_calls: [{ id: "call-1", type: "function" as const, function: { name: "lookup", arguments: '{"q":"llama"}' } }] },
   { role: "tool" as const, tool_call_id: "call-1", name: "lookup", content: '{"ok":true}' },
@@ -52,6 +57,9 @@ const toolMessages = [
 const toolAnthropic = buildAnthropicMessagesRequestBody("local-model", toolMessages, sampling, [{ name: "lookup", input_schema: { type: "object" } }]);
 assert.equal((toolAnthropic.messages[0].content as Array<{ type: string }>)[0].type, "tool_use");
 assert.equal((toolAnthropic.messages[1].content as Array<{ type: string }>)[0].type, "tool_result");
+const toolWithImage = buildAnthropicMessagesRequestBody('local-model', [{ ...toolMessages[0], content: messages[1].content }], sampling);
+assert.equal((toolWithImage.messages[0].content as Array<{ type: string }>)[1].type, 'image');
+assert.equal((toolWithImage.messages[0].content as Array<{ type: string }>)[2].type, 'tool_use');
 
 const translated = translateOpenAiResponseToAnthropic({
   id: "chat-1",

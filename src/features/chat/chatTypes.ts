@@ -1,8 +1,5 @@
 /** Data shared by conversation history, attachments, and document retrieval. */
-export interface ImageAttachment {
-  name: string;
-  dataUrl: string;
-}
+export type { PreparedVideoFrame, MediaPreparation, ImageAttachment } from '../../shared/api/mediaTypes.ts';
 
 export interface DocumentAttachment {
   name: string;

@@ -7,6 +7,7 @@ import type { ApiServerStatus, ServerStatus } from "../../shared/api/types";
 import { createTestStore } from "../../testing/appStore";
 import * as api from "../../shared/api/index";
 import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
+import { ActivePanelContext } from "../../shared/ui/PanelFeedback";
 import DeveloperPanel from "./Developer";
 import { useApiServer } from "./useApiServer";
 
@@ -219,6 +220,104 @@ describe("API server lifecycle", () => {
 });
 
 describe("API status freshness", () => {
+  it("keeps a fresh initial status failure visible and allows the user to recover with Start", async () => {
+    vi.mocked(api.apiServerStatus).mockRejectedValueOnce(new Error("synthetic current status IPC unavailable"));
+    render(page(storeWith()));
+    expect(await screen.findByRole("alert")).toHaveTextContent("synthetic current status IPC unavailable");
+    const start = screen.getByRole("button", { name: "Start API" });
+    expect(start).toBeEnabled();
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    fireEvent.click(start);
+    expect(await screen.findByRole("button", { name: "Stop API" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps an action failure visible when a quiet status read confirms the listener is still running", async () => {
+    vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
+    vi.mocked(api.stopApiServer).mockRejectedValueOnce(new Error("synthetic stop IPC failure"));
+    const { result } = renderHook(() => useApiServer(8080));
+    await waitFor(() => expect(result.current.checked).toBe(true));
+    await act(async () => { await result.current.stop(); });
+    expect(result.current.error).toBe("synthetic stop IPC failure");
+    await act(async () => { await result.current.refresh(true); });
+    expect(result.current.status).toEqual(runningApi);
+    expect(result.current.error).toBe("synthetic stop IPC failure");
+    act(() => result.current.clearError());
+    expect(result.current.error).toBeNull();
+  });
+
+  it.each(["response", "error"])("keeps Start disabled when a superseded initial %s finishes before the fresh page read", async outcome => {
+    const older = deferred<ApiServerStatus>();
+    const newest = deferred<ApiServerStatus>();
+    vi.mocked(api.apiServerStatus).mockReturnValueOnce(older.promise).mockReturnValueOnce(newest.promise);
+    const store = storeWith();
+    const panel = (active: boolean) => <ActivePanelContext.Provider value={active}>{page(store)}</ActivePanelContext.Provider>;
+    const view = render(panel(true));
+    await waitFor(() => expect(api.apiServerStatus).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Start API" })).toBeDisabled();
+    view.rerender(panel(false));
+    view.rerender(panel(true));
+    await waitFor(() => expect(api.apiServerStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      if (outcome === "response") older.resolve(stoppedApi);
+      else older.reject(new Error("synthetic superseded initial read failed"));
+      await older.promise.catch(() => undefined);
+    });
+    const start = screen.getByRole("button", { name: "Start API" });
+    expect(start).toBeDisabled();
+    fireEvent.click(start);
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => { newest.resolve(runningApi); await newest.promise; });
+    expect(screen.getByRole("button", { name: "Stop API" })).toBeEnabled();
+  });
+
+  it("keeps the newest listener read when an older refresh finishes afterward", async () => {
+    const { result } = renderHook(() => useApiServer(8080));
+    await waitFor(() => expect(result.current.checked).toBe(true));
+    const older = deferred<ApiServerStatus>();
+    vi.mocked(api.apiServerStatus).mockReturnValueOnce(older.promise);
+    let previousRead!: Promise<void>;
+    act(() => { previousRead = result.current.refresh(); });
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.status).toEqual(stoppedApi);
+    await act(async () => { older.resolve(runningApi); await previousRead; });
+    expect(result.current.status).toEqual(stoppedApi);
+    expect(result.current.error).toBeNull();
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    expect(api.stopApiServer).not.toHaveBeenCalled();
+  });
+
+  it("does not show an old refresh failure after a newer listener read succeeds", async () => {
+    const { result } = renderHook(() => useApiServer(8080));
+    await waitFor(() => expect(result.current.checked).toBe(true));
+    const older = deferred<ApiServerStatus>();
+    vi.mocked(api.apiServerStatus).mockReturnValueOnce(older.promise);
+    let previousRead!: Promise<void>;
+    act(() => { previousRead = result.current.refresh(); });
+    vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
+    await act(async () => { await result.current.refresh(); });
+    await act(async () => { older.reject(new Error("synthetic superseded status IPC failure")); await previousRead; });
+    expect(result.current.status).toEqual(runningApi);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("preserves the fresh status read on returning to the API page over its older pending read", async () => {
+    const older = deferred<ApiServerStatus>();
+    vi.mocked(api.apiServerStatus).mockReturnValueOnce(older.promise);
+    const { result, rerender } = renderHook(({ active }) => useApiServer(8080, active), { initialProps: { active: true } });
+    await waitFor(() => expect(api.apiServerStatus).toHaveBeenCalledTimes(1));
+    rerender({ active: false });
+    rerender({ active: true });
+    await waitFor(() => expect(api.apiServerStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.checked).toBe(true));
+    expect(result.current.status).toEqual(stoppedApi);
+    await act(async () => { older.resolve(runningApi); await older.promise; });
+    expect(result.current.status).toEqual(stoppedApi);
+    expect(result.current.error).toBeNull();
+    modelLifecycleCommands().forEach(command => expect(command).not.toHaveBeenCalled());
+  });
+
   it("ignores a status read that began before a start finished", async () => {
     const { result } = renderHook(() => useApiServer(8080));
     await waitFor(() => expect(result.current.checked).toBe(true));
@@ -473,6 +572,32 @@ describe("API key and connection details", () => {
 });
 
 describe("API port", () => {
+  it('preserves a later Stop API action when saving the port finishes afterward', async () => {
+    vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
+    const saved = deferred<void>();
+    const store = storeWith();
+    vi.mocked(store.updateConfig).mockImplementationOnce(async patch => {
+      await saved.promise;
+      return Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch);
+    });
+    render(page(store));
+    openDisclosure('Server settings');
+    const port = await screen.findByRole('spinbutton', { name: 'API port' });
+    await waitFor(() => expect(port).toBeEnabled());
+    fireEvent.change(port, { target: { value: '9090' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and restart API' }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Stop API' }));
+    await screen.findByRole('button', { name: 'Start API' });
+    await act(async () => { saved.resolve(); await saved.promise; });
+    await waitFor(() => expect(port).toBeEnabled());
+    expect(store.cfg?.port).toBe(9090);
+    expect(api.stopApiServer).toHaveBeenCalledOnce();
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Start API' })).toBeEnabled();
+    modelLifecycleCommands().forEach(command => expect(command).not.toHaveBeenCalled());
+  });
+
   it("saves the port for the next API start without restarting anything", async () => {
     const store = storeWith();
     render(page(store));

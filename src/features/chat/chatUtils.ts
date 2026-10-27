@@ -1,6 +1,7 @@
 import type { ChatContentPart, ChatMessage } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
 import type { ChatCitation, DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
+import { validMediaPreparation } from './mediaPreparationHistory.ts';
 
 export type { DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
 
@@ -10,12 +11,23 @@ function queryTerms(query: string): string[] {
 
 const DOCUMENT_CHUNK_SIZE = 1800;
 
+/** Query terms are literal text; count non-overlapping matches without match arrays. */
+function countTerm(text: string, term: string): number {
+  let count = 0;
+  let offset = 0;
+  while ((offset = text.indexOf(term, offset)) !== -1) {
+    count += 1;
+    offset += term.length;
+  }
+  return count;
+}
+
 export function rankDocumentChunks(documents: DocumentAttachment[], query = ""): DocumentChunk[] {
   const terms = queryTerms(query);
   return splitDocumentChunks(documents)
     .map((chunk) => {
       const lower = chunk.text.toLocaleLowerCase();
-      const score = terms.reduce((total, term) => total + (lower.match(new RegExp(escapeRegExp(term), "gu"))?.length ?? 0), 0);
+      const score = terms.reduce((total, term) => total + countTerm(lower, term), 0);
       return { ...chunk, score };
     })
     .sort((left, right) => right.score - left.score || left.document.name.localeCompare(right.document.name) || left.order - right.order);
@@ -78,8 +90,9 @@ export function rankVectorDocumentChunks(
 ): RankedDocumentChunk[] {
   const query = vectors[queryIndex];
   if (!query || query.length === 0 || chunks.length === 0) return [];
+  const queryNorms = new Map<number, number>();
   return chunks
-    .map((chunk, index) => ({ chunk, score: cosineSimilarity(vectors[index] ?? [], query) }))
+    .map((chunk, index) => ({ chunk, score: cosineSimilarity(vectors[index] ?? [], query, queryNorms) }))
     .filter((item) => Number.isFinite(item.score))
     .sort((left, right) => right.score - left.score || left.chunk.order - right.chunk.order);
 }
@@ -114,47 +127,69 @@ export function buildVectorDocumentRetrieval(
   };
 }
 
-function cosineSimilarity(left: number[], right: number[]): number {
+function cosineSimilarity(left: number[], right: number[], rightNorms: Map<number, number>): number {
   const length = Math.min(left.length, right.length);
+  // Different vector lengths use different query prefixes within this ranking.
+  let rightNorm = rightNorms.get(length);
+  if (rightNorm === undefined) {
+    rightNorm = 0;
+    for (let index = 0; index < length; index += 1) rightNorm += right[index] ** 2;
+    rightNorms.set(length, rightNorm);
+  }
   let dot = 0;
   let leftNorm = 0;
-  let rightNorm = 0;
   for (let index = 0; index < length; index += 1) {
     dot += left[index] * right[index];
     leftNorm += left[index] ** 2;
-    rightNorm += right[index] ** 2;
   }
   return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function buildDocumentContext(documents: DocumentAttachment[], maxChars = 12_000, query = ""): string {
   const budget = Math.max(256, Math.floor(maxChars));
   let used = 0;
   let context = "";
-  const chunks = documents.length === 0 ? [] : documents.flatMap((document) => document.text.length <= budget ? [{ document, text: document.text, score: 0, order: 0, offset: 0 }] : rankDocumentChunks([document], query));
-  for (const chunk of chunks) {
-    const prefix = `\n\n[Attached document: ${chunk.document.name}]\n`;
+  for (const document of documents) {
+    const prefix = `\n\n[Attached document: ${document.name}]\n`;
     const suffix = "\n[/Attached document]";
-    const remaining = budget - used - prefix.length - suffix.length;
-    if (remaining <= 0) break;
-    const text = chunk.text.slice(0, remaining);
-    const truncated = text.length < chunk.text.length || chunk.document.text.length > chunk.text.length ? "\n[document excerpt truncated]" : "";
-    context += `${prefix}${text}${truncated}${suffix}`;
-    used = context.length;
+    // Preserve attachment order, but do not rank later documents once no part
+    // of them can enter the bounded request context.
+    if (budget - used - prefix.length - suffix.length <= 0) return context;
+    const chunks = document.text.length <= budget
+      ? [{ document, text: document.text, score: 0, order: 0, offset: 0 }]
+      : rankDocumentChunks([document], query);
+    for (const chunk of chunks) {
+      const remaining = budget - used - prefix.length - suffix.length;
+      if (remaining <= 0) return context;
+      const text = chunk.text.slice(0, remaining);
+      const truncated = text.length < chunk.text.length || chunk.document.text.length > chunk.text.length ? "\n[document excerpt truncated]" : "";
+      context += `${prefix}${text}${truncated}${suffix}`;
+      used = context.length;
+    }
   }
   return context;
 }
 
-export function buildMultimodalContent(text: string, images: ImageAttachment[]): ChatContentPart[] {
+export function buildMultimodalContent(text: string, images: ImageAttachment[], mediaBeforeText = false): ChatContentPart[] {
   const parts: ChatContentPart[] = [];
-  if (text.trim()) parts.push({ type: "text", text: text.trim() });
+  if (!mediaBeforeText && text.trim()) parts.push({ type: "text", text: text.trim() });
   for (const image of images) {
-    parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+    if (image.preparation) {
+      if (!validMediaPreparation(image.preparation, image)) throw new Error(`Attachment preparation is unavailable: ${image.name}`);
+      if (image.preparation.kind === 'transcription') {
+        parts.push({ type: 'text', text: `[Audio transcript: ${image.name}]\n${image.preparation.text}\n[/Audio transcript]` });
+      } else {
+        parts.push({ type: 'text', text: `[Sampled video frames: ${image.name}. Audio track is not included.]` });
+        for (const frame of image.preparation.frames) {
+          parts.push({ type: 'text', text: `[Frame at ${frame.timestampSeconds.toFixed(2)} seconds]` });
+          parts.push({ type: 'aiolm_media', media: { ref: frame.ref, kind: 'image' } });
+        }
+      }
+    } else if (image.ref) parts.push({ type: 'aiolm_media', media: { ref: image.ref, kind: image.kind ?? 'image' } });
+    else if ((image.kind ?? 'image') === 'image' && image.dataUrl) parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+    else throw new Error(`Attachment is unavailable: ${image.name}`);
   }
+  if (mediaBeforeText && text.trim()) parts.push({ type: "text", text: text.trim() });
   return parts;
 }
 
@@ -172,8 +207,10 @@ export function estimateTextTokens(text: string): number {
   let nonAscii = 0;
   let cjk = 0;
   for (const character of text) {
-    if (/^[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]$/u.test(character)) cjk += 1;
-    else if (character.codePointAt(0)! <= 0x7f) ascii += 1;
+    const code = character.codePointAt(0)!;
+    if ((code >= 0x3400 && code <= 0x9fff) || (code >= 0x3040 && code <= 0x30ff)
+      || (code >= 0xac00 && code <= 0xd7af)) cjk += 1;
+    else if (code <= 0x7f) ascii += 1;
     else nonAscii += 1;
   }
   return Math.max(1, Math.ceil(ascii / 4 + nonAscii / 2.5 + cjk / 1.8));
@@ -182,7 +219,7 @@ export function estimateTextTokens(text: string): number {
 export function estimateMessageTokens(message: ChatMessage): number {
   const content = message.content;
   const textTokens = typeof content === "string" ? estimateTextTokens(content) : estimateTextTokens(contentText(content));
-  const imageTokens = typeof content === "string" ? 0 : content.filter((part) => part.type === "image_url").length * 256;
+  const imageTokens = typeof content === "string" ? 0 : content.filter((part) => part.type === "image_url" || (part.type === 'aiolm_media' && part.media.kind === 'image')).length * 256;
   return Math.max(4, textTokens + imageTokens + 4);
 }
 

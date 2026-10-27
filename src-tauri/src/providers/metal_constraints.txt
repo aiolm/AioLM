@@ -1,0 +1,10 @@
+# vllm-project/vllm-metal v0.30.0 pyproject.toml and matched core release.
+vllm==0.30.0+cpu
+vllm-metal==0.30.0
+# _paged_ops links MLX private headers; the exact release ABI is required.
+mlx==0.32.1
+nanobind==2.10.2
+mlx-vlm>=0.6.8,<0.7.0
+llguidance>=1.7.0,<1.8.0
+# mlx-lm is a direct immutable git SHA requirement in the plugin wheel metadata:
+# 9e6acca691e64d6d8bb808c328fcdea459099cca.

@@ -1,4 +1,4 @@
-import type { StreamTimings, StreamUsage } from "../api/sse.ts";
+import type { StreamMetrics, StreamTimings, StreamUsage } from "../api/sse.ts";
 
 export interface PhaseMetrics {
   tokens?: number;
@@ -35,10 +35,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     ? value as Record<string, unknown> : {};
 }
 
-function phaseMetrics(tokens: number | undefined, duration: unknown, rate: unknown): PhaseMetrics {
+function phaseMetrics(tokens: number | undefined, duration: unknown, rate: unknown, intervalTokens = tokens): PhaseMetrics {
   const durationMs = nonnegativeNumber(duration);
-  const calculatedRate = tokens !== undefined && durationMs !== undefined && durationMs > 0
-    ? nonnegativeNumber(tokens / durationMs * 1000) : undefined;
+  const calculatedRate = intervalTokens !== undefined && durationMs !== undefined && durationMs > 0
+    ? nonnegativeNumber(intervalTokens / durationMs * 1000) : undefined;
   const tokensPerSecond = nonnegativeNumber(rate) ?? calculatedRate;
   return {
     ...(tokens !== undefined ? { tokens } : {}),
@@ -51,6 +51,7 @@ export function buildResponseMetrics(
   usage: StreamUsage | undefined,
   timings: StreamTimings | undefined,
   observed: ObservedMetrics = {},
+  serverMetrics?: StreamMetrics,
 ): ResponseMetrics {
   const cachedTokens = tokenCount(timings?.cache_n) ?? tokenCount(usage?.prompt_tokens_details?.cached_tokens);
   const promptTokens = tokenCount(usage?.prompt_tokens);
@@ -60,9 +61,16 @@ export function buildResponseMetrics(
   const preparationMs = nonnegativeNumber(observed.preparationMs);
   const firstTokenMs = nonnegativeNumber(observed.firstTokenMs);
   const requestMs = nonnegativeNumber(observed.requestMs);
+  const generationTokens = tokenCount(timings?.predicted_n) ?? tokenCount(usage?.completion_tokens);
+  const nativeGenerationMs = nonnegativeNumber(timings?.predicted_ms);
+  const serverGenerationMs = nonnegativeNumber(serverMetrics?.generation_time_ms);
+  // vLLM measures first-to-last output, which contains N-1 decode intervals.
+  // Its tokens_per_second also includes prefill and cannot serve as the TG rate.
+  const generationIntervals = nativeGenerationMs === undefined && serverGenerationMs !== undefined && generationTokens !== undefined
+    ? Math.max(0, generationTokens - 1) : generationTokens;
   return {
     pp: phaseMetrics(tokenCount(timings?.prompt_n) ?? uncachedTokens, timings?.prompt_ms, timings?.prompt_per_second),
-    tg: phaseMetrics(tokenCount(timings?.predicted_n) ?? tokenCount(usage?.completion_tokens), timings?.predicted_ms, timings?.predicted_per_second),
+    tg: phaseMetrics(generationTokens, nativeGenerationMs ?? serverGenerationMs, timings?.predicted_per_second, generationIntervals),
     ...(preparationMs !== undefined ? { preparationMs } : {}),
     ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
     ...(requestMs !== undefined ? { requestMs } : {}),
@@ -93,9 +101,4 @@ export function sanitizeResponseMetrics(value: unknown): ResponseMetrics | undef
   if (cachedTokens !== undefined) result.cachedTokens = cachedTokens;
   return Object.keys(result.pp).length || Object.keys(result.tg).length || Object.keys(result).length > 2
     ? result : undefined;
-}
-
-export function deriveTokensPerSecond(completionTokens?: number, totalMs?: number): number | null {
-  if (!completionTokens || !totalMs || totalMs <= 0) return null;
-  return completionTokens / (totalMs / 1000);
 }

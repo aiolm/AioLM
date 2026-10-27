@@ -63,6 +63,29 @@ describe('pasted settings', () => {
     expect(result.patch).toEqual({});
   });
 
+  it('keeps negative numeric arguments as values instead of treating them as flags', () => {
+    const result = parseSettingsText('-n -1 --threads -1', SERVER_OPTIONS, base);
+    expect(result.patch.chat_options).toEqual({ max_tokens: -1 });
+    expect(result.rejected).toEqual([{ flag: '--threads', reason: 'value', value: '-1', range: { min: 0, max: 64 } }]);
+  });
+
+  it('keeps nonnumeric dash-prefixed tokens as option boundaries', () => {
+    const boundaries = parseSettingsText('--threads -- --threads - --threads --unknown? --\u672a\u77e5', SERVER_OPTIONS, base);
+    expect(boundaries.rejected).toEqual([
+      { flag: '--threads', reason: 'missing' }, { flag: '--', reason: 'unknown' },
+      { flag: '--threads', reason: 'missing' }, { flag: '-', reason: 'unknown' },
+      { flag: '--threads', reason: 'missing' }, { flag: '--unknown?', reason: 'unknown' },
+      { flag: '--未知', reason: 'unknown' },
+    ]);
+
+    const negatives = parseSettingsText('--threads -0.5 --threads -1e3 -n -1', SERVER_OPTIONS, base);
+    expect(negatives.patch.chat_options).toEqual({ max_tokens: -1 });
+    expect(negatives.rejected).toEqual([
+      { flag: '--threads', reason: 'value', value: '-0.5', range: { min: 0, max: 64 } },
+      { flag: '--threads', reason: 'value', value: '-1e3', range: { min: 0, max: 64 } },
+    ]);
+  });
+
   it('keeps every continuation style and quoted values intact', () => {
     expect(tokenizeCommand('-c 4096 `\n  -t 8')).toEqual(['-c', '4096', '-t', '8']);
     expect(tokenizeCommand('-c 4096 \\\n  -t 8')).toEqual(['-c', '4096', '-t', '8']);

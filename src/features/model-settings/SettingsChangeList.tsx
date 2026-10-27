@@ -8,6 +8,10 @@ import type { ServerOption } from '../../shared/config/serverOptions';
 import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
+import { providerOf, type AppConfig } from '../../shared/api';
+import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
+import { profileSchemaCopy } from './profileSchemaCopy';
+import { profileValueMask } from './profileValueMask';
 
 /** Renders a stored value the way the profile detail panel does, so the same
  *  value reads identically wherever it is shown. */
@@ -35,19 +39,34 @@ export function changeCount(saved: Partial<ExecutionSettings>, current: Partial<
  * edit touched, so the save is confirmed against this list rather than taken on
  * trust. Each row names the setting and the value it goes from and to.
  */
-export default function SettingsChangeList({ saved, current, savedPrompt, currentPrompt, runtimeOptions, runtimeVerified }: {
+export default function SettingsChangeList({ saved, current, savedPrompt, currentPrompt, runtimeOptions, runtimeVerified, runtimeConfig }: {
   saved: Partial<ExecutionSettings>; current: Partial<ExecutionSettings>; savedPrompt: string; currentPrompt: string;
   runtimeOptions: readonly ServerOption[]; runtimeVerified: boolean;
+  runtimeConfig?: AppConfig;
 }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const render = valueRenderer(locale);
-  const installedRuntimes = useInstalledRuntimes();
+  const schema = useProfileRuntimeSchema(runtimeConfig, !!runtimeConfig && providerOf(runtimeConfig) !== 'llama.cpp');
+  const view = schema.view && !['stale', 'unchecked'].includes(schema.view.help_state) ? schema.view : undefined;
+  const mask = profileValueMask(view, saved.provider_options?.[schema.provider] ?? {}, current.provider_options?.[schema.provider] ?? {});
+  const installedRuntimes = useInstalledRuntimes(providerOf(current) === 'llama.cpp' || providerOf(saved) === 'llama.cpp');
   const renderChange = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0 ? '{}' : render(value);
   // A build id is storage identity; the person reads the version it names.
   const renderBuild = (key: string, value: unknown, backend: string | undefined) =>
     key === 'active_build' && typeof value === 'string' && value ? runtimeVersionLabel(installedRuntimes, backend ?? '', value) : renderChange(value);
   const changes = changedSettings(saved, current);
+  const renderOption = (path: string[], value: unknown) => {
+    if (value === undefined) return copy.empty;
+    const [, provider, key] = path;
+    const option = provider === schema.provider ? view?.schema.options.find(item => item.key === key && !item.managed
+      && item.scope.every((segment, index) => view.scope[index] === segment)) : undefined;
+    if (!option) return profileSchemaCopy[locale].unverified;
+    if (option.sensitive.value === true) return '•••';
+    // Both sides may hold different secrets; masking only the newest values
+    // would expose the old one through a copied value in another option.
+    return mask(renderChange(value));
+  };
   const runtimeChanged = saved.active_backend !== current.active_backend || saved.active_build !== current.active_build;
   const promptChanged = savedPrompt !== currentPrompt;
   const row = (key: string, label: string, before: ReactNode, after: ReactNode) => <div key={key}>
@@ -61,10 +80,10 @@ export default function SettingsChangeList({ saved, current, savedPrompt, curren
       (change.path ?? change.key.split('.')).map((key, index) => {
         if (index === 1 && change.path?.[0] === 'lora_adapters') return normalizeDisplayPath(key);
         if (index === 1 && change.path?.[0] === 'server_args') return key;
-        return profileFieldLabel(key, locale);
+        return profileFieldLabel(change.path?.[0] === 'provider_options' ? mask(key) : key, locale);
       }).join(' · '),
-      change.beforeInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true, previousRuntime: runtimeChanged })} /> : renderBuild(change.key, change.before, saved.active_backend),
-      change.afterInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true })} /> : renderBuild(change.key, change.after, current.active_backend)))}
+      change.path?.[0] === 'provider_options' ? renderOption(change.path, change.before) : change.beforeInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true, previousRuntime: runtimeChanged })} /> : renderBuild(change.key, change.before, saved.active_backend),
+      change.path?.[0] === 'provider_options' ? renderOption(change.path, change.after) : change.afterInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true })} /> : renderBuild(change.key, change.after, current.active_backend)))}
     {promptChanged && row('__prompt', copy.prompt, savedPrompt || copy.empty, currentPrompt || copy.empty)}
   </dl>;
 }

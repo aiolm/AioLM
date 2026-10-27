@@ -1,12 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ModelMetadata } from '../api/types';
+import type { ModelArtifact } from '../api/providers';
 import { useI18n } from '../i18n/i18n';
 import { useVisibleModelMetadata } from './useVisibleModelMetadata';
 import ModelPublisher, { modelPublishers, modelPublisherLabels } from './ModelPublisher';
 import Badge from './Badge';
+import { modelDisplayName } from '../lib/displayPaths';
+import { providerCopy } from '../i18n/providerCopy';
 
-export interface ModelBadge {
-  kind: 'family' | 'architecture' | 'parameters' | 'quantization' | 'context' | 'projector' | 'tag';
+interface ModelBadge {
+  kind: 'family' | 'architecture' | 'parameters' | 'quantization' | 'context' | 'projector' | 'tag' | 'format';
   value: string;
   source: 'filename' | 'metadata' | 'hub';
 }
@@ -18,9 +21,11 @@ const badgeLabels = {
   tag: 'ui.modelBadgeTag',
 } as const;
 
+export const unknownFormat = { en: 'Format not identified', ko: '형식 미확인', ja: '形式未確認', zh: '格式未确认' };
+
 /** Names provide hints only; a GGUF architecture takes precedence over family hints. */
 export function modelBadges(model: string, metadata?: ModelMetadata, tags: string[] = []): ModelBadge[] {
-  const name = model.replace(/\\/g, '/').split('/').at(-1) ?? '';
+  const name = modelDisplayName(model);
   if (!name.trim()) return [];
   const badges: ModelBadge[] = [];
   const family = name.match(/(?:^|[^a-z])(qwen\d*(?:[.]\d+)?|(?:embedding)?gemma(?:[-_.]?\d+)?|deepseek(?:[-_.]r\d+)?|llama(?:[-_.]?\d+(?:[.]\d+)?)?|mistral|mixtral|ministral|magistral|devstral|codestral|(?:chat)?glm(?:[-_.]?\d+(?:[.]\d+)?)?)(?=[^a-z0-9]|$)/i)?.[1];
@@ -92,8 +97,8 @@ export function fittingModelBadgeCount(width: number, badgeWidths: number[], mor
 }
 
 function ModelBadgeItem({ badge }: { badge: ModelBadge }) {
-  const { t } = useI18n();
-  const label = t(badgeLabels[badge.kind]);
+  const { t, locale } = useI18n();
+  const label = badge.kind === 'format' ? providerCopy[locale].formats : t(badgeLabels[badge.kind]);
   const source = t(badge.source === 'metadata' ? 'ui.modelBadgeMetadata' : badge.source === 'hub' ? 'ui.modelBadgeHub' : 'ui.modelBadgeFilename');
   return <Badge className="model-badge" title={`${label}: ${badge.value} · ${source}`}>
     <span className="sr-only">{label}: </span><span className="model-badge-value">{badge.value}</span>
@@ -139,14 +144,19 @@ function CompactModelBadges({ badges, total }: { badges: ModelBadge[]; total: nu
   </span>;
 }
 
-export default function ModelBadges({ model, metadata, localPath, tags, repository, mode = 'compact' }: {
-  model: string; metadata?: ModelMetadata; localPath?: string; tags?: string[]; repository?: string; mode?: 'compact' | 'detail';
+export default function ModelBadges({ model, metadata, artifact, localPath, tags, repository, mode = 'compact' }: {
+  model: string; metadata?: ModelMetadata; artifact?: ModelArtifact; localPath?: string; tags?: string[]; repository?: string; mode?: 'compact' | 'detail';
 }) {
-  const { t } = useI18n();
-  const visible = useVisibleModelMetadata(metadata ? undefined : localPath);
+  const { t, locale } = useI18n();
+  const visible = useVisibleModelMetadata(metadata || artifact && artifact.format !== 'gguf' ? undefined : localPath);
   const details = metadata ?? visible.metadata;
   const badges = modelBadges(model, details, tags);
-  const people = modelPublishers(details, repository);
+  if (artifact) {
+    if (artifact.format === 'unknown') badges.push({ kind: 'format', value: unknownFormat[locale], source: 'metadata' });
+    const values = [artifact.format === 'unknown' ? undefined : artifact.format, ...artifact.architectures, artifact.model_type, ...Object.entries(artifact.modalities).filter(([, supported]) => supported).map(([modality]) => modality)];
+    for (const value of values) if (value && !badges.some(badge => badge.value.toLowerCase() === value.toLowerCase())) badges.push({ kind: 'tag', value, source: 'metadata' });
+  }
+  const people = modelPublishers(details, repository ?? artifact?.repository);
   if (!badges.length && !localPath && !people.length) return null;
   const summary = <><ModelPublisher metadata={details} repository={repository} compact />
     <CompactModelBadges badges={summaryModelBadges(badges, people)} total={badges.length + Math.max(0, people.length - 1)} /></>;
@@ -158,7 +168,7 @@ export default function ModelBadges({ model, metadata, localPath, tags, reposito
         {people.map(({ role, name }) => <div key={role}><dt>{t(modelPublisherLabels[role])}</dt><dd>{name}</dd></div>)}
         {badges.map(badge => {
           const colon = badge.kind === 'tag' ? badge.value.indexOf(':') : -1;
-          return <div key={`${badge.kind}:${badge.value}`}><dt>{colon > 0 ? badge.value.slice(0, colon) : t(badgeLabels[badge.kind])}</dt>
+          return <div key={`${badge.kind}:${badge.value}`}><dt>{colon > 0 ? badge.value.slice(0, colon) : badge.kind === 'format' ? providerCopy[locale].formats : t(badgeLabels[badge.kind])}</dt>
             <dd>{colon > 0 ? badge.value.slice(colon + 1) : badge.value}</dd></div>;
         })}
       </dl>

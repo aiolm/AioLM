@@ -63,6 +63,11 @@ export async function deleteBenchmarkHistoryRecord(runId: string): Promise<void>
 
 export async function loadAllBenchmarkHistory(): Promise<PerformanceBenchmarkRecord[]> {
   const records = new Map<string, PerformanceBenchmarkRecord>();
+  // Browser storage already provides the complete snapshot; paging would parse it again.
+  if (!isNativeRuntimeAvailable()) {
+    for (const record of readPerformanceHistory()) records.set(record.id, record);
+    return [...records.values()];
+  }
   let offset: number | null = 0;
   while (offset !== null) {
     const page = await loadBenchmarkHistoryPage(offset, 100);

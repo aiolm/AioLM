@@ -42,7 +42,7 @@ export default function TuningOptionMetadata({ fieldKey, inherited = false, valu
   // no longer has to be looked up to be read.
   const defaultText = rawDefault === null ? text.unspecified : optionDefaultText(rawDefault, locale);
   const fromReference = metadata.defaults.source !== 'app' && !(metadata.verified && metadata.defaults.source === 'help');
-  const automatic = /(?:^|:s*)['"]?auto['"]?(?:s|$)/.test(rawDefault ?? '');
+  const automatic = /(?:^|:\s*)['"]?auto['"]?(?:\s|$)/.test(rawDefault ?? '');
   // A field set back to the default is running the default, whether it got there
   // by being left alone or by being typed in again. The badge only knew the first
   // case, so restoring a value looked as though it had not taken.

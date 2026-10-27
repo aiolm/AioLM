@@ -236,13 +236,10 @@ fn ensure_durable_receipt(path: &Path) -> Result<(), String> {
 
 fn durable_receipt(
     path: &Path,
-    accepted: &AcceptedUpload,
+    bytes: &[u8],
     ensure_durable: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
-    crate::config::atomic_write(
-        path,
-        &serde_json::to_vec(accepted).map_err(|error| error.to_string())?,
-    )?;
+    crate::config::atomic_write(path, bytes)?;
     ensure_durable(path)
 }
 
@@ -312,7 +309,9 @@ fn acknowledge_at_with_durability(
             acknowledged_at: now,
             candidate: None,
         };
-        durable_receipt(&accepted_path, &accepted, ensure_durable)?;
+        let bytes = serde_json::to_vec(&accepted).map_err(|error| error.to_string())?;
+        durable_receipt(&accepted_path, &bytes, ensure_durable)?;
+        drop(bytes);
         return Ok(prune_cache_with_durability(
             root,
             RECENT_CACHE_LIMIT,
@@ -361,13 +360,15 @@ fn acknowledge_at_with_durability(
         acknowledged_at: now,
         candidate,
     };
+    let bytes = serde_json::to_vec(&accepted).map_err(|error| error.to_string())?;
     // The candidate exists before acceptance becomes durable. A crash before
     // acceptance can never authorize deletion; a crash afterward leaves a
     // discoverable candidate without scanning the permanent receipt archive.
     if accepted.candidate.is_some() {
-        durable_receipt(&candidate_path(root, run_id), &accepted, ensure_durable)?;
+        durable_receipt(&candidate_path(root, run_id), &bytes, ensure_durable)?;
     }
-    durable_receipt(&accepted_path, &accepted, ensure_durable)?;
+    durable_receipt(&accepted_path, &bytes, ensure_durable)?;
+    drop(bytes);
     drop(run_lock);
     Ok(prune_cache_with_durability(
         root,
@@ -558,6 +559,118 @@ mod tests {
         let path = journal.path.clone();
         drop(journal);
         path
+    }
+
+    #[test]
+    fn receipt_bytes_and_write_durability_order_survive_each_failure_boundary() {
+        for stage in [
+            "candidate-write",
+            "candidate-sync",
+            "accepted-write",
+            "accepted-sync",
+            "success",
+        ] {
+            let root = fixtures::root();
+            let run_id = format!("receipt-order-{stage}");
+            let journal = native(&root, &run_id, 7, "complete");
+            let original = fs::read(&journal).unwrap();
+            let marker = candidate_path(&root, &run_id);
+            let permanent = receipt_path(&root, &run_id);
+            let (journal_bytes, journal_sha256) = journal_fingerprint(&journal).unwrap();
+            let mut upload = receipt(1);
+            if stage == "success" {
+                upload.url = None;
+            }
+            let expected_bytes = serde_json::to_vec(&AcceptedUpload {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                receipt: upload.clone(),
+                acknowledged_at: 50,
+                candidate: Some(CacheCandidate {
+                    journal_file: journal.file_name().unwrap().to_str().unwrap().into(),
+                    journal_bytes,
+                    journal_sha256,
+                    created_at: 7,
+                }),
+            })
+            .unwrap();
+            let calls = std::cell::RefCell::new(Vec::<PathBuf>::new());
+            if stage == "candidate-write" {
+                fs::write(root.join("recent-cache"), b"synthetic parent obstruction").unwrap();
+            }
+            let ensure = |path: &Path| -> Result<(), String> {
+                calls.borrow_mut().push(path.to_owned());
+                // Each callback must follow its own complete atomic write.
+                assert_eq!(fs::read(path).unwrap(), expected_bytes);
+                if path == marker {
+                    assert!(!permanent.exists());
+                } else {
+                    assert_eq!(path, permanent.as_path());
+                    assert_eq!(fs::read(&marker).unwrap(), expected_bytes);
+                }
+                if (stage == "candidate-sync" && path == marker)
+                    || (stage == "accepted-sync" && path == permanent)
+                {
+                    return Err("synthetic receipt durability failure".into());
+                }
+                ensure_durable_receipt(path)?;
+                if stage == "accepted-write" && path == marker {
+                    // Obstruct only after the initial permanent-receipt lookup
+                    // and successful candidate write/sync, reaching write two.
+                    fs::write(root.join("receipts"), b"synthetic parent obstruction").unwrap();
+                }
+                Ok(())
+            };
+            let result = acknowledge_at_with_durability(&root, &run_id, upload, 50, &ensure);
+            if stage == "success" {
+                let acknowledged = result.unwrap();
+                assert!(acknowledged.acknowledged);
+                assert_eq!(acknowledged.pruned, 0);
+                assert!(acknowledged.warnings.is_empty());
+            } else if stage.ends_with("sync") {
+                assert_eq!(
+                    result.err().as_deref(),
+                    Some("synthetic receipt durability failure")
+                );
+            } else {
+                assert!(result.is_err()); // Native filesystem error text varies.
+            }
+            let expected_calls = match stage {
+                "candidate-write" => vec![],
+                "candidate-sync" | "accepted-write" => vec![marker.clone()],
+                _ => vec![marker.clone(), permanent.clone()],
+            };
+            assert_eq!(*calls.borrow(), expected_calls);
+            assert_eq!(fs::read(&journal).unwrap(), original);
+            assert_eq!(marker.is_file(), stage != "candidate-write");
+            assert_eq!(
+                permanent.is_file(),
+                matches!(stage, "accepted-sync" | "success")
+            );
+            if marker.is_file() {
+                assert_eq!(fs::read(&marker).unwrap(), expected_bytes);
+            }
+            if permanent.is_file() {
+                assert_eq!(fs::read(&permanent).unwrap(), expected_bytes);
+            }
+            if stage == "accepted-write" {
+                fs::remove_file(root.join("receipts")).unwrap();
+            } else if stage == "candidate-write" {
+                fs::remove_file(root.join("recent-cache")).unwrap();
+            }
+            if matches!(
+                stage,
+                "candidate-write" | "candidate-sync" | "accepted-write"
+            ) {
+                let maintenance = prune_cache(&root, 0, |_| {
+                    panic!("an orphan marker must not authorize journal removal")
+                });
+                assert_eq!(maintenance.pruned, 0);
+                assert!(maintenance.warnings.is_empty());
+                assert_eq!(fs::read(&journal).unwrap(), original);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

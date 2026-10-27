@@ -1,10 +1,102 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EXECUTION_KEYS, executionSettings } from '../../shared/config/executionSettings';
+import { CACHE_TYPE_OPTIONS } from '../../shared/config/tuningValidation.ts';
 import { testConfig } from '../../testing/appStore';
-import { exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, writeProjects } from './projectStore';
+import { ACTIVE_PROJECT_KEY, MAX_PROJECTS, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, upsertProject, writeProjects } from './projectStore';
 import { materializeProfileApplication, captureProfile } from '../../shared/config/settingsProfiles';
 
 describe('project settings snapshots', () => {
+  it('imports same-name copies without replacing the active project or its referenced identity', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Research', 'Keep citations', testConfig, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['local:lookup'], '', 100);
+    writeProjects([original], store, original.id);
+    const first = importProject(exportProject(original), readProjects(store));
+    writeProjects(upsertProject(first, readProjects(store)), store);
+    const second = importProject(exportProject(original), readProjects(store));
+    writeProjects(upsertProject(second, readProjects(store)), store);
+    expect(first.name).toBe('Research (2)');
+    expect(second.name).toBe('Research (3)');
+    expect(new Set([first.id, second.id, original.id]).size).toBe(3);
+    expect(readProjects(store).find(item => item.id === original.id)).toEqual(original);
+    expect(activeProjectId(store)).toBe(original.id);
+    expect(second.documentBindings).toEqual(original.documentBindings);
+    expect(second.toolIds).toEqual(original.toolIds);
+    expect(() => upsertProject({ ...first, name: 'RESEARCH' }, readProjects(store))).toThrow('Choose another name');
+    expect(readProjects(store)).toHaveLength(3);
+  });
+
+  it('keeps the project library when a new project exceeds capacity and still allows an update', () => {
+    const projects = Array.from({ length: MAX_PROJECTS }, (_, index) => projectFromConfig(`Project ${index}`, '', testConfig, [], [], '', index));
+    const extra = projectFromConfig('Extra', '', testConfig, [], [], '', 200);
+    expect(() => upsertProject(extra, projects)).toThrow('library is full');
+    expect(projects).toHaveLength(MAX_PROJECTS);
+    expect(upsertProject({ ...projects[0], description: 'Updated' }, projects)).toHaveLength(MAX_PROJECTS);
+  });
+
+  function memoryStorage() {
+    const values = new Map<string, string>();
+    const store = { getItem: (key: string) => values.get(key) ?? null,
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+    } as unknown as Storage;
+    return { values, store };
+  }
+
+  it('reports quota failure without changing saved projects, the active pointer, or listeners', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    writeProjects([original], store, original.id);
+    const changed = { ...original, name: 'Edited' };
+    const listener = vi.fn();
+    window.addEventListener(PROJECTS_CHANGED_EVENT, listener);
+    try {
+      vi.mocked(store.setItem).mockImplementationOnce(() => { throw new DOMException('Synthetic project quota exceeded', 'QuotaExceededError'); });
+      expect(() => writeProjects([changed], store, changed.id)).toThrow('Synthetic project quota exceeded');
+      expect(readProjects(store)).toEqual([original]);
+      expect(activeProjectId(store)).toBe(original.id);
+      expect(listener).not.toHaveBeenCalled();
+      writeProjects([changed], store, changed.id);
+      expect(readProjects(store)).toEqual([changed]);
+      expect(listener).toHaveBeenCalledOnce();
+    } finally { window.removeEventListener(PROJECTS_CHANGED_EVENT, listener); }
+  });
+
+  it('restores the previous project list if its active pointer cannot be saved', () => {
+    const { store, values } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    const replacement = projectFromConfig('Replacement', '', testConfig, [], [], '', 200);
+    writeProjects([original], store, original.id);
+    const raw = values.get(PROJECTS_KEY);
+    vi.mocked(store.setItem).mockImplementation((key, value) => {
+      if (key === ACTIVE_PROJECT_KEY) throw new Error('Synthetic active-project write failure');
+      values.set(key, value);
+    });
+    expect(() => writeProjects([replacement], store, replacement.id)).toThrow('Synthetic active-project write failure');
+    expect(values.get(PROJECTS_KEY)).toBe(raw);
+    expect(readProjects(store)).toEqual([original]);
+    expect(activeProjectId(store)).toBe(original.id);
+    expect(() => setActiveProjectId(replacement.id, store)).toThrow('Synthetic active-project write failure');
+  });
+
+  it('keeps the project being removed if clearing the active pointer fails', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    writeProjects([original], store, original.id);
+    vi.mocked(store.removeItem).mockImplementationOnce(() => { throw new Error('Synthetic active-project removal failure'); });
+    expect(() => writeProjects([], store, null)).toThrow('Synthetic active-project removal failure');
+    expect(readProjects(store)).toEqual([original]);
+    expect(activeProjectId(store)).toBe(original.id);
+  });
+
+  it('keeps reading resilient while making unavailable project writes explicit', () => {
+    const blocked = { getItem: () => { throw new Error('Synthetic read restriction'); } } as unknown as Storage;
+    expect(readProjects(blocked)).toEqual([]);
+    expect(activeProjectId(blocked)).toBeNull();
+    expect(readProjects(null)).toEqual([]);
+    expect(activeProjectId(null)).toBeNull();
+    expect(() => writeProjects([], null)).toThrow('Project storage is unavailable');
+    expect(() => setActiveProjectId(null, null)).toThrow('Project storage is unavailable');
+  });
   it('round-trips every execution setting without copying app-level configuration', () => {
     const cfg = {
       ...structuredClone(testConfig), runtime_defaults: ['temperature'],
@@ -15,11 +107,26 @@ describe('project settings snapshots', () => {
     const project = projectFromConfig('Research', 'Use project instructions', cfg);
     const restored = importProject(exportProject(project));
     expect(Object.keys(restored.config).sort()).toEqual([...EXECUTION_KEYS].sort());
-    expect(restored.config).toEqual(executionSettings(cfg));
+    expect(restored.config).toEqual({ ...executionSettings(cfg), active_provider: 'llama.cpp', active_runtime: '', provider_options: {} });
     expect(restored.systemPrompt).toBe('Use project instructions');
     expect(restored.config).not.toHaveProperty('models_dir');
     expect(restored.config).not.toHaveProperty('settings_profiles');
     expect(restored.config).not.toHaveProperty('sessions');
+  });
+  it('preserves every valid cache type through project normalization and falls back independently', () => {
+    for (const cacheType of CACHE_TYPE_OPTIONS) {
+      const project = projectFromConfig('Cache project', '', { ...testConfig, cache_type_k: cacheType, cache_type_v: 'q4_1' });
+      const restored = importProject(exportProject(project));
+      const patch = projectConfigPatch(restored);
+      expect(restored.config.cache_type_k).toBe(cacheType);
+      expect(restored.config.cache_type_v).toBe('q4_1');
+      expect(patch.cache_type_k).toBe(cacheType);
+      expect(patch.cache_type_v).toBe('q4_1');
+    }
+
+    const invalid = projectFromConfig('Invalid cache project', '', { ...testConfig, cache_type_k: 'not-a-cache-type', cache_type_v: 'iq4_nl' });
+    expect(invalid.config.cache_type_k).toBe('f16');
+    expect(invalid.config.cache_type_v).toBe('iq4_nl');
   });
   it('keeps captured settings separate from source and applied copies', () => {
     const cfg = { ...structuredClone(testConfig), chat_options: { stop: ['done'] } };
@@ -44,6 +151,35 @@ describe('project settings snapshots', () => {
     expect(restored.profileApplication?.settings).not.toHaveProperty('models_dir');
     application.profile_id = 'changed-after-save';
     expect(project.profileApplication?.profile_id).toBe(profile.id);
+  });
+
+  it('keeps a registered engine profile link and its owned settings through storage, export and import', () => {
+    const cfg = {
+      ...structuredClone(testConfig), active_provider: 'custom.synthetic' as const, active_runtime: 'synthetic-1',
+      active_backend: 'vulkan', active_build: 'b1', active_model: '/synthetic/model.json',
+      provider_options: { 'custom.synthetic': { fresh_pair: { spelling: null, occurrences: [['a', 'b']] } }, 'llama.cpp': { other: 'kept apart' } },
+    };
+    const profile = { ...captureProfile(cfg, 'Tuned', 'model', ''), id: 'profile-tuned-synthetic' };
+    const application = materializeProfileApplication(cfg, '', profile);
+    const project = projectFromConfig('Synthetic', '', cfg, [], [], '', 100, application);
+    writeProjects([project], localStorage);
+    const stored = readProjects(localStorage)[0];
+    const restored = importProject(exportProject(stored));
+    for (const item of [project, stored, restored]) {
+      expect(item.profileApplication).toEqual({ ...application, system_prompt: '' });
+      expect(item.profileApplication?.provider).toBe('custom.synthetic');
+      for (const key of ['active_provider', 'active_runtime', 'active_backend', 'active_build', 'ctx_size']) {
+        expect(item.profileApplication?.settings).not.toHaveProperty(key);
+      }
+    }
+    // A link saved before the engine was kept regains it from the project.
+    const { provider: _lost, ...withoutProvider } = application;
+    expect(importProject(JSON.stringify({ ...project, profileApplication: withoutProvider })).profileApplication?.provider).toBe('custom.synthetic');
+    // A link to another engine's profile does not describe this project.
+    expect(importProject(JSON.stringify({ ...project, profileApplication: { ...application, provider: 'vllm' } })).profileApplication).toBeUndefined();
+    // Legacy llama.cpp links stay without an explicit engine.
+    const llama = projectFromConfig('Legacy', '', testConfig, [], [], '', 100, { model: testConfig.active_model, profile_id: 'profile-x', settings: {}, system_prompt: '' });
+    expect(llama.profileApplication).not.toHaveProperty('provider');
   });
 
   it.each([

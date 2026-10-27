@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyCompletion } from "../lib/notifications";
-import { finishTask, getTaskSnapshot, registerTask, removeTask, updateTask, type TaskKind } from "./taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY_MS, updateTask, type TaskKind } from "./taskRegistry";
 
 vi.mock("../lib/notifications", () => ({ notifyCompletion: vi.fn(async () => undefined) }));
 
@@ -87,5 +87,67 @@ describe("completion notifications from finishTask", () => {
   it("ignores ids that are not registered", () => {
     finishTask("missing", "completed");
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("task clearing after reuse", () => {
+  const task = () => getTaskSnapshot().find(value => value.id === "transfer");
+
+  it.each([
+    ["completed", "running"],
+    ["cancelled", "running"],
+    ["completed", "cancelling"],
+    ["cancelled", "cancelling"],
+  ] as const)("keeps an accepted %s row update to %s beyond the old clear deadline", (terminal, active) => {
+    const cancel = vi.fn();
+    start("transfer", "model-download", { phase: "downloading", cancel });
+    finishTask("transfer", terminal);
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS / 2);
+
+    updateTask("transfer", { state: active, received: 16, total: 64 });
+    const restarted = { ...task()! };
+    expect(restarted).toMatchObject({ state: active, received: 16, total: 64, label: "work", phase: "downloading", cancel });
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1);
+    expect(task()).toEqual(restarted);
+
+    finishTask("transfer", "completed");
+    expect(notifyMock.mock.calls).toEqual(terminal === "completed" ? [["download"], ["download"]] : [["download"]]);
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS - 1);
+    expect(task()?.state).toBe("completed");
+    vi.advanceTimersByTime(1);
+    expect(task()).toBeUndefined();
+  });
+
+  it("preserves registerTask reuse, ordinary terminal clearing and failed-row retention", () => {
+    start("transfer", "model-download");
+    finishTask("transfer", "completed");
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS / 2);
+    start("transfer", "model-download");
+    const next = { ...task()! };
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1);
+    expect(task()).toEqual(next);
+
+    finishTask("transfer", "cancelled");
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS);
+    expect(task()).toBeUndefined();
+
+    start("transfer", "model-download");
+    finishTask("transfer", "failed", "Synthetic persistent failure");
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS * 2);
+    expect(task()).toMatchObject({ state: "failed", detail: "Synthetic persistent failure" });
+  });
+
+  it.each(["completed", "cancelled"] as const)("keeps the original %s clear deadline after a non-state update", terminal => {
+    start("transfer", "model-download");
+    finishTask("transfer", terminal);
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS / 2);
+    updateTask("transfer", { received: 64, detail: "Final transfer size" });
+    const updated = { ...task()! };
+
+    vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS / 2 - 1);
+    expect(task()).toEqual(updated);
+    vi.advanceTimersByTime(1);
+    expect(task()).toBeUndefined();
+    expect(notifyMock.mock.calls).toEqual(terminal === "completed" ? [["download"]] : []);
   });
 });

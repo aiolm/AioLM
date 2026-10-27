@@ -1,0 +1,424 @@
+import base64
+import csv
+import hashlib
+import io
+import json
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+from build_wheel import build_wheel, patch_vllm
+
+VLLM_SOURCE = '''class VLLMValidationError(ValueError):
+    pass
+
+class Connector:
+    def load(self, allowed_local_media_path, filepath):
+        if allowed_local_media_path is None:
+            raise RuntimeError(
+                "Cannot load local files without `--allowed-local-media-path`."
+            )
+        if not filepath.startswith(allowed_local_media_path):
+            raise ValueError(
+                f"The file path {filepath} must be a subpath "
+                f"of `--allowed-local-media-path {allowed_local_media_path}`."
+            )
+        return filepath
+'''
+
+
+class CompatibilityWheelBuild(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "vllm-0.30.0+cpu-py3-none-any.whl"
+        self.info = "vllm-0.30.0+cpu.dist-info"
+        with zipfile.ZipFile(self.source, "w") as wheel:
+            wheel.writestr("vllm/multimodal/media/connector.py", VLLM_SOURCE)
+            wheel.writestr(self.info + "/METADATA", "Metadata-Version: 2.1\nName: vllm\nVersion: 0.30.0+cpu\n")
+            wheel.writestr(self.info + "/RECORD", "")
+            wheel.writestr(self.info + "/licenses/LICENSE", "Synthetic license fixture; preserve these bytes.")
+            executable = zipfile.ZipInfo("vllm/native-helper")
+            executable.external_attr = 0o100755 << 16
+            wheel.writestr(executable, b"synthetic native fixture")
+        self.original = self.source.read_bytes()
+        self.digest = hashlib.sha256(self.original).hexdigest()
+
+    def build(self):
+        return build_wheel(self.source, self.root, self.digest, "vllm")
+
+    def test_preserves_source_license_executable_attributes_and_records_a_local_version(self):
+        audit = self.build()
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual(audit["local_version"], "0.30.0+cpu.aiolm.media1")
+        with zipfile.ZipFile(self.root / audit["output_filename"]) as wheel:
+            info = "vllm-0.30.0+cpu.aiolm.media1.dist-info"
+            self.assertEqual(wheel.read(info + "/licenses/LICENSE"), b"Synthetic license fixture; preserve these bytes.")
+            self.assertEqual(wheel.getinfo("vllm/native-helper").external_attr, 0o100755 << 16)
+            self.assertIn(b"Version: 0.30.0+cpu.aiolm.media1\n", wheel.read(info + "/METADATA"))
+            provenance = json.loads(wheel.read(info + "/aiolm_compatibility.json"))
+            self.assertEqual(provenance["source_wheel_sha256"], self.digest)
+            for name, digest, length in csv.reader(io.StringIO(wheel.read(info + "/RECORD").decode())):
+                if name.endswith("/RECORD"):
+                    self.assertEqual((digest, length), ("", ""))
+                    continue
+                data = wheel.read(name)
+                self.assertEqual(int(length), len(data))
+                self.assertEqual(digest, "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("="))
+
+    def test_validation_correction_retains_the_file_allowlist(self):
+        namespace = {}
+        exec(patch_vllm(VLLM_SOURCE), namespace)
+        connector = namespace["Connector"]()
+        error = namespace["VLLMValidationError"]
+        with self.assertRaises(error):
+            connector.load(None, "/outside/image.png")
+        with self.assertRaises(error):
+            connector.load("/allowed/", "/outside/image.png")
+        self.assertEqual(connector.load("/allowed/", "/allowed/image.png"), "/allowed/image.png")
+        with self.assertRaises(ValueError):
+            patch_vllm(VLLM_SOURCE.replace("raise RuntimeError", "raise Exception"))
+
+    def test_rejects_a_wrong_source_hash_and_preserves_existing_output(self):
+        with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+            build_wheel(self.source, self.root, "0" * 64, "vllm")
+        audit = self.build()
+        output = self.root / audit["output_filename"]
+        before = output.read_bytes()
+        with self.assertRaises(FileExistsError):
+            self.build()
+        self.assertEqual(output.read_bytes(), before)
+        self.assertEqual(self.source.read_bytes(), self.original)
+
+    def test_cancelled_build_removes_only_its_new_output(self):
+        with patch("build_wheel.zipfile.ZipFile.writestr", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.build()
+        self.assertEqual(list(self.root.glob("*.whl")), [self.source])
+        self.assertEqual(self.source.read_bytes(), self.original)
+
+
+class MlxStreamPreflight(unittest.IsolatedAsyncioTestCase):
+    async def test_preflight_failure_and_cancellation_finalize_once_without_double_counting_overflow(self):
+        import asyncio
+        import types
+        from build_wheel import patch_mlx_preflight, patch_mlx_audio_window_preflight
+        source = 'async def handler(endpoint, model, preflight, audio=None):\n    try:\n        await preflight()\n    except PromptTooLongError as e:\n        runtime.metrics.record_failure(endpoint=endpoint, model=model, stream=True, error=str(e))\n        raise HTTPException(status_code=400, detail=str(e))\n\n\ndef _build_structured_logits_processors():\n    pass\n'
+        class Metrics:
+            def __init__(self):
+                self.in_flight, self.failures = 1, 0
+            def record_failure(self, **kwargs):
+                self.in_flight -= 1
+                self.failures += 1
+        class PromptTooLongError(ValueError):
+            pass
+        class HTTPException(Exception):
+            def __init__(self, status_code, detail):
+                self.status_code = status_code
+                super().__init__(detail)
+        cases = (ValueError("invalid synthetic waveform"), ValueError("Unable to detect audio format from bytes"), ValueError("Gemma3n audio padding supports at most 30 seconds per clip"), ValueError("Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"), asyncio.CancelledError(), PromptTooLongError("synthetic overflow"))
+        for error in cases:
+            async def preflight():
+                raise error
+            for text, corrected in ((source, False), (patch_mlx_audio_window_preflight(source), True)):
+                metrics = Metrics()
+                namespace = {"runtime": types.SimpleNamespace(metrics=metrics), "PromptTooLongError": PromptTooLongError, "HTTPException": HTTPException}
+                exec(text, namespace)
+                overflow = isinstance(error, PromptTooLongError)
+                invalid_audio = corrected and str(error) in ("Unable to detect audio format from bytes", "Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip")
+                with self.assertRaises(HTTPException if overflow or invalid_audio else type(error)) as caught:
+                    await namespace["handler"]("/chat/completions", "Synthetic", preflight, ["synthetic audio"])
+                if overflow or invalid_audio:
+                    self.assertEqual(caught.exception.status_code, 400)
+                else:
+                    self.assertIs(caught.exception, error)
+                self.assertEqual((metrics.in_flight, metrics.failures), (0, 1) if corrected or overflow else (1, 0))
+        metrics = Metrics()
+        error = ValueError("Unable to detect audio format from bytes")
+        async def preflight_without_audio():
+            raise error
+        namespace = {"runtime": types.SimpleNamespace(metrics=metrics), "PromptTooLongError": PromptTooLongError, "HTTPException": HTTPException}
+        exec(patch_mlx_preflight(source), namespace)
+        with self.assertRaises(ValueError) as caught:
+            await namespace["handler"]("/chat/completions", "Synthetic", preflight_without_audio)
+        self.assertIs(caught.exception, error)
+        self.assertEqual((metrics.in_flight, metrics.failures), (0, 1))
+
+
+class Gemma3nEmbeddingScale(unittest.TestCase):
+    def test_media_prefill_preserves_the_text_token_path_scale_without_scaling_media(self):
+        import types
+        from build_wheel import patch_mlx_gemma3n_embeddings
+
+        source = '''class Model:
+    def embeddings(self, input_ids, media=None):
+        inputs_embeds = self.language_model.model.embed_tokens(input_ids)
+        if media is not None:
+            return inputs_embeds, media
+        return inputs_embeds
+'''
+        namespace = {}
+        exec(patch_mlx_gemma3n_embeddings(source), namespace)
+        model = namespace['Model']()
+        model.config = types.SimpleNamespace(text_config=types.SimpleNamespace(hidden_size=16))
+        model.language_model = types.SimpleNamespace(model=types.SimpleNamespace(embed_tokens=lambda ids: 0.75))
+        token_path = 0.75 * (16**0.5)
+        self.assertEqual(model.embeddings([1]), token_path)
+        # Projected media already has its own normalization, unlike text tokens.
+        self.assertEqual(model.embeddings([1], media=2.5), (token_path, 2.5))
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_embeddings(source.replace('embed_tokens(input_ids)', 'other_embedding(input_ids)'))
+
+
+class ProcessorTemplateTokens(unittest.TestCase):
+    def test_forwards_explicit_token_policy_to_keyword_processors_without_changing_other_signatures(self):
+        import inspect
+        from build_wheel import patch_mlx_special_tokens
+
+        source = '''def process(processor, add_special_tokens=False):
+    parameters = inspect.signature(processor).parameters
+    args = {}
+    if "add_special_tokens" in parameters:
+        args["add_special_tokens"] = add_special_tokens
+    return processor(**args)
+'''
+        namespace = {'inspect': inspect}
+        exec(patch_mlx_special_tokens(source), namespace)
+        process = namespace['process']
+
+        def keyword_processor(**kwargs):
+            return kwargs
+        def explicit_processor(add_special_tokens=True):
+            return add_special_tokens
+        def no_token_option():
+            return 'unchanged'
+        for policy in (False, True):
+            self.assertEqual(process(keyword_processor, policy), {'add_special_tokens': policy})
+            self.assertIs(process(explicit_processor, policy), policy)
+            self.assertEqual(process(no_token_option, policy), 'unchanged')
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_special_tokens(source.replace('in parameters:', 'in other_parameters:'))
+
+    def test_processor_and_tokenizer_share_the_loaded_template_including_no_template(self):
+        import types
+        from build_wheel import patch_mlx_gemma3n_template
+        source = '''class Processor:
+    @classmethod
+    def loaded(cls, tokenizer, **proc_kwargs):
+        return cls(
+            tokenizer=tokenizer,
+            **proc_kwargs,
+        )
+    def __init__(self, **kwargs):
+        self.values = kwargs
+'''
+        namespace = {}
+        exec(patch_mlx_gemma3n_template(source), namespace)
+        for template in (None, '<bos>synthetic chat template'):
+            tokenizer = types.SimpleNamespace(chat_template=template)
+            values = namespace['Processor'].loaded(tokenizer, audio_seq_length=188).values
+            self.assertIs(values['tokenizer'], tokenizer)
+            self.assertEqual(values['chat_template'], template)
+            self.assertEqual(values['audio_seq_length'], 188)
+        values = namespace['Processor'].loaded(object()).values
+        self.assertIsNone(values['chat_template'])
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_template(source.replace('tokenizer=tokenizer', 'tokenizer=other'))
+
+
+class Gemma3nAudioWindow(unittest.TestCase):
+    def test_encoded_padding_preserves_valid_frame_values_and_order_for_each_recording(self):
+        import ast
+        import math
+        import types
+        from build_wheel import patch_mlx_gemma3n_audio_embeddings
+        source = 'from typing import Optional\n\n\ndef masked_scatter(input_tensor, mask, source):\n    pass\n\nclass Model:\n    def prepare(self):\n        inputs_embeds = self.language_model.model.embed_tokens(input_ids)\n        if True:\n            audio_features = mx.concatenate(\n                (audio_features, extra_padding_features), axis=1\n            )\n'
+        tree = ast.parse(patch_mlx_gemma3n_audio_embeddings(source))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == '_align_gemma3n_audio_features')
+        class Tensor:
+            def __init__(self, values, shape):
+                self.values, self.shape = list(values), tuple(shape)
+                assert len(self.values) == math.prod(self.shape)
+            def __getitem__(self, index):
+                width = math.prod(self.shape[1:])
+                return Tensor(self.values[index * width:(index + 1) * width], self.shape[1:])
+            def tolist(self):
+                if len(self.shape) == 1:
+                    return self.values
+                return [self[index].tolist() for index in range(self.shape[0])]
+        def take(features, positions, axis):
+            self.assertEqual(axis, 0)
+            width = features.shape[-1]
+            return Tensor([value for index in positions.values for value in features.values[index * width:(index + 1) * width]], (len(positions.values), width))
+        def concatenate(rows, axis):
+            self.assertEqual(axis, 0)
+            return Tensor([value for row in rows for value in row.values], (sum(row.shape[0] for row in rows), rows[0].shape[1]))
+        def stack(rows, axis):
+            self.assertEqual(axis, 0)
+            return Tensor([value for row in rows for value in row.values], (len(rows), *rows[0].shape))
+        namespace = {'mx': types.SimpleNamespace(array=lambda values, dtype: Tensor(values, (len(values),)), int32=int, take=take, concatenate=concatenate, stack=stack, broadcast_to=lambda value, shape: Tensor(value.values * (shape[0] * shape[1]), shape))}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'gemma3n.py', 'exec'), namespace)
+        align = namespace['_align_gemma3n_audio_features']
+        features = Tensor([10, 11, 90, 91, 20, 21, 30, 31, 40, 41, 80, 81], (2, 3, 2))
+        padding = Tensor([False, True, False, False, False, True], (2, 3))
+        pad = Tensor([0, 1], (1, 1, 2))
+        self.assertEqual(align(features, padding, 4, pad).values, [0, 1, 0, 1, 10, 11, 20, 21, 0, 1, 0, 1, 30, 31, 40, 41])
+        self.assertEqual(align(features, padding, 2, pad).values, [10, 11, 20, 21, 30, 31, 40, 41])
+        with self.assertRaisesRegex(ValueError, 'no valid frames'):
+            align(features, Tensor([True] * 6, (2, 3)), 4, pad)
+        with self.assertRaisesRegex(ValueError, 'at most 30 seconds'):
+            align(features, Tensor([False] * 6, (2, 3)), 2, pad)
+        self.assertEqual(features.values, [10, 11, 90, 91, 20, 21, 30, 31, 40, 41, 80, 81])
+
+    def test_nonstream_endpoints_reject_wrapped_window_errors_without_reclassifying_other_failures(self):
+        from build_wheel import patch_mlx_audio_window_nonstream
+        class HTTPException(Exception):
+            def __init__(self, status_code, detail):
+                self.status_code = status_code
+                super().__init__(detail)
+        source = '''class Endpoints:
+    def first(self, e):
+        if True:
+            if True:
+                raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+    def second(self, e, audio):
+        if True:
+            if True:
+                raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+'''
+        namespace = {'HTTPException': HTTPException}
+        exec(patch_mlx_audio_window_nonstream(source), namespace)
+        endpoints = namespace['Endpoints']()
+        for endpoint in (lambda error, audio: endpoints.first(error), endpoints.second):
+            for message in ('Gemma3n audio padding supports at most 30 seconds per clip', 'Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip', 'different generation failure'):
+                for audio in (None, ['synthetic audio']):
+                    with self.assertRaises(HTTPException) as caught:
+                        endpoint(ValueError(message), audio)
+                    self.assertEqual(caught.exception.status_code, 400 if 'at most 30 seconds' in message else 500)
+            with self.assertRaises(HTTPException) as caught:
+                endpoint(RuntimeError('Gemma3n audio padding supports at most 30 seconds per clip'), None)
+            self.assertEqual(caught.exception.status_code, 500)
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_audio_window_nonstream(source.replace('def second', 'def unused', 1).split('    def unused')[0])
+
+    def helper(self):
+        import ast
+        import os
+        import types
+        from build_wheel import patch_mlx_gemma3n_audio
+        source = 'from typing import List, Optional, Union\n\n\nclass Gemma3nProcessor(ProcessorMixin):\n    def prepare(self, audio, audio_kwargs):\n        if audio is not None:\n            audio_inputs = self.feature_extractor(audio, **audio_kwargs)\n'
+        tree = ast.parse(patch_mlx_gemma3n_audio(source))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
+        class Array:
+            def __init__(self, samples):
+                self.samples, self.ndim = samples, 1
+            def __len__(self):
+                return self.samples
+        namespace = {'os': os, 'np': types.SimpleNamespace(ndarray=Array, number=int)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'processor.py', 'exec'), namespace)
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_audio(source.replace('**audio_kwargs)', '**different_kwargs)'))
+        return namespace['_extract_gemma3n_audio'], Array
+
+    def test_explicit_window_preserves_waveforms_and_original_processor_settings(self):
+        import os
+        extract, Array = self.helper()
+        class Extractor:
+            sampling_rate, padding_side = 16000, 'right'
+            def __call__(self, audio, **kwargs):
+                return audio, self.padding_side, kwargs
+        original = Extractor()
+        for audio in (Array(480000), [Array(3200), Array(8000)], [0.0, 0.25, -0.25]):
+            options = {'sampling_rate': 16000, 'padding': False, 'truncation': True}
+            with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'model'}):
+                result = extract(original, audio, options)
+                self.assertIs(result[0], audio)
+                self.assertEqual(result[1:], ('right', options))
+            with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+                result = extract(original, audio, options)
+                self.assertIs(result[0], audio)
+                self.assertEqual(result[1], 'right')
+                self.assertEqual(result[2], dict(sampling_rate=16000, padding=False, max_length=480000, truncation=False, return_attention_mask=True))
+            self.assertEqual(original.padding_side, 'right')
+            self.assertEqual(options, {'sampling_rate': 16000, 'padding': False, 'truncation': True})
+        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+            for audio in (Array(480001), [Array(100), Array(480001)]):
+                with self.assertRaisesRegex(ValueError, 'at most 30 seconds'):
+                    extract(original, audio, {})
+
+    def test_server_cli_selects_a_known_policy_and_clears_a_previous_policy(self):
+        import argparse
+        import os
+        from build_wheel import patch_mlx_audio_padding_cli
+        source = 'def configure():\n    parser = argparse.ArgumentParser()\n    args = parser.parse_args()\n    return args\n'
+        namespace = {'argparse': argparse, 'os': os}
+        exec(patch_mlx_audio_padding_cli(source), namespace)
+        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left', 'MLX_VLM_GEMMA3N_AUDIO_DITHER': '1'}):
+            with patch('sys.argv', ['server']):
+                args = namespace['configure']()
+                self.assertEqual(args.gemma3n_audio_padding, 'model')
+                self.assertFalse(args.gemma3n_audio_dither)
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_PADDING'], 'model')
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '0')
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'encoded-left']):
+                self.assertEqual(namespace['configure']().gemma3n_audio_padding, 'encoded-left')
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '0')
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'encoded-left', '--gemma3n-audio-dither']):
+                self.assertTrue(namespace['configure']().gemma3n_audio_dither)
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '1')
+            with patch('sys.argv', ['server', '--gemma3n-audio-dither']):
+                with self.assertRaises(SystemExit):
+                    namespace['configure']()
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'unknown']):
+                with self.assertRaises(SystemExit):
+                    namespace['configure']()
+
+
+class Gemma4AudioPacking(unittest.TestCase):
+    def test_padding_between_recordings_cannot_take_the_next_recordings_token_slots(self):
+        import ast
+        import math
+        import types
+        from build_wheel import patch_mlx_gemma4_audio
+
+        source = '\n\nclass MultimodalEmbedder(nn.Module):\n    pass\n\nclass Model:\n    def embeddings(self):\n        if True:\n            def _encode_audio(feat):\n                enc, _ = self.audio_tower(feat, mask)\n                return self.embed_audio(enc)\n'
+        tree = ast.parse(patch_mlx_gemma4_audio(source))
+        function = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == '_pack_audio_features')
+
+        class Tensor:
+            def __init__(self, values, shape):
+                self.values, self.shape = list(values), tuple(shape)
+                assert len(self.values) == math.prod(self.shape)
+            def reshape(self, *shape):
+                if -1 in shape:
+                    shape = tuple(len(self.values) // math.prod(d for d in shape if d != -1) if d == -1 else d for d in shape)
+                return Tensor(self.values, shape)
+            def tolist(self):
+                assert len(self.shape) == 1
+                return self.values
+
+        def take(features, positions, axis):
+            self.assertEqual(axis, 0)
+            width = features.shape[-1]
+            return Tensor([value for index in positions for value in features.values[index * width:(index + 1) * width]], (len(positions), width))
+
+        namespace = {'mx': types.SimpleNamespace(take=take, array=lambda values, dtype: values, int32=int)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'gemma4.py', 'exec'), namespace)
+        pack = namespace['_pack_audio_features']
+        # Encoder padding can become nonzero after the learned projection.
+        features = Tensor([10, 11, 20, 21, 90, 91, 30, 31, 40, 41, 50, 51], (2, 3, 2))
+        packed = pack(features, Tensor([False, False, True, False, False, False], (2, 3)))
+        self.assertEqual(packed.values, [10, 11, 20, 21, 30, 31, 40, 41, 50, 51])
+        self.assertNotEqual(features.values[:10], packed.values, 'upstream scattering includes the first recording padding and drops the final observation')
+        self.assertEqual(pack(features, Tensor([False] * 6, (2, 3))).values, features.values)
+        with self.assertRaisesRegex(ValueError, 'no valid frames'):
+            pack(features, Tensor([True] * 6, (2, 3)))
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma4_audio(source.replace('enc, _ =', 'enc, changed ='))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,7 +4,7 @@
 
 [ドキュメント一覧](../README.md) — インストール、開発、コード構成、プロジェクトポリシー。
 
-AioLM（All-in-One LM）— `llama.cpp` 用 Windows/macOS/Linux デスクトップランタイムマネージャー。`llama-server` を利用した Tauri v2 デスクトップ UI で、モデル、ランタイム、チャット、ベンチマークを管理します。
+AioLM（All-in-One LM）— Tauri v2 UI でモデル、ランタイム、チャット、ベンチマークを管理する Windows/macOS/Linux デスクトップアプリです。llama.cpp、Linux および Apple Silicon macOS（vllm-metal）の vLLM、Apple Silicon macOS の MLX を選択できます。互換性と検証範囲は [推論ランタイム](../reference/inference-runtimes.md) を参照してください。
 
 モデルのロードと API サーバーの起動は独立しています。モデルをロードすると
 アプリ内チャットで利用でき、外部アプリから接続する場合はサイドバーの

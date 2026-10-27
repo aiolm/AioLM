@@ -18,6 +18,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const engineStatus: api.EngineInfo = {
+  provider: 'custom.status', runtime_id: 'synthetic-runtime', runtime_variant: 'external-process',
+  upstream_model: 'synthetic-model', speech_model_type: null,
+  modalities: { text: true, image: true, audio: false, video: false }, tasks: ['generate', 'embed'],
+  request_option_keys: ['temperature', 'payload', 'unsaved'],
+  request_fields: { temperature: 0.75, payload: { text: '한글🙂\n"\\', values: [null, true, -7] } },
+  embedding_model: 'synthetic-embedding', embedding_namespace: 'synthetic-namespace',
+  chat_supported: true, tools_auto: true, tool_parser: false,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -110,6 +120,8 @@ it("serializes concurrent initialization so migration is saved only once", async
 it("preserves the rendered snapshot when polling returns unchanged nested status", async () => {
   const snapshot: api.ServerStatus = {
     state: "running", url: "http://localhost:8080/v1", log_tail: "ready",
+    engine: structuredClone(engineStatus), active_requests: 1, idle_seconds: 0,
+    execution: { active_provider: engineStatus.provider, active_runtime: engineStatus.runtime_id, provider_options: { [engineStatus.provider]: engineStatus.request_fields } },
     memory: { model_mb: 10, context_mb: 1, kv_mb: 1, projector_mb: 0, adapters_mb: 0, total_mb: 12, source: "metadata" },
     lifecycle: { sleep_idle_seconds: 0, request_timeout_seconds: 60, parallel: 1 },
   };
@@ -123,9 +135,25 @@ it("preserves the rendered snapshot when polling returns unchanged nested status
   expect(result.current).toBe(rendered);
 });
 
+it('clears transient notices without erasing authoritative runtime failure diagnostics', async () => {
+  const failed: api.ServerStatus = {
+    state: 'failed', error: 'Synthetic allocation failure', log_tail: 'Synthetic diagnostic detail',
+  };
+  vi.mocked(api.serverStatus).mockImplementation(async () => structuredClone(failed));
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.status.state).toBe('failed'));
+  const snapshot = result.current.status;
+  await act(async () => { result.current.clearErrors(); });
+  expect(result.current.status).toBe(snapshot);
+  expect(result.current.status.error).toBe(failed.error);
+  await act(async () => { await result.current.refreshStatus(); });
+  expect(result.current.status).toBe(snapshot);
+});
+
 it("still publishes changed diagnostics and removes stale optional status fields", async () => {
   const initial: api.ServerStatus = {
     state: "running", log_tail: "ready",
+    engine: structuredClone(engineStatus), active_requests: 1, idle_seconds: 0,
     memory: { model_mb: 10, context_mb: 1, kv_mb: 1, projector_mb: 0, adapters_mb: 0, total_mb: 12, source: "metadata" },
     lifecycle: { sleep_idle_seconds: 0, request_timeout_seconds: 60, parallel: 1 },
   };
@@ -136,6 +164,15 @@ it("still publishes changed diagnostics and removes stale optional status fields
     { memory: { ...initial.memory!, total_mb: 20 } },
     { lifecycle: { ...initial.lifecycle!, active_requests: 1 } },
     { log_tail: "request completed" },
+    { idle_seconds: 1 },
+    { active_requests: 0 },
+    { engine: { ...engineStatus, runtime_id: 'replacement-runtime' } },
+    { engine: { ...engineStatus, modalities: { ...engineStatus.modalities, audio: true } } },
+    { engine: { ...engineStatus, tasks: ['generate'] } },
+    { engine: { ...engineStatus, request_fields: { ...engineStatus.request_fields, payload: { text: 'updated', values: [false, null, 7] } } } },
+    { engine: { ...engineStatus, request_option_keys: ['temperature'] } },
+    { engine: { ...engineStatus, chat_supported: false, tool_parser: true, request_lora: 'synthetic-adapter' } },
+    { engine: { ...engineStatus, embedding_namespace: 'replacement-namespace' } },
   ];
   for (const patch of updates) {
     const next = { ...result.current.status, ...patch };
@@ -143,6 +180,12 @@ it("still publishes changed diagnostics and removes stale optional status fields
     await act(async () => { await result.current.refreshStatus(); });
     expect(result.current.status).toEqual(next);
   }
+  const withoutEngine = { ...result.current.status };
+  delete withoutEngine.engine;
+  vi.mocked(api.serverStatus).mockResolvedValue(withoutEngine);
+  await act(async () => { await result.current.refreshStatus(); });
+  expect(result.current.status).toEqual(withoutEngine);
+  expect(result.current.status).not.toHaveProperty('engine');
   vi.mocked(api.serverStatus).mockResolvedValue({ state: "stopped" });
   await act(async () => { await result.current.refreshStatus(); });
   expect(result.current.status).toEqual({ state: "stopped" });
@@ -256,6 +299,54 @@ it("heals a stale execution-store save through reload and re-expansion", async (
   expect(finalRev).toBeLessThanOrEqual(diskRev + 1);
 });
 
+it("evaluates an execution-store patch for its preview, native save and conflict retry", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const previous = result.current.getConfig()!;
+  const disk = structuredClone({ ...previous, port: 9999 });
+  vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  const wrapped = renderHook(() => useExecutionStore(result.current));
+  const evaluated: api.AppConfig[] = [];
+  let saved!: api.AppConfig;
+  await act(async () => { saved = await wrapped.result.current.store.updateConfig(fresh => { evaluated.push(fresh); return { temperature: 0.3 }; }); });
+  expect(evaluated).toHaveLength(3);
+  expect(evaluated[0]).toBe(previous);
+  expect(evaluated[1]).toBe(previous);
+  expect(evaluated[2]).not.toBe(previous);
+  expect(evaluated[2].port).toBe(9999);
+  expect(saved).toMatchObject({ port: 9999, temperature: 0.3 });
+  expect(saved.settings_profiles?.revision).toBe((disk.settings_profiles?.revision ?? 0) + 1);
+  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings.temperature).toBe(0.3);
+  expect(result.current.actionError).toBeNull();
+});
+
+it("expands a waiting execution-store save against the snapshot a preceding save published", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
+  const persisting = deferred<api.AppConfig>();
+  vi.mocked(api.saveConfig).mockReturnValueOnce(persisting.promise);
+  const wrapped = renderHook(() => useExecutionStore(result.current));
+  const evaluated: api.AppConfig[] = [];
+  let direct!: Promise<api.AppConfig>;
+  let queued!: Promise<api.AppConfig>;
+  await act(async () => { direct = result.current.updateConfig({ temperature: 0.5 }); });
+  await waitFor(() => expect(api.saveConfig).toHaveBeenCalledTimes(savesBefore + 1));
+  await act(async () => { queued = wrapped.result.current.store.updateConfig(fresh => { evaluated.push(fresh); return { ctx_size: 8192 }; }); });
+  await waitFor(() => expect(evaluated).toHaveLength(1));
+  // The native save responds with a normalized snapshot the preview never saw.
+  const request = vi.mocked(api.saveConfig).mock.calls[savesBefore][0];
+  await act(async () => { persisting.resolve({ ...structuredClone(request), top_k: 7 }); await direct; await queued; });
+  expect(evaluated).toHaveLength(2);
+  expect(evaluated[0]).toMatchObject({ temperature: 0.5, top_k: testConfig.top_k });
+  expect(evaluated[1]).not.toBe(evaluated[0]);
+  expect(evaluated[1]).toMatchObject({ temperature: 0.5, top_k: 7 });
+  const saved = result.current.cfg!;
+  expect(saved).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
+  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
+});
+
 it("ignores a cancelled start settling after a new start begins", async () => {
   const first = deferred<string>();
   const second = deferred<string>();
@@ -337,4 +428,85 @@ it("keeps a late failure from a stopped slow start from overwriting a newer laun
   await act(async () => { second.resolve("http://localhost:8080/v1"); await secondRun; });
   expect(result.current.status.state).toBe("running");
   expect(result.current.busy).toBe(false);
+});
+
+it.each(['accepted', 'rolled back'] as const)('keeps config references and the local publication count coherent when a deferred save is %s', async outcome => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  const previous = result.current.cfg!;
+  const previousValues = structuredClone(previous);
+  const revision = result.current.getConfigRevision();
+  expect(revision).toBe(1);
+  expect(result.current.getConfig()).toBe(previous);
+  const persistence = deferred<api.AppConfig>();
+  vi.mocked(api.saveConfig).mockReturnValueOnce(persistence.promise);
+  let operation!: Promise<api.AppConfig>;
+  await act(async () => {
+    operation = result.current.updateConfig({ port: 8081 });
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(result.current.cfg?.port).toBe(8081));
+  const optimistic = result.current.cfg!;
+  expect(optimistic).not.toBe(previous);
+  expect(result.current.getConfig()).toBe(optimistic);
+  expect(result.current.getConfigRevision()).toBe(revision + 1);
+  if (outcome === 'accepted') {
+    const accepted = { ...optimistic, port: 8082 };
+    let saved!: api.AppConfig;
+    await act(async () => { persistence.resolve(accepted); saved = await operation; });
+    expect(saved).toBe(accepted);
+    expect(result.current.cfg).toBe(accepted);
+    expect(result.current.actionError).toBeNull();
+  } else {
+    const failure = new Error('Synthetic disk full');
+    const rejected = expect(operation).rejects.toBe(failure);
+    await act(async () => { persistence.reject(failure); await rejected; });
+    expect(result.current.cfg).toBe(previous);
+    expect(result.current.actionError).toBe('Configuration was not saved: Synthetic disk full');
+  }
+  expect(result.current.getConfig()).toBe(result.current.cfg);
+  expect(result.current.getConfigRevision()).toBe(revision + 2);
+  expect(previous).toEqual(previousValues);
+});
+
+it('publishes a coherent reloaded snapshot and reevaluates the patch before a deferred conflict retry', async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  const previous = result.current.cfg!;
+  const revision = result.current.getConfigRevision();
+  const disk = structuredClone({ ...previous, port: 9999 });
+  const retry = deferred<api.AppConfig>();
+  const conflict = new Error('settings profiles changed since this configuration was opened; reload before saving');
+  vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(conflict).mockReturnValueOnce(retry.promise);
+  const evaluations: Array<{ value: api.AppConfig; live: api.AppConfig | null; revision: number }> = [];
+  let operation!: Promise<api.AppConfig>;
+  await act(async () => {
+    operation = result.current.updateConfig(fresh => {
+      evaluations.push({ value: fresh, live: result.current.getConfig(), revision: result.current.getConfigRevision() });
+      return { port: 8081 };
+    });
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(evaluations.map(entry => entry.value.port)).toEqual([previous.port, 9999]);
+    expect(result.current.cfg?.port).toBe(8081);
+    expect(result.current.getConfig()).toBe(result.current.cfg);
+    expect(result.current.getConfigRevision()).toBe(revision + 4);
+  });
+  const pendingRetry = result.current.cfg!;
+  expect(evaluations[0].live).toBe(previous);
+  expect(evaluations[0].revision).toBe(revision);
+  expect(evaluations[1].live).toBe(evaluations[1].value);
+  expect(evaluations[1].revision).toBe(revision + 3);
+  expect(pendingRetry).not.toBe(previous);
+  expect(pendingRetry.settings_profiles).toBe(disk.settings_profiles);
+  let saved!: api.AppConfig;
+  await act(async () => { retry.resolve(pendingRetry); saved = await operation; });
+  expect(saved).toBe(pendingRetry);
+  expect(result.current.cfg).toBe(pendingRetry);
+  expect(result.current.getConfig()).toBe(pendingRetry);
+  expect(result.current.getConfigRevision()).toBe(revision + 5);
+  expect(result.current.actionError).toBeNull();
+  expect(disk.port).toBe(9999);
 });

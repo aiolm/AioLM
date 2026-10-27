@@ -1,7 +1,7 @@
 import type { Locale } from '../../shared/i18n/i18n';
 import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
 import { formatBytes } from '../../shared/lib/units.ts';
-import { formatRecordedRuntimeVersion } from '../../shared/runtime/runtimeUtils.ts';
+import { formatBenchmarkRuntimeVersion } from '../../shared/runtime/runtimeUtils.ts';
 import { benchmarkCopy } from './benchmarkCopy.ts';
 import { withoutCancelledTrials } from './benchmarkCancellation';
 import { summarizePerformanceRows, type PerformanceBenchmarkRecord, type PerformanceSummary } from './performanceRecords.ts';
@@ -81,7 +81,7 @@ export function performanceMarkdown(record: PerformanceBenchmarkRecord, locale: 
   const concurrencies = [...new Set([1, ...request.batch_sizes])];
   const planned = new Set(request.prompt_lengths).size * concurrencies.length * request.repetitions;
   const status = { complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[result.status];
-  const runtime = formatRecordedRuntimeVersion(result.runtime_version, record.build, '');
+  const runtime = formatBenchmarkRuntimeVersion(result, record.build, '');
 
   const workload = [
     `- ${copy.corpus}: ${copy[request.context_profile]}`,

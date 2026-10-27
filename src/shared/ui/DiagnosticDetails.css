@@ -1,0 +1,14 @@
+.app-diagnostic-details { display: grid; gap: 8px; min-width: 0; max-width: 100%; }
+.app-diagnostic-summary { margin: 0; overflow-wrap: anywhere; }
+.app-diagnostic-disclosure { min-width: 0; max-width: 100%; }
+.app-diagnostic-toggle { cursor: pointer; color: var(--ui-muted); width: fit-content; max-width: 100%; }
+.app-diagnostic-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.app-diagnostic-content { display: grid; gap: 8px; margin-top: 8px; min-width: 0; }
+/* Bounded full text: long engine usage/template lists scroll inside instead
+ * of dominating the workspace. Wraps CJK/emoji/long unbroken tokens and stays
+ * keyboard reachable (tabindex=0) in small windows. */
+.app-diagnostic-full { margin: 0; max-height: 12rem; max-width: 100%; overflow: auto; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; user-select: text; font-size: 0.85em; line-height: 1.5; }
+.app-diagnostic-full:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+.app-diagnostic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.app-diagnostic-feedback { color: var(--ui-muted); font-size: 0.85em; }
+.app-diagnostic-feedback:empty { display: none; }

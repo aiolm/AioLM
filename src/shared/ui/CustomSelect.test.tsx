@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import axe from "axe-core";
-import { useState } from 'react';
+import { Profiler, useState } from 'react';
 import { CustomSelect, OverlayContainerContext } from "./CustomSelect";
 
 const OPTIONS = [
@@ -17,7 +17,32 @@ function renderSelect(onChange = vi.fn()) {
   return { onChange, trigger };
 }
 
+function overrideResizeObserver(value: unknown) {
+  const previous = globalThis.ResizeObserver;
+  vi.stubGlobal("ResizeObserver", value);
+  return () => vi.stubGlobal("ResizeObserver", previous);
+}
+
 describe("CustomSelect", () => {
+  it.each([false, true])('exposes invalid state and linked feedback on the actual combobox (editable: %s)', editable => {
+    const content = (invalid?: boolean) => <>
+      <p id="value-help">Choose a runtime value</p><p id="value-error">The saved value is unavailable</p>
+      <CustomSelect ariaLabel="Runtime value" value="light" options={OPTIONS} onChange={vi.fn()}
+        onInputChange={editable ? vi.fn() : undefined} ariaInvalid={invalid}
+        ariaDescribedBy={invalid ? 'value-help value-error' : 'value-help'} />
+    </>;
+    const view = render(content(true));
+    const control = screen.getByRole('combobox', { name: 'Runtime value' });
+    expect(control.tagName).toBe(editable ? 'INPUT' : 'BUTTON');
+    expect(control).toHaveAttribute('aria-invalid', 'true');
+    expect(control).toHaveAccessibleDescription('Choose a runtime value The saved value is unavailable');
+    view.rerender(content(false));
+    expect(control).toHaveAttribute('aria-invalid', 'false');
+    expect(control).toHaveAccessibleDescription('Choose a runtime value');
+    view.rerender(content());
+    expect(control).not.toHaveAttribute('aria-invalid');
+  });
+
   it('keeps editable values outside the suggestions and uses the common listbox for choices', () => {
     const onChange = vi.fn();
     function Editable() {
@@ -136,6 +161,47 @@ describe("CustomSelect", () => {
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("does not rebind native label listeners for unrelated rerenders", () => {
+    function Harness() {
+      const [revision, setRevision] = useState(0);
+      return <>
+        <button type="button" onClick={() => setRevision(value => value + 1)}>Rerender</button>
+        <label><span>Theme</span><CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} /></label>
+        <output>{revision}</output>
+      </>;
+    }
+
+    render(<Harness />);
+    const label = screen.getByText("Theme").closest("label");
+    if (!label) throw new Error("Wrapping label not found.");
+    const addListener = vi.spyOn(label, "addEventListener");
+    const removeListener = vi.spyOn(label, "removeEventListener");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rerender" }));
+
+    expect(addListener).not.toHaveBeenCalled();
+    expect(removeListener).not.toHaveBeenCalled();
+  });
+
+  it("rebinds only the replaced native label while keeping focus-only activation", () => {
+    function Harness() {
+      const [revision, setRevision] = useState(0);
+      return <>
+        <button type="button" onClick={() => setRevision(value => value + 1)}>Replace label</button>
+        <label key={revision} htmlFor="theme">Theme {revision}</label>
+        <CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} />
+      </>;
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole("combobox");
+    fireEvent.click(screen.getByText("Replace label"));
+    fireEvent.click(screen.getByText("Theme 1"));
+
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("displays clean paths while selecting and submitting the original path", () => {
     const raw = String.raw`\\?\UNC\server\share\model.gguf`;
     const display = String.raw`\\server\share\model.gguf`;
@@ -161,6 +227,234 @@ describe("CustomSelect", () => {
     fireEvent.click(trigger);
     expect(screen.getByRole("option").textContent).toBe(label);
   });
+
+  it("does not remeasure menu width when only the highlight changes", () => {
+    const restoreResizeObserver = overrideResizeObserver(class TestResizeObserver {
+      observe() {}
+      disconnect() {}
+    });
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 800;
+    let listboxMeasurements = 0;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute("role") === "combobox") return { top: 100, bottom: 130, left: 100, right: 220, width: 120, height: 30 } as DOMRect;
+      if (this.getAttribute("role") === "listbox") {
+        listboxMeasurements += 1;
+        return { top: 134, bottom: 300, left: 100, right: 220, width: 120, height: 166 } as DOMRect;
+      }
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    try {
+      renderSelect();
+      const trigger = screen.getByRole("combobox", { name: "Theme" });
+      fireEvent.click(trigger);
+      const measurementsAfterOpen = listboxMeasurements;
+
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+      expect(listboxMeasurements).toBe(measurementsAfterOpen);
+    } finally {
+      rect.mockRestore();
+      window.innerWidth = previousWidth;
+      restoreResizeObserver();
+    }
+  });
+
+  it("keeps the render-driven geometry fallback when ResizeObserver is unavailable", () => {
+    const restoreResizeObserver = overrideResizeObserver(undefined);
+    let listboxMeasurements = 0;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute("role") === "combobox") return { top: 100, bottom: 130, left: 100, right: 220, width: 120, height: 30 } as DOMRect;
+      if (this.getAttribute("role") === "listbox") {
+        listboxMeasurements += 1;
+        return { top: 134, bottom: 300, left: 100, right: 220, width: 120, height: 166 } as DOMRect;
+      }
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    try {
+      renderSelect();
+      const trigger = screen.getByRole("combobox", { name: "Theme" });
+      fireEvent.click(trigger);
+      const measurementsAfterOpen = listboxMeasurements;
+
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+      expect(listboxMeasurements).toBeGreaterThan(measurementsAfterOpen);
+    } finally {
+      rect.mockRestore();
+      restoreResizeObserver();
+    }
+  });
+
+  it("rechecks a mutable options array in the legacy geometry fallback", () => {
+    const restoreResizeObserver = overrideResizeObserver(undefined);
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 360;
+    const options = [{ value: "one", label: "Short" }, { value: "two", label: "Second" }];
+    const renderedWidth = { current: 110 };
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute("role") === "combobox") return { top: 100, bottom: 130, left: 242, right: 352, width: 110, height: 30 } as DOMRect;
+      if (this.getAttribute("role") === "listbox") return {
+        top: 134, bottom: 300, left: parseFloat(this.style.left), right: parseFloat(this.style.left) + renderedWidth.current,
+        width: renderedWidth.current, height: 166,
+      } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    try {
+      function Harness() {
+        const [, setRevision] = useState(0);
+        return <>
+          <button type="button" onClick={() => setRevision(value => value + 1)}>Rerender mutable options</button>
+          <CustomSelect value="one" options={options} onChange={vi.fn()} ariaLabel="Mutable" />
+        </>;
+      }
+
+      render(<Harness />);
+      fireEvent.click(screen.getByRole("combobox", { name: "Mutable" }));
+      expect(screen.getByRole("listbox").style.left).toBe("242px");
+
+      renderedWidth.current = 344;
+      options[0].label = "A long label mutated while the menu is open";
+      fireEvent.click(screen.getByRole("button", { name: "Rerender mutable options" }));
+
+      expect(screen.getByRole("listbox").style.left).toBe("8px");
+    } finally {
+      rect.mockRestore();
+      window.innerWidth = previousWidth;
+      restoreResizeObserver();
+    }
+  });
+
+  it("does not rerender the menu when a viewport event leaves its geometry unchanged", () => {
+    const restoreResizeObserver = overrideResizeObserver(class TestResizeObserver {
+      observe() {}
+      disconnect() {}
+    });
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 800;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute("role") === "combobox") return { top: 100, bottom: 130, left: 100, right: 220, width: 120, height: 30 } as DOMRect;
+      if (this.getAttribute("role") === "listbox") return { top: 134, bottom: 300, left: 100, right: 220, width: 120, height: 166 } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    try {
+      let commits = 0;
+      render(<Profiler id="custom-select" onRender={() => { commits += 1; }}><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} ariaLabel="Theme" /></Profiler>);
+      fireEvent.click(screen.getByRole("combobox", { name: "Theme" }));
+      const commitsAfterOpen = commits;
+
+      fireEvent(window, new Event("resize"));
+
+      expect(commits).toBe(commitsAfterOpen);
+    } finally {
+      rect.mockRestore();
+      window.innerWidth = previousWidth;
+      restoreResizeObserver();
+    }
+  });
+
+  it("repositions an open menu when the trigger size changes", () => {
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 800;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute("role") === "combobox") {
+        const height = this.className.includes("app-custom-select-trigger--sm") ? 20 : 40;
+        return { top: 100, bottom: 100 + height, left: 100, right: 220, width: 120, height } as DOMRect;
+      }
+      if (this.getAttribute("role") === "listbox") return { top: 144, bottom: 300, left: 100, right: 220, width: 120, height: 156 } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    try {
+      const { rerender } = render(<CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} ariaLabel="Theme" />);
+      const trigger = screen.getByRole("combobox", { name: "Theme" });
+      fireEvent.click(trigger);
+      expect(screen.getByRole("listbox")).toHaveStyle({ top: "144px" });
+
+      rerender(<CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} ariaLabel="Theme" size="sm" />);
+
+      expect(screen.getByRole("listbox")).toHaveStyle({ top: "124px" });
+    } finally {
+      rect.mockRestore();
+      window.innerWidth = previousWidth;
+    }
+  });
+
+  it("lowercases an editable query once instead of once per option", () => {
+    const original = String.prototype.toLocaleLowerCase;
+    let queryLowercaseCalls = 0;
+    const lower = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (this: string) {
+      if (this === "NEEDLE") queryLowercaseCalls += 1;
+      return original.call(this);
+    });
+    try {
+      render(<CustomSelect value="" options={Array.from({ length: 80 }, (_, index) => ({ value: String(index), label: `Option ${index}` }))}
+        onChange={vi.fn()} onInputChange={vi.fn()} ariaLabel="Search" />);
+      fireEvent.change(screen.getByRole("combobox", { name: "Search" }), { target: { value: "NEEDLE" } });
+
+      expect(queryLowercaseCalls).toBe(1);
+    } finally {
+      lower.mockRestore();
+    }
+  });
+  describe("in a 360px window with a narrow trigger at the right edge", () => {
+    const RUNTIMES = ["private-000000000001", "private-000000000002"].map(id => ({ value: id, label: `synthetic-dynamic-v1 (${id}) · cpu · external` }));
+    const box = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, width, height, right: x + width, bottom: y + height, toJSON: () => undefined }) as DOMRect;
+    /** Stands in for layout: the listbox reports the width its options would give it. */
+    function layout(renderedWidth: { current: number }, run: () => void) {
+      const innerWidth = window.innerWidth;
+      window.innerWidth = 360;
+      const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("role") === "combobox") return box(242, 100, 110, 30);
+        if (this.getAttribute("role") === "listbox") return box(parseFloat(this.style.left), 134, renderedWidth.current, 200);
+        return box(0, 0, 0, 0);
+      });
+      try { run(); } finally { rect.mockRestore(); window.innerWidth = innerWidth; }
+    }
+
+    it.each([
+      // Long runtime labels lay the menu out wider than its trigger.
+      { renderedWidth: 344, left: 8 },
+      // A menu that fits beside its trigger stays aligned with it.
+      { renderedWidth: 110, left: 242 },
+    ])("keeps a $renderedWidth px menu inside the viewport", ({ renderedWidth, left }) => layout({ current: renderedWidth }, () => {
+      render(<CustomSelect value={RUNTIMES[0].value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
+      fireEvent.click(screen.getByRole("combobox", { name: "Runtime" }));
+      const menu = screen.getByRole("listbox").getBoundingClientRect();
+      expect(menu.left).toBe(left);
+      expect(menu.right).toBeLessThanOrEqual(360 - 8);
+      expect(screen.getByRole("listbox").style.minWidth).toBe("110px");
+    }));
+
+    it("re-fits the open menu when longer options arrive", () => {
+      const renderedWidth = { current: 110 };
+      layout(renderedWidth, () => {
+        const choose = [{ value: "", label: "Choose a runtime" }];
+        const { rerender } = render(<CustomSelect value="" options={choose} onChange={vi.fn()} ariaLabel="Runtime" />);
+        fireEvent.click(screen.getByRole("combobox", { name: "Runtime" }));
+        expect(screen.getByRole("listbox").getBoundingClientRect().left).toBe(242);
+        renderedWidth.current = 344;
+        rerender(<CustomSelect value="" options={[...choose, ...RUNTIMES]} onChange={vi.fn()} ariaLabel="Runtime" />);
+        expect(screen.getByRole("listbox").getBoundingClientRect().right).toBeLessThanOrEqual(360 - 8);
+      });
+    });
+
+    it("keeps the final clamped right edge after a viewport update", () => {
+      const renderedWidth = { current: 344 };
+      layout(renderedWidth, () => {
+        render(<CustomSelect value={RUNTIMES[0].value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
+        const trigger = screen.getByRole("combobox", { name: "Runtime" });
+        fireEvent.click(trigger);
+        const menu = screen.getByRole("listbox");
+
+        expect(menu.style.left).toBe("8px");
+        fireEvent(window, new Event("resize"));
+
+        expect(menu.style.left).toBe("8px");
+        expect(menu.getBoundingClientRect().right).toBe(352);
+      });
+    });
+  });
+
   it("links the trigger to the listbox and to the highlighted option", () => {
     const { trigger } = renderSelect();
     expect(trigger).not.toHaveAttribute("aria-activedescendant");
