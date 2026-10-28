@@ -82,6 +82,14 @@ jobs:
         run: npm run test:provider-options
       - name: Packaging and runtime smoke tooling
         run: npm run test:scripts
+      - name: Windows provider, profile and queued-session UI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm run build:contracts
+          if ($LASTEXITCODE -ne 0) { throw "Contract build failed with exit code $LASTEXITCODE" }
+          npx vitest run src/features/model-settings/ProviderControls.test.tsx src/features/models/ModelWorkspace.profiles.test.tsx src/features/sessions/Sessions.save-queue.test.tsx
+          if ($LASTEXITCODE -ne 0) { throw "Windows UI checks failed with exit code $LASTEXITCODE" }
       - name: Audit npm dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Install Rust
