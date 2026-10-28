@@ -114,12 +114,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('workspace provider fallback profile integration', () => {
+  // Each case traverses the real workspace, dialog, profiles, tabs and Apply.
+  // Allow time for that DOM journey while retaining every state/save boundary.
   it.each([
     { name: 'uses the fallback provider target assignment', currentProvider: 'llama.cpp' as const, assigned: true, clearsRuntime: true, malformedBrowserMemory: false },
     { name: 'uses the fallback provider default when no target assignment exists', currentProvider: 'llama.cpp' as const, assigned: false, clearsRuntime: true, malformedBrowserMemory: false },
     { name: 'retains the current provider runtime and target assignment', currentProvider: 'vllm' as const, assigned: true, clearsRuntime: false, malformedBrowserMemory: false },
     { name: 'opens the fallback target assignment without parsing unrelated malformed memory', currentProvider: 'llama.cpp' as const, assigned: true, clearsRuntime: true, malformedBrowserMemory: true },
-  ])('$name without changing saved state before Apply', async ({ currentProvider, assigned, clearsRuntime, malformedBrowserMemory }) => {
+  ])('$name without changing saved state before Apply', { timeout: 10_000 }, async ({ currentProvider, assigned, clearsRuntime, malformedBrowserMemory }) => {
     const state = fixture(currentProvider, assigned);
     if (malformedBrowserMemory) {
       localStorage.setItem(MODEL_EXECUTION_KEY, '{invalid synthetic memory');

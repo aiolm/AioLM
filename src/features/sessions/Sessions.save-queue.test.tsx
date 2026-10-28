@@ -182,12 +182,14 @@ describe('session name saves in the configuration queue', () => {
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Saved work name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
     await waitFor(() => expect(harness.persist).toHaveBeenCalledOnce());
+    // Persistence can start before React commits the optimistic session row.
+    await waitFor(() => expect(screen.getByRole('article', { name: 'Saved work name' })).toBeVisible());
     fireEvent.click(within(screen.getByRole('article', { name: 'Other session' })).getByRole('button', { name: /Other session/ }));
-    // The queue has already published the requested name optimistically.
     expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Keep other draft' } });
     await act(async () => harness.release());
-    await waitFor(() => expect(screen.getByRole('article', { name: 'Saved work name' })).toBeVisible());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save session' })).toBeEnabled());
+    expect(screen.getByRole('article', { name: 'Saved work name' })).toBeVisible();
     expect(screen.getByLabelText('Session name')).toHaveValue('Keep other draft');
     expect(harness.store.cfg!.sessions!.find(item => item.id === 'other')).toEqual(other);
     expect(within(screen.getByRole('article', { name: 'Other session' })).getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');

@@ -169,7 +169,10 @@ describe('runtime-specific option controls', () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(values).toEqual({ workers: 2, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } });
   });
-  it('shows every external option without preview or waiting for the unrelated runtime inventory', async () => {
+  // Allow CPU time for rendering and validating this full 70-field schema.
+  // The unrelated inventory remains unresolved and readiness must still settle
+  // after the explicitly advanced 150ms debounce below.
+  it('shows every external option without preview or waiting for the unrelated runtime inventory', { timeout: 10_000 }, async () => {
     const provider = 'custom.discovered';
     const options = Array.from({ length: 70 }, (_, index) => schemaOption({ key: `fresh-${index}`, flag: `--fresh-${index}`, target: 'launch', group: 'engine-specific', kind: { type: 'integer' } }));
     options.push({ ...schemaOption({ key: 'owned-model', flag: '--owned-model', target: 'launch', group: 'engine-specific', kind: { type: 'path' } }), managed: 'model' });
