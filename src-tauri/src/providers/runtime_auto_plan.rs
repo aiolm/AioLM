@@ -400,6 +400,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("aiolm-auto-plan-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let script = root.join("unlisted entry point");
         fs::write(&script, b"#!/bin/sh\nif [ \"$#\" != 1 ] || [ \"$1\" != --help ]; then touch model-was-run; exit 1; fi\nprintf '%s\\n' 'Options:' '  --model FILE  Local model path' '  --port PORT  Listening port' '  --host HOST  Listening host' '  --served-model-name NAME  Model name served by the API'\n").unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();

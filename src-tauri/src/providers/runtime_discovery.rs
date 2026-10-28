@@ -955,6 +955,10 @@ mod tests {
         let second = folder.0.join("second-entry");
         fs::write(&first, b"\x7fELFfirst-entry").unwrap();
         fs::write(&second, b"\x7fELFsecond-entry").unwrap();
+        // Discovery resolves the selected root. macOS temporary directories
+        // and Windows verbatim prefixes need the same filesystem identity.
+        let first = first.canonicalize().unwrap();
+        let second = second.canonicalize().unwrap();
         let mut report = DiscoveryReport::default();
         discover_folder(&folder.0, &mut report, &AtomicBool::new(false)).unwrap();
         let a = report
