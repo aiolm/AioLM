@@ -18,7 +18,7 @@ const recipe: api.AdapterSetupRecipe = {
 const draft = { engine_id: 'custom.unseen' } as api.EntrypointDraft;
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.adapterSetupList).mockResolvedValue([recipe]);
+  vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic/engine.setup.json');
   vi.mocked(api.adapterSetupImport).mockResolvedValue(recipe);
 });
 function mount() {
@@ -30,7 +30,8 @@ function mount() {
 it('loads arbitrary recipe data only on request and passes exact Unicode input tokens', async () => {
   const view = mount();
   expect(api.adapterSetupList).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Browse provided adapters' }));
+  expect(screen.queryByRole('button', { name: 'Browse provided adapters' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   const program = await screen.findByLabelText('Installed executable (Required)');
   expect(program).toBeRequired();
   expect(screen.getByLabelText('Source revision (Required)')).toHaveValue('synthetic-revision');
@@ -44,7 +45,7 @@ it('loads arbitrary recipe data only on request and passes exact Unicode input t
 
 it('discards a cancelled late result, retains inputs and permits an explicit retry after failure', async () => {
   const view = mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Browse provided adapters' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   fireEvent.change(await screen.findByLabelText('Installed executable (Required)'), { target: { value: '/synthetic/engine' } });
   let resolve!: (value: api.EntrypointDraft) => void;
   vi.mocked(api.adapterSetupPrepare).mockReturnValueOnce(new Promise(done => { resolve = done; }));
@@ -66,7 +67,7 @@ it('discards a cancelled late result, retains inputs and permits an explicit ret
 it('imports an additional adapter without a closed engine list and ignores late picker results after leaving', async () => {
   const view = mount();
   vi.mocked(api.pickRuntimePath).mockResolvedValueOnce('/synthetic/new-adapter.json');
-  fireEvent.click(screen.getByRole('button', { name: 'Import adapter setup' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   await screen.findByLabelText('Installed executable (Required)');
   expect(api.adapterSetupImport).toHaveBeenCalledWith('/synthetic/new-adapter.json');
   let resolve!: (value: string) => void;

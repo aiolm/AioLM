@@ -52,7 +52,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     let value = json!({"version":1,"id":"any.vendor.setup","title":"Arbitrary adapter","description":"Synthetic boundary",
         "fields":[{"key":"program","label":"Installed executable","kind":"file","required":true},
                   {"key":"draft","label":"Setup data","kind":"file","required":true}],
-        "prepare":{"program":"{input:program}","args":["--adapter-setup-fixture","{input:draft}"],"env":{},"working_directory":home.path},
+        "prepare":{"program":"{input:program}","args":["--adapter-setup-fixture","{resource:draft ; &.json}"],"env":{},"working_directory":home.path},
         "artifacts":["{input:draft}"]});
     fs::write(&recipe_file, serde_json::to_vec(&value).unwrap()).unwrap();
     let recipe = adapter_setup::import(&recipe_file).unwrap();
@@ -86,10 +86,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
             .unwrap_err()
             .contains("complete argv token")
     );
-    let provided = adapter_setup::provided().unwrap();
-    assert!(provided
-        .iter()
-        .any(|r| r.id == "strata.native-openai-bridge"));
+    assert!(adapter_setup::provided().unwrap().is_empty());
 
     let marker = home.path.join("started.txt");
     let mut slow = recipe.clone();
@@ -119,25 +116,73 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     );
     // Failed preparation does not poison the next explicit retry.
     assert!(adapter_setup::prepare(&service, "slow", &recipe, &inputs).is_ok());
-    let helper_root = aiolm_lib::runtime::runtimes_root().join("adapter-helpers");
-    let directories = fs::read_dir(helper_root)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(directories.len(), 1);
-    let helper = directories[0].path().join("strata_bridge.py");
-    let original = fs::read(&helper).unwrap();
-    fs::write(&helper, b"synthetic tamper").unwrap();
     assert!(
-        adapter_setup::prepare(&service, "tampered", &recipe, &inputs)
-            .unwrap_err()
-            .contains("helper changed")
+        !aiolm_lib::runtime::runtimes_root()
+            .join("adapter-helpers")
+            .exists(),
+        "a third-party setup must not extract another engine's helpers"
     );
-    assert_eq!(
-        fs::read(&helper).unwrap(),
-        b"synthetic tamper",
-        "setup must not overwrite a changed helper silently"
-    );
-    fs::write(&helper, original).unwrap();
-    assert!(adapter_setup::prepare(&service, "restored", &recipe, &inputs).is_ok());
+}
+
+#[test]
+fn every_vendor_imports_companion_resources_from_its_own_package() {
+    let directory =
+        std::env::temp_dir().join(format!("aiolm package 눈길 {}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(directory.join("helpers")).unwrap();
+    let helper = directory.join("helpers/prepare ; &.py");
+    fs::write(&helper, b"synthetic provider helper").unwrap();
+    let path = directory.join("engine.setup.json");
+    let source = json!({"version":1,"id":"any.vendor", "title":"Independent provider", "description":"",
+        "fields":[{"key":"python","label":"Python executable","kind":"file","required":true}],
+        "prepare":{"program":"{input:python}","args":["{resource:helpers/prepare ; &.py}"],"env":{}},
+        "artifacts":["{resource:helpers/prepare ; &.py}"]});
+    for id in ["new.vendor", "strata.example", "tensorfold.example"] {
+        let mut value = source.clone();
+        value["id"] = json!(id);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let imported = adapter_setup::import(&path).unwrap();
+        let expected = helper
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(imported.prepare.args, [expected.clone()]);
+        assert_eq!(imported.artifacts, [expected]);
+        assert_eq!(imported.prepare.program, "{input:python}");
+    }
+    let mut automatic = source.clone();
+    automatic["artifacts"] = json!([]);
+    fs::write(&path, serde_json::to_vec(&automatic).unwrap()).unwrap();
+    assert_eq!(adapter_setup::import(&path).unwrap().artifacts.len(), 1);
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../scripts/runtime-adapters/strata.setup.json");
+    assert!(adapter_setup::import(&example).is_ok());
+    for resource in [
+        "../outside.py",
+        "/outside.py",
+        "C:\\outside.py",
+        "helpers",
+        "missing.py",
+    ] {
+        let mut value = source.clone();
+        value["prepare"]["args"][0] = json!(format!("{{resource:{resource}}}"));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(
+            adapter_setup::import(&path).is_err(),
+            "resource accepted: {resource}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let outside = directory.with_extension("outside.py");
+        fs::write(&outside, b"outside package").unwrap();
+        let link = directory.join("linked.py");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let mut value = source.clone();
+        value["prepare"]["args"][0] = json!("{resource:linked.py}");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(adapter_setup::import(&path).is_err());
+        fs::remove_file(outside).unwrap();
+    }
+    fs::remove_dir_all(directory).unwrap();
 }

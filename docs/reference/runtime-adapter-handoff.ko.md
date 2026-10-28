@@ -216,7 +216,7 @@ Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 �
 
 ### 공통 GUI의 어댑터 설정 파일
 
-실행 파일을 직접 선택하는 등록 여정에 더해, **어댑터로 간편 연결**에서 제공 설정을 보거나 외부 설정 파일을 가져올 수 있다. 엔진 목록은 닫힌 enum이 아니다. 어댑터 설정은 엔진별 화면 코드 대신 입력 항목과 producer 명령을 제공하고, 동일한 `EntrypointDraft`를 반환한다. 설정을 불러오는 것만으로 producer를 실행하거나 엔진을 등록하지 않는다. 사용자가 설치 정보를 입력하고 확인 명령을 실행한 뒤에도 도움말 탐색·binding 검토·등록·모델별 fresh probe가 필요하다.
+실행 파일을 직접 선택하는 등록 여정에 더해, **AioLM 연결 설정 가져오기 (.json)**에서 외부 설정 파일을 가져올 수 있다. 앱은 특정 외부 엔진의 설정을 기본 목록으로 제공하지 않는다. v0.3.2의 「제공 어댑터 보기」는 Strata 예시만 불러오던 이전 UI이며 설치된 엔진을 검색하는 기능이 아니다. 엔진 목록은 닫힌 enum이 아니다. 어댑터 설정은 엔진별 화면 코드 대신 입력 항목과 producer 명령을 제공하고, 동일한 `EntrypointDraft`를 반환한다. 설정을 불러오는 것만으로 producer를 실행하거나 엔진을 등록하지 않는다. 사용자가 설치 정보를 입력하고 확인 명령을 실행한 뒤에도 도움말 탐색·binding 검토·등록·모델별 fresh probe가 필요하다.
 
 설정 파일은 최대 64 KiB UTF-8 JSON(선택적 BOM)이며 다음 계약을 사용한다.
 
@@ -224,12 +224,12 @@ Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 �
 - `fields: [{key,label,kind,required,default?}]`: `kind`는 `file/folder/text`, 최대 32개. 기본값은 어댑터가 선언한 값이며 현재 기기의 경로나 설정을 복사하지 않는다.
 - `prepare: {program,args,env,working_directory?}`: 명시적으로 선택한 절대 실행 파일과 token 배열. 현재 v1의 `env`는 비어 있어야 한다. shell 문자열이나 비밀 입력은 사용하지 않는다.
 - `artifacts`: producer의 스크립트·종속 파일을 선언한다. 실행 파일과 함께 명령 전후 해시를 검사한다.
-- `{input:key}`와 `{resource:name}`는 **한 argv token 전체**를 대체한다. 공백·Unicode·빈 값·기호를 shell로 재해석하지 않는다. 부분 문자열 치환은 거부한다. `{resource:name}`는 제품에 포함된 helper 이름만 허용하며, 다른 어댑터는 선택한 외부 producer와 명시적 artifact를 쓸 수 있다.
+- `{input:key}`와 `{resource:name}`는 **한 argv token 전체**를 대체한다. 공백·Unicode·빈 값·기호를 shell로 재해석하지 않는다. 부분 문자열 치환은 거부한다. `{resource:relative/file}`는 가져온 설정 JSON과 같은 폴더 아래의 파일을 가리킨다. 모든 제공자에게 동일하게 적용하며, 절대 경로·상위 폴더 이탈·외부를 가리키는 symlink·누락 파일은 거부한다. 어댑터 묶음을 모두 압축 해제한 뒤 JSON을 선택한다. 참조한 helper는 자동으로 artifacts에도 포함한다.
 - producer는 stdout에 단일 `EntrypointDraft` JSON, 진단은 stderr에 쓴다. 공통 소유 프로세스의 출력 한도·15초 기한·취소·경합 publication을 적용하고, 반환 draft를 검증한다. 실패·취소는 등록이나 Ready를 만들지 않으며 입력을 보존해 재시도할 수 있다.
 
-제공 helper는 production 앱에 포함하며 표준 앱 runtime 경로의 내용 해시별 폴더에 배치한다. 개발 checkout의 절대 경로가 필요하지 않는다. 기존 helper가 달라졌으면 덮어쓰지 않고 오류를 반환한다. 설정 파일이나 helper 변경은 새 명령 identity와 명시적 재등록을 필요로 한다. 예전 draft에서 생략한 `models`, `launch_resources`, `options_separator`는 자동으로 채우지 않는다.
+외부 helper는 어댑터 제공자의 묶음에서 읽으며 앱에 특정 엔진의 helper를 포함하거나 자동 배치하지 않는다. 이미 등록한 실행본과 이전 버전이 배치한 helper는 삭제하지 않는다. 가져온 파일을 이동했다면 다시 가져와 등록한다. 설정 파일이나 helper 변경은 새 명령 identity와 명시적 재등록을 필요로 한다. 예전 draft에서 생략한 `models`, `launch_resources`, `options_separator`는 자동으로 채우지 않는다.
 
-제공 Strata 설정은 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 고정 native build는 도움말을 stderr에만 쓰고 AioLM은 비어 있지 않은 stdout만 해석하므로, bridge는 native stdout·stderr를 한 pipe로 받아 binding 행 뒤의 하나의 stdout 문서로 전달한다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
+SDK의 Strata 예시 설정(`scripts/runtime-adapters/strata.setup.json`)도 다른 외부 엔진과 똑같이 가져온다. 기본 제공 엔진이나 보편 호환성의 증거가 아니다. 이 예시는 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 고정 native build는 도움말을 stderr에만 쓰고 AioLM은 비어 있지 않은 stdout만 해석하므로, bridge는 native stdout·stderr를 한 pipe로 받아 binding 행 뒤의 하나의 stdout 문서로 전달한다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
 
 bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로그를 만들고, 설치된 HTTP 서버에는 고정 `--engine strata`, 파생 config, 앱 host/port만 전달한다. 원본 deployment·weight·tokenizer를 바꾸지 않는다. 모델 소스·입력·resident protocol은 명시 metadata로 예약하며, 서버가 deployment의 `gpu`·`backend`로 설정한 표시 장치를 덮어쓰는 native `--gpu`도 예약한다. 장치를 바꾸려면 다른 전용 deployment를 선택한다. flag처럼 생긴 **값**을 별도 옵션으로 다시 해석하지 않는다. HTTP 서버와 native CLI의 인자를 섞지 않는다. 모델·tokenizer·source revision·build 검사는 별도 기존 probe가 담당한다. 도움말·producer 성공은 모델 로드나 추론 성공의 증거가 아니다. 다른 revision은 검토한 어댑터 설정/bridge가 필요하며, 다른 엔진의 설정 파일 추가는 앱의 공통 기능에 engine ID 분기를 요구하지 않는다.
 

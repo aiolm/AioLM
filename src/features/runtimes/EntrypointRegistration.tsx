@@ -352,6 +352,9 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
       <form action="#" method="POST" onSubmit={event => event.preventDefault()}>
         {step === 0 && (
           <div className="model-settings-fields">
+            <h4 className="app-section-title">{copy.manual}</h4>
+            <p className="app-section-hint">{copy.fileHint}</p>
+            <p className="app-section-hint">{copy.requirements}</p>
             <div className="entrypoint-primary">
               <PathField label={copy.program} value={program} kind="file" disabled={disabled} required copy={copy} onChange={setProgram} />
             </div>

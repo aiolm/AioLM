@@ -3,6 +3,9 @@ import type { Locale } from './i18n';
 /** Wording for registering an executable or entry point from explicit choices. */
 export const entrypointCopy = {
   ko: {
+    manual: "설정 파일 없이 직접 등록하기",
+    fileHint: "서버 실행 파일(예: llama-server.exe 또는 llama-server)을 고르세요. Python 엔진은 설치에 사용한 python.exe 또는 bin/python을 고르고, 스크립트 경로나 -m 모듈명을 아래 인자에 한 칸씩 추가합니다. 모델(.gguf·.safetensors), 설치 파일, 일반 설정 JSON을 실행 파일로 선택하지 마세요.",
+    requirements: "엔진이 OpenAI 호환 HTTP/SSE를 제공하거나 별도 bridge가 이를 제공해야 합니다. 모델 호환성 검사(probe)도 필요합니다. 실행 파일만으로는 연결되지 않습니다. 제공자에게 모델·포트 옵션과 AioLM용 probe를 확인하세요.",
     title: '실행 파일·엔트리포인트 등록',
     hint: "엔진 실행 방법을 선택하고 도움말을 읽은 뒤 모델·연결·호환성 확인 방법을 설정하세요. 등록 후 실행 프로필에서 모델을 선택하면 실제 실행 가능 여부를 확인합니다.",
     steps: '진행 단계',
@@ -83,6 +86,9 @@ export const entrypointCopy = {
     bindingIncomplete: '옵션을 고르거나 사용 안 함을 선택하세요.',
   },
   en: {
+    manual: "Register manually without a setup file",
+    fileHint: "Choose the server executable (for example llama-server.exe or llama-server). For a Python engine, choose the python.exe or bin/python used to install it, then add the script path or -m and module name as separate arguments below. Do not select a model (.gguf or .safetensors), installer or ordinary configuration JSON as the executable.",
+    requirements: "The engine must provide OpenAI-compatible HTTP/SSE, or a separate bridge must provide it. A model compatibility probe is also required. An executable alone is insufficient. Ask the provider for model/port options and an AioLM-compatible probe.",
     title: 'Register an executable or entry point',
     hint: "Choose how to launch the engine, read its help, then configure model, connection and compatibility checks. After registration, select a model in an execution profile to check whether it is ready to run.",
     steps: 'Progress',
@@ -163,6 +169,9 @@ export const entrypointCopy = {
     bindingIncomplete: 'choose its option or select Not used.',
   },
   ja: {
+    manual: "設定ファイルなしで手動登録",
+    fileHint: "サーバー実行ファイル（例：llama-server.exe、llama-server）を選びます。Pythonエンジンはインストールに使ったpython.exeまたはbin/pythonを選び、スクリプトのパスか-mとモジュール名を下の引数に1つずつ追加します。モデル、インストーラー、通常の設定JSONは実行ファイルではありません。",
+    requirements: "OpenAI互換HTTP/SSEをエンジンまたは別のbridgeが提供し、モデル互換性検査（probe）にも対応する必要があります。実行ファイルだけでは接続できません。モデル・ポートのオプションとAioLM用probeを提供者に確認してください。",
     title: '実行ファイル・エントリーポイントの登録',
     hint: "エンジンの起動方法を選び、ヘルプを読んでからモデル・接続・互換性の確認方法を設定してください。登録後、実行プロファイルでモデルを選ぶと実行可能か確認できます。",
     steps: '進行状況',
@@ -243,6 +252,9 @@ export const entrypointCopy = {
     bindingIncomplete: 'オプションを選ぶか、使用しないを選択してください。',
   },
   zh: {
+    manual: "没有设置文件时手动注册",
+    fileHint: "选择服务器可执行文件（例如llama-server.exe或llama-server）。Python引擎请选择安装时使用的python.exe或bin/python，再在下方逐项添加脚本路径或-m和模块名。不要将模型、安装程序或普通配置JSON选作可执行文件。",
+    requirements: "引擎本身或独立bridge必须提供OpenAI兼容HTTP/SSE，并需要模型兼容性检查（probe）。只有可执行文件无法完成连接。请向提供方确认模型/端口选项及AioLM兼容probe。",
     title: '注册可执行文件或入口点',
     hint: "选择引擎的启动方式，阅读帮助，然后设置模型、连接及兼容性检查。注册后，在运行配置中选择模型以检查能否运行。",
     steps: '进度',
