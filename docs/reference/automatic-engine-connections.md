@@ -1,7 +1,7 @@
 # Automatic external engine connections
 
-This is the unreleased connection flow, not a change to the published v0.3.2
-assets. It uses execution evidence and a common protocol rather than an engine
+This connection flow is available starting with v0.3.3. Published v0.3.2 assets
+remain unchanged. It uses execution evidence and a common protocol rather than an engine
 catalog, package name or implementation language.
 
 ## User flow

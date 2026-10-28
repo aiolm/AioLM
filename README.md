@@ -33,8 +33,8 @@ AGENTS.md instructions. Chat reads these files for new turns and can load local
 skills automatically or through the skill picker and `$skill-name` references.
 See [chat personalization](docs/reference/personalization.md).
 
-The automatic external connection flow on this development branch is **not in the
-published v0.3.2 packages**. In **Inference engines → Add inference engine**, use
+Starting with **v0.3.3**, the automatic external connection flow is available.
+In **Inference engines → Add inference engine**, use
 **Find automatically → Choose a model → Connect**. If no server is found, choose
 its installation folder. AioLM saves the connection internally after an actual
 chat and streaming check; no JSON or separate probe program is needed in this
