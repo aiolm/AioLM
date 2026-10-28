@@ -17,16 +17,6 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// not apply to the response, so long generations are unaffected.
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Web origins of the application's own webview: packaged builds per platform
-/// and the development server. Browser code from any other origin is not
-/// granted access; every request still needs the API key.
-const APP_ORIGINS: [&str; 4] = [
-    "tauri://localhost",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-    "http://localhost:1420",
-];
-
 tokio::task_local! {
     /// The allowed `Origin` of the request being answered, if any. Every
     /// response writer below adds the matching CORS header, so handlers and
@@ -37,7 +27,7 @@ tokio::task_local! {
 pub(super) fn allowed_origin(headers: &HashMap<String, String>) -> Option<String> {
     headers
         .get("origin")
-        .filter(|origin| APP_ORIGINS.contains(&origin.as_str()))
+        .filter(|origin| crate::app_origin::is_allowed(origin))
         .cloned()
 }
 
@@ -372,7 +362,7 @@ pub(super) async fn write_stream_head(
 
 /// Answer a browser's CORS preflight. It cannot carry the API key, so it is
 /// answered before authentication; it grants nothing to origins outside
-/// `APP_ORIGINS`, and the request that follows still needs the key.
+/// the shared app origin policy, and the request that follows still needs the key.
 pub(super) async fn write_preflight(
     stream: &mut TcpStream,
     headers: &HashMap<String, String>,

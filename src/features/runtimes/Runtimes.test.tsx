@@ -9,6 +9,7 @@ import { notifySessionStatusChanged } from "../../shared/runtime/sessionUtils";
 import { withSessionTransition } from "../../shared/state/sessionTransitions";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import * as runtimeHelp from "../../shared/api/runtimeHelp";
+import * as runtimeAuto from "../../shared/api/runtimeAuto";
 import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { effectiveSchema } from "../../testing/effectiveSchema";
 import { testConfig } from "../../testing/appStore";
@@ -42,6 +43,18 @@ vi.mock("../../shared/api/runtimeHelp", async origin => ({
   entrypointHelpDiscover: vi.fn(), entrypointHelpCancel: vi.fn(async () => true),
   entrypointManifestPreview: vi.fn(), runtimeEntrypointRegister: vi.fn(), pickRuntimePath: vi.fn(),
 }));
+
+vi.mock("../../shared/api/runtimeAuto", () => ({
+  runtimeAutoDiscover: vi.fn(), runtimeAutoInspect: vi.fn(), runtimeAutoConnect: vi.fn(), runtimeAutoCancel: vi.fn(async () => true),
+}));
+
+/** Manual entry-point configuration is an explicit advanced action. */
+function openManualRegistration() {
+  const summary = screen.getByText('Advanced: configure the launch method manually');
+  const details = summary.closest('details')!;
+  if (!details.open) fireEvent.click(summary);
+  return details;
+}
 
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
@@ -273,6 +286,9 @@ describe("RuntimesPanel pull-request builds", () => {
     mocked.providerCatalog.mockResolvedValue(BUILTINS);
     mocked.providerRuntimes.mockResolvedValue([]);
     mocked.sessionSummaryList.mockResolvedValue([]);
+    vi.mocked(runtimeAuto.runtimeAutoDiscover).mockReset().mockResolvedValue({ candidates: [], warnings: [], truncated: false });
+    vi.mocked(runtimeAuto.runtimeAutoInspect).mockReset();
+    vi.mocked(runtimeAuto.runtimeAutoConnect).mockReset();
     installedNewestCuda();
     mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
@@ -705,6 +721,9 @@ describe('neutral inference engine inventory', () => {
     mocked.providerCatalog.mockResolvedValue(BUILTINS);
     mocked.providerRuntimes.mockResolvedValue([]);
     mocked.sessionSummaryList.mockResolvedValue([]);
+    vi.mocked(runtimeAuto.runtimeAutoDiscover).mockReset().mockResolvedValue({ candidates: [], warnings: [], truncated: false });
+    vi.mocked(runtimeAuto.runtimeAutoInspect).mockReset();
+    vi.mocked(runtimeAuto.runtimeAutoConnect).mockReset();
     installedNewestCuda();
     mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
@@ -727,6 +746,7 @@ describe('neutral inference engine inventory', () => {
     const view = render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
     try {
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      openManualRegistration();
       fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
       fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
       fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -791,7 +811,7 @@ describe('neutral inference engine inventory', () => {
     for (const name of ['MLX', 'vLLM']) expect(screen.getByRole('button', { name })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Add an inference engine' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Add inference engine' })).toBeVisible();
-    expect(screen.getByText(/No engine is installed or registered yet/)).toBeVisible();
+    expect(screen.getByText(/Start with automatic discovery/)).toBeVisible();
     expect(screen.queryByRole('combobox', { name: 'Inference engine' })).not.toBeInTheDocument();
     expect(screen.queryByText('Backend to build')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Deep verification' })).not.toBeInTheDocument();
@@ -799,6 +819,91 @@ describe('neutral inference engine inventory', () => {
     expect(mocked.rtList).not.toHaveBeenCalled();
     expect(mocked.rtLatest).not.toHaveBeenCalled();
     expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps manual registration and navigation locked until cancelled automatic discovery actually settles', async () => {
+    let finish!: (result: runtimeAuto.RuntimeDiscovery) => void;
+    vi.mocked(runtimeAuto.runtimeAutoDiscover).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const onBusyChange = vi.fn(); const updateConfig = vi.fn();
+    const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
+    render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+    openManualRegistration();
+    fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.kept' } });
+    fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'kept-build' } });
+    fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/kept-executable' } });
+    fireEvent.click(screen.getByText('Advanced: import registration file (manifest)'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Registration file path (manifest)' }), { target: { value: '/synthetic/kept-registration.json' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+    try {
+      await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+      expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Probe & register' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Refresh list' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(runtimeAuto.runtimeAutoCancel).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+      expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    } finally {
+      await act(async () => finish({ candidates: [], warnings: [], truncated: false }));
+    }
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Probe & register' })).toBeEnabled();
+    expect(screen.getByLabelText('Executable or interpreter')).toHaveValue('/synthetic/kept-executable');
+    expect(screen.getByRole('textbox', { name: 'Registration file path (manifest)' })).toHaveValue('/synthetic/kept-registration.json');
+    expect(cfg).toEqual(before); expect(updateConfig).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();
+  });
+
+  it('announces an automatic connection only after backend verification and leaves saved execution unchanged', async () => {
+    const candidate: runtimeAuto.RuntimeCandidate = {
+      id: 'synthetic-discovery', source: 'local_process', display_name: 'Unfamiliar executable', entrypoint_path: '/synthetic/service',
+      command: { program: '/synthetic/service', args: [], argv_source: 'os_arguments' },
+      endpoints: [{ host: '127.0.0.1', port: 43121 }], entrypoint_kind: 'native', state: 'needs_configuration', reasons: [],
+    };
+    const prepared: runtimeAuto.PreparedRuntimeConnection = {
+      kind: 'attached', candidate, models: [{ id: 'synthetic-model', name: 'Model A' }], base_url: 'http://127.0.0.1:43121/v1',
+      plan: 'synthetic-opaque-token', detail: 'Synthetic discovery evidence',
+    };
+    const connected: runtimeAuto.AutomaticRuntimeResult = {
+      engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic', model_path: '/synthetic/model-reference.json',
+      mode: 'attached', checks: ['model-identity', 'chat-response', 'sse-stream'],
+    };
+    let finish!: (result: runtimeAuto.AutomaticRuntimeResult) => void;
+    vi.mocked(runtimeAuto.runtimeAutoDiscover).mockResolvedValueOnce({ candidates: [candidate], warnings: [], truncated: false });
+    vi.mocked(runtimeAuto.runtimeAutoInspect).mockResolvedValueOnce(prepared);
+    vi.mocked(runtimeAuto.runtimeAutoConnect).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const updateConfig = vi.fn(); const onBusyChange = vi.fn();
+    const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
+    render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+    expect(screen.getByRole('heading', { name: 'Connect an external inference engine' })).toHaveFocus();
+    expect(openManualRegistration()).toHaveAttribute('open');
+    // The advanced form remains available, but automatic setup needs none of its fields.
+    fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+    expect(runtimeAuto.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(candidate);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    try {
+      expect(runtimeAuto.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(prepared, 'synthetic-model');
+      await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+      expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+      expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();
+    } finally {
+      mocked.providerCatalog.mockResolvedValue([...BUILTINS, SYNTHETIC]);
+      mocked.providerRuntimes.mockResolvedValue([SYNTHETIC_RUNTIME]);
+      await act(async () => finish(connected));
+    }
+    const announcement = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
+    await waitFor(() => expect(announcement).toHaveFocus());
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    expect(mocked.providerCatalog).toHaveBeenCalledWith(true);
+    expect(runtimeHelp.runtimeEntrypointRegister).not.toHaveBeenCalled();
+    expect(mocked.runtimeAdapterRegister).not.toHaveBeenCalled();
+    expect(cfg).toEqual(before); expect(updateConfig).not.toHaveBeenCalled();
   });
 
   it('filters to a registered fourth engine, opens its own runtimes and returns focus to it in the kept search', async () => {
@@ -847,13 +952,15 @@ describe('neutral inference engine inventory', () => {
     expect(screen.queryByRole('heading', { name: 'Deep verification' })).not.toBeInTheDocument();
   });
 
-  it('opens the entrypoint wizard from Add and keeps typed values across back, inventory updates and busy help discovery', async () => {
+  it('opens automatic connection first and keeps explicit manual values across back, inventory updates and busy help discovery', async () => {
     let finishHelp!: (value: [runtimeHelp.HelpReport, runtimeHelp.RuntimeDescriptor]) => void;
     vi.mocked(runtimeHelp.entrypointHelpDiscover).mockImplementation(() => new Promise(resolve => { finishHelp = resolve; }));
     render(panel());
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
-    expect(screen.getByRole('heading', { name: 'Register an executable or entry point' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Connect an external inference engine' })).toHaveFocus();
+    expect(screen.getByText('Advanced: configure the launch method manually').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText("Advanced: import registration file (manifest)").closest('details')).not.toHaveAttribute('open');
+    openManualRegistration();
     fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
     fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
     fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -887,6 +994,7 @@ describe('neutral inference engine inventory', () => {
     });
     render(panel({ store: { ...store, updateConfig } as unknown as AppStore, onOpenProfiles }));
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+    openManualRegistration();
     fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
     fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
     fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -937,6 +1045,7 @@ describe('neutral inference engine inventory', () => {
       vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockImplementation(async () => { refreshes[refresh](); return { ...REGISTERED, ...NEW_BUILD }; });
       render(panel({ store: { ...store, updateConfig } as unknown as AppStore }));
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      openManualRegistration();
       fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
       fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-2' } });
       fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -972,6 +1081,7 @@ describe('neutral inference engine inventory', () => {
     // end of the reviewed manifest, and Register itself is replaced on success.
     const reviewAndRegister = async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      openManualRegistration();
       fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
       fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
       fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -1079,6 +1189,7 @@ describe('neutral inference engine inventory', () => {
     };
     const prepareBothForms = async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      openManualRegistration();
       fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
       fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
       fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });

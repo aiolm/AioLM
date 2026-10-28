@@ -208,7 +208,7 @@ impl InferenceRuntimeAdapter for ProcessAdapter {
         _gpu: &ResolvedGpu,
     ) -> Result<EngineCommand, String> {
         let mut plan = super::registry::command(cfg, port, key)?;
-        let mut environment = super::python_env::engine_environment();
+        let mut environment = crate::runtime::child_environment();
         environment.extend(plan.env);
         plan.env = environment;
         Ok(plan)

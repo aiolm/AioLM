@@ -24,6 +24,7 @@ import { useDeepVerification } from "./useDeepVerification";
 import ProviderEnvironments from './ProviderEnvironments';
 import AdapterCatalogList from './AdapterCatalogList';
 import EntrypointRegistration from './EntrypointRegistration';
+import AutomaticRuntimeConnection from './AutomaticRuntimeConnection';
 import { providerCatalog, providerRuntimes } from '../../shared/api/index';
 import { isExternalProvider, providerDisplayName, type ProviderDescription, type RuntimeInstance } from '../../shared/api/providers';
 import { providerOf } from '../../shared/api/providers';
@@ -64,8 +65,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const [providerRevision, setProviderRevision] = useState(0);
   const [providerBusy, setProviderBusy] = useState(false);
   const [wizardBusy, setWizardBusy] = useState(false);
+  const [autoBusy, setAutoBusy] = useState(false);
   const [manifestBusy, setManifestBusy] = useState(false);
-  const adapterBusy = wizardBusy || manifestBusy;
+  const adapterBusy = autoBusy || wizardBusy || manifestBusy;
   const [wizardOpened, setWizardOpened] = useState(false);
   const [wizardKey, setWizardKey] = useState(0);
   const [registered, setRegistered] = useState<{ engine: ProviderId; name: string; runtime: string } | null>(null);
@@ -195,13 +197,20 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       {wizardOpened && (
         <div className="runtimes-main" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
-          <EntrypointRegistration key={wizardKey} titleRef={wizardHeading} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy}
+          <AutomaticRuntimeConnection key={`auto-${wizardKey}`} titleRef={wizardHeading} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy}
+            onConnected={result => { notifyRuntimeInventoryChanged(); onRegistered(result.engine_id, result); }} onBusyChange={setAutoBusy} />
+          <details className="runtime-advanced">
+            <summary>{copy.advancedManual}</summary>
+            <div className="runtime-advanced__body">
+          <EntrypointRegistration key={wizardKey} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || autoBusy}
             onPublished={() => { setProviderRevision(value => value + 1); notifyRuntimeInventoryChanged(); }}
             onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setWizardBusy} />
+            </div>
+          </details>
           <details className="runtime-advanced">
             <summary>{copy.advancedManifest}</summary>
             <div className="runtime-advanced__body">
-              <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy || wizardBusy} onRegistered={onRegistered} onBusyChange={setManifestBusy} />
+              <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy || wizardBusy || autoBusy} onRegistered={onRegistered} onBusyChange={setManifestBusy} />
             </div>
           </details>
         </div>

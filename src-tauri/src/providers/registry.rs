@@ -877,7 +877,7 @@ fn run_probe(
     let mut command = crate::procutil::std_command(&m.probe.program);
     command
         .env_clear()
-        .envs(super::python_env::engine_environment());
+        .envs(crate::runtime::child_environment());
     for arg in &m.probe.args {
         command.arg(expand(
             arg,
@@ -917,7 +917,12 @@ fn run_probe(
     let before = fingerprint(&cfg.active_model);
     let output = crate::procutil::capture_output_cancellable(
         &mut command,
-        Duration::from_secs(30),
+        if super::runtime_auto::is_owned_manifest(m) {
+            // The app-owned probe may load a model and test JSON plus SSE.
+            Duration::from_secs(240)
+        } else {
+            Duration::from_secs(30)
+        },
         LIMIT as usize,
         cancel,
     )
@@ -1075,6 +1080,43 @@ pub async fn register_manifest(
 }
 pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result<(), String> {
     let mut r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
+    if super::runtime_auto::is_owned_manifest(&r.manifest) {
+        // The helper belongs to this running app/CLI, not the engine. A normal
+        // app update may replace it. Retain and verify every engine/spec hash,
+        // then run a fresh model probe through the current trusted executable.
+        if r.manifest.artifacts.len() != r.artifacts_sha256.len()
+            || r.manifest
+                .artifacts
+                .iter()
+                .any(|path| !r.artifacts_sha256.contains_key(path))
+        {
+            return Err(
+                "automatic connection artifact identity is incomplete; find the installation again"
+                    .into(),
+            );
+        }
+        for (path, expected) in &r.artifacts_sha256 {
+            if digest(Path::new(path))? != *expected {
+                return Err(
+                    "adapter artifact changed; register the updated build explicitly".into(),
+                );
+            }
+        }
+        let helper = std::env::current_exe().map_err(|e| e.to_string())?;
+        let hash = digest(&helper)?;
+        if r.manifest.launch.program != helper.to_string_lossy()
+            || r.executable_sha256 != hash
+            || r.probe_sha256 != hash
+        {
+            r.manifest.launch.program = helper.to_string_lossy().into_owned();
+            r.manifest.probe.program = r.manifest.launch.program.clone();
+            r.executable_sha256 = hash.clone();
+            r.probe_sha256 = hash;
+            r.probe = None;
+            r.model_fingerprint.clear();
+            r.launch_fingerprint.clear();
+        }
+    }
     let copy = r.clone();
     let cfg_copy = cfg.clone();
     let result =

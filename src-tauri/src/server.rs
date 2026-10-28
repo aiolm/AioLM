@@ -1154,7 +1154,7 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
 /// Unix accepts the child's process group; Windows accepts the child or any
 /// process in its job, e.g. the interpreter a venv `python.exe` launcher starts.
 #[cfg_attr(not(windows), allow(unused_variables))]
-fn listener_owned_by_child(
+pub(crate) fn listener_owned_by_child(
     pid: u32,
     port: u16,
     owner: Option<crate::procutil::ProcessHandle>,
