@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::BTreeMap;
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(target_os = "macos", test))]
 use std::path::PathBuf;
 use std::{
     collections::BTreeSet,
@@ -637,108 +637,12 @@ fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Resu
 }
 
 #[cfg(windows)]
+#[path = "runtime_discovery_windows.rs"]
+mod windows_inventory;
+
+#[cfg(windows)]
 fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
-    let Some(system) = std::env::var_os("SystemRoot") else {
-        report
-            .warnings
-            .push("The system process inventory is unavailable.".into());
-        return Ok(());
-    };
-    let program = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    // Static system query only: no candidate command or user text is evaluated.
-    let script = r#"
-[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
-$ErrorActionPreference='Stop'
-$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$listeners=@(Get-NetTCPConnection -State Listen | Where-Object { $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::' -or $_.LocalAddress -eq '::1' -or $_.LocalAddress -like '127.*' })
-$rows=@(foreach($id in ($listeners.OwningProcess | Sort-Object -Unique)) {
-    try {
-        $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$id)
-        if($null -eq $p) { continue }
-        $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid
-        if($owner.Sid -eq $sid) {
-            [pscustomobject]@{pid=$p.ProcessId;program=$p.ExecutablePath;command_line=$p.CommandLine;created=[string]$p.CreationDate;listeners=@($listeners | Where-Object OwningProcess -eq $id | ForEach-Object { [pscustomobject]@{host=$_.LocalAddress;port=$_.LocalPort} })}
-        }
-    } catch { continue }
-})
-ConvertTo-Json -InputObject $rows -Depth 4 -Compress
-"#;
-    let bytes = match system_inventory(
-        &program,
-        &[
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ],
-        cancel,
-    ) {
-        Ok(bytes) => bytes,
-        Err(message) => {
-            cancelled(cancel)?;
-            report.warnings.push(message);
-            return Ok(());
-        }
-    };
-    let rows: Vec<serde_json::Value> = match serde_json::from_slice(&bytes) {
-        Ok(rows) => rows,
-        Err(_) => {
-            report
-                .warnings
-                .push("The system process inventory was incomplete.".into());
-            return Ok(());
-        }
-    };
-    for row in rows.into_iter().take(MAX_ENTRIES) {
-        cancelled(cancel)?;
-        let Some(pid) = row["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) else {
-            continue;
-        };
-        let endpoints = row["listeners"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|value| {
-                local_endpoint(
-                    value["host"].as_str()?.parse().ok()?,
-                    u16::try_from(value["port"].as_u64()?).ok()?,
-                )
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if endpoints.is_empty() {
-            continue;
-        }
-        let command = (|| {
-            let program = row["program"].as_str()?.to_owned();
-            if !Path::new(&program).is_absolute() {
-                return None;
-            }
-            let mut args = super::options::split_command_with_syntax(
-                row["command_line"].as_str()?,
-                super::options::CommandSyntax::Windows,
-            )
-            .ok()?;
-            if args.is_empty() {
-                return None;
-            }
-            args.remove(0);
-            if !valid_arguments(&args) {
-                return None;
-            }
-            Some(ObservedCommand {
-                program,
-                args,
-                working_directory: None,
-                argv_source: ArgvSource::WindowsCommandLine,
-            })
-        })();
-        let entrypoint_path = command.as_ref().map(|command| command.program.clone());
-        push(report, candidate(DiscoverySource::LocalProcess, entrypoint_path, command, endpoints, EntrypointKind::Attached, Some((pid, row["created"].as_str().unwrap_or("").into())), vec!["Windows command-line splitting and working directory need confirmation before managed launch. Protocol, model and lifecycle ownership are unverified.".into()]));
-    }
-    Ok(())
+    windows_inventory::discover(report, cancel)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

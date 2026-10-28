@@ -203,7 +203,9 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
                 .iter()
                 .any(|endpoint| endpoint["port"] == upstream_port)
         })
-        .expect("the actual local model service was not discovered");
+        .unwrap_or_else(|| {
+            panic!("the actual local model service was not discovered: {discovery}")
+        });
     assert!(
         candidate.get("command").is_none(),
         "public CLI discovery must not print captured process arguments"
