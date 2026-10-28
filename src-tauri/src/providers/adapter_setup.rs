@@ -209,6 +209,19 @@ pub fn prepare(
         values.insert(field.key.clone(), value.clone());
     }
     let resolve = |token: &str| resolve(token, &values);
+    // Import adds package resources to the hash list. A user-selected input
+    // may name the same file; keep one canonical entry after substitution.
+    let artifacts = recipe
+        .artifacts
+        .iter()
+        .map(|s| {
+            PathBuf::from(resolve(s)?)
+                .canonicalize()
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect();
     let command = HelpCommand {
         program: PathBuf::from(resolve(&recipe.prepare.program)?),
         args: recipe
@@ -232,11 +245,7 @@ pub fn prepare(
             .as_ref()
             .map(|s| resolve(s).map(PathBuf::from))
             .transpose()?,
-        artifacts: recipe
-            .artifacts
-            .iter()
-            .map(|s| resolve(s).map(PathBuf::from))
-            .collect::<Result<_, _>>()?,
+        artifacts,
         runtime_version: format!("adapter-setup-v1:{}", recipe.id),
         scope: vec![],
         encoding: Encoding::Utf8,
