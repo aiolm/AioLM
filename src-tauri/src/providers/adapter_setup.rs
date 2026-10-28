@@ -210,15 +210,12 @@ pub fn prepare(
     }
     let resolve = |token: &str| resolve(token, &values);
     // Import adds package resources to the hash list. A user-selected input
-    // may name the same file; keep one canonical entry after substitution.
+    // may name the same file; keep one identical path after substitution. Preserve distinct symlink
+    // aliases so HelpCommand can still detect retargeting.
     let artifacts = recipe
         .artifacts
         .iter()
-        .map(|s| {
-            PathBuf::from(resolve(s)?)
-                .canonicalize()
-                .map_err(|e| e.to_string())
-        })
+        .map(|s| resolve(s).map(PathBuf::from))
         .collect::<Result<BTreeSet<_>, _>>()?
         .into_iter()
         .collect();
