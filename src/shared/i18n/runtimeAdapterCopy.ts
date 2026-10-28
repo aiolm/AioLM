@@ -1,7 +1,7 @@
 export const runtimeAdapterCopy = {
   ko: {
     title: '외부 엔진 등록',
-    hint: "엔진의 등록 파일(manifest)을 선택하세요. 실행 파일·모델·외부 환경은 그대로 유지됩니다.",
+    hint: "제공자나 개발자가 준비한 완성된 등록 JSON을 가져옵니다. *.engine.json은 파일 이름의 예이며 앱이 자동 생성하는 파일이 아닙니다. 파일이 없다면 위에서 직접 등록하세요.",
     path: "등록 파일 경로 (manifest)", file: '파일 선택', register: '검사 후 등록',
     refreshError: "등록했지만 목록을 새로고침하지 못했습니다. 다시 등록하기 전에 목록을 새로고침하세요.",
     locked: '다른 작업을 마치고, 실행 중인 모델이 있으면 중지한 뒤 등록해 주세요.',
@@ -11,7 +11,7 @@ export const runtimeAdapterCopy = {
   },
   en: {
     title: 'Register external engine',
-    hint: "Choose the engine’s registration file (manifest). Executables, models and external environments stay in place.",
+    hint: "Import a completed registration JSON prepared by a provider or developer. *.engine.json is an example filename; the app does not generate this file automatically. Without one, use manual registration above.",
     path: "Registration file path (manifest)", file: 'Choose file', register: 'Probe & register',
     refreshError: "Registered, but the list could not be refreshed. Refresh the list before registering again.",
     locked: 'Finish any other task and unload any running models before registering.',
@@ -21,7 +21,7 @@ export const runtimeAdapterCopy = {
   },
   ja: {
     title: '外部エンジンの登録',
-    hint: "エンジンの登録ファイル（manifest）を選んでください。実行ファイル・モデル・外部環境はそのまま維持されます。",
+    hint: "提供者や開発者が用意した完成済みの登録JSONを読み込みます。*.engine.jsonはファイル名の例で、アプリが自動生成するファイルではありません。なければ上で手動登録してください。",
     path: "登録ファイルのパス（manifest）", file: 'ファイルを選択', register: '検査して登録',
     refreshError: "登録しましたが一覧を更新できませんでした。再登録する前に一覧を更新してください。",
     locked: '他の作業を終え、実行中のモデルがあれば停止してから登録してください。',
@@ -31,7 +31,7 @@ export const runtimeAdapterCopy = {
   },
   zh: {
     title: '注册外部引擎',
-    hint: "请选择引擎的注册文件（manifest）。可执行文件、模型及外部环境保持原样。",
+    hint: "导入提供方或开发者准备的完整注册JSON。*.engine.json只是文件名示例，应用不会自动生成此文件。没有文件时，请在上方手动注册。",
     path: "注册文件路径（manifest）", file: '选择文件', register: '检查并注册',
     refreshError: "已注册，但无法刷新列表。再次注册前请先刷新列表。",
     locked: '请先完成其他任务；如有正在运行的模型，请停止后再注册。',

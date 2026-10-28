@@ -11,7 +11,7 @@ vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
   entrypointHelpDiscover: vi.fn(), entrypointHelpCancel: vi.fn(async () => true),
   entrypointManifestPreview: vi.fn(), runtimeEntrypointRegister: vi.fn(), pickRuntimePath: vi.fn(),
-  adapterSetupList: vi.fn(), adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(), adapterSetupCancel: vi.fn(async () => true),
+  adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(), adapterSetupCancel: vi.fn(async () => true),
 }));
 const schema = effectiveSchema(['model', 'port'].map(key => ({ key, flag: `--${key}`, target: 'launch' as const, group: 'runtime', kind: { type: 'text' as const } }))).schema;
 const output = { text: 'synthetic help', clean_text: 'synthetic help', encoding: 'utf-8', decoding_loss: false, truncated: false };
@@ -282,7 +282,6 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
   fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
   expect(screen.getByLabelText('Installation folder')).toHaveValue('/synthetic/sdk');
   expect(api.adapterSetupImport).toHaveBeenCalledTimes(1);
-  expect(api.adapterSetupList).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
   expect(api.entrypointHelpDiscover).not.toHaveBeenCalled();
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();

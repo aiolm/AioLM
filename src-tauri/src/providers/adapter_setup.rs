@@ -79,12 +79,6 @@ impl Recipe {
     }
 }
 
-pub fn provided() -> Result<Vec<Recipe>, String> {
-    // Retain the IPC boundary for older clients without advertising any
-    // third-party engine as a bundled adapter. All recipes are imported.
-    Ok(vec![])
-}
-
 pub fn import(path: &Path) -> Result<Recipe, String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();

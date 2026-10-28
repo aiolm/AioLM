@@ -102,8 +102,6 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
         r#"{"example":"{literal}"}"#.into(),
     ]);
     assert!(adapter_setup::prepare(&service, "literal-json", &literal_json, &inputs).is_ok());
-    assert!(adapter_setup::provided().unwrap().is_empty());
-
     let marker = home.path.join("started.txt");
     let mut slow = recipe.clone();
     slow.prepare.args.extend([

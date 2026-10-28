@@ -483,6 +483,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
         )}
         {step === 3 && (
           <div className="entrypoint-review">
+            <p className="app-section-hint">{copy.reviewHint}</p>
             {manifest && <pre className="entrypoint-review-manifest">{manifest}</pre>}
             {done ? <p role="status">{copy.registered}</p> : (
               <div className="app-page-actions">

@@ -6,7 +6,7 @@ import AdapterSetupPanel from './AdapterSetupPanel';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
-  adapterSetupList: vi.fn(), adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(),
+  adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(),
   adapterSetupCancel: vi.fn(async () => true), pickRuntimePath: vi.fn(),
 }));
 const recipe: api.AdapterSetupRecipe = {
@@ -29,10 +29,11 @@ function mount() {
 
 it('loads arbitrary recipe data only on request and passes exact Unicode input tokens', async () => {
   const view = mount();
-  expect(api.adapterSetupList).not.toHaveBeenCalled();
-  expect(screen.queryByRole('button', { name: 'Browse provided adapters' })).not.toBeInTheDocument();
+  expect(api.pickRuntimePath).not.toHaveBeenCalled();
+  expect(api.adapterSetupImport).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   const program = await screen.findByLabelText('Installed executable (Required)');
+  expect(screen.getByText(recipe.title)).toBeVisible();
   expect(program).toBeRequired();
   expect(screen.getByLabelText('Source revision (Required)')).toHaveValue('synthetic-revision');
   fireEvent.change(program, { target: { value: '/synthetic path/눈길 ; &/engine' } });
@@ -70,6 +71,15 @@ it('imports an additional adapter without a closed engine list and ignores late 
   fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   await screen.findByLabelText('Installed executable (Required)');
   expect(api.adapterSetupImport).toHaveBeenCalledWith('/synthetic/new-adapter.json');
+  vi.mocked(api.adapterSetupImport).mockResolvedValueOnce({
+    ...recipe, id: 'another.vendor', title: 'Another independent adapter',
+    fields: [{ key: 'folder', label: 'Installation folder', kind: 'folder', required: true, default: '/synthetic/package' }],
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
+  expect(await screen.findByLabelText('Installation folder (Required)')).toHaveValue('/synthetic/package');
+  expect(screen.queryByLabelText('Installed executable (Required)')).not.toBeInTheDocument();
+  expect(screen.getByText('Another independent adapter')).toBeVisible();
+  expect(api.adapterSetupPrepare).not.toHaveBeenCalled();
   let resolve!: (value: string) => void;
   vi.mocked(api.pickRuntimePath).mockReturnValueOnce(new Promise(done => { resolve = done; }));
   fireEvent.click(screen.getByRole('button', { name: 'Browse' }));

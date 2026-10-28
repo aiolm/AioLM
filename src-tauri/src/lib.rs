@@ -192,7 +192,6 @@ pub fn run() {
             commands::runtime_help_cmd::entrypoint_help_discover,
             commands::runtime_help_cmd::entrypoint_help_cancel,
             commands::runtime_help_cmd::entrypoint_manifest_preview,
-            commands::runtime_help_cmd::adapter_setup_list,
             commands::runtime_help_cmd::adapter_setup_import,
             commands::runtime_help_cmd::adapter_setup_prepare,
             commands::runtime_help_cmd::adapter_setup_cancel,
