@@ -1863,7 +1863,7 @@ mod tests {
         });
 
         let child = Command::new("sh")
-            .args(["-c", "exec sleep 5"])
+            .args(["-c", "exec sleep 30"])
             .spawn()
             .expect("spawn non-listening managed child");
         let shared = Arc::new(Mutex::new(ServerState::default()));
@@ -1879,7 +1879,10 @@ mod tests {
         let err = Arc::new(ErrBuf::default());
         let result = tokio::runtime::Runtime::new()
             .expect("create test runtime")
-            .block_on(wait_ready(shared.clone(), &url, "token", 1, &err));
+            // The fixture must finish two HTTP round trips and the native
+            // listener-owner lookup before the deadline, even when parallel
+            // tests saturate a hosted runner. Keep the child alive beyond it.
+            .block_on(wait_ready(shared.clone(), &url, "token", 5, &err));
 
         stop.store(true, Ordering::Release);
         server_thread.join().expect("join dummy HTTP server");
@@ -1892,9 +1895,11 @@ mod tests {
             reaped
         };
         assert!(child_reaped);
-        assert!(result
-            .expect_err("readiness must reject the unrelated HTTP server")
-            .contains("not owned by the managed server process"));
+        let error = result.expect_err("readiness must reject the unrelated HTTP server");
+        assert!(
+            error.contains("not owned by the managed server process"),
+            "expected the listener ownership diagnostic, got: {error}"
+        );
     }
 
     #[test]
