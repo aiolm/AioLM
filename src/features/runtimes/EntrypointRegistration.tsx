@@ -353,6 +353,9 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
         {step === 0 && (
           <div className="model-settings-fields">
             <div className="entrypoint-primary">
+              <h4 className="app-section-title">{copy.manual}</h4>
+              <p className="app-section-hint">{copy.fileHint}</p>
+              <p className="app-section-hint">{copy.requirements}</p>
               <PathField label={copy.program} value={program} kind="file" disabled={disabled} required copy={copy} onChange={setProgram} />
             </div>
             <RuntimeArgumentList label={copy.prefix} tokens={prefix} disabled={disabled} onError={setError} onChange={setPrefix}
@@ -480,6 +483,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
         )}
         {step === 3 && (
           <div className="entrypoint-review">
+            <p className="app-section-hint">{copy.reviewHint}</p>
             {manifest && <pre className="entrypoint-review-manifest">{manifest}</pre>}
             {done ? <p role="status">{copy.registered}</p> : (
               <div className="app-page-actions">

@@ -1,4 +1,5 @@
 //! Backend modules, public client APIs and desktop application startup.
+mod app_origin;
 pub mod app_update;
 mod attachment_drop;
 pub mod backends;
@@ -66,6 +67,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 /// sessions untouched; if the spawn itself fails the app stays open and usable
 /// (servers already stopped) with an error.
 pub(crate) fn shutdown_managed_processes(state: &AppState) {
+    providers::runtime_auto::cancel();
     state.launch_preflights.cancel_all();
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
@@ -119,6 +121,17 @@ fn closes_to_tray(app: &tauri::AppHandle) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if providers::runtime_auto::is_internal(&args) {
+        let result = tokio::runtime::Runtime::new()
+            .expect("initialize automatic connection helper")
+            .block_on(providers::runtime_auto::run_internal(&args));
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     #[cfg(target_os = "macos")]
     launch_path::extend_for_desktop_launch();
     let context = tauri::generate_context!();
@@ -192,10 +205,13 @@ pub fn run() {
             commands::runtime_help_cmd::entrypoint_help_discover,
             commands::runtime_help_cmd::entrypoint_help_cancel,
             commands::runtime_help_cmd::entrypoint_manifest_preview,
-            commands::runtime_help_cmd::adapter_setup_list,
             commands::runtime_help_cmd::adapter_setup_import,
             commands::runtime_help_cmd::adapter_setup_prepare,
             commands::runtime_help_cmd::adapter_setup_cancel,
+            commands::runtime_auto_cmd::runtime_auto_discover,
+            commands::runtime_auto_cmd::runtime_auto_inspect,
+            commands::runtime_auto_cmd::runtime_auto_connect,
+            commands::runtime_auto_cmd::runtime_auto_cancel,
             commands::providers::runtime_entrypoint_register,
             commands::providers::pick_runtime_path,
             commands::benchmark_explorer::open_aiolm_website,

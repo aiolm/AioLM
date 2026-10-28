@@ -5,29 +5,13 @@ use super::{
     runtime_help::{self, Encoding, HelpCommand, HelpService},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 const LIMIT: usize = 64 * 1024;
-const RESOURCES: &[(&str, &str)] = &[
-    (
-        "create_adapter.py",
-        include_str!("../../../scripts/runtime-adapters/create_adapter.py"),
-    ),
-    (
-        "strata_bridge.py",
-        include_str!("../../../scripts/runtime-adapters/strata_bridge.py"),
-    ),
-    (
-        "strata_setup.py",
-        include_str!("../../../scripts/runtime-adapters/strata_setup.py"),
-    ),
-];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,15 +79,6 @@ impl Recipe {
     }
 }
 
-pub fn provided() -> Result<Vec<Recipe>, String> {
-    let recipe: Recipe = serde_json::from_str(include_str!(
-        "../../../scripts/runtime-adapters/strata.setup.json"
-    ))
-    .map_err(|e| e.to_string())?;
-    recipe.validate()?;
-    Ok(vec![recipe])
-}
-
 pub fn import(path: &Path) -> Result<Recipe, String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
@@ -116,57 +91,74 @@ pub fn import(path: &Path) -> Result<Recipe, String> {
         return Err("adapter setup recipe exceeds 64 KiB".into());
     }
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
-    let recipe: Recipe = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let mut recipe: Recipe = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    recipe.validate()?;
+    let root = path
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or("adapter setup has no parent directory")?
+        .to_path_buf();
+    let mut resources = BTreeSet::new();
+    let mut resolve_resource = |token: &str| -> Result<String, String> {
+        let Some(relative) = token
+            .strip_prefix("{resource:")
+            .and_then(|s| s.strip_suffix('}'))
+        else {
+            return Ok(token.into());
+        };
+        let relative_path = Path::new(relative);
+        if relative.is_empty()
+            || relative.contains(['\\', '\0'])
+            || relative.contains("{input:")
+            || relative.contains("{resource:")
+            || relative_path
+                .components()
+                .any(|c| !matches!(c, Component::Normal(_)))
+        {
+            return Err(
+                "adapter resources must be relative file paths inside the setup folder".into(),
+            );
+        }
+        let resource = root.join(relative_path).canonicalize().map_err(|e| {
+            format!("adapter resource is missing; keep the setup package together: {relative}: {e}")
+        })?;
+        if !resource.starts_with(&root) || !resource.is_file() {
+            return Err("adapter resource must be a file inside the setup folder".into());
+        }
+        let resolved = resource.to_string_lossy().into_owned();
+        resources.insert(resolved.clone());
+        Ok(resolved)
+    };
+    recipe.prepare.program = resolve_resource(&recipe.prepare.program)?;
+    recipe.prepare.args = recipe
+        .prepare
+        .args
+        .iter()
+        .map(|s| resolve_resource(s))
+        .collect::<Result<_, _>>()?;
+    recipe.prepare.working_directory = recipe
+        .prepare
+        .working_directory
+        .as_ref()
+        .map(|s| resolve_resource(s))
+        .transpose()?;
+    recipe.artifacts = recipe
+        .artifacts
+        .iter()
+        .map(|s| resolve_resource(s))
+        .collect::<Result<_, _>>()?;
+    // Every referenced helper participates in the existing help identity check.
+    let additional = resources
+        .into_iter()
+        .filter(|p| !recipe.artifacts.contains(p))
+        .collect::<Vec<_>>();
+    recipe.artifacts.extend(additional);
     recipe.validate()?;
     Ok(recipe)
 }
 
-fn materialize() -> Result<BTreeMap<String, String>, String> {
-    let mut digest = Sha256::new();
-    for (name, source) in RESOURCES {
-        digest.update(name.as_bytes());
-        digest.update(source.as_bytes());
-    }
-    let parent = crate::runtime::runtimes_root().join("adapter-helpers");
-    if fs::symlink_metadata(&parent).is_ok_and(|m| m.file_type().is_symlink() || !m.is_dir()) {
-        return Err("bundled adapter helper root is not an owned directory".into());
-    }
-    let directory = parent.join(format!("{:x}", digest.finalize()));
-    if fs::symlink_metadata(&directory).is_ok_and(|m| m.file_type().is_symlink() || !m.is_dir()) {
-        return Err("bundled adapter helper directory is not an owned directory".into());
-    }
-    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-    let mut paths = BTreeMap::new();
-    for (name, source) in RESOURCES {
-        let path = directory.join(name);
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => file
-                .write_all(source.as_bytes())
-                .map_err(|e| e.to_string())?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error.to_string()),
-        }
-        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || !m.is_file())
-            || fs::read(&path).map_err(|e| e.to_string())? != source.as_bytes()
-        {
-            return Err(
-                "bundled adapter helper changed; restore the helper before retrying setup".into(),
-            );
-        }
-        paths.insert((*name).into(), path.to_string_lossy().into_owned());
-    }
-    Ok(paths)
-}
-
-fn resolve(
-    token: &str,
-    inputs: &BTreeMap<String, String>,
-    resources: &BTreeMap<String, String>,
-) -> Result<String, String> {
+fn resolve(token: &str, inputs: &BTreeMap<String, String>) -> Result<String, String> {
     if let Some(key) = token
         .strip_prefix("{input:")
         .and_then(|s| s.strip_suffix('}'))
@@ -176,16 +168,14 @@ fn resolve(
             .cloned()
             .ok_or_else(|| format!("missing adapter input: {key}"));
     }
-    if let Some(key) = token
-        .strip_prefix("{resource:")
-        .and_then(|s| s.strip_suffix('}'))
-    {
-        return resources
-            .get(key)
-            .cloned()
-            .ok_or_else(|| format!("unknown bundled adapter resource: {key}"));
+    if token.starts_with("{resource:") {
+        return Err(
+            "import the adapter setup JSON with its companion files before preparing it".into(),
+        );
     }
-    if token.contains(['{', '}', '\0']) {
+    // Only the two v1 namespaces are template syntax; other braces are
+    // literal data, including JSON argv and resolved package paths.
+    if token.contains('\0') || token.contains("{input:") || token.contains("{resource:") {
         return Err("setup placeholders must occupy one complete argv token".into());
     }
     Ok(token.into())
@@ -216,8 +206,17 @@ pub fn prepare(
         }
         values.insert(field.key.clone(), value.clone());
     }
-    let resources = materialize()?;
-    let resolve = |token: &str| resolve(token, &values, &resources);
+    let resolve = |token: &str| resolve(token, &values);
+    // Import adds package resources to the hash list. A user-selected input
+    // may name the same file; keep one identical path after substitution. Preserve distinct symlink
+    // aliases so HelpCommand can still detect retargeting.
+    let artifacts = recipe
+        .artifacts
+        .iter()
+        .map(|s| resolve(s).map(PathBuf::from))
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect();
     let command = HelpCommand {
         program: PathBuf::from(resolve(&recipe.prepare.program)?),
         args: recipe
@@ -241,11 +240,7 @@ pub fn prepare(
             .as_ref()
             .map(|s| resolve(s).map(PathBuf::from))
             .transpose()?,
-        artifacts: recipe
-            .artifacts
-            .iter()
-            .map(|s| resolve(s).map(PathBuf::from))
-            .collect::<Result<_, _>>()?,
+        artifacts,
         runtime_version: format!("adapter-setup-v1:{}", recipe.id),
         scope: vec![],
         encoding: Encoding::Utf8,

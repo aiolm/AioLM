@@ -1517,6 +1517,8 @@ fn help_value() -> Value {
             "models list":"scan model files and snapshots with engine compatibility",
             "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
             "runtime list":"list built-in and registered external engine installations",
+            "runtime discover [folder]":"find current-user local model APIs and entry points in a selected folder without executing candidates",
+            "runtime connect <candidate-id> <model-id> [folder]":"rediscover, inspect and verify one common automatic connection, then save its registration",
             "runtime register-manifest <json>":"probe and register a versioned external process adapter; engine files stay external",
             "runtime select <custom.engine> <id>":"select a registered engine without replacing its files",
             "runtime probe <custom.engine> <id>":"probe the exact active model on an external adapter",
@@ -1554,6 +1556,14 @@ enum CliCommand {
         path: String,
     },
     RuntimesList,
+    RuntimeDiscover {
+        folder: Option<String>,
+    },
+    RuntimeConnect {
+        candidate: String,
+        model: String,
+        folder: Option<String>,
+    },
     DeviceProfile,
     RuntimeProbe {
         backend: String,
@@ -1623,6 +1633,10 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
         },
         "runtime" | "runtimes" => match args.get(1).map(String::as_str) {
             Some("list") if args.len() == 2 => Ok(CliCommand::RuntimesList),
+            Some("discover") if (2..=3).contains(&args.len()) => Ok(CliCommand::RuntimeDiscover { folder: args.get(2).cloned() }),
+            Some("connect") if (4..=5).contains(&args.len()) => Ok(CliCommand::RuntimeConnect { candidate: args[2].clone(), model: args[3].clone(), folder: args.get(4).cloned() }),
+            Some("discover") => Err("usage: runtime discover [folder]".into()),
+            Some("connect") => Err("usage: runtime connect <candidate-id> <model-id> [folder]".into()),
             Some("register-manifest") if args.len() == 3 => Ok(CliCommand::RuntimeAdapterRegister { manifest: args[2].clone() }),
             Some("register") if args.len() == 4 => Ok(CliCommand::RuntimeRegister { provider: args[2].clone(), python: args[3].clone() }),
             Some("install") if (3..=4).contains(&args.len()) => Ok(CliCommand::RuntimeInstall { provider: args[2].clone(), python: args.get(3).cloned() }),
@@ -1643,7 +1657,7 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
             Some("select") => Err("usage: runtime select <backend> <build>".into()),
             Some("device") => Ok(CliCommand::DeviceProfile),
             Some("register" | "install" | "remove") => Err("usage: runtime register <vllm|mlx-vlm> <python> | install <vllm|mlx-vlm> [python] | remove <vllm|mlx-vlm> <id>".into()),
-            _ => Err("usage: runtime list|probe|select <backend> <build>|register|install|remove|export|import|device".into()),
+            _ => Err("usage: runtime list|discover [folder]|connect <candidate-id> <model-id> [folder]|probe|select <backend> <build>|register|install|remove|export|import|device".into()),
         },
         "doctor" if args.len() == 1 => Ok(CliCommand::Doctor),
         "server" => match args.get(1).map(String::as_str) {
@@ -1673,6 +1687,72 @@ async fn run(args: &[String]) -> Result<Value, String> {
         CliCommand::ModelsList => models_value(),
         CliCommand::ModelsDelete { path } => delete_model_value(&path),
         CliCommand::RuntimesList => runtimes_value(),
+        CliCommand::RuntimeDiscover { folder } => {
+            let _lock = acquire_command_lock()?;
+            let cancel = aiolm_lib::providers::runtime_auto::cancellation();
+            cancel.store(false, Ordering::Release);
+            let discover =
+                aiolm_lib::providers::runtime_auto::discover(folder.as_deref().map(Path::new));
+            let report = run_interruptible(discover, tokio::signal::ctrl_c(), &cancel).await?;
+            Ok(
+                json!({"candidates": report.candidates.into_iter().map(|candidate| json!({
+                "id": candidate.id, "display_name": candidate.display_name, "source": candidate.source,
+                "entrypoint_kind": candidate.entrypoint_kind, "endpoints": candidate.endpoints, "state": candidate.state,
+            })).collect::<Vec<_>>(), "warnings": report.warnings, "truncated": report.truncated}),
+            )
+        }
+        CliCommand::RuntimeConnect {
+            candidate,
+            model,
+            folder,
+        } => {
+            let _lock = acquire_command_lock()?;
+            if read_state()?.is_some_and(|state| {
+                state_process_is_managed(&state) && process_is_alive(state.pid)
+            }) {
+                return Err("stop the headless server before connecting another runtime".into());
+            }
+            let cancel = aiolm_lib::providers::runtime_auto::cancellation();
+            cancel.store(false, Ordering::Release);
+            let work = async {
+                use aiolm_lib::providers::{artifacts::ArtifactRole, runtime_auto};
+                let report = runtime_auto::discover(folder.as_deref().map(Path::new)).await?;
+                let candidate = report
+                    .candidates
+                    .into_iter()
+                    .find(|value| value.id == candidate)
+                    .ok_or(
+                        "the candidate changed or is unavailable; discover the installation again",
+                    )?;
+                let local_models = if candidate.endpoints.is_empty() {
+                    let worker_cancel = cancel.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let cfg = config::load_result()?;
+                        let catalog =
+                            aiolm_lib::scan_model_catalog(&cfg.models_dir, &worker_cancel, None)?;
+                        Ok::<_, String>(
+                            catalog
+                                .models
+                                .into_iter()
+                                .filter(|model| model.artifact.role == ArtifactRole::Model)
+                                .map(|model| runtime_auto::ModelChoice {
+                                    id: model.artifact.path,
+                                    name: model.artifact.name,
+                                })
+                                .collect(),
+                        )
+                    })
+                    .await
+                    .map_err(|error| error.to_string())??
+                } else {
+                    vec![]
+                };
+                let prepared = runtime_auto::inspect(&candidate, local_models).await?;
+                runtime_auto::connect(&prepared, &model, cancel.clone()).await
+            };
+            let connected = run_interruptible(work, tokio::signal::ctrl_c(), &cancel).await?;
+            serde_json::to_value(connected).map_err(|error| error.to_string())
+        }
         CliCommand::DeviceProfile => device_value(),
         CliCommand::RuntimeProbe { backend, build } => runtime_probe_value(&backend, &build).await,
         CliCommand::RuntimeSelect { backend, build } => runtime_select_value(&backend, &build),
@@ -1819,9 +1899,9 @@ async fn run_interruptible<T>(
         result = &mut work => result,
         Ok(()) = interrupt => {
             cancel.store(true, Ordering::Release);
-            eprintln!("cancelling; waiting for the installer to stop and remove its staging folder");
+            eprintln!("cancelling; waiting for the runtime operation to stop and clean up");
             // Work that finished as the interrupt arrived is kept and reported.
-            work.await.map_err(|error| format!("runtime installation cancelled: {error}"))
+            work.await.map_err(|error| format!("runtime operation cancelled: {error}"))
         }
     }
 }
@@ -1833,6 +1913,16 @@ fn main() {
         std::process::exit(1);
     }
     let args = env::args().skip(1).collect::<Vec<_>>();
+    if aiolm_lib::providers::runtime_auto::is_internal(&args) {
+        let result = tokio::runtime::Runtime::new()
+            .expect("initialize automatic connection helper")
+            .block_on(aiolm_lib::providers::runtime_auto::run_internal(&args));
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.len() == 1 && args[0] == INTERNAL_LOG_COLLECTOR {
         // The collector needs no GUI, keyring, migration or async runtime.
         // Its parent has already created the log directory/file.
@@ -2147,6 +2237,27 @@ mod tests {
             })
         );
         assert_eq!(parse(&["runtimes", "list"]), Ok(CliCommand::RuntimesList));
+        assert_eq!(
+            parse(&["runtime", "discover", "folder with spaces"]),
+            Ok(CliCommand::RuntimeDiscover {
+                folder: Some("folder with spaces".into())
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "runtime",
+                "connect",
+                "opaque-id",
+                "model name 눈길",
+                "folder with spaces"
+            ]),
+            Ok(CliCommand::RuntimeConnect {
+                candidate: "opaque-id".into(),
+                model: "model name 눈길".into(),
+                folder: Some("folder with spaces".into())
+            })
+        );
+        assert!(parse(&["runtime", "connect", "opaque-id"]).is_err());
         assert_eq!(
             parse(&[
                 "runtime",

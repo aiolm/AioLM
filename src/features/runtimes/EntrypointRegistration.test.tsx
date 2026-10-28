@@ -11,7 +11,7 @@ vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
   entrypointHelpDiscover: vi.fn(), entrypointHelpCancel: vi.fn(async () => true),
   entrypointManifestPreview: vi.fn(), runtimeEntrypointRegister: vi.fn(), pickRuntimePath: vi.fn(),
-  adapterSetupList: vi.fn(), adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(), adapterSetupCancel: vi.fn(async () => true),
+  adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(), adapterSetupCancel: vi.fn(async () => true),
 }));
 const schema = effectiveSchema(['model', 'port'].map(key => ({ key, flag: `--${key}`, target: 'launch' as const, group: 'runtime', kind: { type: 'text' as const } }))).schema;
 const output = { text: 'synthetic help', clean_text: 'synthetic help', encoding: 'utf-8', decoding_loss: false, truncated: false };
@@ -176,7 +176,7 @@ it('retains the full published submission across help-save failure and config ch
   expect(submitted).toEqual(expected); expect(submitted).not.toBe(preview);
   expect(submitted.prefix).not.toBe(preview.prefix); expect(submitted.help).not.toBe(preview.help);
   expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
-  expect(screen.getByText('Browse provided adapters').closest('button')).toBeDisabled();
+  expect(screen.getByText('Import AioLM connection setup (.json)').closest('button')).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
   expect(screen.queryByLabelText('Compatibility check program')).not.toBeInTheDocument();
   const changed: typeof testConfig = { ...testConfig, active_provider: 'custom.other', active_runtime: 'other-build' };
@@ -272,15 +272,16 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
     launch_resources: { version: 1, directory_env: 'SYNTHETIC_LAUNCH_DIRECTORY' },
     options_separator: '--',
   };
-  vi.mocked(api.adapterSetupList).mockResolvedValue([recipe]);
+  vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic/engine.setup.json');
+  vi.mocked(api.adapterSetupImport).mockResolvedValue(recipe);
   vi.mocked(api.adapterSetupPrepare).mockResolvedValue(prepared);
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
-  fireEvent.click(screen.getByRole('button', { name: 'Browse provided adapters' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   fireEvent.submit((await screen.findByRole('button', { name: 'Check installation and continue' })).closest('form')!);
   await screen.findByRole('button', { name: 'Discover help' });
   fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
   expect(screen.getByLabelText('Installation folder')).toHaveValue('/synthetic/sdk');
-  expect(api.adapterSetupList).toHaveBeenCalledTimes(1);
+  expect(api.adapterSetupImport).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
   expect(api.entrypointHelpDiscover).not.toHaveBeenCalled();
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();

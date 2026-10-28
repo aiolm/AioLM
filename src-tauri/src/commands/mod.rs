@@ -17,6 +17,7 @@ pub(crate) mod notifications;
 pub(crate) mod personalization;
 pub(crate) mod projects;
 pub(crate) mod providers;
+pub(crate) mod runtime_auto_cmd;
 pub(crate) mod runtime_help_cmd;
 pub(crate) mod runtimes;
 pub(crate) mod server;

@@ -145,7 +145,7 @@ const en = {
   keyNeverRendered: "The API key is never shown on screen or in snippets; use Copy API key to copy it.",
 
   // ---- Runtimes ----
-  runtimesIntro: "Register an inference engine from its executable or entry point, then configure its options from --help. Built-in adapters are available in the same list.",
+  runtimesIntro: "Find an engine automatically or choose its installation folder, then select a model and connect. AioLM checks actual model responses before saving the connection.",
   runtimeLookupFailed: "Runtime lookup failed",
   probeHint: "Read-only probe of the selected executable: version, help flags, visible devices, and llama-bench preflight.",
   probing: "Probing",
@@ -860,7 +860,7 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
   diagnosticsTitle: "런타임 진단", noDiagnostics: "보고된 런타임 진단이 없습니다.",
   exampleEndpoint: "예시 엔드포인트", keyNeverRendered: "API 키는 화면이나 예제 코드에 표시되지 않습니다. API 키 복사 버튼으로 복사하세요.",
 
-  runtimesIntro: "추론 엔진의 실행 파일이나 엔트리포인트를 등록하고 --help에서 실행 옵션을 확인해 설정하세요. 기본 제공 어댑터도 같은 목록에서 사용할 수 있습니다.",
+  runtimesIntro: "자동으로 찾거나 설치 폴더를 고른 뒤, 모델을 선택해 연결하세요. 연결을 저장하기 전에 실제 모델 응답을 확인합니다.",
   runtimeLookupFailed: "런타임 조회 실패",
   probeHint: "선택한 실행 파일을 읽기 전용으로 점검합니다: 버전, 도움말 플래그, 표시되는 장치, llama-bench 사전 점검.",
   probing: "점검 중",
@@ -1261,7 +1261,7 @@ const ja: UiCatalog = {
   reasonPlatformNotSupported: "現在のオペレーティングシステムとアーキテクチャに対応するビルドがリリースカタログにありません。",
   reasonUnavailable: "互換性の説明がありません。最新情報を確認するにはデバイス検出を更新してください。",
   stopSessionsBeforeRuntime: "ランタイムを変更・転送する前に、すべてのモデルセッションをアンロードしてください。",
-  runtimesIntro: "推論エンジンの実行ファイルかエントリーポイントを登録し、--helpから実行オプションを設定します。標準アダプターも同じ一覧で利用できます。",
+  runtimesIntro: "自動で検索するかインストール先フォルダーを選び、モデルを選択して接続してください。接続を保存する前に、実際のモデル応答を確認します。",
   sessionsIntro: "推論エンジン、プロファイルとGPU割り当てを持つ独立したモデルセッションを管理します。",
   modelsEmptyBody: "{dir}にモデルがありません。別のフォルダーを選ぶか、モデルファイルまたは必要なファイルが揃ったモデルフォルダーを追加して再検索してください。",
   modelsNoMatches: "条件に一致するモデルがありません",
@@ -1434,7 +1434,7 @@ const zh: UiCatalog = {
   reasonPlatformNotSupported: "发布目录中没有适用于当前操作系统和架构的构建。",
   reasonUnavailable: "暂无兼容性说明。请刷新设备检测以查看最新信息。",
   stopSessionsBeforeRuntime: "更改或传输运行时之前，请卸载所有模型会话。",
-  runtimesIntro: "注册推理引擎的可执行文件或入口点，再根据--help配置运行选项。内置适配器也在同一列表中提供。",
+  runtimesIntro: "自动查找或选择安装文件夹，再选择模型并连接。保存连接前，AioLM会检查模型的实际响应。",
   sessionsIntro: "管理具有独立推理引擎、配置和GPU分配的模型会话。",
   modelsEmptyBody: "在{dir}中未找到模型。请选择其他文件夹，或添加模型文件或包含所有所需文件的模型文件夹后重新扫描。",
   modelsNoMatches: "没有符合条件的模型",

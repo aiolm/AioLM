@@ -506,7 +506,6 @@ export interface AdapterSetupRecipe {
   prepare: ProcessSpec;
   artifacts?: string[];
 }
-export const adapterSetupList = (): Promise<AdapterSetupRecipe[]> => invoke<AdapterSetupRecipe[]>('adapter_setup_list');
 export const adapterSetupImport = (path: string): Promise<AdapterSetupRecipe> => invoke<AdapterSetupRecipe>('adapter_setup_import', { path });
 export const adapterSetupPrepare = (owner: string, recipe: AdapterSetupRecipe, inputs: Record<string, string>): Promise<EntrypointDraft> =>
   invoke<EntrypointDraft>('adapter_setup_prepare', { owner, recipe, inputs });

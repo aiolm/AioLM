@@ -1,9 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { adapterSetupCancel, adapterSetupImport, adapterSetupList, adapterSetupPrepare, pickRuntimePath,
+import { adapterSetupCancel, adapterSetupImport, adapterSetupPrepare, pickRuntimePath,
   type AdapterSetupRecipe, type EntrypointDraft } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { adapterSetupCopy } from '../../shared/i18n/adapterSetupCopy';
-import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
@@ -17,8 +16,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
   const copy = adapterSetupCopy[locale];
   const id = useId();
   const owner = `adapter-setup-${id}`;
-  const [recipes, setRecipes] = useState<AdapterSetupRecipe[]>([]);
-  const [selected, setSelected] = useState('');
+  const [recipe, setRecipe] = useState<AdapterSetupRecipe | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -26,7 +24,6 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
   const generation = useRef(0);
   const cancelled = useRef(false);
   const running = useRef(false);
-  const recipe = recipes.find(item => item.id === selected);
   useEffect(() => () => {
     generation.current += 1;
     if (running.current) {
@@ -35,21 +32,16 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     }
     onBusyChange(false);
   }, [onBusyChange, owner]);
-  const select = (next: AdapterSetupRecipe) => {
-    setSelected(next.id);
-    setInputs(Object.fromEntries(next.fields.map(field => [field.key, field.default ?? ''])));
-    setError('');
-  };
-  const load = async (imported: boolean) => {
+  const load = async () => {
     const own = ++generation.current;
     setBusy(true); onBusyChange(true); setError('');
     try {
-      const path = imported ? await pickRuntimePath('file') : null;
-      if (imported && !path) return;
-      const next = imported ? [await adapterSetupImport(path!)] : await adapterSetupList();
+      const path = await pickRuntimePath('file');
+      if (!path) return;
+      const next = await adapterSetupImport(path);
       if (generation.current !== own) return;
-      setRecipes(next);
-      if (next[0]) select(next[0]);
+      setRecipe(next);
+      setInputs(Object.fromEntries(next.fields.map(field => [field.key, field.default ?? ''])));
     } catch (cause) {
       if (generation.current === own) setError(String(cause));
     } finally {
@@ -96,12 +88,11 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     <h4 id={`${id}-title`} className="app-section-title">{copy.title}</h4>
     <p className="app-section-hint">{copy.hint}</p>
     <div className="app-page-actions">
-      <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => void load(false)}>{copy.provided}</button>
-      <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => void load(true)}>{copy.import}</button>
+      <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => void load()}>{copy.import}</button>
     </div>
+    <p className="app-section-hint">{copy.fileHint}</p>
     {recipe && <form action="#" method="POST" className="model-settings-fields" onSubmit={event => { event.preventDefault(); void prepare(); }}>
-      <CustomSelect ariaLabel={copy.select} value={selected} disabled={locked} options={recipes.map(item => ({ value: item.id, label: item.title }))}
-        onChange={value => { const next = recipes.find(item => item.id === value); if (next) select(next); }} />
+      <p className="app-section-title">{recipe.title}</p>
       <p>{recipe.description}</p>
       <fieldset disabled={locked}>
         <legend>{copy.empty}</legend>

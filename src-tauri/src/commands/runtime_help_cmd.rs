@@ -21,11 +21,6 @@ fn service() -> &'static HelpService {
 }
 
 #[tauri::command]
-pub(crate) fn adapter_setup_list() -> Result<Vec<crate::providers::adapter_setup::Recipe>, String> {
-    crate::providers::adapter_setup::provided()
-}
-
-#[tauri::command]
 pub(crate) async fn adapter_setup_import(
     path: String,
 ) -> Result<crate::providers::adapter_setup::Recipe, String> {

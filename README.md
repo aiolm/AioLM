@@ -16,6 +16,7 @@ AioLM (All-in-One LM) — Windows/macOS/Linux desktop runtime manager with a Tau
 - User AGENTS.md instructions, local skills, and an in-app personalization editor
 - Projects, Hugging Face Discover, and MCP servers
 - Independent model loading and one API server page for OpenAI- and Anthropic-compatible clients
+- External engine connections through a common process and verified OpenAI v1 boundary, independent of implementation language
 - Tuning for server and sampling parameters
 - New-version notification at startup and verified installer updates from Settings
 
@@ -31,6 +32,20 @@ Use **Settings → Personalization** to edit your shared and AioLM-specific
 AGENTS.md instructions. Chat reads these files for new turns and can load local
 skills automatically or through the skill picker and `$skill-name` references.
 See [chat personalization](docs/reference/personalization.md).
+
+Starting with **v0.3.3**, the automatic external connection flow is available.
+In **Inference engines → Add inference engine**, use
+**Find automatically → Choose a model → Connect**. If no server is found, choose
+its installation folder. AioLM saves the connection internally after an actual
+chat and streaming check; no JSON or separate probe program is needed in this
+flow. Advanced explicit registration remains available.
+
+Discovery does not install engines or guarantee model support. Running local
+OpenAI v1 servers can be attached without taking ownership of their processes.
+Automatic managed launch requires unambiguous documented arguments and verified
+model routing. Other protocols, ambiguous launch commands, authentication setup
+and container creation require further configuration. Text checks do not certify
+media, tools or response quality. See the [connection contract](docs/reference/automatic-engine-connections.md).
 
 ## Platform support
 

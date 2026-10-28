@@ -229,6 +229,9 @@ jobs:
       # `npx tauri build` would ship runner paths in its panic metadata.
       - name: Build NSIS and MSI
         run: node scripts/package-tauri.mjs
+      - name: Verify NSIS and MSI installation and installed CLI
+        timeout-minutes: 15
+        run: node scripts/smoke-installers.mjs
       - name: Collect release assets
         shell: pwsh
         run: |
@@ -454,6 +457,24 @@ jobs:
           name: AioLM ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ needs.prepare.outputs.target_sha }}
           body: |
+            ## Automatic external inference-engine connections
+
+            - Find a running local server or select its installation folder, choose a model, and connect.
+              The same process and OpenAI-compatible v1 contract applies regardless of engine name or implementation language.
+              AioLM saves the connection only after actual model-identity, chat-response and complete streaming checks.
+            - Attach existing servers through an app-owned local proxy. Disconnecting leaves the original server running;
+              cancelling a response closes that request and allows another request on the same connection.
+            - Keep advanced explicit registration and provider-authored setup files, with verified resources, literal arguments
+              and Unicode paths. The obsolete provided-adapter menu has been removed.
+            - Existing llama.cpp, vLLM and MLX workflows remain available on their supported operating systems and hardware.
+              External engine names are not a bundled-engine list or a claim of universal device/model compatibility.
+
+            These text/streaming checks do not certify images, audio, video, tools or response quality. Dedicated external
+            engine/device validation, SmolVLM F09, overall Linux acceptance and the original v0.3.1-to-v0.3.2 update
+            installation/UI checks remain open. Published v0.3.2 assets and the original validation materials are preserved.
+
+            ## Packages and verification
+
             Windows x64: NSIS / MSI. Linux x86_64 (Ubuntu 24.04+): DEB / AppImage.
             macOS 13.3+: Apple silicon (aarch64) and Intel (x64) DMG, or install.sh.
             Assets are unsigned. Verify SHA-256 values against checksums.txt from this release.
@@ -462,7 +483,7 @@ jobs:
             install.sh, which verifies the DMG's SHA-256.
             DEB registers the launcher and icon automatically. For AppImage desktop integration,
             use register-linux-desktop.py from this release after verifying its checksum.
-            Installation guide: https://github.com/aiolm/AioLM/blob/${{ needs.prepare.outputs.tag_name }}/docs/guides/install.md
+            Installation guide: https://aiolm.vercel.app/en/guides/install
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release-assets/*
