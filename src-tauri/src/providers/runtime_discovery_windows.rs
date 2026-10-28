@@ -30,7 +30,7 @@ fn user_token(process: HANDLE) -> Option<Vec<u8>> {
             &mut size,
         );
     }
-    if size < std::mem::size_of::<TOKEN_USER>() as u32 || size > 16 * 1024 {
+    if !(std::mem::size_of::<TOKEN_USER>() as u32..=16 * 1024).contains(&size) {
         return None;
     }
     let mut bytes = vec![0u8; size as usize];
@@ -147,8 +147,12 @@ pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Res
         return Ok(());
     };
     let mut listeners = BTreeMap::<u32, BTreeSet<LocalEndpoint>>::new();
-    for line in String::from_utf8_lossy(&bytes).lines().take(MAX_ENTRIES) {
+    for (index, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
         cancelled(cancel)?;
+        if index >= MAX_ENTRIES {
+            report.truncated = true;
+            break;
+        }
         if let Some((pid, endpoint)) = listener(line) {
             listeners.entry(pid).or_default().insert(endpoint);
         }
@@ -190,7 +194,10 @@ mod tests {
             "::1"
         );
         assert_eq!(
-            listener(&row.replace("127.0.0.1", "0.0.0.0")).unwrap().1.host,
+            listener(&row.replace("127.0.0.1", "0.0.0.0"))
+                .unwrap()
+                .1
+                .host,
             "127.0.0.1"
         );
         assert!(listener(&row.replace("127.0.0.1", "192.0.2.1")).is_none());

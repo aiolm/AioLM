@@ -22,6 +22,7 @@ const MAX_CANDIDATES: usize = 256;
 const MAX_ENTRIES: usize = 8192;
 const MAX_DEPTH: usize = 4;
 const MAX_COMMAND_BYTES: usize = 128 * 1024;
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const MAX_ARGUMENTS: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +125,7 @@ fn text_path(path: &Path) -> Option<String> {
     path.to_str().map(str::to_owned)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn valid_arguments(args: &[String]) -> bool {
     args.len() <= MAX_ARGUMENTS
         && args.iter().all(|s| s.len() <= 32768 && !s.contains('\0'))

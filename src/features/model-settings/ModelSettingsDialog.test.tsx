@@ -476,17 +476,29 @@ describe('model settings editor', { timeout: 45000 }, () => {
       }],
     }], truncated: false });
     vi.mocked(api.listModels).mockImplementationOnce(scan).mockImplementationOnce(scan);
-    const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · Registered installation/ }));
-    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
-    openOptions();
-    await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
-    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
-    expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('models/snapshot');
-    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
-    expect(onApply).not.toHaveBeenCalled();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let mounted!: ReturnType<typeof mount>;
+      // Flush the runtime/schema responses, then drive the option editor's
+      // real validation debounce without racing DOM queries against CI load.
+      await act(async () => {
+        mounted = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · Registered installation/ }));
+      });
+      expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+      openOptions();
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+      expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('models/snapshot');
+      fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+      expect(mounted.onApply).not.toHaveBeenCalled();
+    } finally { cleanup(); vi.useRealTimers(); }
   });
 
   it('restores unsaved system prompts independently when switching inference engines', async () => {
