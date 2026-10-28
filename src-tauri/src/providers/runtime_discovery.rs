@@ -475,7 +475,7 @@ fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Resu
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn system_inventory(program: &Path, args: &[&str], cancel: &AtomicBool) -> Result<Vec<u8>, String> {
     let mut command = crate::procutil::std_command(program);
     command

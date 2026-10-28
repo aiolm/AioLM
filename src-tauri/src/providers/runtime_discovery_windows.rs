@@ -1,11 +1,15 @@
-//! Windows listener discovery without PowerShell or WMI startup.
+//! Native Windows listener discovery independent of localized command output.
 //! Read only socket ownership, current-user SID, executable and creation time.
 //! Existing processes are never adopted, stopped or inspected for credentials.
 use super::*;
 use std::collections::BTreeMap;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::PathBuf;
-use windows_sys::Win32::Foundation::{FILETIME, HANDLE};
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, FILETIME, HANDLE};
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_OWNER_PID,
+    MIB_TCPTABLE_OWNER_PID, MIB_TCP_STATE_LISTEN, TCP_TABLE_OWNER_PID_LISTENER,
+};
+use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use windows_sys::Win32::Security::{
     EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
 };
@@ -109,37 +113,146 @@ fn process_metadata(pid: u32, current_user: &[u8]) -> Option<(Option<String>, St
     Some((path, creation.to_string()))
 }
 
-fn listener(line: &str) -> Option<(u32, LocalEndpoint)> {
-    let columns = line.split_whitespace().collect::<Vec<_>>();
-    if columns.len() != 5
-        || !columns[0].eq_ignore_ascii_case("TCP")
-        || !columns[3].eq_ignore_ascii_case("LISTENING")
-    {
+const MAX_TABLE_BYTES: usize = 4 * 1024 * 1024;
+const TABLE_ATTEMPTS: usize = 3;
+
+fn tcp_table(ipv6: bool, cancel: &AtomicBool, truncated: &mut bool) -> Result<Vec<u8>, String> {
+    let family = u32::from(if ipv6 { AF_INET6 } else { AF_INET });
+    let mut size = 0;
+    cancelled(cancel)?;
+    let status = unsafe {
+        GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            family,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        )
+    };
+    if status != ERROR_INSUFFICIENT_BUFFER && status != ERROR_SUCCESS {
+        return Err("The native Windows listener table is unavailable.".into());
+    }
+    for _ in 0..TABLE_ATTEMPTS {
+        cancelled(cancel)?;
+        if size as usize > MAX_TABLE_BYTES {
+            *truncated = true;
+            return Err("The native Windows listener table exceeds the discovery limit.".into());
+        }
+        if size < std::mem::size_of::<u32>() as u32 {
+            return Err("The native Windows listener table is incomplete.".into());
+        }
+        let mut bytes = vec![0u8; size as usize];
+        let status = unsafe {
+            GetExtendedTcpTable(
+                bytes.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                family,
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        cancelled(cancel)?;
+        if status == ERROR_INSUFFICIENT_BUFFER {
+            continue;
+        }
+        if status != ERROR_SUCCESS || size as usize > bytes.len() {
+            return Err("The native Windows listener table is unavailable or incomplete.".into());
+        }
+        bytes.truncate(size as usize);
+        return Ok(bytes);
+    }
+    Err("The native Windows listener table changed repeatedly; find local servers again.".into())
+}
+
+fn listener(
+    address: IpAddr,
+    network_port: u32,
+    state: u32,
+    pid: u32,
+) -> Option<(u32, LocalEndpoint)> {
+    if pid == 0 || state != MIB_TCP_STATE_LISTEN as u32 {
         return None;
     }
-    let (host, port) = columns[1].rsplit_once(':')?;
-    let address = host.trim_matches(['[', ']']).parse().ok()?;
-    let endpoint = local_endpoint(address, port.parse().ok()?)?;
-    let pid = columns[4].parse::<u32>().ok().filter(|pid| *pid != 0)?;
-    Some((pid, endpoint))
+    // Win32 stores a 16-bit network-order port in the low half of a DWORD.
+    let port = u16::from_be(network_port as u16);
+    Some((pid, local_endpoint(address, port)?))
+}
+
+fn table_listeners(
+    bytes: &[u8],
+    ipv6: bool,
+    cancel: &AtomicBool,
+) -> Result<(Vec<(u32, LocalEndpoint)>, bool), String> {
+    cancelled(cancel)?;
+    let (offset, row_size) = if ipv6 {
+        (
+            std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
+            std::mem::size_of::<MIB_TCP6ROW_OWNER_PID>(),
+        )
+    } else {
+        (
+            std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table),
+            std::mem::size_of::<MIB_TCPROW_OWNER_PID>(),
+        )
+    };
+    if bytes.len() < std::mem::size_of::<u32>()
+        || bytes.len() < offset
+        || bytes.len() > MAX_TABLE_BYTES
+    {
+        return Err("The native Windows listener table has an invalid size.".into());
+    }
+    let count = u32::from_ne_bytes(
+        bytes[..4]
+            .try_into()
+            .map_err(|_| "The listener count is incomplete.")?,
+    ) as usize;
+    let required = count
+        .checked_mul(row_size)
+        .and_then(|length| length.checked_add(offset))
+        .ok_or("The native Windows listener count exceeds its limits.")?;
+    if required > bytes.len() {
+        return Err("The native Windows listener table has incomplete rows.".into());
+    }
+    let mut listeners = Vec::new();
+    for index in 0..count.min(MAX_ENTRIES) {
+        cancelled(cancel)?;
+        let start = offset + index * row_size;
+        let row = &bytes[start..start + row_size];
+        // Header/count bounds above prove that a complete native record is
+        // present. These repr(C) records contain only unsigned integer data;
+        // Vec<u8> and supplied test slices need not have record alignment.
+        let found = if ipv6 {
+            let row = unsafe {
+                row.as_ptr()
+                    .cast::<MIB_TCP6ROW_OWNER_PID>()
+                    .read_unaligned()
+            };
+            listener(
+                Ipv6Addr::from(row.ucLocalAddr).into(),
+                row.dwLocalPort,
+                row.dwState,
+                row.dwOwningPid,
+            )
+        } else {
+            let row = unsafe { row.as_ptr().cast::<MIB_TCPROW_OWNER_PID>().read_unaligned() };
+            listener(
+                Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes()).into(),
+                row.dwLocalPort,
+                row.dwState,
+                row.dwOwningPid,
+            )
+        };
+        if let Some(found) = found {
+            listeners.push(found);
+        }
+    }
+    Ok((listeners, count > MAX_ENTRIES))
 }
 
 pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
-    let Some(system) = std::env::var_os("SystemRoot") else {
-        report
-            .warnings
-            .push("The system listener inventory is unavailable.".into());
-        return Ok(());
-    };
-    let program = PathBuf::from(system).join("System32/netstat.exe");
-    let bytes = match system_inventory(&program, &["-ano"], cancel) {
-        Ok(bytes) => bytes,
-        Err(message) => {
-            cancelled(cancel)?;
-            report.warnings.push(message);
-            return Ok(());
-        }
-    };
+    cancelled(cancel)?;
     let Some(current_user) = user_token(unsafe { GetCurrentProcess() }) else {
         report
             .warnings
@@ -147,14 +260,20 @@ pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Res
         return Ok(());
     };
     let mut listeners = BTreeMap::<u32, BTreeSet<LocalEndpoint>>::new();
-    for (index, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
-        cancelled(cancel)?;
-        if index >= MAX_ENTRIES {
-            report.truncated = true;
-            break;
-        }
-        if let Some((pid, endpoint)) = listener(line) {
-            listeners.entry(pid).or_default().insert(endpoint);
+    for ipv6 in [false, true] {
+        let result = tcp_table(ipv6, cancel, &mut report.truncated)
+            .and_then(|bytes| table_listeners(&bytes, ipv6, cancel));
+        match result {
+            Ok((rows, truncated)) => {
+                report.truncated |= truncated;
+                for (pid, endpoint) in rows {
+                    listeners.entry(pid).or_default().insert(endpoint);
+                }
+            }
+            Err(message) => {
+                cancelled(cancel)?;
+                report.warnings.push(message);
+            }
         }
     }
     for (pid, endpoints) in listeners {
@@ -182,28 +301,131 @@ pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Res
 mod tests {
     use super::*;
 
+    fn native_ipv4_table(rows: &[[u32; 6]]) -> Vec<u8> {
+        let mut bytes = vec![0; std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table)];
+        bytes[..4].copy_from_slice(&(rows.len() as u32).to_ne_bytes());
+        for row in rows {
+            for word in row {
+                bytes.extend(word.to_ne_bytes());
+            }
+        }
+        bytes
+    }
+
     #[test]
-    fn listener_rows_keep_ipv4_ipv6_and_exclude_udp_remote_and_nonlisteners() {
-        let row = "TCP 127.0.0.1:43121 0.0.0.0:0 LISTENING 42";
-        let (pid, endpoint) = listener(row).unwrap();
-        assert_eq!(pid, 42);
-        assert_eq!(endpoint.host, "127.0.0.1");
-        assert_eq!(endpoint.port, 43121);
+    fn native_tables_preserve_address_and_port_byte_order_without_state_text() {
+        let port = 43121u16;
+        let row = [
+            MIB_TCP_STATE_LISTEN as u32,
+            u32::from_ne_bytes([127, 0, 0, 1]),
+            u32::from(port.to_be()),
+            0,
+            0,
+            42,
+        ];
+        let table = native_ipv4_table(&[row]);
+        // An unaligned slice must work just like the native byte buffer.
+        let mut unaligned = vec![0x7f];
+        unaligned.extend(table);
+        let (rows, truncated) =
+            table_listeners(&unaligned[1..], false, &AtomicBool::new(false)).unwrap();
+        assert!(!truncated);
         assert_eq!(
-            listener(&row.replace("127.0.0.1", "[::1]")).unwrap().1.host,
-            "::1"
+            rows,
+            [(
+                42,
+                LocalEndpoint {
+                    host: "127.0.0.1".into(),
+                    port
+                }
+            )]
         );
+        let mut ipv6 = vec![0; std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table)];
+        ipv6[..4].copy_from_slice(&1u32.to_ne_bytes());
+        ipv6.extend(Ipv6Addr::LOCALHOST.octets());
+        ipv6.extend(0u32.to_ne_bytes());
+        ipv6.extend(u32::from(port.to_be()).to_ne_bytes());
+        ipv6.extend([0u8; 16]);
+        for word in [0, 0, MIB_TCP_STATE_LISTEN as u32, 43] {
+            ipv6.extend(word.to_ne_bytes());
+        }
+        let (rows, truncated) = table_listeners(&ipv6, true, &AtomicBool::new(false)).unwrap();
+        assert!(!truncated);
         assert_eq!(
-            listener(&row.replace("127.0.0.1", "0.0.0.0"))
+            rows,
+            [(
+                43,
+                LocalEndpoint {
+                    host: "::1".into(),
+                    port
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn numeric_listener_filter_keeps_only_live_local_owner_candidates() {
+        let port = u32::from(12345u16.to_be());
+        assert_eq!(
+            listener(Ipv4Addr::UNSPECIFIED.into(), port, 2, 42)
                 .unwrap()
                 .1
                 .host,
             "127.0.0.1"
         );
-        assert!(listener(&row.replace("127.0.0.1", "192.0.2.1")).is_none());
-        assert!(listener(&row.replace("LISTENING", "ESTABLISHED")).is_none());
-        assert!(listener(&row.replace("TCP", "UDP")).is_none());
-        assert!(listener(&row.replace(" 42", " 0")).is_none());
+        assert_eq!(
+            listener(Ipv6Addr::UNSPECIFIED.into(), port, 2, 42)
+                .unwrap()
+                .1
+                .host,
+            "::1"
+        );
+        assert!(listener(Ipv4Addr::new(192, 0, 2, 1).into(), port, 2, 42).is_none());
+        assert!(listener(Ipv4Addr::LOCALHOST.into(), port, 5, 42).is_none());
+        assert!(listener(Ipv4Addr::LOCALHOST.into(), port, 2, 0).is_none());
+        assert!(listener(Ipv4Addr::LOCALHOST.into(), 0, 2, 42).is_none());
+    }
+
+    #[test]
+    fn native_table_lengths_counts_limits_and_cancellation_are_checked() {
+        let cancel = AtomicBool::new(false);
+        assert!(table_listeners(&[0; 3], false, &cancel).is_err());
+        let mut missing = native_ipv4_table(&[]);
+        missing[..4].copy_from_slice(&u32::MAX.to_ne_bytes());
+        assert!(table_listeners(&missing, false, &cancel).is_err());
+        let row = [
+            2,
+            u32::from_ne_bytes([127, 0, 0, 1]),
+            u32::from(12345u16.to_be()),
+            0,
+            0,
+            42,
+        ];
+        let bytes = native_ipv4_table(&vec![row; MAX_ENTRIES + 1]);
+        let (rows, truncated) = table_listeners(&bytes, false, &cancel).unwrap();
+        assert_eq!(rows.len(), MAX_ENTRIES);
+        assert!(truncated);
+        let mut short = native_ipv4_table(&[row]);
+        short.pop();
+        assert!(table_listeners(&short, false, &cancel).is_err());
+        assert!(table_listeners(&bytes, false, &AtomicBool::new(true))
+            .unwrap_err()
+            .contains("cancelled"));
+    }
+
+    #[test]
+    fn native_inventory_finds_a_real_current_user_listener_without_adopting_it() {
+        let socket = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let mut report = DiscoveryReport::default();
+        discover(&mut report, &AtomicBool::new(false)).unwrap();
+        assert!(report.candidates.iter().any(|candidate| candidate.pid
+            == Some(std::process::id())
+            && candidate
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.port == port)));
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     }
 
     #[test]
