@@ -146,7 +146,10 @@ fn every_vendor_imports_companion_resources_from_its_own_package() {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        assert_eq!(imported.prepare.args, [expected.clone()]);
+        assert_eq!(
+            imported.prepare.args.as_slice(),
+            std::slice::from_ref(&expected)
+        );
         assert_eq!(imported.artifacts, [expected]);
         assert_eq!(imported.prepare.program, "{input:python}");
     }
