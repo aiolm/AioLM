@@ -9,7 +9,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { createServer, createConnection } from 'node:net';
-import { readRuntimeAdapterStream } from './runtime-adapter-stream.mjs';
+import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery } from './runtime-adapter-stream.mjs';
 
 const execute = promisify(execFile);
 const args = Object.fromEntries(process.argv.slice(2).reduce((rows, value, i, all) => value.startsWith('--') ? [...rows, [value.slice(2), all[i + 1]]] : rows, []));
@@ -89,10 +89,7 @@ async function completion(cancel = false) {
   check(response.ok, `Chat returned ${response.status}`);
   const result = await readRuntimeAdapterStream(response, { controller, cancel });
   if (cancel) return result;
-  const { content, usage } = result;
-  check(/\b5\b/.test(content), 'The arithmetic answer did not contain 5');
-  check(Number.isSafeInteger(usage?.prompt_tokens) && usage.prompt_tokens > 0 && Number.isSafeInteger(usage?.completion_tokens) && usage.completion_tokens > 0, 'Authoritative tokenizer usage was not supplied');
-  return { content, usage, answerContainsFive: /5/.test(content) };
+  return validateRuntimeAdapterCompletion(result, '5');
 }
 try {
   await record('A01 provenance', async () => {
@@ -110,7 +107,14 @@ try {
   });
   await independent(lifecycleChecks[0], async () => { const started = await command('start', ['server', 'start']); check(started.url && started.pid, 'No owned server URL/PID'); url = started.url; ownedPids.add(started.pid); return completion(); });
   if (url) {
-    await independent(lifecycleChecks[1], async () => { const result = await completion(true); const status = await command('status-after-cancel', ['server', 'status']); check(status.state === 'running', 'Server stopped after cancelling stream'); return result; });
+    await independent(lifecycleChecks[1], async () => {
+      const before = await command('status-before-cancel', ['server', 'status']);
+      const result = await completion(true);
+      const afterCancel = await command('status-after-cancel', ['server', 'status']);
+      const followup = await completion();
+      const afterFollowup = await command('status-after-followup', ['server', 'status']);
+      return { ...result, followup, sameProcessAfterFollowup: validateRuntimeAdapterRecovery(before, afterCancel, afterFollowup) };
+    });
     await independent(lifecycleChecks[2], async () => { const result = await command('restart', ['server', 'restart']); check(result.url && result.pid, 'No owned server URL/PID after restart'); url = result.url; ownedPids.add(result.pid); return completion(); });
   } else {
     unrun(lifecycleChecks[1], 'Initial server start did not provide a ready owned URL/PID');

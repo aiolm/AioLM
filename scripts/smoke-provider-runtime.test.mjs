@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ReadableStream } from "node:stream/web";
 import { TextEncoder } from "node:util";
-import { readRuntimeAdapterStream } from "./runtime-adapter-stream.mjs";
+import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery } from "./runtime-adapter-stream.mjs";
 import {
   CHECKS,
   STATUSES,
@@ -1111,4 +1111,23 @@ test("synthetic self-test runs on loopback and never claims a native pass", () =
   assert.match(result.stdout, /cancel: pass/);
   assert.match(result.stdout, /transcription: pass/);
   assert.match(result.stdout, /tools: pass/);
+});
+
+
+test('external acceptance rejects echoed prompts or extra answers despite containing the expected number', () => {
+  const usage = { prompt_tokens: 42, completion_tokens: 2 };
+  assert.equal(validateRuntimeAdapterCompletion({ content: ' 5\n', usage }, '5').answerExact, true);
+  for (const content of ['15', '5\nuser: Compute 2 + 3.\nassistant: 5', 'The answer is 5', '5 5', '']) {
+    assert.throws(() => validateRuntimeAdapterCompletion({ content, usage }, '5'), /exactly match/);
+  }
+  assert.throws(() => validateRuntimeAdapterCompletion({ content: '5' }, '5'), /tokenizer usage/);
+});
+
+test('external cancellation recovery requires the same process for the follow-up answer', () => {
+  const running = { state: 'running', pid: 123 };
+  assert.equal(validateRuntimeAdapterRecovery(running, running, running), true);
+  for (const changed of [{ state: 'stopped', pid: 123 }, { state: 'running', pid: 124 }, { state: 'running' }]) {
+    assert.throws(() => validateRuntimeAdapterRecovery(running, changed, running), /same running server/);
+    assert.throws(() => validateRuntimeAdapterRecovery(running, running, changed), /same running server/);
+  }
 });

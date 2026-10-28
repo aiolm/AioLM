@@ -115,7 +115,9 @@ pub fn import(path: &Path) -> Result<Recipe, String> {
         };
         let relative_path = Path::new(relative);
         if relative.is_empty()
-            || relative.contains(['\\', '{', '}', '\0'])
+            || relative.contains(['\\', '\0'])
+            || relative.contains("{input:")
+            || relative.contains("{resource:")
             || relative_path
                 .components()
                 .any(|c| !matches!(c, Component::Normal(_)))
@@ -177,7 +179,9 @@ fn resolve(token: &str, inputs: &BTreeMap<String, String>) -> Result<String, Str
             "import the adapter setup JSON with its companion files before preparing it".into(),
         );
     }
-    if token.contains(['{', '}', '\0']) {
+    // Only the two v1 namespaces are template syntax; other braces are
+    // literal data, including JSON argv and resolved package paths.
+    if token.contains('\0') || token.contains("{input:") || token.contains("{resource:") {
         return Err("setup placeholders must occupy one complete argv token".into());
     }
     Ok(token.into())

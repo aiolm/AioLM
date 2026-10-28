@@ -19,7 +19,10 @@ struct Home {
 }
 impl Home {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("aiolm setup 눈길 {}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "aiolm setup {{preview}} 눈길 {}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir(&path).unwrap();
         let previous = std::env::var_os("AIOLM_HOME");
         // One test owns this integration binary's environment.
@@ -41,7 +44,7 @@ impl Drop for Home {
 fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     let home = Home::new();
     let program = env!("CARGO_BIN_EXE_fake-llama-server");
-    let draft_file = home.path.join("draft ; &.json");
+    let draft_file = home.path.join("draft {v1} ; &.json");
     let source = json!({"engine_id":"custom.arbitrarysetup", "runtime_id":"r1", "display_name":"Arbitrary setup",
         "program":program,"prefix":["--adapter-engine"], "working_directory":home.path,"artifacts":[],"environment":{},
         "protocol":{"kind":"openai_http"}, "model":{"kind":"flag","flag":"--model"},"port":{"kind":"flag","flag":"--port"},
@@ -52,7 +55,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     let value = json!({"version":1,"id":"any.vendor.setup","title":"Arbitrary adapter","description":"Synthetic boundary",
         "fields":[{"key":"program","label":"Installed executable","kind":"file","required":true},
                   {"key":"draft","label":"Setup data","kind":"file","required":true}],
-        "prepare":{"program":"{input:program}","args":["--adapter-setup-fixture","{resource:draft ; &.json}"],"env":{},"working_directory":home.path},
+        "prepare":{"program":"{input:program}","args":["--adapter-setup-fixture","{resource:draft {v1} ; &.json}"],"env":{},"working_directory":home.path},
         "artifacts":["{input:draft}"]});
     fs::write(&recipe_file, serde_json::to_vec(&value).unwrap()).unwrap();
     let recipe = adapter_setup::import(&recipe_file).unwrap();
@@ -86,6 +89,19 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
             .unwrap_err()
             .contains("complete argv token")
     );
+    let mut partial_resource = recipe.clone();
+    partial_resource.prepare.args[1] = "path/{resource:helper.py}".into();
+    assert!(
+        adapter_setup::prepare(&service, "partial-resource", &partial_resource, &inputs)
+            .unwrap_err()
+            .contains("complete argv token")
+    );
+    let mut literal_json = recipe.clone();
+    literal_json.prepare.args.extend([
+        "--ignored-literal".into(),
+        r#"{"example":"{literal}"}"#.into(),
+    ]);
+    assert!(adapter_setup::prepare(&service, "literal-json", &literal_json, &inputs).is_ok());
     assert!(adapter_setup::provided().unwrap().is_empty());
 
     let marker = home.path.join("started.txt");

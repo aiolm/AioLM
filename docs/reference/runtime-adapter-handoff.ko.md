@@ -224,7 +224,7 @@ Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 �
 - `fields: [{key,label,kind,required,default?}]`: `kind`는 `file/folder/text`, 최대 32개. 기본값은 어댑터가 선언한 값이며 현재 기기의 경로나 설정을 복사하지 않는다.
 - `prepare: {program,args,env,working_directory?}`: 명시적으로 선택한 절대 실행 파일과 token 배열. 현재 v1의 `env`는 비어 있어야 한다. shell 문자열이나 비밀 입력은 사용하지 않는다.
 - `artifacts`: producer의 스크립트·종속 파일을 선언한다. 실행 파일과 함께 명령 전후 해시를 검사한다.
-- `{input:key}`와 `{resource:name}`는 **한 argv token 전체**를 대체한다. 공백·Unicode·빈 값·기호를 shell로 재해석하지 않는다. 부분 문자열 치환은 거부한다. `{resource:relative/file}`는 가져온 설정 JSON과 같은 폴더 아래의 파일을 가리킨다. 모든 제공자에게 동일하게 적용하며, 절대 경로·상위 폴더 이탈·외부를 가리키는 symlink·누락 파일은 거부한다. 어댑터 묶음을 모두 압축 해제한 뒤 JSON을 선택한다. 참조한 helper는 자동으로 artifacts에도 포함한다.
+- `{input:key}`와 `{resource:name}`는 **한 argv token 전체**를 대체한다. 공백·Unicode·빈 값·기호를 shell로 재해석하지 않는다. 부분 문자열 치환은 거부한다. v1은 `{input:`·`{resource:`만 예약 구문으로 해석한다. 그 밖의 중괄호는 JSON 인자·일반 파일명 등에서 그대로 보존한다. 예약 구문을 문자 그대로 포함한 경로는 현재 v1 템플릿에서 지원하지 않는다. `{resource:relative/file}`는 가져온 설정 JSON과 같은 폴더 아래의 파일을 가리킨다. 모든 제공자에게 동일하게 적용하며, 절대 경로·상위 폴더 이탈·외부를 가리키는 symlink·누락 파일은 거부한다. 어댑터 묶음을 모두 압축 해제한 뒤 JSON을 선택한다. 참조한 helper는 자동으로 artifacts에도 포함한다.
 - producer는 stdout에 단일 `EntrypointDraft` JSON, 진단은 stderr에 쓴다. 공통 소유 프로세스의 출력 한도·15초 기한·취소·경합 publication을 적용하고, 반환 draft를 검증한다. 실패·취소는 등록이나 Ready를 만들지 않으며 입력을 보존해 재시도할 수 있다.
 
 외부 helper는 어댑터 제공자의 묶음에서 읽으며 앱에 특정 엔진의 helper를 포함하거나 자동 배치하지 않는다. 이미 등록한 실행본과 이전 버전이 배치한 helper는 삭제하지 않는다. 가져온 파일을 이동했다면 다시 가져와 등록한다. 설정 파일이나 helper 변경은 새 명령 identity와 명시적 재등록을 필요로 한다. 예전 draft에서 생략한 `models`, `launch_resources`, `options_separator`는 자동으로 채우지 않는다.

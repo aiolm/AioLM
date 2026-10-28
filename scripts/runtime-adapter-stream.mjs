@@ -35,3 +35,22 @@ export async function readRuntimeAdapterStream(response, { controller, cancel = 
   if (cancel) throw new Error('Stream ended before cancellation could be exercised');
   return { content, reasoningChars, usage };
 }
+
+/** Exact protocol acceptance is shared by every external engine. */
+export function validateRuntimeAdapterCompletion({ content, usage }, expectedAnswer) {
+  if (content.trim() !== expectedAnswer) throw new Error('The final answer did not exactly match the expected answer');
+  if (!Number.isSafeInteger(usage?.prompt_tokens) || usage.prompt_tokens <= 0
+      || !Number.isSafeInteger(usage?.completion_tokens) || usage.completion_tokens <= 0) {
+    throw new Error('Authoritative tokenizer usage was not supplied');
+  }
+  return { content, usage, answerExact: true };
+}
+
+/** Cancellation recovery must not be disguised by a server restart. */
+export function validateRuntimeAdapterRecovery(before, afterCancel, afterFollowup) {
+  if (![before, afterCancel, afterFollowup].every(status => status.state === 'running'
+      && Number.isSafeInteger(status.pid) && status.pid > 0 && status.pid === before.pid)) {
+    throw new Error('Cancellation and follow-up must preserve the same running server process');
+  }
+  return true;
+}
