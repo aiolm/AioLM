@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ReadableStream } from "node:stream/web";
 import { TextEncoder } from "node:util";
-import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery } from "./runtime-adapter-stream.mjs";
+import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery,
+  DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS, validateRuntimeAdapterRequestTimeout, withRuntimeAdapterRequestDeadline } from "./runtime-adapter-stream.mjs";
 import {
   CHECKS,
   STATUSES,
@@ -1130,4 +1131,126 @@ test('external cancellation recovery requires the same process for the follow-up
     assert.throws(() => validateRuntimeAdapterRecovery(running, changed, running), /same running server/);
     assert.throws(() => validateRuntimeAdapterRecovery(running, running, changed), /same running server/);
   }
+});
+
+
+test('external request timeout accepts only bounded integer milliseconds', () => {
+  assert.equal(DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS, 120000);
+  for (const value of [1, 600000, '250', '600000']) assert.equal(validateRuntimeAdapterRequestTimeout(value), Number(value));
+  for (const value of [undefined, null, '', true, 0, -1, 600001, 1.5, NaN, Infinity, '1.5', '1e3', '--other']) {
+    assert.throws(() => validateRuntimeAdapterRequestTimeout(value), /integer from 1 to 600000/);
+  }
+});
+
+test('external CLI rejects invalid or missing request-timeout values before any runtime action', () => {
+  for (const args of [['0'], ['600001'], ['1.5'], []]) {
+    const result = spawnSync(process.execPath,
+      ['--experimental-strip-types', 'scripts/smoke-runtime-adapters.mjs', '--request-timeout-ms', ...args],
+      { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /request-timeout-ms must be an integer from 1 to 600000/);
+    assert.doesNotMatch(result.stderr, /Required: --cli/);
+  }
+});
+
+test('external request deadline clears its timer after success or an unrelated error', async () => {
+  let completedController, failedController;
+  assert.equal(await withRuntimeAdapterRequestDeadline(async controller => {
+    completedController = controller;
+    return 'done';
+  }, 30), 'done');
+  const failure = new Error('unrelated inference failure');
+  await assert.rejects(withRuntimeAdapterRequestDeadline(async controller => {
+    failedController = controller;
+    throw failure;
+  }, 30), error => error === failure);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(completedController.signal.aborted, false);
+  assert.equal(failedController.signal.aborted, true);
+});
+
+async function withStalledAdapterResponse(handler, check) {
+  const sockets = new Set();
+  const server = createServer(handler);
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  try { await check(`http://127.0.0.1:${server.address().port}`); }
+  finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+test('external request deadline aborts an actual loopback request stalled before headers', { timeout: 5000 }, async () => {
+  let sawRequest, sawClose;
+  const requested = new Promise(resolve => { sawRequest = resolve; });
+  const closed = new Promise(resolve => { sawClose = resolve; });
+  await withStalledAdapterResponse((_request, response) => {
+    sawRequest();
+    response.once('close', sawClose);
+    // Never send headers: fetch itself must be inside the deadline.
+  }, async url => {
+    const assertion = assert.rejects(withRuntimeAdapterRequestDeadline(async controller => {
+      const response = await fetch(url, { signal: controller.signal });
+      return readRuntimeAdapterStream(response, { controller });
+    }, 250), /request timed out after 250ms/);
+    await Promise.all([requested, assertion]);
+    await closed;
+  });
+});
+
+for (const cancel of [false, true]) test(`external request deadline aborts a stalled whole SSE body (cancel=${cancel})`, { timeout: 5000 }, async () => {
+  let sawClose;
+  const closed = new Promise(resolve => { sawClose = resolve; });
+  await withStalledAdapterResponse((_request, response) => {
+    response.once('close', sawClose);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.flushHeaders();
+    response.write(cancel ? adapterFrame({ role: 'assistant' }) : adapterFrame({ content: '5' }));
+    // A complete-looking answer or role frame followed by a stall is not completion/cancellation.
+  }, async url => {
+    await assert.rejects(withRuntimeAdapterRequestDeadline(async controller => {
+      const response = await fetch(url, { signal: controller.signal });
+      return readRuntimeAdapterStream(response, { controller, cancel });
+    }, 250), /request timed out after 250ms/);
+    await closed;
+  });
+});
+
+test('external request deadline preserves intentional generation cancellation', { timeout: 5000 }, async () => {
+  let sawClose;
+  const closed = new Promise(resolve => { sawClose = resolve; });
+  await withStalledAdapterResponse((_request, response) => {
+    response.once('close', sawClose);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(adapterFrame({ content: '1' }));
+  }, async url => {
+    const result = await withRuntimeAdapterRequestDeadline(async controller => {
+      const response = await fetch(url, { signal: controller.signal });
+      return readRuntimeAdapterStream(response, { controller, cancel: true });
+    }, 1000);
+    assert.equal(result.content, '1');
+    assert.equal(result.streamAbortedAfterOutput, true);
+    assert.equal(result.cancelledOn, 'content');
+    await closed;
+  });
+});
+
+
+test('external request rejection closes an unread error response without replacing its diagnostic', { timeout: 5000 }, async () => {
+  let sawClose;
+  const closed = new Promise(resolve => { sawClose = resolve; });
+  const failure = new Error('Chat returned 503');
+  await withStalledAdapterResponse((_request, response) => {
+    response.once('close', sawClose);
+    response.writeHead(503, { 'Content-Type': 'text/plain' });
+    response.flushHeaders();
+  }, async url => {
+    await assert.rejects(withRuntimeAdapterRequestDeadline(async controller => {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw failure;
+      return readRuntimeAdapterStream(response, { controller });
+    }, 1000), error => error === failure);
+    await closed;
+  });
 });

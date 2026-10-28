@@ -1,4 +1,4 @@
-/* global TextDecoder */
+/* global TextDecoder, AbortController, setTimeout, clearTimeout */
 import { SseParser } from '../src/shared/api/sse.ts';
 
 /** A reasoning token is generation output, but never a final answer. */
@@ -53,4 +53,36 @@ export function validateRuntimeAdapterRecovery(before, afterCancel, afterFollowu
     throw new Error('Cancellation and follow-up must preserve the same running server process');
   }
   return true;
+}
+
+export const DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS = 120000;
+
+export function validateRuntimeAdapterRequestTimeout(value) {
+  const timeoutMs = typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : value;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
+    throw new Error('--request-timeout-ms must be an integer from 1 to 600000');
+  }
+  return timeoutMs;
+}
+
+/** Keep the deadline active until both response headers and the whole SSE body settle. */
+export async function withRuntimeAdapterRequestDeadline(operation, timeoutMs = DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS) {
+  const deadlineMs = validateRuntimeAdapterRequestTimeout(timeoutMs);
+  const controller = new AbortController();
+  let expired = false;
+  const deadline = setTimeout(() => { expired = true; controller.abort(); }, deadlineMs);
+  try {
+    const result = await operation(controller);
+    if (expired) throw new Error(`Runtime adapter request timed out after ${deadlineMs}ms`);
+    return result;
+  } catch (error) {
+    // readRuntimeAdapterStream handles intentional generation cancellation.
+    // A deadline abort must remain a failure, even if output arrived at the boundary.
+    if (expired) throw new Error(`Runtime adapter request timed out after ${deadlineMs}ms`);
+    // Close an unread body too, such as a non-2xx response rejected before SSE parsing.
+    controller.abort();
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+  }
 }

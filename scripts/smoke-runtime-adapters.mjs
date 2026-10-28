@@ -1,4 +1,4 @@
-/* global process, fetch, AbortController, setTimeout */
+/* global process, fetch, setTimeout */
 // Host-native acceptance. The supplied CLI must already be built on this host;
 // engines/models are inspected in place and never installed or downloaded.
 import { execFile } from 'node:child_process';
@@ -9,10 +9,13 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { createServer, createConnection } from 'node:net';
-import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery } from './runtime-adapter-stream.mjs';
+import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery,
+  DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS, validateRuntimeAdapterRequestTimeout, withRuntimeAdapterRequestDeadline } from './runtime-adapter-stream.mjs';
 
 const execute = promisify(execFile);
 const args = Object.fromEntries(process.argv.slice(2).reduce((rows, value, i, all) => value.startsWith('--') ? [...rows, [value.slice(2), all[i + 1]]] : rows, []));
+const requestTimeoutMs = validateRuntimeAdapterRequestTimeout(Object.hasOwn(args, 'request-timeout-ms')
+  ? args['request-timeout-ms'] : DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS);
 for (const key of ['cli', 'manifest', 'model', 'provenance']) if (!args[key]) throw new Error(`Required: --${key}`);
 const output = resolve(args.output ?? join('tmp', 'runtime-adapter-validation', new Date().toISOString().replace(/[:.]/g, '-')));
 await mkdir(dirname(output), { recursive: true });
@@ -84,13 +87,15 @@ async function stopped() {
   throw new Error('An owned server PID or port remains after shutdown');
 }
 async function completion(cancel = false) {
-  const controller = new AbortController();
-  const response = await fetch(`${url}/chat/completions`, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: served, messages: [{ role: 'user', content: cancel ? 'Write the numbers from 1 through 1000, one number per line. Continue until the limit.' : 'Compute 2 + 3. Reply with the number only.' }], stream: true, stream_options: { include_usage: true }, max_tokens: cancel ? 1024 : 32 }) });
-  check(response.ok, `Chat returned ${response.status}`);
-  const result = await readRuntimeAdapterStream(response, { controller, cancel });
-  if (cancel) return result;
-  return validateRuntimeAdapterCompletion(result, '5');
+  return withRuntimeAdapterRequestDeadline(async controller => {
+    const response = await fetch(`${url}/chat/completions`, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: served, messages: [{ role: 'user', content: cancel ? 'Write the numbers from 1 through 1000, one number per line. Continue until the limit.' : 'Compute 2 + 3. Reply with the number only.' }], stream: true, stream_options: { include_usage: true }, max_tokens: cancel ? 1024 : 32 }) });
+    check(response.ok, `Chat returned ${response.status}`);
+    const result = await readRuntimeAdapterStream(response, { controller, cancel });
+    if (cancel) return result;
+    return validateRuntimeAdapterCompletion(result, '5');
+  }, requestTimeoutMs);
 }
+
 try {
   await record('A01 provenance', async () => {
     for (const file of provenance.files) check(/^[0-9a-f]{64}$/.test(file.sha256) && await hash(resolve(file.path)) === file.sha256, 'Model/dependency hash mismatch');
@@ -144,6 +149,6 @@ finally {
   const sourceDirty = (await execute('git', ['status', '--porcelain'])).stdout.trim().length > 0;
   const source = (await execute('git', ['rev-parse', 'HEAD'])).stdout.trim();
   const harnessFiles = await Promise.all(['smoke-runtime-adapters.mjs', 'runtime-adapter-stream.mjs', '../src/shared/api/sse.ts'].map(async name => ({ file: name, sha256: await hash(fileURLToPath(new URL(name, import.meta.url))) })));
-  await writeFile(join(output, 'results.json'), JSON.stringify({ schema_version: 1, source, source_dirty: sourceDirty, tracked_diff_sha256: createHash('sha256').update(sourceDiff).digest('hex'), harness_files: harnessFiles, cli_sha256: await hash(resolve(args.cli)), manifest_sha256: await hash(resolve(args.manifest)), os: process.platform, arch: process.arch, engine_id: manifest.engine_id, runtime_id: manifest.runtime_id, model_revision: provenance.model_revision, synthetic: provenance.synthetic === true, steps, remaining: ['Native GUI / profiles / multi-session / MCP / RAG / media / gateway authentication', 'Unsupported benchmark/deep/portable capabilities must stay unavailable'] }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  await writeFile(join(output, 'results.json'), JSON.stringify({ schema_version: 1, source, source_dirty: sourceDirty, tracked_diff_sha256: createHash('sha256').update(sourceDiff).digest('hex'), harness_files: harnessFiles, cli_sha256: await hash(resolve(args.cli)), manifest_sha256: await hash(resolve(args.manifest)), os: process.platform, arch: process.arch, request_timeout_ms: requestTimeoutMs, engine_id: manifest.engine_id, runtime_id: manifest.runtime_id, model_revision: provenance.model_revision, synthetic: provenance.synthetic === true, steps, remaining: ['Native GUI / profiles / multi-session / MCP / RAG / media / gateway authentication', 'Unsupported benchmark/deep/portable capabilities must stay unavailable'] }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   process.stdout.write(`Acceptance evidence: ${output}\n`);
 }
