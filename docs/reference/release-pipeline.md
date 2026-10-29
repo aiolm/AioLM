@@ -36,15 +36,19 @@ from production coverage; existing coverage sources and thresholds are retained.
 
 Each OS first collects a complete test plan tied to its checkout SHA and source
 and configuration hashes. Shards must match that plan. OS-local merge jobs
-independently collect the test inventory, reject missing/duplicate/failed reports,
-verify the actual blob contents, and enforce the original whole-suite coverage
+verify the source-file inventory and the exact plan digest from the successful
+collection job, reject missing/duplicate/failed reports, verify the actual blob
+contents, and enforce the original whole-suite coverage
 thresholds. Partial shards defer those thresholds; they never ignore test
 failures. The stable `Frontend tests and build` check requires every OS, shard
 and merge to succeed. Successful main runs retain measured file durations for
 future balanced plans. Missing history changes scheduling only, never coverage.
 
-Native CI retains clippy, all-feature and default-feature tests, real CLI/runtime
-checks, OS credential checks and macOS window/lifecycle checks. Windows process
+Native CI retains clippy, all-feature tests and documentation tests, real
+CLI/runtime checks, OS credential checks and macOS window/lifecycle checks.
+macOS also runs default-feature tests because its opt-in WebDriver changes the
+native path. Windows/Linux all-feature and default code are identical for the
+current feature set; adding a non-macOS feature requires reviewing this matrix. Windows process
 fixtures prepare repeated initial settings through the same validated config
 save path, then read them back through the real CLI. Representative and long
 command-line cases still exercise individual public config commands. All process
@@ -85,6 +89,7 @@ other raw-file preservation evidence remains unchanged.
 
 Compare cold and warm cache runs, the slowest platform, and approval waiting
 separately. File-duration history is optional and cannot authorize skipping a
-test. Retry failed jobs after diagnosing their logs; successful platform outputs
+test. Local merges without a trusted plan digest also recollect all test names.
+Retry failed jobs after diagnosing their logs; successful platform outputs
 do not need to be rebuilt when retrying one failed platform. Existing published
 releases, tags and pinned validation materials are not replaced by these changes.

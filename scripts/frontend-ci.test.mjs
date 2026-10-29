@@ -1,11 +1,13 @@
 /* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assignFiles, inventory, reportInventory, testPath, validateAssignments, verifyRecords, verifyReport } from "./frontend-ci.mjs";
+import { assignFiles, inventory, planOutputEntry, reportInventory, testPath, validateAssignments, verifyPlanDigest, verifyRecords, verifyReport } from "./frontend-ci.mjs";
 
 const sha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -70,6 +72,19 @@ test("collection normalizes runner paths and retains repeated named cases", () =
   assert.throws(() => testPath("/other/src/a.test.ts", "/synthetic"), /Unexpected/);
 });
 
+test("only the producer's independently supplied digest authenticates a plan", () => {
+  const bytes = Buffer.from('{"files":[]}\n');
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  assert.doesNotThrow(() => verifyPlanDigest(bytes, digest));
+  assert.throws(() => verifyPlanDigest(bytes, ""), /64 hexadecimal/);
+  assert.throws(() => verifyPlanDigest(bytes, "x".repeat(64)), /64 hexadecimal/);
+  assert.throws(() => verifyPlanDigest(Buffer.from('{"files":["omitted"]}\n'), digest), /trusted producer digest/);
+  assert.equal(planOutputEntry("Linux", digest), `linux_plan=${digest}\n`);
+  assert.equal(planOutputEntry("Windows", digest), `windows_plan=${digest}\n`);
+  assert.throws(() => planOutputEntry("Windows\nevil=value", digest), /Linux or Windows/);
+  assert.throws(() => planOutputEntry("__proto__", digest), /Linux or Windows/);
+});
+
 test("real Vitest shards merge every parameterized case and enforce unchanged coverage", { timeout: 60_000 }, (context) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   mkdirSync(join(root, "tmp"), { recursive: true });
@@ -89,15 +104,21 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
     reportsDirectory: 'coverage', thresholds: { statements: process.env.AIOLM_COVERAGE_THRESHOLD_PROBE ? 100 : 40,
       branches: 35, functions: 35, lines: 45 } } } });\n`);
   writeFileSync(join(fixture, "src/math.ts"), "export function add(a: number, b: number) { return a + b; }\nexport function unused() { return 0; }\n");
-  writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1));\n");
+  writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; if (process.env.AIOLM_FRONTEND_COLLECTION_BLOCKED) throw new Error('Test module recollection is blocked'); it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1));\n");
   writeFileSync(join(fixture, "src/two.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it('second file', () => expect(add(2, 3)).toBe(5));\n");
-  const run = (...args) => {
+  const runWithEnv = (args, env = {}) => {
     const result = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), ...args], {
-      cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 30_000,
+      cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false", ...env }, encoding: "utf8", timeout: 30_000,
     });
     assert.equal(result.status, 0, JSON.stringify({ command: args, stdout: result.stdout, stderr: result.stderr, signal: result.signal, error: result.error?.message }));
   };
-  run("plan", "--shards", "2", "--output", "tmp/plan.json");
+  const run = (...args) => runWithEnv(args);
+  const sourceSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
+  const runnerOs = process.platform === "win32" ? "Windows" : "Linux";
+  const githubOutput = join(fixture, "tmp/github-output");
+  runWithEnv(["plan", "--shards", "2", "--output", "tmp/plan.json"], { GITHUB_ACTIONS: "true", GITHUB_SHA: sourceSha, RUNNER_OS: runnerOs, GITHUB_OUTPUT: githubOutput });
+  const planDigest = createHash("sha256").update(readFileSync(join(fixture, "tmp/plan.json"))).digest("hex");
+  assert.equal(readFileSync(githubOutput, "utf8"), planOutputEntry(runnerOs, planDigest));
   run("shard", "--plan", "tmp/plan.json", "--index", "1", "--output", "tmp/shards/one");
   run("shard", "--plan", "tmp/plan.json", "--index", "2", "--output", "tmp/shards/two");
   run("merge", "--plan", "tmp/plan.json", "--input", "tmp/shards");
@@ -106,9 +127,18 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   assert.equal(merged.numFailedTests, 0);
   const coverage = JSON.parse(readFileSync(join(fixture, "coverage/coverage-summary.json"), "utf8"));
   assert.equal(coverage.total.statements.pct, 50);
+  runWithEnv(["merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/trusted-merge", "--expected-plan-sha", planDigest], { AIOLM_FRONTEND_COLLECTION_BLOCKED: "1" });
+  const trusted = JSON.parse(readFileSync(join(fixture, "tmp/trusted-merge/results.json"), "utf8"));
+  assert.equal(trusted.numPassedTests, 3);
   const strict = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), "merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/strict-merge"], {
     cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false", AIOLM_COVERAGE_THRESHOLD_PROBE: "1" }, encoding: "utf8", timeout: 30_000,
   });
   assert.equal(strict.status, 1, strict.stdout + strict.stderr);
   assert.match(strict.stdout + strict.stderr, /Coverage for statements.*does not meet global threshold/);
+  writeFileSync(join(fixture, "src/omitted.test.ts"), "import { it, expect } from 'vitest'; it('new source', () => expect(1).toBe(1));\n");
+  const omitted = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), "merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/omitted-merge", "--expected-plan-sha", planDigest], {
+    cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(omitted.status, 1, omitted.stdout + omitted.stderr);
+  assert.match(omitted.stdout + omitted.stderr, /Current source file inventory/);
 });

@@ -548,6 +548,80 @@ impl Drop for FixtureConfigHome {
     }
 }
 
+fn fixture_public_projection(cfg: &aiolm_lib::AppConfig, home: &Path) -> PublicResult<Value> {
+    fn sensitive_name(name: &str) -> bool {
+        let normalized = name.to_ascii_lowercase().replace(['-', ' '], "_");
+        [
+            "api_key",
+            "authorization",
+            "connection_string",
+            "credential",
+            "password",
+            "private_key",
+            "secret",
+            "token",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    }
+    fn sensitive_flag(value: &str) -> bool {
+        let normalized = value.to_ascii_lowercase();
+        [
+            "--api-key",
+            "--authorization",
+            "--password",
+            "--private-key",
+            "--secret",
+            "--token",
+        ]
+        .iter()
+        .any(|needle| normalized == *needle || normalized.starts_with(&format!("{needle}=")))
+    }
+    fn redact(value: Value) -> Value {
+        match value {
+            Value::Object(mut object) => {
+                for (name, value) in &mut object {
+                    *value = if sensitive_name(name) {
+                        Value::from("[REDACTED]")
+                    } else {
+                        redact(std::mem::take(value))
+                    };
+                }
+                Value::Object(object)
+            }
+            Value::Array(mut values) => {
+                let mut redact_next = false;
+                for value in &mut values {
+                    if redact_next {
+                        *value = Value::from("[REDACTED]");
+                        redact_next = false;
+                    } else if let Value::String(text) = value {
+                        if sensitive_flag(text) && text.contains('=') {
+                            let end = text.find('=').unwrap_or(text.len());
+                            *value = Value::from(format!("{}=[REDACTED]", &text[..end]));
+                        } else {
+                            redact_next = sensitive_flag(text);
+                        }
+                    } else {
+                        *value = redact(std::mem::take(value));
+                    }
+                }
+                Value::Array(values)
+            }
+            other => other,
+        }
+    }
+    let mut projection = redact(serde_json::to_value(cfg).map_err(|e| e.to_string())?);
+    let _home = FixtureConfigHome::enter(home);
+    runtime_schema::mask_config(
+        &providers::registry::root(),
+        cfg,
+        &mut projection,
+        "[REDACTED]",
+    );
+    Ok(projection)
+}
+
 struct PublicReader {
     done: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -822,6 +896,7 @@ impl PublicCase {
         serde_json::json!({"elapsed_ms":self.started.elapsed().as_millis(),"phases_ms":phases,
             "timed_cli_commands":commands,"registered_children":self.commands.len(),
             "fixture_saves":self.evidence.iter().filter(|entry|entry["fixture_config"]["through_public_cli"] == false).count(),
+            "reference_config_saves":self.evidence.iter().filter_map(|entry|entry["fixture_config"]["reference_saves"].as_u64()).sum::<u64>(),
             "public_config_set_commands":self.evidence.iter().filter(|entry|entry["argv"][0] == "config" && entry["argv"][1] == "set").count()})
     }
     fn file(&self, relative: &str) -> PathBuf {
@@ -893,21 +968,33 @@ impl PublicCase {
             let _home = FixtureConfigHome::enter(&self.home);
             // Start with the configuration written by real runtime selection,
             // retaining registry/profile/default initialization and migration.
-            let cfg = aiolm_lib::config::load_result()?;
-            let mut value = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
-            let object = value
-                .as_object_mut()
-                .ok_or("fixture config is not an object")?;
-            for (key, value) in fields {
+            let mut cfg = aiolm_lib::config::load_result()?;
+            for (key, field) in fields {
+                let mut value = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
+                let object = value
+                    .as_object_mut()
+                    .ok_or("fixture config is not an object")?;
                 public_require(object.contains_key(*key), "unknown fixture config field")?;
-                object.insert((*key).into(), value.clone());
+                object.insert((*key).into(), field.clone());
+                cfg = serde_json::from_value(value).map_err(|e| e.to_string())?;
+                cfg.runtime_defaults.retain(|changed| changed != key);
+                cfg.normalize();
+                cfg.validate()?;
+                if matches!(
+                    *key,
+                    "active_model"
+                        | "active_provider"
+                        | "active_runtime"
+                        | "active_backend"
+                        | "active_build"
+                ) {
+                    // config get initializes an application snapshot when the
+                    // active model/runtime changes. Model that read boundary
+                    // before later fields, just as sequential config set does.
+                    cfg = self.canonical_fixture_config(&cfg)?;
+                }
             }
-            let mut cfg: aiolm_lib::AppConfig =
-                serde_json::from_value(value).map_err(|e| e.to_string())?;
-            cfg.runtime_defaults
-                .retain(|key| !fields.iter().any(|(changed, _)| key == changed));
-            cfg.normalize();
-            cfg.validate()?;
+            cfg = self.canonical_fixture_config(&cfg)?;
             if !self.config_through_cli {
                 cfg = aiolm_lib::config::save(&cfg)?;
             }
@@ -926,13 +1013,49 @@ impl PublicCase {
             }
         }
         self.evidence.push(serde_json::json!({"fixture_config":{"fields":fields.iter().map(|(key,_)|*key).collect::<Vec<_>>(),
-            "through_public_cli":self.config_through_cli,"elapsed_ms":started.elapsed().as_millis()}}));
+            "through_public_cli":self.config_through_cli,"elapsed_ms":started.elapsed().as_millis(),
+            "reference_saves":1+fields.iter().filter(|(key,_)|matches!(*key,"active_model"|"active_provider"|"active_runtime"|"active_backend"|"active_build")).count()}}));
         Ok(expected)
     }
+    fn canonical_fixture_config(
+        &self,
+        cfg: &aiolm_lib::AppConfig,
+    ) -> PublicResult<aiolm_lib::AppConfig> {
+        let reference = self.file(&format!(
+            "profile/config-reference-{}",
+            uuid::Uuid::new_v4()
+        ));
+        public_io(fs::create_dir(&reference))?;
+        let canonical = {
+            let _home = FixtureConfigHome::enter(&reference);
+            // The reference has its own file, never the actual configuration
+            // being checked. Exercise the exact saved-value migration used by
+            // the public CLI, including profile presence and model identity.
+            aiolm_lib::config::save(cfg)?;
+            aiolm_lib::config::load_result()?
+        };
+        public_io(fs::remove_file(reference.join("config.json")))?;
+        public_io(fs::remove_dir(reference))?;
+        Ok(canonical)
+    }
     fn fixture_readback(&mut self, expected: &Value) -> PublicResult<Value> {
+        let expected_cfg: aiolm_lib::AppConfig =
+            serde_json::from_value(expected.clone()).map_err(|e| e.to_string())?;
+        let stored_cfg: aiolm_lib::AppConfig =
+            serde_json::from_slice(&public_io(fs::read(self.file("config.json")))?)
+                .map_err(|e| e.to_string())?;
+        let stored = serde_json::to_value(stored_cfg).map_err(|e| e.to_string())?;
+        let public = fixture_public_projection(&expected_cfg, &self.home)?;
         let observed = self.success(&["config", "get"])?;
+        self.evidence.push(serde_json::json!({"fixture_config_comparison":{
+            "expected_saved":expected,"actual_saved":stored,"expected_public":public,"actual_public":observed
+        }}));
         public_require(
-            &observed == expected,
+            &stored == expected,
+            "fixture and saved configuration differ",
+        )?;
+        public_require(
+            observed == public,
             "fixture and public CLI configuration differ",
         )?;
         self.evidence

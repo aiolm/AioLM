@@ -15,6 +15,9 @@ concurrency:
 jobs:
   frontend-checks:
     name: Frontend checks (${{ matrix.os }})
+    outputs:
+      linux_plan: ${{ steps.plan.outputs.linux_plan }}
+      windows_plan: ${{ steps.plan.outputs.windows_plan }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +71,7 @@ jobs:
           key: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ github.sha }}
           restore-keys: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-
       - name: Plan complete frontend test coverage
+        id: plan
         run: node scripts/frontend-ci.mjs plan --shards 2 --timings tmp/frontend-ci-history/timings.json --output tmp/frontend-ci/plan.json
       - name: Retain test plan
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -159,7 +163,10 @@ jobs:
           pattern: frontend-shard-${{ matrix.os }}-*
           path: tmp/frontend-ci/shards
       - name: Verify complete test inventory and original global thresholds
-        run: node scripts/frontend-ci.mjs merge --plan tmp/frontend-ci/plan.json --input tmp/frontend-ci/shards
+        shell: bash
+        env:
+          EXPECTED_PLAN_SHA: ${{ matrix.os == 'windows-latest' && needs.frontend-checks.outputs.windows_plan || needs.frontend-checks.outputs.linux_plan }}
+        run: node scripts/frontend-ci.mjs merge --plan tmp/frontend-ci/plan.json --input tmp/frontend-ci/shards --expected-plan-sha "$EXPECTED_PLAN_SHA"
       - name: Prepare duration history for future plans
         run: node -e "const fs=require('node:fs'); fs.mkdirSync('tmp/frontend-ci-history',{recursive:true}); fs.copyFileSync('tmp/frontend-ci/merged/timings.json','tmp/frontend-ci-history/timings.json');"
       - name: Save successful main duration history
@@ -246,10 +253,10 @@ jobs:
         env:
           AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
-      - name: Default-feature native tests
-        env:
-          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
+      # The only extra feature is macOS-only. On Windows all-features tests
+      # cover the default native code too; preserve doc-tests separately.
+      - name: Rust documentation tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features
       - name: Frontend build for Tauri metadata validation
         run: npm run build
       - name: Build desktop and CLI
@@ -346,10 +353,15 @@ jobs:
         env:
           AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
+      # macos-ui-smoke changes native code only on macOS; verify both paths.
       - name: Default-feature native tests
+        if: runner.os == 'macOS'
         env:
           AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Linux documentation tests
+        if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features
       - name: Secret Service lock and native authentication cancellation
         if: runner.os == 'Linux'
         timeout-minutes: 5

@@ -3,7 +3,7 @@
 // test inventory and the original whole-suite coverage gate before success.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -79,6 +79,27 @@ function collect(output) {
   return inventory(json(output));
 }
 
+function checkSourceFiles(plan, output) {
+  // filesOnly applies the real include/exclude globs without importing tests
+  // or constructing hundreds of jsdom environments a second time.
+  const code = runVitest(["list", "--config", "vitest.config.ts", "--filesOnly", "--json", output]);
+  requireThat(code === 0, "Frontend source file discovery failed");
+  const current = json(output).map((entry) => testPath(entry.file)).sort();
+  same(current, plan.files.map((entry) => entry.path).sort(), "Current source file inventory");
+}
+
+export function verifyPlanDigest(bytes, expected) {
+  requireThat(typeof expected === "string" && /^[a-f0-9]{64}$/i.test(expected), "Expected frontend plan digest must be 64 hexadecimal characters");
+  requireThat(hash(bytes) === expected.toLowerCase(), "Frontend plan does not match the trusted producer digest");
+}
+
+export function planOutputEntry(runnerOs, digest) {
+  const key = runnerOs === "Linux" ? "linux_plan" : runnerOs === "Windows" ? "windows_plan" : undefined;
+  requireThat(key, "Frontend plan output requires a Linux or Windows runner");
+  requireThat(/^[a-f0-9]{64}$/.test(digest), "Invalid frontend plan output digest");
+  return `${key}=${digest}\n`;
+}
+
 function stamp(files) {
   return {
     files: files.map((file) => ({ ...file, sha256: hash(readFileSync(resolve(ROOT, file.path))) })),
@@ -152,6 +173,10 @@ function makePlan(options) {
   const plan = { formatVersion: VERSION, sourceSha: sourceSha(), shardCount: count, ...stamp(collected), assignments: assignFiles(collected, count, timings, sizes) };
   validateAssignments(plan);
   writeJson(output, plan);
+  if (process.env.GITHUB_ACTIONS === "true") {
+    requireThat(process.env.GITHUB_OUTPUT, "Missing GitHub output file for frontend plan digest");
+    appendFileSync(process.env.GITHUB_OUTPUT, planOutputEntry(process.env.RUNNER_OS, hash(readFileSync(output))));
+  }
   console.log(`Planned ${collected.length} files and ${collected.reduce((n, file) => n + file.tests.length, 0)} tests in ${count} disjoint shards.`);
 }
 
@@ -196,15 +221,27 @@ export function verifyRecords(plan, records, planDigest) {
 function merge(options) {
   requireThat(options.plan && options.input, "Merge requires --plan and --input");
   const planBytes = readFileSync(resolve(ROOT, options.plan));
+  const trustedPlan = Object.hasOwn(options, "expected-plan-sha");
+  if (trustedPlan) verifyPlanDigest(planBytes, options["expected-plan-sha"]);
   const plan = JSON.parse(planBytes);
   validateCheckout(plan);
   const output = checkedOutput(options.output ?? "tmp/frontend-ci/merged");
   requireThat(!existsSync(output), "Refusing to reuse a frontend merge output directory");
   mkdirSync(output, { recursive: true });
-  // Independently collect from this checkout; artifact metadata alone cannot
-  // authorize dropping, duplicating or changing a test in the merge.
-  const current = collect(join(output, "collected.json"));
-  same(current, plan.files.map(({ path, tests }) => ({ path, tests })), "Merged source test inventory");
+  const expected = plan.files.map(({ path, tests }) => ({ path, tests }));
+  let current;
+  if (trustedPlan) {
+    // CI passes the producing job's digest separately from downloaded artifacts.
+    // That authenticates the once-collected names; source hashes and the cheap
+    // fresh file inventory still prevent stale/new/omitted source files.
+    checkSourceFiles(plan, join(output, "source-files.json"));
+    current = expected;
+  } else {
+    // Local callers without an independently trusted digest retain the full
+    // recollection check; artifact metadata alone never authorizes omissions.
+    current = collect(join(output, "collected.json"));
+    same(current, expected, "Merged source test inventory");
+  }
   const input = resolve(ROOT, options.input);
   const directories = readdirSync(input).map((name) => join(input, name)).filter((path) => lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink() && existsSync(join(path, "record.json")));
   const records = directories.map((path) => json(join(path, "record.json")));
@@ -237,7 +274,7 @@ function parseOptions(args) {
   const options = {};
   while (args.length) {
     const key = args.shift();
-    requireThat(/^--(?:plan|index|output|input|shards|timings)$/.test(key ?? "") && args.length > 0, `Unknown or incomplete argument: ${key}`);
+    requireThat(/^--(?:plan|index|output|input|shards|timings|expected-plan-sha)$/.test(key ?? "") && args.length > 0, `Unknown or incomplete argument: ${key}`);
     requireThat(!Object.hasOwn(options, key.slice(2)), `Repeated argument: ${key}`);
     options[key.slice(2)] = args.shift();
   }
