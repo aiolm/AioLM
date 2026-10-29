@@ -386,14 +386,23 @@ function OptionField({ option, value, disabled, automaticTelemetry = false, onCh
   const [draft, setDraft] = useState(text);
   const [invalid, setInvalid] = useState(false);
   const [jsonNumberError, setJsonNumberError] = useState(false);
+  const saved = useRef({ text, key: option.key });
+  const invalidRef = useRef(false);
   const errorId = useId();
-  useEffect(() => { setDraft(text); setInvalid(false); setJsonNumberError(false); onInvalid(`provider:${option.key}`, false);
+  useEffect(() => {
+    // The initial state already contains the saved value. A late first effect
+    // or a new validation listener must not replace an edit made meanwhile.
+    if (saved.current.text !== text || saved.current.key !== option.key) {
+      saved.current = { text, key: option.key };
+      setDraft(text); setInvalid(false); setJsonNumberError(false); invalidRef.current = false;
+    }
+    onInvalid(`provider:${option.key}`, invalidRef.current);
     return () => onInvalid(`provider:${option.key}`, false);
   }, [text, option.key, onInvalid]);
   const edit = (text: string) => {
     setDraft(text);
     setJsonNumberError(false);
-    if (!text.trim()) { setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(undefined); return; }
+    if (!text.trim()) { invalidRef.current = false; setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(undefined); return; }
     try {
       let parsed: unknown = text;
       if (option.kind.type === 'json') parsed = parseJsonOption(text);
@@ -401,8 +410,8 @@ function OptionField({ option, value, disabled, automaticTelemetry = false, onCh
         parsed = Number(text);
         if (!Number.isFinite(parsed) || option.kind.type === 'integer' && !Number.isSafeInteger(parsed) || option.kind.min !== undefined && Number(parsed) < option.kind.min || option.kind.max !== undefined && Number(parsed) > option.kind.max) throw new Error('range');
       }
-      setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
-    } catch (cause) { setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
+      invalidRef.current = false; setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
+    } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
   return <label>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small>
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}

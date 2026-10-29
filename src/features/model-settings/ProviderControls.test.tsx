@@ -793,6 +793,41 @@ describe('registered engine options from accepted help (G04)', () => {
 });
 
 describe('catalog command import before runtime selection', () => {
+  it('retains a rejected JSON draft when its validation listener changes and resets only for a new saved value', async () => {
+    const option: api.ProviderOption = { key: 'payload', flag: '--payload', target: 'launch', group: 'runtime', kind: { type: 'json' } };
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const cfg = { ...testConfig, active_provider: 'vllm' as const, active_runtime: '', provider_options: { vllm: { payload: { seed: 17 } } } };
+    const onChange = vi.fn(); const previousInvalid = vi.fn(); const nextInvalid = vi.fn();
+    const view = (value: api.AppConfig, onInvalid: (key: string, invalid: boolean) => void) => <I18nProvider initialLocale="en"><ProviderOptions cfg={value} disabled={false} onInvalid={onInvalid} onChange={onChange} /></I18nProvider>;
+    const rendered = render(view(cfg, previousInvalid));
+    const field = await screen.findByLabelText(/^--payload/);
+    const draft = '{"seed":';
+    fireEvent.change(field, { target: { value: draft } });
+    expect(field).toHaveValue(draft);
+    expect(previousInvalid.mock.calls.filter(([key]) => key === 'provider:payload').at(-1)).toEqual(['provider:payload', true]);
+    rendered.rerender(view(cfg, nextInvalid));
+    expect(field).toHaveValue(draft);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toBeVisible();
+    expect(previousInvalid.mock.calls.filter(([key]) => key === 'provider:payload').at(-1)).toEqual(['provider:payload', false]);
+    expect(nextInvalid.mock.calls.filter(([key]) => key === 'provider:payload').at(-1)).toEqual(['provider:payload', true]);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(cfg.provider_options.vllm.payload).toEqual({ seed: 17 });
+    fireEvent.change(field, { target: { value: '{"seed":18}' } });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(nextInvalid.mock.calls.filter(([key]) => key === 'provider:payload').at(-1)).toEqual(['provider:payload', false]);
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { vllm: { payload: { seed: 18 } } } });
+    fireEvent.change(field, { target: { value: draft } });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    rendered.rerender(view({ ...cfg, provider_options: { vllm: { payload: { seed: 19 } } } }, nextInvalid));
+    expect(JSON.parse((field as HTMLTextAreaElement).value)).toEqual({ seed: 19 });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(nextInvalid.mock.calls.filter(([key]) => key === 'provider:payload').at(-1)).toEqual(['provider:payload', false]);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an unserializable JSON draft recoverable without changing the catalog settings', async () => {
     const option: api.ProviderOption = { key: 'payload', flag: '--payload', target: 'launch', group: 'runtime', kind: { type: 'json' } };
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);
