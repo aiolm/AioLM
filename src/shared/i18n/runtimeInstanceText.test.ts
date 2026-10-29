@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { runtimeLabel, type RuntimeInstance } from '../api/providers';
 import { runtimeInstanceLabel } from './runtimeInstanceText';

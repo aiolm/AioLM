@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import type { CommandEntry, OptionSchemaDefinition, PositionalRole } from '../../shared/api/runtimeHelp';

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { StreamTimings, StreamUsage } from "../api/sse";
 import { buildResponseMetrics, sanitizeResponseMetrics } from "./metrics";

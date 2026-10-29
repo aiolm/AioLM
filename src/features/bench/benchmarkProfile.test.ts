@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { benchmarkSettingsProfile, localBenchmarkProfileSource, publicBenchmarkProfileSource, type BenchmarkProfileSource } from './benchmarkProfile';
 import { applySettingsProfile } from '../../shared/config/settingsProfiles';

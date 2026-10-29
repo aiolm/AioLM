@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { serverSettingsChanged } from '../config/executionSettings';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAdapterRegister, providerRemove, type ProviderOption, publishRuntimeCatalog, type ProviderDescription, listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';

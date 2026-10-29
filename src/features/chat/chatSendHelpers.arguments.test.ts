@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { resolveDetectedToolCall } from './chatSendHelpers';
 import type { ChatMcpTool } from './useChatMcpTools';

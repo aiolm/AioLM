@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { translate } from '../../shared/i18n/i18n';
 import { TUNING_FIELD_CATALOG, tuningFieldDescription } from './tuningFields';

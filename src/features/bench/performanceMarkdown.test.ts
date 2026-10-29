@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { PerformanceBenchmarkRow } from '../../shared/api/types.ts';
 import type { Locale } from '../../shared/i18n/i18n';

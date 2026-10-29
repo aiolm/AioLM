@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { OptionSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import { applyPlan, editOption, expandPlan, moveOccurrence, ORDER_KEY, readOrder, setOccurrenceSpelling } from './optionOrder';

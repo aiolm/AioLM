@@ -65,9 +65,13 @@ npm run package:tauri
 # -> .codex-target/release/bundle/nsis/ , .../msi/
 ```
 
-インストーラーは `aiolm-cli.exe` を Tauri の補助バイナリとして `aiolm.exe` の隣に配置するため、
-パッケージング前に `npm run build:cli` が実行されている必要があります。`npm run package:tauri` はこれを含みます。
-CLI を `bundle.resources` にも登録すると同じファイルが二重に配置され、MSI ビルドが WiX ICE30 で失敗します。
+このコマンドはフロントエンドを一度ビルドし、同じ配布設定でアプリと `aiolm-cli` をまとめて
+コンパイルしてから、各 OS のインストーラーを生成します。Tauri は CLI をアプリの隣に補助バイナリとして配置します。
+`bundle.resources` への重複登録は、二重配置と WiX ICE30 エラーの原因になるため避けてください。
+CLI 単体の開発には引き続き `npm run build:cli` を使えます。
+Cargo の時間レポートは `.codex-target/cargo-timings` に保存されます。
+Linux では `node scripts/package-tauri.mjs --prepare-runtime` で固定 AppImage ランタイムを
+先に準備できます。通常のパッケージングでも同じキャッシュのハッシュを再検証します。
 
 パッケージングは `scripts/package-tauri.mjs` を経由するため、cargo はビルドマシンの
 ホーム、Cargo、rustup、ワークスペースの各ディレクトリに対する rustc

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { CACHE_TYPE_OPTIONS } from '../config/tuningValidation.ts';
 import { testConfig } from '../../testing/appStore';

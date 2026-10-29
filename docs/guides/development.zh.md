@@ -65,9 +65,12 @@ npm run package:tauri
 # -> .codex-target/release/bundle/nsis/ , .../msi/
 ```
 
-安装包会将 `aiolm-cli.exe` 作为 Tauri 辅助二进制文件安装在 `aiolm.exe` 旁边，因此打包前必须先运行
-`npm run build:cli`；`npm run package:tauri` 已包含这一步。
-请勿再将该 CLI 列入 `bundle.resources`：同一文件会被安装两次，导致 MSI 构建因 WiX ICE30 失败。
+此命令只构建一次前端，再用相同的发布配置一起编译应用和 `aiolm-cli`，然后生成对应系统的安装包。
+Tauri 会将 CLI 作为辅助二进制文件放在应用旁边。请勿再将它列入 `bundle.resources`，以免重复安装并触发 WiX ICE30。
+单独开发 CLI 时仍可使用 `npm run build:cli`。
+Cargo 耗时报告保存在 `.codex-target/cargo-timings`。
+Linux 可通过 `node scripts/package-tauri.mjs --prepare-runtime` 提前准备固定的 AppImage 运行时；
+正常打包时仍会重新验证同一缓存的哈希。
 
 打包通过 `scripts/package-tauri.mjs` 进行，因此 cargo 会带着针对构建机器的主目录、
 Cargo、rustup 与工作区目录的 rustc `--remap-path-prefix` 参数运行。没有这些参数时，

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import { SERVER_OPTIONS, getOptionOccurrences } from '../../shared/config/serverOptions';

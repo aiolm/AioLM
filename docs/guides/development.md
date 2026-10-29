@@ -91,14 +91,18 @@ AIOLM_SMOKE=1 AIOLM_SMOKE_MODEL='C:/path/to/model.gguf' cargo test --test smoke 
 ## Packaging
 
 ```bash
-npm run package:tauri  # builds CLI first
+npm run package:tauri
 # -> .codex-target/release/bundle/nsis/ , .../msi/
 ```
 
-The installers ship `aiolm-cli.exe` as Tauri's auxiliary binary, installed next to
-`aiolm.exe`, so `npm run build:cli` must run before packaging; `npm run package:tauri`
-does that for you. Do not also list the CLI under `bundle.resources`: the same file
-would be installed twice and the MSI build fails with WiX ICE30.
+The command builds the frontend once, compiles the app and `aiolm-cli` together
+with the same production configuration, then creates host installers from those
+outputs. Tauri installs the CLI beside the app as an auxiliary binary. Keep it
+out of `bundle.resources` to prevent duplicate installation and WiX ICE30.
+`npm run build:cli` remains available for standalone CLI development.
+Cargo timing reports are written under `.codex-target/cargo-timings`.
+On Linux, `node scripts/package-tauri.mjs --prepare-runtime` can prepare the
+pinned AppImage runtime early; normal packaging re-verifies the same cache.
 
 Packaging goes through `scripts/package-tauri.mjs` so that cargo runs with rustc
 `--remap-path-prefix` flags for the build machine's home, Cargo, rustup and

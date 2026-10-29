@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ChatSkill } from "../../shared/api/personalization";
 import { findSkillReferences, isSafeSkillId, parseSkillToolCall, resolveSkillSelection } from "./chatPersonalization";
