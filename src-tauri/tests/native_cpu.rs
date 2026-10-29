@@ -3,12 +3,13 @@
 //! and a disposable home are used. Run alone with --ignored --test-threads=1.
 use aiolm_lib::runtime;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
+
+#[path = "support/native_model.rs"]
+mod native_model;
 
 // Qwen's Apache-2.0 model, pinned to the publisher's immutable revision.
 const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf";
@@ -194,25 +195,24 @@ fn real_cli_lifecycle(backend: &str, from_source: bool) {
             latest.build
         };
         let model = home.0.join("model with spaces.gguf");
-        let mut file = std::fs::File::create(&model).unwrap();
-        let mut response = client
-            .get(MODEL_URL)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap();
-        let mut hash = Sha256::new();
-        let mut bytes = 0u64;
-        while let Some(chunk) = response.chunk().await.unwrap() {
-            bytes += chunk.len() as u64;
-            assert!(bytes <= MODEL_BYTES, "model exceeded pinned size");
-            hash.update(&chunk);
-            file.write_all(&chunk).unwrap();
-        }
-        assert_eq!(bytes, MODEL_BYTES);
-        assert_eq!(format!("{:x}", hash.finalize()), MODEL_SHA256);
-        println!("Model download and pinned SHA-256 verification passed");
+        let cache = std::env::var_os("AIOLM_NATIVE_MODEL_CACHE").map(PathBuf::from);
+        let acquired = native_model::acquire_model(
+            &client,
+            &native_model::ModelSpec {
+                url: MODEL_URL,
+                sha256: MODEL_SHA256,
+                bytes: MODEL_BYTES,
+            },
+            &model,
+            cache.as_deref(),
+            native_model::DownloadPolicy::default(),
+        )
+        .await
+        .expect("bounded native model acquisition with pinned size and SHA-256");
+        println!(
+            "Model pinned size and SHA-256 verification passed (cache_hit={}, transport_attempts={})",
+            acquired.cache_hit, acquired.attempts
+        );
         (build, model)
     });
     assert_eq!(home.cli(&["config", "get"])["active_build"], "");

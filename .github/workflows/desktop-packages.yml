@@ -54,6 +54,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      AIOLM_NATIVE_MODEL_CACHE: ${{ github.workspace }}/tmp/native-model-cache
       # AppImage's build tools can run without mounting FUSE in hosted CI.
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
@@ -128,7 +129,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
+      - name: Restore hash-pinned native test model
+        if: runner.os == 'macOS'
+        id: native-model
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/native-model-cache
+          enableCrossOsArchive: true
+          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
       - name: Real macOS CPU runtime and CLI lifecycle
+        id: macos_cpu
         if: runner.os == 'macOS'
         timeout-minutes: 20
         env:
@@ -138,6 +148,13 @@ jobs:
           # binary by its absolute workspace path.
           AIOLM_NATIVE_CLI: ${{ github.workspace }}/.codex-target/release/aiolm-cli
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+      - name: Save successfully exercised native test model
+        if: runner.os == 'macOS' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.macos_cpu.outcome == 'success' && steps.native-model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/native-model-cache
+          enableCrossOsArchive: true
+          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
       - name: macOS Keychain roundtrip
         if: (success() || failure()) && runner.os == 'macOS'
         timeout-minutes: 5
@@ -206,6 +223,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      AIOLM_NATIVE_MODEL_CACHE: ${{ github.workspace }}/tmp/native-model-cache
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
@@ -228,12 +246,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api repos/ggml-org/llama.cpp/pulls/29903 > "$RUNNER_TEMP/aiolm-pull-request.json"
+      - name: Restore hash-pinned native test model
+        id: native-model
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/native-model-cache
+          enableCrossOsArchive: true
+          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
       - name: Real PR source build and CLI lifecycle
+        id: native_source
         timeout-minutes: 100
         env:
           AIOLM_NATIVE_SOURCE: ${{ matrix.backend }}
           AIOLM_NATIVE_PULL_REQUEST: ${{ runner.temp }}/aiolm-pull-request.json
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_source_build_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+      - name: Save successfully exercised native test model
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.native_source.outcome == 'success' && steps.native-model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/native-model-cache
+          enableCrossOsArchive: true
+          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
 
   install:
     if: inputs.package_run_id != ''

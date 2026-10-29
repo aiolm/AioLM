@@ -262,6 +262,15 @@ settings. Windows CI additionally runs the opt-in `native_cpu` live download and
 CLI lifecycle test with a public hash-pinned 491 MB model, and an isolated synthetic
 Credential Manager roundtrip. The CPU lifecycle test also passed locally on Linux.
 
+The native fixture allows at most three download attempts within one 600-second
+acquisition budget, retrying only transient transfer failures. Every attempt must
+match the immutable model size and SHA-256; inference and lifecycle checks are
+never retried.
+`AIOLM_NATIVE_MODEL_CACHE` optionally selects an absolute, disposable cache
+directory. Cache hits are fully verified while copying into the isolated test
+home. CI shares these public model bytes across platforms and saves them only
+after successful lifecycle validation on main.
+
 | Area | Required observations |
 | --- | --- |
 | Install/launch | Clean install, CLI included, launch from desktop menu/Finder, second launch restores the existing window, uninstall leaves user data according to policy |
