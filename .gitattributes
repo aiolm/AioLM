@@ -7,3 +7,7 @@ src/shared/config/providerRequestOptions.json text eol=lf
 
 # Keep the pinned Linux runtime inputs and scripts portable across checkouts.
 scripts/appimage-runtime/** text eol=lf
+
+# Native model cache keys must match across Windows, macOS and Linux checkouts.
+src-tauri/tests/native_cpu.rs text eol=lf
+src-tauri/tests/support/native_model.rs text eol=lf
