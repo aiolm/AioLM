@@ -10,6 +10,9 @@
 //! start/stop journey through that actual redirector and a synthetic script.
 #![cfg(windows)]
 
+#[path = "support/windows_listener.rs"]
+mod windows_listener;
+
 use aiolm_lib::providers::{
     self,
     launch_resources::{self, Request},
@@ -56,7 +59,8 @@ impl TestHome {
             fs::create_dir_all(path.join("profile").join(profile)).unwrap();
         }
         let previous = std::env::var_os("AIOLM_HOME");
-        // This integration binary has one test, so no concurrent env readers.
+        // Only the full lifecycle test reads configuration; the listener-table
+        // regressions never read or modify this process environment.
         std::env::set_var("AIOLM_HOME", &path);
         Self { path, previous }
     }
@@ -286,6 +290,7 @@ struct ForeignServer {
     finished: std::sync::mpsc::Receiver<()>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    stop_evidence: Option<Value>,
 }
 impl ForeignServer {
     fn start() -> Self {
@@ -339,15 +344,18 @@ impl ForeignServer {
             model_checks,
             stop,
             thread: Some(thread),
+            stop_evidence: None,
         }
     }
 }
 impl ForeignServer {
     fn stop_checked(&mut self) -> Result<(), String> {
+        let stop_started = Instant::now();
+        let deadline = stop_started + EXIT_BOUND;
         self.stop.store(true, Ordering::Release);
         if self.thread.is_some() {
             self.finished
-                .recv_timeout(EXIT_BOUND)
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .map_err(|e| format!("foreign stop: {e}"))?;
             if let Some(thread) = self.thread.take() {
                 thread
@@ -355,10 +363,23 @@ impl ForeignServer {
                     .map_err(|_| "foreign thread panicked".to_string())?;
             }
         }
-        if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
-            return Err("foreign listener remains after checked stop".into());
-        }
-        Ok(())
+        // Joining proves the fixture thread dropped its listener. Confirm
+        // absence in both kernel LISTEN tables, including another process
+        // rebinding the port, without Windows' refused-connect backoff.
+        let query_started = Instant::now();
+        let proof = windows_listener::wait_loopback_listener_closed(
+            self.port,
+            deadline.saturating_duration_since(Instant::now()),
+        );
+        let query_elapsed = query_started.elapsed();
+        self.stop_evidence = Some(serde_json::json!({
+            "owned_port":self.port,"method":"kernel_ipv4_ipv6_listen_tables",
+            "query_elapsed_ms":query_elapsed.as_millis(),"query_elapsed_us":query_elapsed.as_micros(),
+            "total_stop_ms":stop_started.elapsed().as_millis(),"bound_ms":EXIT_BOUND.as_millis(),
+            "proof":proof.as_ref().map(|proof|serde_json::json!({"listener_absent":true,"snapshots":proof.snapshots,
+                "api_queries":proof.api_queries,"elapsed_us":proof.elapsed.as_micros()})).map_err(String::as_str)
+        }));
+        proof.map(|_| ())
     }
 }
 impl Drop for ForeignServer {
@@ -1898,6 +1919,8 @@ impl PublicCase {
             if let Err(e) = foreign.stop_checked() {
                 errors.push(e);
             }
+            self.evidence
+                .push(serde_json::json!({"foreign_listener_stop":foreign.stop_evidence}));
         }
         for alias in &self.aliases {
             if alias.exists() {

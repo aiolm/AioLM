@@ -257,24 +257,24 @@ jobs:
       # The only extra feature is macOS-only. On Windows all-features tests
       # cover the default native code too; preserve doc-tests separately.
       - name: Rust documentation tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features --timings
       - name: Frontend build for Tauri metadata validation
         run: npm run build
+      # Reuse the feature set already compiled by the Windows test suite.
+      # macos-ui-smoke adds no Windows code or Windows target dependency.
       - name: Build desktop and CLI
-        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --all-features --timings
       - name: Native CLI with a clean home
         run: npm run test:native-cli
 
-      - name: Retain Windows process evidence and Cargo timings
+      - name: Retain Windows process evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-evidence-windows
           if-no-files-found: warn
           retention-days: 14
-          path: |
-            ${{ runner.temp }}/headless-cli-evidence
-            .codex-target/cargo-timings
+          path: ${{ runner.temp }}/headless-cli-evidence
       - name: Fetch public runtime metadata without the shared anonymous API limit
         shell: bash
         env:
@@ -295,7 +295,7 @@ jobs:
         env:
           AIOLM_NATIVE_CPU: "1"
           AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-features --timings --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Save successfully exercised native test model
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.native_cpu.outcome == 'success' && steps.native-model.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -307,7 +307,15 @@ jobs:
         if: success() || failure()
         env:
           AIOLM_VAULT_SMOKE: roundtrip
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-features --timings --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
+      - name: Retain Windows Cargo timings after every compilation phase
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-timings-windows
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings
 
   rust-portability:
     name: Native tests (${{ matrix.os }})
