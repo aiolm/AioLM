@@ -249,7 +249,20 @@ fn transport_failure(error: &reqwest::Error, received: u64) -> Failure {
     } else {
         "request"
     };
-    let message = format!("native model {category} failure after {received} bytes");
+    let mut cause = std::error::Error::source(error);
+    let mut io_kind = None;
+    for _ in 0..8 {
+        let Some(current) = cause else { break };
+        if let Some(error) = current.downcast_ref::<std::io::Error>() {
+            io_kind = Some(error.kind());
+            break;
+        }
+        cause = current.source();
+    }
+    let detail = io_kind
+        .map(|kind| format!(" (I/O {kind:?})"))
+        .unwrap_or_default();
+    let message = format!("native model {category} failure{detail} after {received} bytes");
     if error.is_timeout() || error.is_connect() || error.is_body() || error.is_decode() {
         Failure::Transient(message)
     } else {
@@ -439,10 +452,10 @@ pub async fn acquire_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Arc,
+        Arc, Mutex,
     };
     use std::thread::JoinHandle;
 
@@ -492,9 +505,13 @@ mod tests {
         requests: Arc<AtomicUsize>,
         stop: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
+        diagnostics: Arc<Mutex<Vec<String>>>,
     }
     impl Server {
         fn new(replies: Vec<Reply>) -> Self {
+            Self::with_inherited_nonblocking(replies, false)
+        }
+        fn with_inherited_nonblocking(replies: Vec<Reply>, force_nonblocking: bool) -> Self {
             assert!(!replies.is_empty());
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
@@ -503,24 +520,36 @@ mod tests {
             let stop = Arc::new(AtomicBool::new(false));
             let counted = requests.clone();
             let stopped = stop.clone();
+            let diagnostics = Arc::new(Mutex::new(Vec::new()));
+            let recorded = diagnostics.clone();
             let worker = std::thread::spawn(move || {
                 while !stopped.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
-                            stream
-                                .set_read_timeout(Some(Duration::from_secs(1)))
-                                .unwrap();
-                            let mut request = vec![];
-                            let mut byte = [0_u8; 1];
-                            while request.len() < 8192 && !request.ends_with(b"\r\n\r\n") {
-                                match stream.read(&mut byte) {
-                                    Ok(1) => request.push(byte[0]),
-                                    _ => break,
-                                }
+                            if force_nonblocking {
+                                stream.set_nonblocking(true).unwrap();
                             }
-                            let index = counted.fetch_add(1, Ordering::AcqRel);
-                            let reply = &replies[index.min(replies.len() - 1)];
-                            Self::respond(&mut stream, reply, &stopped);
+                            match Self::read_request(&mut stream) {
+                                Ok(true) => {
+                                    let index = counted.fetch_add(1, Ordering::AcqRel);
+                                    let reply = &replies[index.min(replies.len() - 1)];
+                                    if let Err(error) = Self::respond(&mut stream, reply, &stopped)
+                                    {
+                                        recorded
+                                            .lock()
+                                            .unwrap()
+                                            .push(format!("response {index}: {:?}", error.kind()));
+                                    }
+                                }
+                                Ok(false) => recorded
+                                    .lock()
+                                    .unwrap()
+                                    .push("incomplete request headers".into()),
+                                Err(error) => recorded
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("request headers: {:?}", error.kind())),
+                            }
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(2))
@@ -534,9 +563,39 @@ mod tests {
                 requests,
                 stop,
                 worker: Some(worker),
+                diagnostics,
             }
         }
-        fn respond(stream: &mut TcpStream, reply: &Reply, stop: &AtomicBool) {
+        fn read_request(stream: &mut TcpStream) -> std::io::Result<bool> {
+            // Accepted sockets may inherit the listener's nonblocking flag on
+            // Darwin. WouldBlock is not the end of an HTTP request.
+            stream.set_nonblocking(false)?;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut request = vec![];
+            let mut byte = [0_u8; 1];
+            while request.len() < 8192 && !request.ends_with(b"\r\n\r\n") {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "fixture header budget elapsed",
+                        )
+                    })?;
+                stream.set_read_timeout(Some(remaining))?;
+                match stream.read(&mut byte)? {
+                    0 => return Ok(false),
+                    _ => request.push(byte[0]),
+                }
+            }
+            Ok(request.ends_with(b"\r\n\r\n"))
+        }
+        fn respond(
+            stream: &mut TcpStream,
+            reply: &Reply,
+            stop: &AtomicBool,
+        ) -> std::io::Result<()> {
             let (status, declared, bytes) = match reply {
                 Reply::Body {
                     status,
@@ -550,18 +609,51 @@ mod tests {
                 headers.push_str(&format!("Content-Length: {length}\r\n"));
             }
             headers.push_str("\r\n");
-            if stream.write_all(headers.as_bytes()).is_err() || stream.write_all(bytes).is_err() {
-                return;
-            }
+            let mut response = headers.into_bytes();
+            response.extend_from_slice(bytes);
+            stream.write_all(&response)?;
+            stream.flush()?;
             if matches!(reply, Reply::StalledBody) {
                 let deadline = Instant::now() + Duration::from_secs(1);
                 while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(2));
                 }
+                return Ok(());
             }
+            // Deliver a finite HTTP response with an orderly FIN, including
+            // intentional Content-Length truncation. Bound peer draining so
+            // dropping the socket never turns unread input into a TCP reset.
+            stream.shutdown(Shutdown::Write)?;
+            let deadline = Instant::now() + Duration::from_millis(200);
+            let mut discard = [0_u8; 1024];
+            while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                if remaining.is_zero() {
+                    break;
+                }
+                stream.set_read_timeout(Some(remaining))?;
+                match stream.read(&mut discard) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        break
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
         }
         fn count(&self) -> usize {
             self.requests.load(Ordering::Acquire)
+        }
+        fn diagnostics(&self) -> Vec<String> {
+            self.diagnostics.lock().unwrap().clone()
         }
     }
     impl Drop for Server {
@@ -609,6 +701,47 @@ mod tests {
                     .ends_with(".part")));
             }
         }
+    }
+
+    #[test]
+    fn inherited_nonblocking_socket_waits_for_complete_fragmented_headers() {
+        let server = Server::with_inherited_nonblocking(vec![good()], true);
+        let mut stream = TcpStream::connect(
+            server
+                .url
+                .trim_start_matches("http://")
+                .trim_end_matches("/model.gguf"),
+        )
+        .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        stream
+            .write_all(b"GET /model.gguf HTTP/1.1\r\nHost: local-fixture")
+            .unwrap();
+        let mut byte = [0_u8; 1];
+        let error = stream
+            .read(&mut byte)
+            .expect_err("partial headers must not receive a response");
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        assert_eq!(server.count(), 0, "no response before header terminator");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        stream.write_all(b"\r\n\r\n").unwrap();
+        let mut response = vec![];
+        stream.read_to_end(&mut response).unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert!(response.ends_with(DATA));
+        assert_eq!(server.count(), 1);
+        assert!(
+            server.diagnostics().is_empty(),
+            "{:?}",
+            server.diagnostics()
+        );
     }
 
     #[tokio::test]
@@ -675,27 +808,39 @@ mod tests {
 
     #[tokio::test]
     async fn integrity_and_oversized_responses_fail_without_retry_or_cache_publication() {
-        for reply in [
-            Reply::Body {
-                status: 200,
-                declared: Some(DATA.len()),
-                bytes: vec![b'x'; DATA.len()],
-            },
-            Reply::Body {
-                status: 200,
-                declared: None,
-                bytes: vec![b'x'; DATA.len() + 1],
-            },
-            Reply::Body {
-                status: 200,
-                declared: Some(DATA.len() + 1),
-                bytes: vec![b'x'; DATA.len() + 1],
-            },
-            Reply::Body {
-                status: 200,
-                declared: Some(1),
-                bytes: vec![b'x'],
-            },
+        for (case, reply) in [
+            (
+                "same-size hash mismatch",
+                Reply::Body {
+                    status: 200,
+                    declared: Some(DATA.len()),
+                    bytes: vec![b'x'; DATA.len()],
+                },
+            ),
+            (
+                "unframed body oversized",
+                Reply::Body {
+                    status: 200,
+                    declared: None,
+                    bytes: vec![b'x'; DATA.len() + 1],
+                },
+            ),
+            (
+                "declared size oversized",
+                Reply::Body {
+                    status: 200,
+                    declared: Some(DATA.len() + 1),
+                    bytes: vec![b'x'; DATA.len() + 1],
+                },
+            ),
+            (
+                "declared size short",
+                Reply::Body {
+                    status: 200,
+                    declared: Some(1),
+                    bytes: vec![b'x'],
+                },
+            ),
         ] {
             let area = Area::new();
             let server = Server::new(vec![reply, good()]);
@@ -711,9 +856,10 @@ mod tests {
             .unwrap_err();
             assert!(
                 error.contains("size") || error.contains("SHA-256"),
-                "{error}"
+                "{case}: {error}; fixture: {:?}",
+                server.diagnostics()
             );
-            assert_eq!(server.count(), 1);
+            assert_eq!(server.count(), 1, "{case}");
             assert!(!area.destination().exists());
             assert!(!area.cache().join(format!("{sha}.gguf")).exists());
             no_partials(&area);
