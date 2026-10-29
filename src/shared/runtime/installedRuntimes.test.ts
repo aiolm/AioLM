@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { InstalledRuntime } from "../api/types";
 import { runtimeVersionLabel } from "./installedRuntimes";

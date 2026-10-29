@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
 import { MODEL_PROFILE_KEYS, profileSettingsSnapshot, settingsSnapshot, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';

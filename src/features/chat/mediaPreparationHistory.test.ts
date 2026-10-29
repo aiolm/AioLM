@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { buildMultimodalContent, estimateMessageTokens } from './chatUtils';
 import { sameImages, toChatMessage } from './chatSendHelpers';

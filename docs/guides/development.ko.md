@@ -68,9 +68,13 @@ npm run package:tauri
 # -> .codex-target/release/bundle/nsis/ , .../msi/
 ```
 
-설치 파일은 `aiolm-cli.exe`를 Tauri 보조 바이너리로 포함해 `aiolm.exe` 옆에 설치하므로
-패키징 전에 `npm run build:cli`가 실행되어야 합니다. `npm run package:tauri`가 이를 함께 수행합니다.
-CLI를 `bundle.resources`에도 등록하면 같은 파일이 두 번 설치되어 MSI 빌드가 WiX ICE30으로 실패합니다.
+이 명령은 프런트엔드를 한 번 빌드하고 앱과 `aiolm-cli`를 같은 배포 설정으로 함께 컴파일한 뒤,
+그 결과로 운영체제에 맞는 설치 파일을 만듭니다. Tauri는 CLI를 앱 옆에 보조 바이너리로 설치합니다.
+`bundle.resources`에는 중복 등록하지 마세요. 같은 파일이 두 번 설치되어 WiX ICE30 오류가 발생합니다.
+CLI만 개발할 때는 `npm run build:cli`를 사용할 수 있습니다.
+Cargo 시간 보고서는 `.codex-target/cargo-timings`에 저장됩니다.
+Linux에서는 `node scripts/package-tauri.mjs --prepare-runtime`으로 고정 AppImage 런타임을
+미리 준비할 수 있습니다. 일반 패키징도 같은 캐시의 해시를 다시 검증합니다.
 
 패키징은 `scripts/package-tauri.mjs`를 거치므로 cargo가 빌드 머신의 홈, Cargo,
 rustup, 작업 폴더에 대한 rustc `--remap-path-prefix` 플래그와 함께 실행됩니다.

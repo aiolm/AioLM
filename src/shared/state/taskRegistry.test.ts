@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyCompletion } from "../lib/notifications";
 import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY_MS, updateTask, type TaskKind } from "./taskRegistry";

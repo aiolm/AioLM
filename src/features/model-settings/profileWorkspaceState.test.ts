@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { captureProfile, defaultSettingsProfileEntry, emptyProfileLibrary, setDefaultSettingsProfile, type SettingsProfile } from '../../shared/config/settingsProfiles';
 import { testConfig } from '../../testing/appStore';

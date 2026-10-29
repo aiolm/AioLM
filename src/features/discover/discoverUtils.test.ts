@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { firstShard, groupHfFiles, markInstalled, shardTotal } from './discoverUtils';
 

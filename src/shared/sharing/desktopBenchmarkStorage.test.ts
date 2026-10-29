@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { acknowledgeUploadedBenchmark, takeBenchmarkMaintenanceWarnings } from "./desktopBenchmarkStorage.ts";
 import { invoke, isNativeRuntimeAvailable } from "../api/transport.ts";

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { helpDefault, serverDefault } from './optionDefaults';
 import { describeServerOption, parseRuntimeHelp, SERVER_OPTIONS } from './serverOptions';

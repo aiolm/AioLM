@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractVideoFrames, transcribeMedia } from './commands';
 import { invoke } from './transport';

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { AppConfig, GpuPlacement, SessionDefinition } from "../api/types";
 import { resolvedGpuPlacement, runtimeGpuDevices, sessionConfig, sessionDefinitionFromStatus, toggleGpuSelection } from "./sessionUtils";

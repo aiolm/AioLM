@@ -8,20 +8,28 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  frontend:
-    name: Frontend tests and build
-    runs-on: ubuntu-latest
-    # Backstop against a hung install/test/build step; normal runs finish in
-    # a few minutes.
+  frontend-checks:
+    name: Frontend checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          node-version-file: ".node-version"
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
           cache: npm
       - name: Setup pinned npm
         shell: bash
@@ -30,26 +38,158 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
         run: npm rebuild esbuild
-      - name: Lint
-        run: npm run lint
-      - name: Audit npm dependencies
-        run: npm audit --omit=dev --audit-level=high
-      - name: Test
-        run: npm test
-      - name: Linux desktop registration
-        run: python3 -B -m unittest discover -s scripts -p 'test_linux_desktop.py'
-      - name: Snapshot repair and provider compatibility tools
+      - name: Lint and dependency audit
+        shell: bash
         run: |
+          npm run lint
+          npm audit --omit=dev --audit-level=high
+      - name: Contracts, tooling and direct tests
+        run: npm run test:checks
+      - name: Linux registration and Python tooling
+        if: runner.os == 'Linux'
+        run: |
+          bash -n install.sh
+          python3 -B -m unittest discover -s scripts -p 'test_*.py'
           python3 -B -m unittest discover -s scripts/model-repair -p 'test_*.py'
           python3 -B -m unittest discover -s scripts/provider-compatibility -p 'test_*.py'
           python3 -B src-tauri/src/providers/vllm_probe_tests.py
           python3 -B src-tauri/src/providers/vllm_speech_capabilities_tests.py
           python3 -B src-tauri/src/providers/metal_capabilities_tests.py
           python3 -B -m unittest discover -s src-tauri/src/providers/tests -p 'test_*.py'
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Build
-        run: npm run build
+      - name: Typecheck and frontend build
+        shell: bash
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Restore measured frontend durations
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/frontend-ci-history/timings.json
+          key: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ github.sha }}
+          restore-keys: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-
+      - name: Plan complete frontend test coverage
+        run: node scripts/frontend-ci.mjs plan --shards 2 --timings tmp/frontend-ci-history/timings.json --output tmp/frontend-ci/plan.json
+      - name: Retain test plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-plan-${{ matrix.os }}
+          path: tmp/frontend-ci/plan.json
+          if-no-files-found: error
+
+  frontend-shards:
+    needs: frontend-checks
+    name: Frontend tests (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        shard: [1, 2]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Rebuild esbuild
+        run: npm rebuild esbuild
+      - name: Build contracts
+        run: npm run build:contracts
+      - name: Download exact test plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: frontend-plan-${{ matrix.os }}
+          path: tmp/frontend-ci
+      - name: Execute assigned tests with coverage
+        run: node scripts/frontend-ci.mjs shard --plan tmp/frontend-ci/plan.json --index ${{ matrix.shard }} --output tmp/frontend-ci/shard-${{ matrix.shard }}
+      - name: Retain shard results even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-shard-${{ matrix.os }}-${{ matrix.shard }}
+          path: tmp/frontend-ci/shard-${{ matrix.shard }}
+          if-no-files-found: error
+
+  frontend-merge:
+    needs: [frontend-checks, frontend-shards]
+    name: Frontend global coverage (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Rebuild esbuild
+        run: npm rebuild esbuild
+      - name: Build contracts
+        run: npm run build:contracts
+      - name: Download exact test plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: frontend-plan-${{ matrix.os }}
+          path: tmp/frontend-ci
+      - name: Download all OS shard reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: frontend-shard-${{ matrix.os }}-*
+          path: tmp/frontend-ci/shards
+      - name: Verify complete test inventory and original global thresholds
+        run: node scripts/frontend-ci.mjs merge --plan tmp/frontend-ci/plan.json --input tmp/frontend-ci/shards
+      - name: Prepare duration history for future plans
+        run: node -e "const fs=require('node:fs'); fs.mkdirSync('tmp/frontend-ci-history',{recursive:true}); fs.copyFileSync('tmp/frontend-ci/merged/timings.json','tmp/frontend-ci-history/timings.json');"
+      - name: Save successful main duration history
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: tmp/frontend-ci-history/timings.json
+          key: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ github.sha }}
+      - name: Retain coverage and measured file timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-coverage-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            coverage/coverage-summary.json
+            tmp/frontend-ci/merged
+
+  frontend:
+    name: Frontend tests and build
+    if: always()
+    needs: [frontend-checks, frontend-shards, frontend-merge]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every OS, shard and merged coverage result
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'const results = JSON.parse(process.env.RESULTS); for (const [name, job] of Object.entries(results)) { if (job.result !== "success") throw new Error(name + ": " + job.result); }'
 
   rust:
     name: Rust checks
@@ -58,6 +198,7 @@ jobs:
     # finish well within this on windows-latest.
     timeout-minutes: 60
     env:
+      AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
@@ -76,33 +217,39 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
         run: npm rebuild esbuild
-      - name: Lint frontend
-        run: npm run lint
-      - name: Check generated provider options
-        run: npm run test:provider-options
-      - name: Packaging and runtime smoke tooling
-        run: npm run test:scripts
-      - name: Windows provider, profile and queued-session UI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          npm run build:contracts
-          if ($LASTEXITCODE -ne 0) { throw "Contract build failed with exit code $LASTEXITCODE" }
-          npx vitest run src/features/model-settings/ProviderControls.test.tsx src/features/models/ModelWorkspace.profiles.test.tsx src/features/sessions/Sessions.save-queue.test.tsx
-          if ($LASTEXITCODE -ne 0) { throw "Windows UI checks failed with exit code $LASTEXITCODE" }
-      - name: Audit npm dependencies
-        run: npm audit --omit=dev --audit-level=high
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Record native verification inputs
+        run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
+      - name: Restore Cargo dependencies (verify)
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2, reviewed commit
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "verify-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - name: Retain native verification input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
       - name: Format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
+      - name: Default-feature native tests
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Frontend build for Tauri metadata validation
         run: npm run build
       - name: Build desktop and CLI
@@ -110,6 +257,16 @@ jobs:
       - name: Native CLI with a clean home
         run: npm run test:native-cli
 
+      - name: Retain Windows process evidence and Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-evidence-windows
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/headless-cli-evidence
+            .codex-target/cargo-timings
       - name: Fetch public runtime metadata without the shared anonymous API limit
         shell: bash
         env:
@@ -136,6 +293,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
+      AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
@@ -166,10 +324,32 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Record native verification inputs
+        run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
+      - name: Restore Cargo dependencies (verify)
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2, reviewed commit
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "verify-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - name: Retain native verification input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
       - name: Lint native code
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Native tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
+      - name: Default-feature native tests
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Secret Service lock and native authentication cancellation
         if: runner.os == 'Linux'
         timeout-minutes: 5
@@ -238,3 +418,11 @@ jobs:
           AIOLM_NATIVE_METAL: "1"
           AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_metal_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+      - name: Retain native Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-timings-${{ matrix.os }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings

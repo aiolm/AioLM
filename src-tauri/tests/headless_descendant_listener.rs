@@ -509,6 +509,45 @@ fn public_bytes(bytes: &[u8]) -> Value {
         "base64": base64::engine::general_purpose::STANDARD.encode(bytes)})
 }
 
+fn public_executable_digest(path: &Path) -> PublicResult<Value> {
+    use sha2::{Digest, Sha256};
+    let mut file = public_io(fs::File::open(path))?;
+    let mut digest = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let length = public_io(file.read(&mut chunk))?;
+        if length == 0 {
+            break;
+        }
+        digest.update(&chunk[..length]);
+        bytes += length as u64;
+    }
+    // Executable evidence has always retained only size/hash. Avoid encoding a
+    // full executable as Base64 merely to discard that field immediately.
+    Ok(serde_json::json!({"bytes":bytes,"sha256":format!("{:x}",digest.finalize())}))
+}
+
+/// This integration binary has a single active parent test. CLI children have
+/// explicit environments; the temporary override only directs synchronous
+/// config migration/saving to this case's already isolated home.
+struct FixtureConfigHome(Option<std::ffi::OsString>);
+impl FixtureConfigHome {
+    fn enter(home: &Path) -> Self {
+        let previous = std::env::var_os("AIOLM_HOME");
+        std::env::set_var("AIOLM_HOME", home);
+        Self(previous)
+    }
+}
+impl Drop for FixtureConfigHome {
+    fn drop(&mut self) {
+        match &self.0 {
+            Some(previous) => std::env::set_var("AIOLM_HOME", previous),
+            None => std::env::remove_var("AIOLM_HOME"),
+        }
+    }
+}
+
 struct PublicReader {
     done: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -737,10 +776,16 @@ struct PublicCase {
     finished: bool,
     owns_home: bool,
     recover_interrupted_start: bool,
+    config_through_cli: bool,
+    started: Instant,
+    phase_started: Instant,
+    phase: &'static str,
+    phase_ms: BTreeMap<&'static str, u128>,
 }
 impl PublicCase {
     fn new() -> Self {
         let home = std::env::temp_dir().join(format!("aiolm-public-cli-{}", uuid::Uuid::new_v4()));
+        let started = Instant::now();
         Self {
             image: home.join("synthetic launcher.exe"),
             home,
@@ -754,7 +799,30 @@ impl PublicCase {
             finished: false,
             owns_home: false,
             recover_interrupted_start: false,
+            config_through_cli: false,
+            started,
+            phase_started: started,
+            phase: "setup",
+            phase_ms: BTreeMap::new(),
         }
+    }
+    fn phase(&mut self, phase: &'static str) {
+        *self.phase_ms.entry(self.phase).or_default() += self.phase_started.elapsed().as_millis();
+        self.phase = phase;
+        self.phase_started = Instant::now();
+    }
+    fn timings(&self) -> Value {
+        let mut phases = self.phase_ms.clone();
+        *phases.entry(self.phase).or_default() += self.phase_started.elapsed().as_millis();
+        let commands = self
+            .evidence
+            .iter()
+            .filter(|entry| entry.get("argv").is_some())
+            .count();
+        serde_json::json!({"elapsed_ms":self.started.elapsed().as_millis(),"phases_ms":phases,
+            "timed_cli_commands":commands,"registered_children":self.commands.len(),
+            "fixture_saves":self.evidence.iter().filter(|entry|entry["fixture_config"]["through_public_cli"] == false).count(),
+            "public_config_set_commands":self.evidence.iter().filter(|entry|entry["argv"][0] == "config" && entry["argv"][1] == "set").count()})
     }
     fn file(&self, relative: &str) -> PathBuf {
         self.home.join(relative)
@@ -801,12 +869,12 @@ impl PublicCase {
             Ok(output) => {
                 let value =
                     serde_json::from_slice(&output.stdout).map_err(|error| error.to_string());
-                self.evidence.push(serde_json::json!({"argv":args,"cwd":std::env::current_dir().ok(),"elapsed_ms":start.elapsed().as_millis(),
+                self.evidence.push(serde_json::json!({"argv":args,"phase":self.phase,"cwd":std::env::current_dir().ok(),"elapsed_ms":start.elapsed().as_millis(),
                     "exit":output.status.code(),"stdout":public_bytes(&output.stdout),"stderr":public_bytes(&output.stderr),"json":value}));
                 Ok((output.status.success(), value?))
             }
             Err(error) => {
-                self.evidence.push(serde_json::json!({"argv":args,"error":error,"elapsed_ms":start.elapsed().as_millis()}));
+                self.evidence.push(serde_json::json!({"argv":args,"phase":self.phase,"error":error,"elapsed_ms":start.elapsed().as_millis()}));
                 Err(error)
             }
         }
@@ -818,6 +886,58 @@ impl PublicCase {
     }
     fn set(&mut self, key: &str, value: &str) -> PublicResult<()> {
         self.success(&["config", "set", key, value]).map(|_| ())
+    }
+    fn configure_fixture(&mut self, fields: &[(&str, Value)]) -> PublicResult<Value> {
+        let started = Instant::now();
+        let expected = {
+            let _home = FixtureConfigHome::enter(&self.home);
+            // Start with the configuration written by real runtime selection,
+            // retaining registry/profile/default initialization and migration.
+            let cfg = aiolm_lib::config::load_result()?;
+            let mut value = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
+            let object = value
+                .as_object_mut()
+                .ok_or("fixture config is not an object")?;
+            for (key, value) in fields {
+                public_require(object.contains_key(*key), "unknown fixture config field")?;
+                object.insert((*key).into(), value.clone());
+            }
+            let mut cfg: aiolm_lib::AppConfig =
+                serde_json::from_value(value).map_err(|e| e.to_string())?;
+            cfg.runtime_defaults
+                .retain(|key| !fields.iter().any(|(changed, _)| key == changed));
+            cfg.normalize();
+            cfg.validate()?;
+            if !self.config_through_cli {
+                cfg = aiolm_lib::config::save(&cfg)?;
+            }
+            serde_json::to_value(cfg).map_err(|e| e.to_string())?
+        };
+        if self.config_through_cli {
+            // Representative public journeys still exercise every setting
+            // command. Other ownership cases need the same state, not dozens
+            // of repeated process starts and durable writes to prepare it.
+            for (key, value) in fields {
+                let argument = value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string());
+                self.set(key, &argument)?;
+            }
+        }
+        self.evidence.push(serde_json::json!({"fixture_config":{"fields":fields.iter().map(|(key,_)|*key).collect::<Vec<_>>(),
+            "through_public_cli":self.config_through_cli,"elapsed_ms":started.elapsed().as_millis()}}));
+        Ok(expected)
+    }
+    fn fixture_readback(&mut self, expected: &Value) -> PublicResult<Value> {
+        let observed = self.success(&["config", "get"])?;
+        public_require(
+            &observed == expected,
+            "fixture and public CLI configuration differ",
+        )?;
+        self.evidence
+            .push(serde_json::json!({"public_fixture_readback_equal":true}));
+        Ok(observed)
     }
     fn setup(&mut self) -> PublicResult<u16> {
         self.setup_with_status_route(false)
@@ -912,13 +1032,6 @@ impl PublicCase {
             &self.file("registration.json").to_string_lossy(),
         ])?;
         self.success(&["runtime", "select", ENGINE, "launcher-1"])?;
-        self.set("models_dir", &self.file("models").to_string_lossy())?;
-        self.set(
-            "active_model",
-            &self
-                .file("models/running-00001-of-00002.gguf")
-                .to_string_lossy(),
-        )?;
         self.foreign = Some(ForeignServer::start());
         self.foreign_process = Some(PublicProcess::open(
             std::process::id(),
@@ -926,8 +1039,15 @@ impl PublicCase {
         )?);
         let port = free_port();
         public_require(port != self.foreign_port()?, "A and B ports collided")?;
-        self.set("port", &port.to_string())?;
-        let config = self.success(&["config", "get"])?;
+        let expected = self.configure_fixture(&[
+            ("models_dir", serde_json::json!(self.file("models"))),
+            (
+                "active_model",
+                serde_json::json!(self.file("models/running-00001-of-00002.gguf")),
+            ),
+            ("port", serde_json::json!(port)),
+        ])?;
+        let config = self.fixture_readback(&expected)?;
         self.evidence.push(serde_json::json!({"setup_config":config,"home":self.home,
             "child_environment":"AIOLM/legacy removed; HOME/USERPROFILE/APPDATA/LOCALAPPDATA/XDG roots and TMP/TEMP within unique home; proxies removed, NO_PROXY loopback"}));
         Ok(port)
@@ -1576,6 +1696,7 @@ impl PublicCase {
         if self.finished {
             return vec![];
         }
+        self.phase("cleanup");
         self.finished = true;
         let mut errors = vec![];
         if !self.owns_home {
@@ -1678,12 +1799,11 @@ impl PublicCase {
                 if metadata.is_dir() {
                     inventory(&entry.path(), entries)?;
                 } else {
-                    let mut raw = public_bytes(&public_io(fs::read(entry.path()))?);
-                    if entry.path().extension().is_some_and(|e| e == "exe") {
-                        raw.as_object_mut()
-                            .ok_or("raw object missing")?
-                            .remove("base64");
-                    }
+                    let raw = if entry.path().extension().is_some_and(|e| e == "exe") {
+                        public_executable_digest(&entry.path())?
+                    } else {
+                        public_bytes(&public_io(fs::read(entry.path()))?)
+                    };
                     entries.push(serde_json::json!({"path":entry.path(),"raw":raw}));
                 }
             }
@@ -1741,13 +1861,14 @@ impl Drop for PublicCase {
 }
 
 async fn prepared_public_cli_regressions() {
-    let evidence_root = std::env::var_os("AIOLM_CLI_FIXTURE_EVIDENCE")
+    let parent = std::env::var_os("AIOLM_CLI_FIXTURE_EVIDENCE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("aiolm-cli-evidence-{}", uuid::Uuid::new_v4()))
-        });
-    fs::create_dir_all(&evidence_root).expect("create synthetic evidence directory");
+        .unwrap_or_else(std::env::temp_dir);
+    fs::create_dir_all(&parent).expect("create synthetic evidence parent");
+    let evidence_root = parent.join(format!("aiolm-public-evidence-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&evidence_root).expect("create exclusive public evidence directory");
     let mut failures = vec![];
+    let mut summaries = vec![];
     for name in [
         "status-route-unchanged",
         "status-route-next",
@@ -1779,9 +1900,11 @@ async fn prepared_public_cli_regressions() {
         "saved-controls",
     ] {
         let mut case = PublicCase::new();
+        case.config_through_cli = name == "status-route-unchanged";
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PublicResult<()> {
                 let port = case.setup_with_status_route(name.starts_with("status-route-"))?;
+                case.phase("behavior");
                 case.behavior(name, port)
             }));
         let cleanup = case.finish_checked();
@@ -1812,7 +1935,10 @@ async fn prepared_public_cli_regressions() {
             .filter(|(_, ok)| !ok)
             .map(|(label, _)| label.clone())
             .collect();
-        let evidence = serde_json::json!({"case":name,"observed_error":observed_error,"setup_error":setup_error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence});
+        let timings = case.timings();
+        let failed_case = setup_error.is_some() || !cleanup.is_empty() || !failed.is_empty();
+        summaries.push(serde_json::json!({"case":name,"failed":failed_case,"timings":timings}));
+        let evidence = serde_json::json!({"case":name,"timings":timings,"observed_error":observed_error,"setup_error":setup_error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence});
         fs::write(
             evidence_root.join(format!("{name}.json")),
             serde_json::to_vec_pretty(&evidence).expect("serialize evidence"),
@@ -1821,10 +1947,18 @@ async fn prepared_public_cli_regressions() {
         eprintln!(
             "public CLI {name}: setup={setup_error:?}, cleanup={cleanup:?}, behavior={failed:?}"
         );
-        if setup_error.is_some() || !cleanup.is_empty() || !failed.is_empty() {
+        if failed_case {
             failures.push(name);
         }
     }
+    fs::write(
+        evidence_root.join("summary.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "cases":summaries,"failed_cases":failures
+        }))
+        .expect("serialize public timing summary"),
+    )
+    .expect("persist public timing summary");
     assert!(
         failures.is_empty(),
         "public CLI cases failed: {failures:?}; evidence {}",
@@ -2443,13 +2577,24 @@ impl PublicCase {
     fn auxiliary_command_at(&mut self, cwd: &Path, args: &[&str]) -> PublicResult<(bool, Value)> {
         let mut command = self.isolated_cli(args);
         command.current_dir(cwd);
+        let started = Instant::now();
         let index = self.commands.len();
         self.commands.push(PublicCommand::spawn(command)?);
-        self.commands[index].init_readers()?;
-        let output = self.commands[index].output()?;
-        let value: Value = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
-        self.evidence.push(serde_json::json!({"argv":args,"cwd":cwd,"exit":output.status.code(),"stdout":public_bytes(&output.stdout),"stderr":public_bytes(&output.stderr),"json":value}));
-        Ok((output.status.success(), value))
+        let result = self.commands[index]
+            .init_readers()
+            .and_then(|()| self.commands[index].output());
+        match result {
+            Ok(output) => {
+                let value =
+                    serde_json::from_slice::<Value>(&output.stdout).map_err(|e| e.to_string());
+                self.evidence.push(serde_json::json!({"argv":args,"phase":self.phase,"cwd":cwd,"elapsed_ms":started.elapsed().as_millis(),"exit":output.status.code(),"stdout":public_bytes(&output.stdout),"stderr":public_bytes(&output.stderr),"json":value}));
+                Ok((output.status.success(), value?))
+            }
+            Err(error) => {
+                self.evidence.push(serde_json::json!({"argv":args,"phase":self.phase,"cwd":cwd,"elapsed_ms":started.elapsed().as_millis(),"error":error}));
+                Err(error)
+            }
+        }
     }
     fn auxiliary_clear(&mut self) -> PublicResult<()> {
         self.set(
@@ -2467,6 +2612,9 @@ impl PublicCase {
         Ok(())
     }
     fn auxiliary_setup(&mut self, mode: &str) -> PublicResult<(u16, AuxiliaryPlan)> {
+        // Retain one complete config-set journey, and the real long command
+        // line in the oversize contract; other scenarios vary ownership/files.
+        self.config_through_cli = matches!(mode, "enabled" | "oversize");
         let port = self.setup()?;
         let runtime = self.file("runtimes/local_aux67-cpu");
         public_io(fs::create_dir_all(&runtime))?;
@@ -2738,30 +2886,6 @@ impl PublicCase {
             ])?;
             self.success(&["runtime", "select", ENGINE, "auxiliary-67"])?;
         }
-        self.set("active_model", &plan.model)?;
-        for (key, value) in [
-            ("ngl", "0"),
-            ("ctx_size", "512"),
-            ("batch_size", "1"),
-            ("ubatch_size", "1"),
-            ("keep", "0"),
-            ("cache_type_k", "f16"),
-            ("cache_type_v", "f16"),
-            ("flash_attn", "off"),
-            ("threads", "1"),
-            ("parallel", "0"),
-            ("sleep_idle_seconds", "-1"),
-            ("request_timeout_seconds", "3600"),
-            ("spec_draft_n_max", "3"),
-            ("spec_draft_n_min", "0"),
-            ("spec_draft_p_min", "0"),
-            ("spec_draft_p_split", "0.1"),
-        ] {
-            self.set(key, value)?;
-        }
-        self.set("mmproj", &plan.projector)?;
-        self.set("spec_draft_model", &plan.draft)?;
-        self.set("spec_type", if plan.speculative { "draft" } else { "none" })?;
         let mut loras: Vec<Value> = plan
             .loras
             .iter()
@@ -2773,15 +2897,36 @@ impl PublicCase {
         if mode == "oversize" {
             self.auxiliary_oversize_preflight(&plan, port)?;
         }
-        self.set(
-            "lora_adapters",
-            &serde_json::to_string(&loras).map_err(|e| e.to_string())?,
-        )?;
-        self.set(
-            "server_args",
-            &serde_json::to_string(if native { plan.raw.as_slice() } else { &[] })
-                .map_err(|e| e.to_string())?,
-        )?;
+        let expected = self.configure_fixture(&[
+            ("active_model", serde_json::json!(plan.model)),
+            ("ngl", serde_json::json!(0)),
+            ("ctx_size", serde_json::json!(512)),
+            ("batch_size", serde_json::json!(1)),
+            ("ubatch_size", serde_json::json!(1)),
+            ("keep", serde_json::json!(0)),
+            ("cache_type_k", serde_json::json!("f16")),
+            ("cache_type_v", serde_json::json!("f16")),
+            ("flash_attn", serde_json::json!("off")),
+            ("threads", serde_json::json!(1)),
+            ("parallel", serde_json::json!(0)),
+            ("sleep_idle_seconds", serde_json::json!(-1)),
+            ("request_timeout_seconds", serde_json::json!(3600)),
+            ("spec_draft_n_max", serde_json::json!(3)),
+            ("spec_draft_n_min", serde_json::json!(0)),
+            ("spec_draft_p_min", serde_json::json!(0.0)),
+            ("spec_draft_p_split", serde_json::json!(0.1)),
+            ("mmproj", serde_json::json!(plan.projector)),
+            ("spec_draft_model", serde_json::json!(plan.draft)),
+            (
+                "spec_type",
+                serde_json::json!(if plan.speculative { "draft" } else { "none" }),
+            ),
+            ("lora_adapters", serde_json::json!(loras)),
+            (
+                "server_args",
+                serde_json::json!(if native { plan.raw.as_slice() } else { &[] }),
+            ),
+        ])?;
         if native {
             let (ok, probe) = self
                 .auxiliary_command_at(&plan.cli_cwd, &["runtime", "probe", "cpu", "local_aux67"])?;
@@ -2802,7 +2947,7 @@ impl PublicCase {
             self.evidence
                 .push(serde_json::json!({"native_probe":probe}));
         }
-        let configured = self.success(&["config", "get"])?;
+        let configured = self.fixture_readback(&expected)?;
         self.evidence.push(serde_json::json!({"captured_plan":{"cwd":plan.cwd,"cli_cwd":plan.cli_cwd,"model":plan.model,"projector":plan.projector,"draft":plan.draft,"loras":plan.loras,"speculative":plan.speculative,"native":plan.native,"expected_argv":plan.argv(port)},"configured":configured}));
         Ok((port, plan))
     }
@@ -3188,6 +3333,7 @@ impl PublicCase {
         self.recover_interrupted_start =
             matches!(mode, "setup-error" | "setup-unwind" | "setup-reader-error");
         let (port, plan) = self.auxiliary_setup(mode)?;
+        self.phase("behavior");
         let (index, ok, value) = self.auxiliary_launch(&plan, port, mode)?;
         if matches!(mode, "oversize" | "activation-failure" | "resource-failure") {
             self.expect(
@@ -3667,6 +3813,7 @@ fn auxiliary_launch_cleanup_child() {
         .unwrap();
     drop(allocated);
     let (port, plan) = case.auxiliary_setup("known-empty").unwrap();
+    case.phase("behavior");
     let (index, ok, _) = case.auxiliary_launch(&plan, port, "cleanup-child").unwrap();
     assert!(ok);
     let mut ready = fs::OpenOptions::new()
@@ -3691,6 +3838,7 @@ fn auxiliary_cleanup_child_contract(evidence_root: &Path) -> bool {
     let mut case = PublicCase::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PublicResult<()> {
         case.setup()?;
+        case.phase("behavior");
         let control = case.file("cleanup-child.json");
         let ack = case.file("cleanup-child.ack");
         let template = case.isolated_cli(&[]);
@@ -3811,7 +3959,7 @@ fn auxiliary_cleanup_child_contract(evidence_root: &Path) -> bool {
         .create_new(true)
         .open(evidence_root.join("cleanup-child.json"))
         .expect("exclusive cleanup child evidence");
-    file.write_all(&serde_json::to_vec_pretty(&serde_json::json!({"setup_error":error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence})).unwrap()).unwrap();
+    file.write_all(&serde_json::to_vec_pretty(&serde_json::json!({"timings":case.timings(),"setup_error":error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence})).unwrap()).unwrap();
     !failed
 }
 
@@ -3821,10 +3969,18 @@ async fn configured_file_retention_contracts() -> AuxiliaryFailures {
     let parent = std::env::var_os("AIOLM_CLI_FIXTURE_EVIDENCE")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
+    fs::create_dir_all(&parent).expect("create auxiliary evidence parent");
     let evidence_root = parent.join(format!("aiolm-auxiliary-evidence-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&evidence_root).expect("create exclusive auxiliary evidence root");
     let mut failures = vec![];
-    if !auxiliary_cleanup_child_contract(&evidence_root) {
+    let mut summaries = vec![];
+    let cleanup_child_started = Instant::now();
+    let cleanup_child_ok = auxiliary_cleanup_child_contract(&evidence_root);
+    summaries.push(
+        serde_json::json!({"case":"cleanup-child","failed":!cleanup_child_ok,
+        "elapsed_ms":cleanup_child_started.elapsed().as_millis()}),
+    );
+    if !cleanup_child_ok {
         failures.push("cleanup-child");
     }
     for mode in [
@@ -3944,7 +4100,9 @@ async fn configured_file_retention_contracts() -> AuxiliaryFailures {
         let failed = setup_error.is_some()
             || !cleanup.is_empty()
             || case.expectations.iter().any(|(_, ok)| !*ok);
-        let evidence = serde_json::json!({"case":mode,"observed":observed,"setup_error":setup_error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence});
+        let timings = case.timings();
+        summaries.push(serde_json::json!({"case":mode,"failed":failed,"timings":timings}));
+        let evidence = serde_json::json!({"case":mode,"timings":timings,"observed":observed,"setup_error":setup_error,"cleanup_errors":cleanup,"expectations":case.expectations,"observations":case.evidence});
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -3960,6 +4118,14 @@ async fn configured_file_retention_contracts() -> AuxiliaryFailures {
             failures.push(mode);
         }
     }
+    fs::write(
+        evidence_root.join("summary.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "cases":summaries,"failed_cases":failures
+        }))
+        .expect("serialize auxiliary timing summary"),
+    )
+    .expect("persist auxiliary timing summary");
     AuxiliaryFailures {
         failures,
         evidence_root,

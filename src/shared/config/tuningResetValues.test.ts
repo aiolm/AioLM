@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { parseRuntimeHelp, SERVER_OPTIONS } from './serverOptions';
 import { tuningOptionMetadata } from '../../features/tuning/tuningOptionInfo';

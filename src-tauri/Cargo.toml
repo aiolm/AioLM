@@ -117,7 +117,8 @@ required-features = ["test-fixtures"]
 
 [lib]
 name = "aiolm_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Both desktop executables consume the shared Rust library directly.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

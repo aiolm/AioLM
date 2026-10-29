@@ -1,0 +1,114 @@
+/* global process */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { assignFiles, inventory, reportInventory, testPath, validateAssignments, verifyRecords, verifyReport } from "./frontend-ci.mjs";
+
+const sha = "a".repeat(40);
+const digest = "b".repeat(64);
+const files = [
+  { path: "src/one.test.ts", tests: ["same parameter", "same parameter", "suite > keeps data"] },
+  { path: "src/two.test.tsx", tests: ["suite > cancel"] },
+];
+const plan = { formatVersion: 1, sourceSha: sha, shardCount: 2, files, assignments: [[files[0].path], [files[1].path]] };
+const record = (index, overrides = {}) => ({ formatVersion: 1, sourceSha: sha, planSha256: digest, index, shardCount: 2, exitCode: 0, ...overrides });
+const report = (path, names) => ({
+  success: true, numFailedTests: 0, numFailedTestSuites: 0, numTotalTests: names.length, numPassedTests: names.length,
+  testResults: [{ name: path, status: "passed", assertionResults: names.map((name) => {
+    const parts = name.split(" > ");
+    return { fullName: parts.join(" "), ancestorTitles: parts.slice(0, -1), title: parts.at(-1), status: "passed" };
+  }) }],
+});
+
+test("weighted planning puts long files on separate runners and retains every file", () => {
+  const paths = ["src/slow.test.ts", "src/medium.test.ts", "src/small.test.ts", "src/tiny.test.ts"];
+  const assignments = assignFiles(paths.map((path) => ({ path })), 2, Object.fromEntries(paths.map((path, index) => [path, [100, 80, 15, 5][index]])));
+  assert.deepEqual(assignments, [[paths[0]], [paths[1], paths[2], paths[3]].sort()]);
+  assert.deepEqual(assignments.flat().sort(), paths.sort());
+});
+
+test("the plan refuses missing, duplicated and empty file assignments", () => {
+  assert.doesNotThrow(() => validateAssignments(plan));
+  assert.throws(() => validateAssignments({ ...plan, assignments: [[files[0].path], [files[0].path]] }), /assignments/);
+  assert.throws(() => validateAssignments({ ...plan, assignments: [[files[0].path], []] }), /Empty/);
+  assert.throws(() => validateAssignments({ ...plan, files: [files[0], files[0]] }), /Duplicate/);
+});
+
+test("source and shard provenance cannot be replaced by a successful status", () => {
+  assert.doesNotThrow(() => verifyRecords(plan, [record(1), record(2)], digest));
+  assert.throws(() => verifyRecords(plan, [record(1)], digest), /Missing/);
+  assert.throws(() => verifyRecords(plan, [record(1), record(1)], digest), /Duplicate/);
+  assert.throws(() => verifyRecords(plan, [record(1), record(2, { sourceSha: "c".repeat(40) })], digest), /different source/);
+  assert.throws(() => verifyRecords(plan, [record(1), record(2, { planSha256: "c".repeat(64) })], digest), /different source/);
+  assert.throws(() => verifyRecords(plan, [record(1), record(2, { exitCode: 1 })], digest), /failed/);
+});
+
+test("parameterized names retain exact multiplicity and all original assertions must pass", () => {
+  assert.doesNotThrow(() => verifyReport(plan, 1, report(files[0].path, files[0].tests)));
+  assert.throws(() => verifyReport(plan, 1, report(files[0].path, files[0].tests.slice(1))), /inventory/);
+  assert.throws(() => verifyReport(plan, 1, report(files[0].path, [...files[0].tests, files[0].tests[0]])), /inventory/);
+  const failed = report(files[0].path, files[0].tests);
+  failed.testResults[0].assertionResults[0].status = "pending";
+  assert.throws(() => verifyReport(plan, 1, failed), /did not pass/);
+});
+
+test("a report cannot substitute an assigned file or list one twice", () => {
+  assert.throws(() => verifyReport(plan, 1, report(files[1].path, files[1].tests)), /inventory/);
+  const duplicate = report(files[0].path, files[0].tests);
+  duplicate.testResults.push(duplicate.testResults[0]);
+  assert.throws(() => reportInventory(duplicate), /Duplicate/);
+  assert.throws(() => reportInventory({ ...duplicate, success: false }), /failed/);
+});
+
+test("collection normalizes runner paths and retains repeated named cases", () => {
+  assert.deepEqual(inventory([{ file: "/synthetic/src/a.test.ts", name: "parameter" }, { file: "/synthetic/src/a.test.ts", name: "parameter" }], "/synthetic"), [{ path: "src/a.test.ts", tests: ["parameter", "parameter"] }]);
+  assert.throws(() => testPath("src/../../escape.test.ts"), /Unexpected/);
+  assert.throws(() => testPath("src/../escape.test.ts"), /Unexpected/);
+  assert.throws(() => testPath("/other/src/a.test.ts", "/synthetic"), /Unexpected/);
+});
+
+test("real Vitest shards merge every parameterized case and enforce unchanged coverage", { timeout: 60_000 }, (context) => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  mkdirSync(join(root, "tmp"), { recursive: true });
+  const fixture = mkdtempSync(join(root, "tmp/frontend-shard-contract-"));
+  context.after(() => rmSync(fixture, { recursive: true, force: true }));
+  mkdirSync(join(fixture, "scripts"));
+  mkdirSync(join(fixture, "src"));
+  copyFileSync(join(root, "scripts/frontend-ci.mjs"), join(fixture, "scripts/frontend-ci.mjs"));
+  copyFileSync(join(root, "vitest.ci.config.ts"), join(fixture, "vitest.ci.config.ts"));
+  symlinkSync(join(root, "node_modules"), join(fixture, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  writeFileSync(join(fixture, "package.json"), '{"type":"module"}\n');
+  writeFileSync(join(fixture, "package-lock.json"), '{}\n');
+  writeFileSync(join(fixture, "vitest.setup.ts"), "");
+  writeFileSync(join(fixture, "vitest.config.ts"), `import { defineConfig } from 'vitest/config';
+export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node', maxWorkers: 1,
+  include: ['src/*.test.ts'], coverage: { provider: 'v8', include: ['src/math.ts'], reporter: ['json-summary'],
+    reportsDirectory: 'coverage', thresholds: { statements: process.env.AIOLM_COVERAGE_THRESHOLD_PROBE ? 100 : 40,
+      branches: 35, functions: 35, lines: 45 } } } });\n`);
+  writeFileSync(join(fixture, "src/math.ts"), "export function add(a: number, b: number) { return a + b; }\nexport function unused() { return 0; }\n");
+  writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1));\n");
+  writeFileSync(join(fixture, "src/two.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it('second file', () => expect(add(2, 3)).toBe(5));\n");
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), ...args], {
+      cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 30_000,
+    });
+    assert.equal(result.status, 0, JSON.stringify({ command: args, stdout: result.stdout, stderr: result.stderr, signal: result.signal, error: result.error?.message }));
+  };
+  run("plan", "--shards", "2", "--output", "tmp/plan.json");
+  run("shard", "--plan", "tmp/plan.json", "--index", "1", "--output", "tmp/shards/one");
+  run("shard", "--plan", "tmp/plan.json", "--index", "2", "--output", "tmp/shards/two");
+  run("merge", "--plan", "tmp/plan.json", "--input", "tmp/shards");
+  const merged = JSON.parse(readFileSync(join(fixture, "tmp/frontend-ci/merged/results.json"), "utf8"));
+  assert.equal(merged.numPassedTests, 3);
+  assert.equal(merged.numFailedTests, 0);
+  const coverage = JSON.parse(readFileSync(join(fixture, "coverage/coverage-summary.json"), "utf8"));
+  assert.equal(coverage.total.statements.pct, 50);
+  const strict = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), "merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/strict-merge"], {
+    cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false", AIOLM_COVERAGE_THRESHOLD_PROBE: "1" }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(strict.status, 1, strict.stdout + strict.stderr);
+  assert.match(strict.stdout + strict.stderr, /Coverage for statements.*does not meet global threshold/);
+});

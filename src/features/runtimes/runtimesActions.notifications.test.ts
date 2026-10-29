@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
 import { notifyCompletion } from "../../shared/lib/notifications";

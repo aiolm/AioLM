@@ -16,6 +16,9 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
+      // This fixture was test-local before the suite was split. Keep it out of
+      // production coverage while retaining the pre-existing source universe.
+      exclude: ["src/testing/modelSettingsDialog.tsx"],
       // Only covers src/** exercised by Vitest (component/hook/utility
       // tests). The 21 direct Node assertion scripts under tests/direct/**
       // (run via tests/direct/run.ts) are not instrumented here —

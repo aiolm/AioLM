@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { describeServerOption, SERVER_OPTIONS } from '../config/serverOptions';
 import { serverOptionDescription, serverOptionDescriptions } from './serverOptionDescriptions';

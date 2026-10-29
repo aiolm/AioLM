@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import { emptyGpuPlacement } from '../runtime/sessionUtils';

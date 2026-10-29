@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ServerState } from "../api/types";
 import { translate } from "../i18n/i18nUnified";

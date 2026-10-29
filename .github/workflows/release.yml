@@ -167,6 +167,8 @@ jobs:
     # below instead of shipping installers whose publishing is silently off.
     env:
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -190,6 +192,25 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Record package build inputs
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+        run: node scripts/release-ci.mjs record-inputs --sha "$TARGET_SHA" --output tmp/build-inputs.json
+      - name: Retain package input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
+      - name: Restore release Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "package-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Report benchmark sharing configuration
         shell: pwsh
         run: |
@@ -199,39 +220,23 @@ jobs:
           } elseif ($override -eq "off") {
             Write-Warning "AIOLM_BENCHMARK_API_URL is 'off'; these installers ship with anonymous benchmark publishing disabled."
           } else {
-            Write-Host "Anonymous benchmark publishing targets $override"
+            Write-Host "A benchmark API origin override is configured; CI fingerprints verify the exact build input before publication."
           }
-      - name: Build CLI resource
-        run: npm run build:cli
-      - name: Verify before packaging
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          npm test
-          if ($LASTEXITCODE -ne 0) { throw "npm test failed with exit code $LASTEXITCODE" }
-          npm run typecheck
-          if ($LASTEXITCODE -ne 0) { throw "npm run typecheck failed with exit code $LASTEXITCODE" }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw "npm run build failed with exit code $LASTEXITCODE" }
-          cargo fmt --manifest-path src-tauri/Cargo.toml --check
-          if ($LASTEXITCODE -ne 0) { throw "cargo fmt --check failed with exit code $LASTEXITCODE" }
-          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-          if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed with exit code $LASTEXITCODE" }
-          cargo test --locked --manifest-path src-tauri/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
-          npm run lint
-          if ($LASTEXITCODE -ne 0) { throw "npm run lint failed with exit code $LASTEXITCODE" }
-          if ([string]::IsNullOrWhiteSpace($env:AIOLM_SMOKE)) {
-            Write-Warning "Real-model smoke test was not enabled; release verification covers unit/integration tests only."
-          }
-      # Runs tauri through the packaging script so the app binary is compiled
-      # with the same build-path remapping as the CLI built above; a bare
-      # `npx tauri build` would ship runner paths in its panic metadata.
+      # CI verifies this same main commit and build origin in parallel. Tauri
+      # compiles both release binaries once with the same production context.
       - name: Build NSIS and MSI
         run: node scripts/package-tauri.mjs
       - name: Verify NSIS and MSI installation and installed CLI
         timeout-minutes: 15
         run: node scripts/smoke-installers.mjs
+      - name: Retain release compiler timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-timings-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings
       - name: Collect release assets
         shell: pwsh
         run: |
@@ -282,6 +287,8 @@ jobs:
       contents: read
     env:
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       APPIMAGE_EXTRACT_AND_RUN: "1"
       CARGO_INCREMENTAL: "0"
     steps:
@@ -313,23 +320,57 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Record package build inputs
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+        run: node scripts/release-ci.mjs record-inputs --sha "$TARGET_SHA" --output tmp/build-inputs.json
+      - name: Retain package input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
+      - name: Restore release Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "package-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
         run: npm rebuild esbuild
-      - name: Verify before packaging
-        run: |
-          npm test
-          npm run typecheck
-          npm run lint
-          cargo fmt --manifest-path src-tauri/Cargo.toml --check
-          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-          cargo test --locked --manifest-path src-tauri/Cargo.toml
-          python3 -B -m unittest discover -s scripts -p 'test_linux_desktop.py'
+      - name: Restore pinned AppImage runtime
+        if: runner.os == 'Linux'
+        id: appimage-runtime
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .codex-target/appimage-runtime
+          key: appimage-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/appimage-runtime/**') }}
+      - name: Prepare and verify pinned AppImage runtime early
+        if: runner.os == 'Linux'
+        run: node scripts/package-tauri.mjs --prepare-runtime
+      - name: Save verified AppImage runtime
+        if: runner.os == 'Linux' && github.ref == 'refs/heads/main' && steps.appimage-runtime.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .codex-target/appimage-runtime
+          key: appimage-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/appimage-runtime/**') }}
       - name: Build DEB and AppImage
         run: npm run package:tauri
       - name: Verify installation, launcher and icon
         run: node scripts/smoke-installers.mjs
+      - name: Retain release compiler timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-timings-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings
       - name: Collect release assets
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -362,6 +403,8 @@ jobs:
       contents: read
     env:
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
@@ -381,25 +424,43 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Record package build inputs
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+        run: node scripts/release-ci.mjs record-inputs --sha "$TARGET_SHA" --output tmp/build-inputs.json
+      - name: Retain package input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
+      - name: Restore release Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "package-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
         run: npm rebuild esbuild
-      # The platform-independent frontend suite, typecheck and lint already run
-      # in the Windows and Linux jobs of this release; on hosted Intel Macs the
-      # jsdom suite exceeds its per-test timeouts. Keep the native checks here.
-      - name: Verify before packaging
-        run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml --check
-          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-          cargo test --locked --manifest-path src-tauri/Cargo.toml
-          bash -n install.sh
       # Ad-hoc signed (no Developer ID); the package check requires a strict signature.
       - name: Build APP and DMG
         run: npm run package:tauri
       - name: Verify installation, launch, quit and install.sh
         timeout-minutes: 15
         run: node scripts/smoke-installers.mjs
+      - name: Retain release compiler timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-timings-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings
       - name: Collect release assets
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -416,8 +477,84 @@ jobs:
           path: release-assets
           if-no-files-found: error
 
+  verify-ci:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    name: Require CI for the exact main commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.ci.outputs.run_id }}
+      url: ${{ steps.ci.outputs.url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.target_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - name: Wait for existing main CI without starting another run
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+        run: node scripts/release-ci.mjs wait --sha "$TARGET_SHA" --output "$RUNNER_TEMP/main-ci.json"
+
+  ready:
+    needs: [prepare, build, build-linux, build-macos, verify-ci]
+    if: needs.prepare.outputs.should_release == 'true'
+    name: Prepare verified assets and approval summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.target_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - name: Download all four verified platform outputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: "*-release-assets"
+          merge-multiple: true
+          path: release-assets
+      - name: Download native CI input fingerprints
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ci-inputs-*
+          path: ci-build-inputs
+          run-id: ${{ needs.verify-ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Download package input fingerprints
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: package-inputs-*
+          path: package-build-inputs
+      - name: Verify payload inventory and prepare LF checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+          CI_RUN_ID: ${{ needs.verify-ci.outputs.run_id }}
+        run: node scripts/release-ci.mjs prepare-assets --directory release-assets --version "$RELEASE_VERSION" --sha "$TARGET_SHA" --ci-run-id "$CI_RUN_ID" --ci-inputs ci-build-inputs --package-inputs package-build-inputs
+      - name: Retain the exact ten files for publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: approved-installers
+          path: release-assets
+          if-no-files-found: error
+
   publish:
-    needs: [prepare, build, build-linux, build-macos]
+    needs: [prepare, ready, verify-ci]
     if: needs.prepare.outputs.should_release == 'true'
     name: Publish installers and release
     runs-on: windows-latest
@@ -432,24 +569,38 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: "*-release-assets"
-          merge-multiple: true
+          name: approved-installers
           path: release-assets
-      - name: Generate checksums
+      - name: Recheck CI after approval
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+          CI_RUN_ID: ${{ needs.verify-ci.outputs.run_id }}
+        with:
+          script: |
+            const run = (await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: Number(process.env.CI_RUN_ID) })).data;
+            if (run.head_sha !== process.env.TARGET_SHA || run.head_branch !== 'main' || run.event !== 'push' || run.path !== '.github/workflows/ci.yml' || run.status !== 'completed' || run.conclusion !== 'success') {
+              throw new Error('The exact main CI is no longer successful; publication stopped.');
+            }
+      - name: Recheck staged checksums
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $assetDir = "release-assets"
-          $manifest = foreach ($file in (Get-ChildItem $assetDir -File | Sort-Object Name)) {
-            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($file.Name)"
+          $files = @(Get-ChildItem release-assets -File)
+          if ($files.Count -ne 10) { throw "Expected exactly ten staged release assets" }
+          $raw = [IO.File]::ReadAllText((Join-Path $pwd "release-assets/checksums.txt"))
+          if ($raw.Contains("`r") -or -not $raw.EndsWith("`n")) { throw "Noncanonical checksums" }
+          $seen = @{}
+          foreach ($line in ($raw.TrimEnd("`n") -split "`n")) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$') { throw "Invalid checksum record" }
+            $digest = $Matches[1]
+            $name = $Matches[2]
+            if ($name -eq "checksums.txt" -or $seen.ContainsKey($name)) { throw "Duplicate checksum record" }
+            $seen[$name] = $true
+            $actual = (Get-FileHash -LiteralPath (Join-Path "release-assets" $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $digest) { throw "Staged asset changed: $name" }
           }
-          # LF line endings, so `sha256sum -c` and `shasum -a 256 -c` accept the file;
-          # Set-Content on Windows would write CRLF.
-          $checksumPath = Join-Path $assetDir "checksums.txt"
-          [IO.File]::WriteAllText($checksumPath, (($manifest -join "`n") + "`n"), [Text.Encoding]::ASCII)
-          if ([IO.File]::ReadAllText($checksumPath).Contains("`r")) { throw "checksums.txt must use LF line endings" }
-          Get-Content $checksumPath
+          if ($seen.Count -ne 9) { throw "Expected nine checked payloads" }
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -484,6 +635,51 @@ jobs:
             DEB registers the launcher and icon automatically. For AppImage desktop integration,
             use register-linux-desktop.py from this release after verifying its checksum.
             Installation guide: https://aiolm.vercel.app/en/guides/install
+          draft: false
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release-assets/*
+
+  verify-public:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.should_release == 'true'
+    name: Verify publicly downloaded release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.target_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - name: Install Linux runtime dependencies for the isolated CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-0 libayatana-appindicator3-1 libxdo3
+      - name: Verify stable latest release, public payloads and clean-home CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+        run: python3 -B scripts/verify-public-release.py --version "$RELEASE_VERSION" --expected-sha "$TARGET_SHA" --output-dir "$RUNNER_TEMP/public-release-verification" --execute-cli
+      - name: Record public verification summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/public-release-verification/summary.md" ]; then
+            cat "$RUNNER_TEMP/public-release-verification/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain public verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: public-release-verification
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/public-release-verification/verification-report.json
+            ${{ runner.temp }}/public-release-verification/summary.md

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { buildChatRequestBody, type AppConfig } from "../api/index";
 import { hasChatOverride, removeArgs, resetAllTuning, resetTuningField, RUNTIME_DEFAULT_KEYS, withManualOverrides } from "./tuningDefaults";

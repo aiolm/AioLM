@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import {
-  buildPrerequisiteProblems, provisionAppImageRuntime, readPins, RUNTIME_DIRECTORY, verifyBundledAppImages, verifyEmbeddedRuntime,
+  buildPrerequisiteProblems, provisionAppImageRuntime, readPins, readVerifiedRuntime, RUNTIME_DIRECTORY, verifyBundledAppImages, verifyEmbeddedRuntime,
 } from "./appimage-runtime/runtime.mjs";
-import { bundleTargets, packagingArgs, packagingEnv } from "./package-tauri.mjs";
+import { bundleTargets, packagingArgs, packagingEnv, preparePackagingEnv, runPackaging } from "./package-tauri.mjs";
 
 test("desktop packaging selects formats that the host can build", () => {
   assert.equal(bundleTargets("win32"), "nsis,msi");
@@ -17,8 +17,11 @@ test("desktop packaging selects formats that the host can build", () => {
   assert.equal(bundleTargets("darwin"), "app,dmg");
   assert.throws(() => bundleTargets("freebsd"), /not supported/);
   assert.deepEqual(packagingArgs("linux"), [
-    "build", "--config", "src-tauri/tauri-package.conf.json", "--bundles", "deb,appimage",
-    "--", "--no-default-features",
+    "build", "--config", "src-tauri/tauri-package.conf.json", "--features", "tauri/custom-protocol", "--no-bundle",
+    "--", "--locked", "--no-default-features", "--timings",
+  ]);
+  assert.deepEqual(packagingArgs("linux", "bundle"), [
+    "bundle", "--config", "src-tauri/tauri-package.conf.json", "--features", "tauri/custom-protocol", "--bundles", "deb,appimage",
   ]);
 });
 
@@ -33,8 +36,93 @@ test("smoke fixtures stay enabled for normal tests and excluded from packaging",
     assert.match(target, /required-features\s*=\s*\["test-fixtures"\]/);
   }
   for (const platform of ["win32", "linux", "darwin"]) {
-    assert.deepEqual(packagingArgs(platform).slice(-2), ["--", "--no-default-features"]);
+    assert.ok(packagingArgs(platform).includes("--no-default-features"));
+    assert.ok(!packagingArgs(platform, "bundle").includes("test-fixtures"));
   }
+});
+
+function packagingFixture(t, platform = "win32") {
+  const root = mkdtempSync(join(tmpdir(), "aiolm-desktop-package-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const directory = join(root, ".codex-target", "release");
+  const writeExecutable = (name) => {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, name + (platform === "win32" ? ".exe" : "")), `synthetic ${name}`);
+  };
+  return { root, platform, env: { SYNTHETIC_BUILD: "1" }, cli: join(root, "tauri.js"), writeExecutable };
+}
+
+test("one production build produces both executables before bundle-only packaging", (t) => {
+  const fixture = packagingFixture(t);
+  const calls = [];
+  const result = runPackaging({ ...fixture, spawn(command, args, options) {
+    calls.push({ command, args, options });
+    if (args[1] === "build") {
+      fixture.writeExecutable("aiolm");
+      fixture.writeExecutable("aiolm-cli");
+    }
+    return { status: 0 };
+  } });
+  assert.equal(result, 0);
+  assert.deepEqual(calls.map(({ args }) => args[1]), ["build", "bundle"]);
+  assert.equal(calls.filter(({ args }) => args.includes("--no-bundle")).length, 1);
+  assert.equal(calls[0].options.env, calls[1].options.env);
+  assert.equal(calls[0].options.cwd, fixture.root);
+  assert.equal(calls[1].options.cwd, fixture.root);
+  assert.equal(calls[1].options.env.SYNTHETIC_BUILD, "1");
+});
+
+test("a failed production build never packages existing executables", (t) => {
+  const fixture = packagingFixture(t);
+  fixture.writeExecutable("aiolm");
+  fixture.writeExecutable("aiolm-cli");
+  const calls = [];
+  assert.equal(runPackaging({ ...fixture, spawn(_command, args) {
+    calls.push(args[1]);
+    return { status: 17 };
+  } }), 17);
+  assert.deepEqual(calls, ["build"]);
+});
+
+test("packaging stops when a successful runner has not produced the auxiliary CLI", (t) => {
+  const fixture = packagingFixture(t);
+  const calls = [];
+  assert.throws(() => runPackaging({ ...fixture, spawn(_command, args) {
+    calls.push(args[1]);
+    fixture.writeExecutable("aiolm");
+    return { status: 0 };
+  } }), /did not create aiolm-cli/);
+  assert.deepEqual(calls, ["build"]);
+});
+
+test("bundle failures propagate without reporting verified AppImages", (t) => {
+  const fixture = packagingFixture(t, "linux");
+  const calls = [];
+  const result = runPackaging({ ...fixture,
+    provisionRuntime: () => "/synthetic/pinned-runtime",
+    readRuntime: () => assert.fail("no successful bundle to verify"),
+    spawn(_command, args) {
+      calls.push(args[1]);
+      fixture.writeExecutable("aiolm");
+      fixture.writeExecutable("aiolm-cli");
+      return { status: args[1] === "build" ? 0 : 23 };
+    },
+  });
+  assert.equal(result, 23);
+  assert.deepEqual(calls, ["build", "bundle"]);
+});
+
+test("early AppImage preparation uses the same cache as normal packaging", (t) => {
+  const fixture = packagingFixture(t, "linux");
+  const options = [];
+  const prepare = () => preparePackagingEnv({ ...fixture, provisionRuntime(value) {
+    options.push(value);
+    return "/synthetic/pinned-runtime";
+  } });
+  assert.equal(prepare().LDAI_RUNTIME_FILE, "/synthetic/pinned-runtime");
+  assert.equal(prepare().LDAI_RUNTIME_FILE, "/synthetic/pinned-runtime");
+  assert.equal(options[0].cacheRoot, join(fixture.root, ".codex-target", "appimage-runtime"));
+  assert.equal(options[0].cacheRoot, options[1].cacheRoot);
 });
 
 test("direct Tauri builds use host formats and CLI builds never bundle", () => {
@@ -90,6 +178,22 @@ function runtimeFixture(t) {
   const ready = () => [];
   return { directory, runtime, pins, write, noBuild, ready, log: () => {} };
 }
+
+test("packaging re-verifies the pinned runtime after the bundle command", (t) => {
+  const fixture = packagingFixture(t, "linux");
+  const { runtime, pins, write } = runtimeFixture(t);
+  const path = write("provided/runtime", runtime);
+  assert.throws(() => runPackaging({ ...fixture,
+    provisionRuntime: () => path,
+    readRuntime: (candidate) => readVerifiedRuntime(candidate, pins),
+    spawn(_command, args) {
+      fixture.writeExecutable("aiolm");
+      fixture.writeExecutable("aiolm-cli");
+      if (args[1] === "bundle") writeFileSync(path, syntheticRuntime({ body: "changed during packaging" }));
+      return { status: 0 };
+    },
+  }), /requires the pinned/);
+});
 
 test("Linux packaging hands appimagetool the pinned runtime; other hosts are unchanged", () => {
   const base = { PATH: "/usr/bin" };
