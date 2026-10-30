@@ -901,18 +901,24 @@ mod tests {
             idle_timeout: Duration::from_secs(1),
             ..policy()
         };
+        // The acquisition budget starts after its caller has prepared the client.
+        let client_started = Instant::now();
+        let client = client();
+        let client_setup = client_started.elapsed();
+        let spec = spec(&server.url, &sha);
+        let destination = area.destination();
         let started = Instant::now();
-        let error = acquire_model(
-            &client(),
-            &spec(&server.url, &sha),
-            &area.destination(),
-            None,
-            policy,
-        )
-        .await
-        .unwrap_err();
+        let error = acquire_model(&client, &spec, &destination, None, policy)
+            .await
+            .unwrap_err();
         assert!(error.contains("budget"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "client setup: {client_setup:?}; acquisition elapsed: {:?}; total budget: {:?}; idle timeout: {:?}",
+            started.elapsed(),
+            policy.total_budget,
+            policy.idle_timeout
+        );
         assert_eq!(server.count(), 1);
         assert!(!area.destination().exists());
         no_partials(&area);
