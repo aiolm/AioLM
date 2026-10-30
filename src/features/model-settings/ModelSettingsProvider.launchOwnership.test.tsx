@@ -54,6 +54,20 @@ function targets() {
   }] });
 }
 
+function editorActions(editor: HTMLElement) {
+  // Keep action queries out of the editor's mounted, inactive option panels.
+  const footer = editor.querySelector('footer');
+  expect(footer).toBeInTheDocument();
+  return within(footer!);
+}
+
+function profileActions(editor: HTMLElement) {
+  // This banner is portalled outside the named settings-profile region.
+  const banner = editor.querySelector<HTMLElement>('.settings-profile-banner');
+  expect(banner).toBeInTheDocument();
+  return within(banner!);
+}
+
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
 afterEach(cleanup);
 
@@ -74,7 +88,7 @@ it('keeps an unrelated save free of launch cancellation after another target is 
   try {
     fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
     const editorA = await screen.findByRole('dialog', { name: 'Model & settings' });
-    const start = within(editorA).getByRole('button', { name: 'Save profile & start' });
+    const start = editorActions(editorA).getByRole('button', { name: 'Save profile & start' });
     await waitFor(() => expect(start).toBeEnabled());
     fireEvent.click(start);
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledTimes(1));
@@ -86,10 +100,11 @@ it('keeps an unrelated save free of launch cancellation after another target is 
     fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
     const editorB = await screen.findByRole('dialog', { name: 'Model & settings' });
     expect(editorB).toHaveTextContent('Session: Work');
-    const saveProfile = within(editorB).getByRole('button', { name: 'Save profile' });
+    const saveProfile = profileActions(editorB).getByRole('button', { name: 'Save profile' });
     await waitFor(() => expect(saveProfile).toBeEnabled());
     fireEvent.click(saveProfile);
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    const saveConfirmation = screen.getByRole('dialog', { name: /^Save these changes to / });
+    fireEvent.click(within(saveConfirmation).getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(editorB).toHaveAttribute('aria-busy', 'true'));
 
@@ -126,7 +141,7 @@ it('keeps the current launch cancellable when a previous handed-off launch compl
   try {
     fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
     const sessionEditor = await screen.findByRole('dialog', { name: 'Model & settings' });
-    const sessionStart = within(sessionEditor).getByRole('button', { name: 'Save profile & start' });
+    const sessionStart = editorActions(sessionEditor).getByRole('button', { name: 'Save profile & start' });
     await waitFor(() => expect(sessionStart).toBeEnabled());
     fireEvent.click(sessionStart);
     await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
@@ -136,7 +151,7 @@ it('keeps the current launch cancellable when a previous handed-off launch compl
     // flag. A default launch can begin while that session launch is handed off.
     fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
     const defaultEditor = await screen.findByRole('dialog', { name: 'Model & settings' });
-    const defaultStart = within(defaultEditor).getByRole('button', { name: 'Save profile & start' });
+    const defaultStart = editorActions(defaultEditor).getByRole('button', { name: 'Save profile & start' });
     await waitFor(() => expect(defaultStart).toBeEnabled());
     const previousRefreshes = vi.mocked(store.refreshStatus).mock.calls.length;
     vi.mocked(store.refreshStatus).mockReturnValueOnce(defaultRefresh.promise);
@@ -144,13 +159,13 @@ it('keeps the current launch cancellable when a previous handed-off launch compl
     await waitFor(() => expect(store.start).toHaveBeenCalledOnce());
     await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 1));
     expect(defaultEditor).toHaveAttribute('aria-busy', 'true');
-    expect(within(defaultEditor).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(editorActions(defaultEditor).getByRole('button', { name: 'Cancel' })).toBeEnabled();
 
     await act(async () => sessionLaunch.resolve(sessionComplete));
     await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 2));
     // The completed session must not remove the newer default operation's
     // cancellation action or redirect that action to the old session.
-    fireEvent.click(within(defaultEditor).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(editorActions(defaultEditor).getByRole('button', { name: 'Cancel' }));
     expect(store.stop).toHaveBeenCalledOnce();
     expect(api.sessionStop).not.toHaveBeenCalled();
     expect(api.cancelLaunchPreflight).not.toHaveBeenCalled();
