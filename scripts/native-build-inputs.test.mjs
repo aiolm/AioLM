@@ -138,10 +138,29 @@ test("checkout provenance and phase validation fail before reading native metada
   assert.throws(() => observeNativeBuildInputs({ ...options, phase: PRIVATE }), /Invalid native observation arguments/);
 });
 
-test("library enumeration and aggregate fingerprint reads stay bounded", t => {
+test("bin and integration-test fingerprints do not consume the normal-library record budget", t => {
   const f = fixture(t);
   const parent = dirname(f.unit);
-  for (let index = 0; index < 64; index += 1) mkdirSync(join(parent, `aiolm-${index.toString(16).padStart(16, "0")}`));
+  for (let index = 0; index < 80; index += 1) {
+    const folder = join(parent, `aiolm-${index.toString(16).padStart(16, "0")}`);
+    mkdirSync(folder);
+    writeFileSync(join(folder, "test-integration-native.json"), JSON.stringify({ local: PRIVATE }));
+  }
+  const value = f.observe();
+  assert.equal(value.status, "observed");
+  assert.equal(value.unit.id, UNIT);
+  assert.equal(value.generatedInputs.length, 1);
+  assert.ok(!JSON.stringify(value).includes(PRIVATE));
+});
+
+test("normal-library record enumeration and aggregate fingerprint reads stay bounded", t => {
+  const f = fixture(t);
+  const parent = dirname(f.unit);
+  for (let index = 0; index < 64; index += 1) {
+    const folder = join(parent, `aiolm-${index.toString(16).padStart(16, "0")}`);
+    mkdirSync(folder);
+    writeFileSync(join(folder, "lib-aiolm_lib.json"), fingerprint(["macos-ui-smoke"]));
+  }
   assert.equal(f.observe().reason, "too-many-library-entries");
   for (let index = 0; index < 64; index += 1) rmSync(join(parent, `aiolm-${index.toString(16).padStart(16, "0")}`), { recursive: true });
   const data = fingerprint(["default", "test-fixtures"]).replace('"local":[', `"boundedPadding":"${"x".repeat(983_040)}","local":[`);

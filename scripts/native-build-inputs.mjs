@@ -91,15 +91,19 @@ export function observeNativeBuildInputs({ root = ROOT, targetDirectory = resolv
     const candidates = [];
     const entries = readdirSync(fingerprint);
     if (entries.length > 10_000) unavailable("too-many-fingerprint-entries");
-    const libraries = entries.filter(name => UNIT.test(name)).sort();
-    if (libraries.length > 64) unavailable("too-many-library-entries");
+    const packageUnits = entries.filter(name => UNIT.test(name)).sort();
+    let libraryRecords = 0;
     let remainingFingerprintBytes = 8_388_608;
-    for (const name of libraries) {
+    for (const name of packageUnits) {
       const folder = join(fingerprint, name);
       if (realpathSync(folder) !== folder || !lstatSync(folder).isDirectory()) unavailable("unsafe-library-directory");
       const file = join(folder, "lib-aiolm_lib.json");
       let text;
       try {
+        // Bins, integration tests and library tests share the package prefix.
+        // Only an actual normal-library record consumes this record budget.
+        if (!lstatSync(file).isFile()) unavailable("unsafe-input-file");
+        if (++libraryRecords > 64) unavailable("too-many-library-entries");
         const value = regular(file, Math.min(1_048_576, remainingFingerprintBytes));
         remainingFingerprintBytes -= value.size;
         text = value.content.toString("utf8");
