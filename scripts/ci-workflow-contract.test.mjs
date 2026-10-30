@@ -11,6 +11,13 @@ const verify = patch => {
   }
   return verifyCiWorkflowContracts({ ...sources, ...patch });
 };
+const changeCiJob = (source, name, change) => {
+  const start = source.indexOf(`  ${name}:\n`);
+  assert.ok(start >= 0, `Expected ${name} job`);
+  const next = source.slice(start + 1).search(/^ {2}[\w-]+:\n/m);
+  const end = next < 0 ? source.length : start + 1 + next;
+  return source.slice(0, start) + change(source.slice(start, end)) + source.slice(end);
+};
 
 test("all seven cached jobs preserve compiler isolation, cache purposes and matching effective environments", () => {
   assert.deepEqual(verify(), { guardedJobs: 7, rustPin: "1.98.0" });
@@ -27,7 +34,31 @@ test("LF and Windows CRLF workflows enforce the same historical mismatch check",
     const packages = variant.packages.replace(/ {6}RUST_BACKTRACE: "1"\r?\n/, "");
     assert.notEqual(packages, variant.packages, "Expected backtrace removal in either line-ending format");
     assert.throws(() => verifyCiWorkflowContracts({ ...variant, packages }), /Cache environment differs between package jobs/);
+    const ci = changeCiJob(sources.ci, "rust", job => job.replace("        run: npm run build", "        if: runner.os == 'macOS'\n        run: npm run build")).replace(/\n/g, newline);
+    assert.notEqual(ci, variant.ci, "Expected conditional frontend mutation in either line-ending format");
+    assert.throws(() => verifyCiWorkflowContracts({ ...variant, ci }), /Frontend build must be unconditional and required/);
   }
+});
+
+test("native verification builds frontend once and requires success before its first Cargo compile", () => {
+  for (const name of ["rust", "rust-portability"]) {
+    for (const change of [
+      job => job.replace("        run: npm run build", "        run: npm run build:contracts"),
+      job => job.replace("        run: npm run build", "        if: runner.os == 'macOS'\n        run: npm run build"),
+      job => job.replace("        run: npm run build", "        continue-on-error: true\n        run: npm run build"),
+      job => job.replace("        run: npm run build", "        run: npm run build\n      - run: npm run build"),
+      job => {
+        const build = job.match(/^ {6}- name: .*\n {8}run: npm run build\n/m)?.[0];
+        assert.ok(build, "Expected frontend step to relocate");
+        return job.replace(build, "").replace(/^( {8}run: cargo clippy[^\n]*\n)/m, `$1${build}`);
+      },
+    ]) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), /Frontend build must/);
+  }
+});
+
+test("the default-feature Mac helper never regenerates frontend inputs", () => {
+  const ci = changeCiJob(sources.ci, "macos-default", job => job.replace("      - name: Default-feature native tests", "      - run: npm run build\n      - name: Default-feature native tests"));
+  assert.throws(() => verify({ ci }), /Mac default helper must not rebuild frontend inputs/);
 });
 
 test("the pinned installer default makes explicit and implicit incremental settings equivalent", () => {

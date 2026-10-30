@@ -284,12 +284,14 @@ jobs:
           name: ci-inputs-${{ runner.os }}-${{ runner.arch }}
           path: tmp/build-inputs.json
           if-no-files-found: error
+      # Keep frontend inputs stable through all build-time context generation.
+      - name: Frontend build for Tauri metadata validation
+        run: npm run build
       - name: Format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-      # Let the regular library initialize generated Tauri context inputs
-      # before the first library-test compilation.
+      # Preserve documentation tests independently of the all-target suite.
       # The only extra feature is macOS-only. On Windows all-features tests
       # cover the default native code too; preserve doc-tests separately.
       - name: Rust documentation tests
@@ -298,8 +300,6 @@ jobs:
         env:
           AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
-      - name: Frontend build for Tauri metadata validation
-        run: npm run build
       # Reuse the feature set already compiled by the Windows test suite.
       # macos-ui-smoke adds no Windows code or Windows target dependency.
       - name: Build desktop and CLI
@@ -416,6 +416,9 @@ jobs:
           name: ci-inputs-${{ runner.os }}-${{ runner.arch }}
           path: tmp/build-inputs.json
           if-no-files-found: error
+      # Keep frontend inputs stable through all build-time context generation.
+      - name: Build frontend
+        run: npm run build
       - name: Lint native code
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Native tests
@@ -429,8 +432,6 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: python3 scripts/smoke-linux-vault.py
-      - name: Build frontend
-        run: npm run build
       - name: Build desktop and CLI
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings
       - name: Native CLI with a clean home

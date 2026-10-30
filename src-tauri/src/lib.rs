@@ -134,7 +134,7 @@ pub fn run() {
     }
     #[cfg(target_os = "macos")]
     launch_path::extend_for_desktop_launch();
-    let context = tauri::generate_context!();
+    let context = tauri::tauri_build_context!();
     #[cfg(windows)]
     let instance_startup = startup::InstanceStartupLock::acquire(&context.config().identifier)
         .expect("error coordinating application startup");
