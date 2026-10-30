@@ -42,7 +42,7 @@
     "test:direct": "node --experimental-strip-types tests/direct/run.ts",
     "test:unit": "npm run test:checks && npm run test:coverage",
     "test:provider-options": "node scripts/sync-provider-launch-options.mjs --check",
-    "test:scripts": "node --test scripts/package-tauri.test.mjs scripts/smoke-provider-runtime.test.mjs scripts/frontend-ci.test.mjs scripts/release-ci.test.mjs",
+    "test:scripts": "node --test scripts/package-tauri.test.mjs scripts/smoke-provider-runtime.test.mjs scripts/frontend-ci.test.mjs scripts/release-ci.test.mjs scripts/ci-rust-toolchain.test.mjs",
     "test:provider-runtime": "node --test scripts/smoke-provider-runtime.test.mjs && node scripts/smoke-provider-runtime.mjs --self-test",
     "test:native-cli": "node scripts/smoke-native-cli.mjs",
     "test": "npm run test:unit",

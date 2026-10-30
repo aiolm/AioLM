@@ -192,6 +192,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record package build inputs
         shell: bash
         env:
@@ -320,6 +322,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record package build inputs
         shell: bash
         env:
@@ -424,6 +428,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record package build inputs
         shell: bash
         env:

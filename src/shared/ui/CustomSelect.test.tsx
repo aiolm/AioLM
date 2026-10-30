@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import axe from "axe-core";
-import { Profiler, useState } from 'react';
+import { Profiler, useState, type ReactNode } from 'react';
 import { CustomSelect, OverlayContainerContext } from "./CustomSelect";
 
 const OPTIONS = [
@@ -200,6 +200,92 @@ describe("CustomSelect", () => {
 
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each<[string, (select: ReactNode) => ReactNode]>([
+    ["multiple explicit labels", select => <><label htmlFor="theme">First</label>{select}<label htmlFor="theme">Second</label></>],
+    ["a wrapping label", select => <label>Wrapping{select}</label>],
+    ["an explicit empty for attribute", select => <label htmlFor="">Empty target{select}</label>],
+    ["an explicit different target", select => <><input id="other" /><label htmlFor="other">Other target{select}</label></>],
+    ["a preceding non-labelable duplicate id", select => <><span id="theme" /><label htmlFor="theme">Duplicate</label>{select}</>],
+    ["a preceding labelable duplicate id", select => <><button id="theme">Earlier</button><label htmlFor="theme">Duplicate</label>{select}</>],
+    ["a later duplicate id", select => <><label htmlFor="theme">First control</label>{select}<input id="theme" /></>],
+    ["a wrapping label with an earlier control", select => <label>First child<input />{select}</label>],
+  ])("keeps native label activation boundaries for %s", (_name, layout) => {
+    const { container } = render(layout(<CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} />));
+    const trigger = container.querySelector<HTMLButtonElement>('button[role="combobox"]');
+    if (!trigger) throw new Error("Select trigger not found.");
+    const nativeLabels = Array.from(trigger.labels ?? []);
+    for (const label of container.querySelectorAll("label")) {
+      expect(fireEvent.click(label)).toBe(!nativeLabels.includes(label));
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+      if (nativeLabels.includes(label)) expect(trigger).toHaveFocus();
+    }
+    if (nativeLabels.length > 1) {
+      fireEvent.click(trigger);
+      expect(screen.getByRole("listbox", { name: "First Second" })).toBeInTheDocument();
+    }
+  });
+
+  it("rebinds when the same label is retargeted without changing select props", () => {
+    function Harness() {
+      const [linked, setLinked] = useState(false);
+      return <>
+        <button onClick={() => setLinked(value => !value)}>Retarget</button>
+        <input id="other" />
+        <label htmlFor={linked ? "theme" : "other"}>Dynamic label</label>
+        <CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} />
+      </>;
+    }
+    const { container } = render(<Harness />);
+    const trigger = container.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+    const label = screen.getByText("Dynamic label");
+    expect(fireEvent.click(label)).toBe(true);
+    fireEvent.click(screen.getByText("Retarget"));
+    expect(fireEvent.click(label)).toBe(false);
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByText("Retarget"));
+    expect(fireEvent.click(label)).toBe(true);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps labels inside the select's shadow tree and names its portalled menu", () => {
+    const host = document.createElement("div");
+    const outside = document.createElement("label");
+    outside.htmlFor = "theme";
+    outside.textContent = "Outside";
+    document.body.append(outside, host);
+    const shadow = host.attachShadow({ mode: "open" });
+    const view = render(<><label htmlFor="theme">Inside</label><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} /></>, { container: shadow });
+    try {
+      const trigger = shadow.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+      const label = shadow.querySelector("label")!;
+      expect(Array.from(trigger.labels ?? [])).toEqual([label]);
+      expect(fireEvent.click(outside)).toBe(true);
+      expect(fireEvent.click(label)).toBe(false);
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(trigger);
+      expect(screen.getByRole("listbox", { name: "Inside" })).toBeInTheDocument();
+    } finally {
+      view.unmount(); outside.remove(); host.remove();
+    }
+  });
+
+  it.each([false, true])("keeps a detached root label associated (namespaced for: %s)", namespaced => {
+    const label = document.createElement("label");
+    if (namespaced) label.setAttributeNS("urn:synthetic", "for", "another-target");
+    const view = render(<><span>Detached label</span><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} /></>, { container: label });
+    try {
+      const trigger = label.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+      expect(trigger.getRootNode()).toBe(label);
+      expect(Array.from(trigger.labels ?? [])).toEqual([label]);
+      expect(fireEvent.click(label)).toBe(false);
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+    } finally {
+      view.unmount();
+    }
+    expect(fireEvent.click(label)).toBe(true);
   });
 
   it("displays clean paths while selecting and submitting the original path", () => {

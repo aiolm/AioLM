@@ -266,6 +266,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record native verification inputs
         run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
       - name: Restore Cargo dependencies (verify)
@@ -396,6 +398,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record native verification inputs
         run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
       - name: Restore Cargo dependencies (verify)
@@ -550,6 +554,8 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Isolate the pinned hosted Rust toolchain
+        run: node scripts/ci-rust-toolchain.mjs
       - name: Record default-feature verification inputs
         run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
       - name: Restore Cargo dependencies (verify)

@@ -52,6 +52,24 @@ const MENU_EDGE = 8;
 /** Longest line a menu grows to for options wider than their trigger. */
 const MENU_READABLE_WIDTH = "30rem";
 
+function associatedLabels(trigger: HTMLButtonElement | HTMLInputElement | null): HTMLLabelElement[] {
+  if (!trigger) return [];
+  const root = trigger.getRootNode();
+  if (!("querySelectorAll" in root)) return [];
+  const labels = Array.from((root as ParentNode).querySelectorAll<HTMLLabelElement>("label"));
+  // A detached label can itself be the tree root, outside querySelectorAll.
+  if (root.nodeType === 1 && (root as Element).localName === "label") labels.unshift(root as HTMLLabelElement);
+  return labels.filter(label => {
+    // Narrow candidates before asking the browser to resolve their control.
+    // This avoids resolving every unrelated label after each editor commit.
+    if (label.hasAttributeNS(null, "for")) {
+      if (label.getAttributeNS(null, "for") !== trigger.id) return false;
+    } else if (!label.contains(trigger)) return false;
+    // Retain native duplicate-id, first-labelable-child and tree semantics.
+    return label.control === trigger;
+  });
+}
+
 export function CustomSelect<T extends string | number = string>({
   id,
   name,
@@ -132,7 +150,7 @@ export function CustomSelect<T extends string | number = string>({
   // without changing the control props, so dependency-based binding misses them.
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
-    const labels = trigger ? Array.from(trigger.labels ?? []) : [];
+    const labels = associatedLabels(trigger);
     const previousLabels = boundLabelsRef.current;
     const labelsChanged = labels.length !== previousLabels.length || labels.some((label) => !previousLabels.includes(label));
     if (labelsChanged) {
@@ -267,7 +285,7 @@ export function CustomSelect<T extends string | number = string>({
     setHighlightedIndex(visibleOptions.findIndex((opt) => opt.value === value));
     // A portalled listbox is outside the native <label>, so it repeats the label's
     // own text; a wrapping label's copy of the trigger (the selected value) is dropped.
-    setLabelName(Array.from(triggerRef.current?.labels ?? []).map((label) => {
+    setLabelName(associatedLabels(triggerRef.current).map((label) => {
       const copy = label.cloneNode(true) as HTMLLabelElement;
       copy.querySelectorAll(".app-custom-select-container").forEach((element) => element.remove());
       return copy.textContent?.trim();
