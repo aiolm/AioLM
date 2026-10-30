@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readCiWorkflowSources, verifyCiWorkflowContracts } from "./ci-workflow-contract.mjs";
 
-const sources = readCiWorkflowSources();
-const verify = patch => verifyCiWorkflowContracts({ ...sources, ...patch });
+// Windows checks out YAML with CRLF. Use one canonical mutation fixture so a
+// literal replacement always changes the intended input on every host.
+const sources = Object.fromEntries(Object.entries(readCiWorkflowSources()).map(([key, source]) => [key, source.replace(/\r\n/g, "\n")]));
+const verify = patch => {
+  for (const [key, source] of Object.entries(patch ?? {})) {
+    assert.notEqual(source, sources[key], `Expected mutation of ${key} to change the fixture`);
+  }
+  return verifyCiWorkflowContracts({ ...sources, ...patch });
+};
 
 test("all seven cached jobs preserve compiler isolation, cache purposes and matching effective environments", () => {
   assert.deepEqual(verify(), { guardedJobs: 7, rustPin: "1.98.0" });
@@ -11,6 +18,16 @@ test("all seven cached jobs preserve compiler isolation, cache purposes and matc
 
 test("the historical release/package backtrace mismatch is rejected", () => {
   assert.throws(() => verify({ packages: sources.packages.replace('      RUST_BACKTRACE: "1"\n', "") }), /Cache environment differs between package jobs/);
+});
+
+test("LF and Windows CRLF workflows enforce the same historical mismatch check", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const variant = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.replace(/\n/g, newline)]));
+    assert.deepEqual(verifyCiWorkflowContracts(variant), verify());
+    const packages = variant.packages.replace(/ {6}RUST_BACKTRACE: "1"\r?\n/, "");
+    assert.notEqual(packages, variant.packages, "Expected backtrace removal in either line-ending format");
+    assert.throws(() => verifyCiWorkflowContracts({ ...variant, packages }), /Cache environment differs between package jobs/);
+  }
 });
 
 test("the pinned installer default makes explicit and implicit incremental settings equivalent", () => {
