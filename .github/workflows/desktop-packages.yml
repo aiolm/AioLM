@@ -204,6 +204,7 @@ jobs:
           name: desktop-packages-${{ matrix.os }}
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
           path: |
             .codex-target/release/bundle/**/*.exe
             .codex-target/release/bundle/**/*.msi

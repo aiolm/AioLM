@@ -10,6 +10,8 @@
 //! start/stop journey through that actual redirector and a synthetic script.
 #![cfg(windows)]
 
+#[path = "support/launch_resource_binding.rs"]
+mod launch_resource_binding;
 #[path = "support/windows_listener.rs"]
 mod windows_listener;
 
@@ -3306,11 +3308,37 @@ impl PublicCase {
             "exact native/launcher/collector tree",
         )?;
         if !plan.native {
-            let marker: Value = serde_json::from_slice(&public_io(fs::read(
-                self.launches[index].directory.join(".aiolm-launch.json"),
-            ))?)
-            .map_err(|e| e.to_string())?;
-            let root_pid = auxiliary_pid(&marker["pid"])?;
+            let directory = &self.launches[index].directory;
+            let expected_id = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("resource UUID directory")?;
+            let marker_path = directory.join(".aiolm-launch.json");
+            let binding_started = Instant::now();
+            // Spawning resumes the launcher before the parent binds its PID.
+            // A descendant receipt alone is not the resource-binding barrier.
+            let binding = launch_resource_binding::wait_for_resource_binding(
+                expected_id,
+                listener,
+                &engines,
+                deadline,
+                || {
+                    serde_json::from_slice(&public_io(fs::read(&marker_path))?)
+                        .map_err(|error| error.to_string())
+                },
+                || {
+                    self.launches[index]
+                        .processes
+                        .iter()
+                        .filter(|process| {
+                            engines.contains(&process.pid) || collectors.contains(&process.pid)
+                        })
+                        .all(|process| process.running() && job.contains(process.pid))
+                },
+            )?;
+            let marker = binding.marker;
+            let root_pid = binding.pid;
+            self.evidence.push(serde_json::json!({"resource_marker_binding":{"marker":marker,"pending_observations":binding.pending_observations,"wait_ms":binding_started.elapsed().as_millis(),"within_original_start_bound":Instant::now()<=deadline}}));
             public_require(
                 marker["version"] == 1
                     && root_pid != listener

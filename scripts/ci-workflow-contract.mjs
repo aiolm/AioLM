@@ -82,6 +82,29 @@ function stepsFrom(entry, context) {
   return blocks.map((lines, index) => mapAt(lines, 8, `${context}.steps[${index}]`));
 }
 
+function frontendBeforeNativeCompile(source) {
+  const workflow = mapAt(source.replace(/\r\n/g, "\n").split("\n"), 0, "workflow");
+  const jobs = mapping(workflow.get("jobs"), 2, "jobs");
+  for (const name of ["rust", "rust-portability", "macos-default"]) {
+    const job = mapping(jobs.get(name), 4, `jobs.${name}`);
+    const steps = stepsFrom(job.get("steps"), name);
+    const scripts = steps.map(step => {
+      const run = step.get("run");
+      return !run ? "" : run.lines.length ? [run.value, ...run.lines].join("\n") : scalar(run, `${name}.run`);
+    });
+    const builds = scripts.flatMap((script, index) => [...script.matchAll(/^\s*npm\s+run\s+build(?:\s|$)/gm)].map(() => index));
+    if (name === "macos-default") {
+      requireThat(builds.length === 0, "Mac default helper must not rebuild frontend inputs");
+      continue;
+    }
+    const firstCompile = scripts.findIndex(script => /^\s*cargo\s+(?:\+\S+\s+)?(?:clippy|test|build)(?:\s|$)/m.test(script));
+    requireThat(builds.length === 1 && firstCompile >= 0 && builds[0] < firstCompile,
+      `Frontend build must run once before the first Cargo compile in ${name}`);
+    requireThat(!["if", "continue-on-error"].some(key => steps[builds[0]].has(key)),
+      `Frontend build must be unconditional and required in ${name}`);
+  }
+}
+
 function cacheRecipe(source, jobName, purpose, helper, pin) {
   const workflow = mapAt(source.replace(/\r\n/g, "\n").split("\n"), 0, "workflow");
   const jobs = mapping(workflow.get("jobs"), 2, "jobs");
@@ -157,6 +180,8 @@ export function verifyCiWorkflowContracts({ ci, release, packages, rustManifest 
     const reference = JSON.stringify(group[0]);
     requireThat(group.every(recipe => JSON.stringify(recipe) === reference), `Cache environment differs between ${group[0].purpose} jobs`);
   }
+  // Keep frontend inputs stable while build-time context generation is reused.
+  frontendBeforeNativeCompile(ci);
   return { guardedJobs: verification.length + packaging.length, rustPin: pin };
 }
 
