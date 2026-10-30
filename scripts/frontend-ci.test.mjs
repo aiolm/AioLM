@@ -134,7 +134,7 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
     reportsDirectory: 'coverage', thresholds: { statements: process.env.AIOLM_COVERAGE_THRESHOLD_PROBE ? 100 : 40,
       branches: 35, functions: 35, lines: 45 } } } });\n`);
   writeFileSync(join(fixture, "src/math.ts"), "export function add(a: number, b: number) { return a + b; }\nexport function unused() { return 0; }\n");
-  writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; if (process.env.AIOLM_FRONTEND_COLLECTION_BLOCKED) throw new Error('Test module recollection is blocked'); it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1));\n");
+  writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; if (process.env.AIOLM_FRONTEND_COLLECTION_BLOCKED) throw new Error('Test module recollection is blocked'); it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1)); if (process.env.AIOLM_FRONTEND_UNHANDLED_PROBE) it('preserves a failing unhandled rejection', () => { void Promise.reject(new Error('Unhandled frontend contract rejection')); expect(add(1, 1)).toBe(2); });\n");
   writeFileSync(join(fixture, "src/two.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it('second file', () => expect(add(2, 3)).toBe(5));\n");
   const runWithEnv = (args, env = {}) => {
     const result = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), ...args], {
@@ -202,6 +202,22 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   });
   assert.equal(strict.status, 1, strict.stdout + strict.stderr);
   assert.match(strict.stdout + strict.stderr, /Coverage for statements.*does not meet global threshold/);
+  const unhandledIndex = actualPlan.assignments.findIndex((paths) => paths.includes("src/one.test.ts")) + 1;
+  const unhandled = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), "shard", "--plan", "tmp/plan.json", "--index", String(unhandledIndex), "--output", "tmp/unhandled-shard"], {
+    cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false", AIOLM_FRONTEND_UNHANDLED_PROBE: "1" }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(unhandled.status, 1, unhandled.stdout + unhandled.stderr);
+  assert.match(readFileSync(join(fixture, "tmp/unhandled-shard/blob.json"), "utf8"), /Unhandled frontend contract rejection/);
+  // Vitest's JSON reporter can mark every assertion as passed despite an
+  // unhandled rejection. The actual process status must still fail the shard.
+  const unhandledReport = JSON.parse(readFileSync(join(fixture, "tmp/unhandled-shard/results.json"), "utf8"));
+  assert.equal(unhandledReport.numPassedTests, 3);
+  assert.equal(unhandledReport.numFailedTests, 0);
+  const unhandledRecord = JSON.parse(readFileSync(join(fixture, "tmp/unhandled-shard/record.json"), "utf8"));
+  assert.equal(unhandledRecord.exitCode, unhandled.status);
+  const unhandledRecords = ["one", "two"].map((directory) => JSON.parse(readFileSync(join(fixture, `tmp/shards/${directory}/record.json`), "utf8")))
+    .map((entry) => entry.index === unhandledIndex ? unhandledRecord : entry);
+  assert.throws(() => verifyRecords(actualPlan, unhandledRecords, planDigest), /failed/);
   writeFileSync(join(fixture, "src/omitted.test.ts"), "import { it, expect } from 'vitest'; it('new source', () => expect(1).toBe(1));\n");
   const omitted = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), "merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/omitted-merge", ...trustedArguments], {
     cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 30_000,
