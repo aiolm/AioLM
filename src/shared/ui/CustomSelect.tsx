@@ -56,18 +56,23 @@ function associatedLabels(trigger: HTMLButtonElement | HTMLInputElement | null):
   if (!trigger) return [];
   const root = trigger.getRootNode();
   if (!("querySelectorAll" in root)) return [];
-  const labels = Array.from((root as ParentNode).querySelectorAll<HTMLLabelElement>("label"));
-  // A detached label can itself be the tree root, outside querySelectorAll.
-  if (root.nodeType === 1 && (root as Element).localName === "label") labels.unshift(root as HTMLLabelElement);
-  return labels.filter(label => {
-    // Narrow candidates before asking the browser to resolve their control.
-    // This avoids resolving every unrelated label after each editor commit.
-    if (label.hasAttributeNS(null, "for")) {
-      if (label.getAttributeNS(null, "for") !== trigger.id) return false;
-    } else if (!label.contains(trigger)) return false;
-    // Retain native duplicate-id, first-labelable-child and tree semantics.
-    return label.control === trigger;
-  });
+  const id = trigger.id;
+  // CSS selectors replace nulls and unpaired surrogates, so these rare IDs
+  // need the native lookup to retain their exact DOM value.
+  if (/[\u0000\ud800-\udfff]/u.test(id)) return Array.from(trigger.labels ?? []);
+  const escapedId = id.replace(/[\u0001-\u001f\u007f"\\\u{10000}-\u{10ffff}]/gu, character => `\\${character.codePointAt(0)!.toString(16)} `);
+  // Only explicit labels can be outside the control's ancestors. Keep their
+  // lookup selective rather than inspecting every label on every editor commit.
+  const labels = id
+    ? Array.from((root as ParentNode).querySelectorAll<HTMLLabelElement>(`label[for="${escapedId}"]`))
+    : [];
+  for (let parent = trigger.parentElement; parent; parent = parent.parentElement) {
+    if (parent.localName === "label" && !labels.includes(parent as HTMLLabelElement)) labels.push(parent as HTMLLabelElement);
+  }
+  // Native resolution retains duplicate-id, namespaced attribute and first
+  // labelable-child rules. Ancestor labels must rejoin explicit labels in tree order.
+  return labels.filter(label => label.control === trigger)
+    .sort((left, right) => left === right ? 0 : left.compareDocumentPosition(right) & 4 ? -1 : 1);
 }
 
 export function CustomSelect<T extends string | number = string>({

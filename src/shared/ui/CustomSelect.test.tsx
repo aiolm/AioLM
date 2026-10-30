@@ -227,6 +227,44 @@ describe("CustomSelect", () => {
     }
   });
 
+  it.each([
+    'theme"], label[for="other',
+    String.raw`theme\path`,
+    "theme\n\r\fnext",
+    "theme\u0001\u001f\u007fnext",
+    "theme\u0000next",
+    "theme\ud800next",
+    "theme\udfffnext",
+    "theme🦜 next",
+  ])("keeps an arbitrary label target literal: %j", id => {
+    const { container } = render(<>
+      <label htmlFor={id}>Literal target</label>
+      <label htmlFor="other">Other target</label><input id="other" />
+      <CustomSelect id={id} value="light" options={OPTIONS} onChange={vi.fn()} />
+    </>);
+    const trigger = container.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+    const label = screen.getByText("Literal target");
+    expect(Array.from(trigger.labels ?? [])).toEqual([label]);
+    expect(fireEvent.click(screen.getByText("Other target"))).toBe(true);
+    expect(fireEvent.click(label)).toBe(false);
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("listbox", { name: "Literal target" })).toBeInTheDocument();
+  });
+
+  it("names the menu from interleaved explicit and wrapping labels in tree order", () => {
+    const { container } = render(<>
+      <label htmlFor="theme">Before</label>
+      <label><span>Wrapping</span><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} /></label>
+      <label htmlFor="theme">After</label>
+    </>);
+    const trigger = container.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+    for (const label of container.querySelectorAll("label")) expect(fireEvent.click(label)).toBe(false);
+    fireEvent.click(trigger);
+    expect(screen.getByRole("listbox", { name: "Before Wrapping After" })).toBeInTheDocument();
+  });
+
   it("rebinds when the same label is retargeted without changing select props", () => {
     function Harness() {
       const [linked, setLinked] = useState(false);
@@ -282,6 +320,22 @@ describe("CustomSelect", () => {
       expect(Array.from(trigger.labels ?? [])).toEqual([label]);
       expect(fireEvent.click(label)).toBe(false);
       expect(trigger).toHaveAttribute("aria-expanded", "false");
+    } finally {
+      view.unmount();
+    }
+    expect(fireEvent.click(label)).toBe(true);
+  });
+
+  it("keeps an explicit detached root label associated", () => {
+    const label = document.createElement("label");
+    label.htmlFor = "theme";
+    const view = render(<><span>Detached target</span><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} /></>, { container: label });
+    try {
+      const trigger = label.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+      expect(Array.from(trigger.labels ?? [])).toEqual([label]);
+      expect(fireEvent.click(label)).toBe(false);
+      fireEvent.click(trigger);
+      expect(screen.getByRole("listbox", { name: "Detached target" })).toBeInTheDocument();
     } finally {
       view.unmount();
     }

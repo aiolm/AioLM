@@ -432,7 +432,7 @@ jobs:
       - name: Build frontend
         run: npm run build
       - name: Build desktop and CLI
-        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings
       - name: Native CLI with a clean home
         run: npm run test:native-cli
       - name: Detected macOS GPU and Metal support
@@ -463,7 +463,7 @@ jobs:
         env:
           AIOLM_NATIVE_CPU: "1"
           AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Save successfully exercised native test model
         if: runner.os == 'macOS' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.macos_cpu.outcome == 'success' && steps.native-model.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -478,7 +478,7 @@ jobs:
         run: |
           mkdir -p tmp
           swiftc scripts/macos-window-probe.swift -o tmp/macos-window-probe
-          cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm --no-default-features --features macos-ui-smoke
+          cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm --no-default-features --features macos-ui-smoke --timings
       - name: Real WKWebView onboarding, settings and window lifecycle
         if: runner.os == 'macOS'
         timeout-minutes: 5
@@ -507,7 +507,7 @@ jobs:
         env:
           AIOLM_NATIVE_METAL: "1"
           AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_metal_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings --test native_cpu real_metal_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Retain native Cargo timings
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
