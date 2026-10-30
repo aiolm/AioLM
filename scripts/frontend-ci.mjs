@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const VERSION = 1;
+const VERSION = 2;
 const INPUTS = ["vitest.config.ts", "vitest.ci.config.ts", "vitest.setup.ts", "scripts/frontend-ci.mjs", "package.json", "package-lock.json"];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -72,20 +72,26 @@ function runVitest(args, env = {}) {
   return result.status ?? 1;
 }
 
-function collect(output) {
+function collect(output, { config = "vitest.config.ts", env = {} } = {}) {
   mkdirSync(dirname(output), { recursive: true });
-  const code = runVitest(["list", "--config", "vitest.config.ts", "--json", output]);
+  const code = runVitest(["list", "--config", config, "--json", output], env);
   requireThat(code === 0, "Frontend test collection failed");
   return inventory(json(output));
 }
 
-function checkSourceFiles(plan, output) {
-  // filesOnly applies the real include/exclude globs without importing tests
-  // or constructing hundreds of jsdom environments a second time.
+function discoverFiles(output) {
+  mkdirSync(dirname(output), { recursive: true });
+  // Global planning applies the real globs without importing test modules or
+  // constructing their DOM environments. Each shard collects its own cases.
   const code = runVitest(["list", "--config", "vitest.config.ts", "--filesOnly", "--json", output]);
   requireThat(code === 0, "Frontend source file discovery failed");
-  const current = json(output).map((entry) => testPath(entry.file)).sort();
-  same(current, plan.files.map((entry) => entry.path).sort(), "Current source file inventory");
+  const files = json(output).map((entry) => testPath(entry.file)).sort();
+  requireThat(files.length > 0 && new Set(files).size === files.length, "Empty or duplicate frontend source file inventory");
+  return files.map((path) => ({ path }));
+}
+
+function checkSourceFiles(plan, output) {
+  same(discoverFiles(output).map((entry) => entry.path), plan.files.map((entry) => entry.path).sort(), "Current source file inventory");
 }
 
 export function verifyPlanDigest(bytes, expected) {
@@ -93,11 +99,34 @@ export function verifyPlanDigest(bytes, expected) {
   requireThat(hash(bytes) === expected.toLowerCase(), "Frontend plan does not match the trusted producer digest");
 }
 
+export function verifyCaseDigest(bytes, expected) {
+  requireThat(typeof expected === "string" && /^[a-f0-9]{64}$/i.test(expected), "Expected frontend case digest must be 64 hexadecimal characters");
+  requireThat(hash(bytes) === expected.toLowerCase(), "Frontend cases do not match the trusted producer digest");
+}
+
 export function planOutputEntry(runnerOs, digest) {
   const key = runnerOs === "Linux" ? "linux_plan" : runnerOs === "Windows" ? "windows_plan" : undefined;
   requireThat(key, "Frontend plan output requires a Linux or Windows runner");
   requireThat(/^[a-f0-9]{64}$/.test(digest), "Invalid frontend plan output digest");
   return `${key}=${digest}\n`;
+}
+
+export function casesOutputEntry(runnerOs, index, digest) {
+  const key = runnerOs === "Linux" ? "linux" : runnerOs === "Windows" ? "windows" : undefined;
+  requireThat(key, "Frontend cases output requires a Linux or Windows runner");
+  requireThat(Number.isInteger(index) && index > 0 && index <= 32, "Invalid frontend cases output index");
+  requireThat(/^[a-f0-9]{64}$/.test(digest), "Invalid frontend cases output digest");
+  return `${key}_${index}_cases=${digest}\n`;
+}
+
+export function expectedCaseDigests(value, count) {
+  const digests = JSON.parse(value);
+  requireThat(digests && typeof digests === "object" && !Array.isArray(digests), "Expected frontend case digests must be an index map");
+  same(Object.keys(digests).sort(), Array.from({ length: count }, (_, index) => String(index + 1)).sort(), "Trusted case digest indices");
+  for (const digest of Object.values(digests)) {
+    requireThat(typeof digest === "string" && /^[a-f0-9]{64}$/i.test(digest), "Expected frontend case digest must be 64 hexadecimal characters");
+  }
+  return digests;
 }
 
 function stamp(files) {
@@ -123,7 +152,7 @@ export function validateAssignments(plan) {
 function validateCheckout(plan) {
   validateAssignments(plan);
   same(plan.sourceSha, sourceSha(), "Plan source SHA");
-  const current = stamp(plan.files.map(({ path, tests }) => ({ path, tests })));
+  const current = stamp(plan.files.map(({ path }) => ({ path })));
   same(current.files, plan.files, "Test source hashes");
   same(current.inputs, plan.inputs, "Frontend configuration hashes");
 }
@@ -151,11 +180,25 @@ export function reportInventory(report, root = ROOT) {
   return inventory(tests, root);
 }
 
-export function verifyReport(plan, index, report, root = ROOT) {
+export function verifyCases(plan, index, cases, planDigest) {
   const assigned = plan.assignments[index - 1];
   requireThat(Array.isArray(assigned), "Unknown frontend shard index");
-  const expected = plan.files.filter((file) => assigned.includes(file.path)).map(({ path, tests }) => ({ path, tests }));
-  same(reportInventory(report, root), expected, `Shard ${index} tests`);
+  requireThat(cases.formatVersion === VERSION && cases.sourceSha === plan.sourceSha && cases.planSha256 === planDigest
+    && cases.index === index && cases.shardCount === plan.shardCount, "Collected cases belong to a different source, plan or shard");
+  requireThat(Array.isArray(cases.files), "Missing collected frontend cases");
+  const normalized = [];
+  for (const file of cases.files) {
+    requireThat(Array.isArray(file.tests) && file.tests.length > 0, "Empty collected frontend file");
+    for (const name of file.tests) normalized.push({ file: file.path, name });
+  }
+  const files = inventory(normalized);
+  same(files, cases.files, "Collected case inventory");
+  same(files.map((file) => file.path).sort(), [...assigned].sort(), `Shard ${index} collected files`);
+  return files;
+}
+
+export function verifyReport(cases, report, root = ROOT) {
+  same(reportInventory(report, root), cases.files, `Shard ${cases.index} tests`);
 }
 
 function checkedOutput(path) {
@@ -166,18 +209,18 @@ function checkedOutput(path) {
 
 function makePlan(options) {
   const output = checkedOutput(options.output ?? "tmp/frontend-ci/plan.json");
-  const collected = collect(join(dirname(output), "collected.json"));
+  const discovered = discoverFiles(join(dirname(output), "source-files.json"));
   const timings = options.timings && existsSync(options.timings) ? json(options.timings).files : {};
   const count = Number(options.shards ?? 2);
-  const sizes = Object.fromEntries(collected.map((file) => [file.path, readFileSync(resolve(ROOT, file.path)).length]));
-  const plan = { formatVersion: VERSION, sourceSha: sourceSha(), shardCount: count, ...stamp(collected), assignments: assignFiles(collected, count, timings, sizes) };
+  const sizes = Object.fromEntries(discovered.map((file) => [file.path, readFileSync(resolve(ROOT, file.path)).length]));
+  const plan = { formatVersion: VERSION, sourceSha: sourceSha(), shardCount: count, ...stamp(discovered), assignments: assignFiles(discovered, count, timings, sizes) };
   validateAssignments(plan);
   writeJson(output, plan);
   if (process.env.GITHUB_ACTIONS === "true") {
     requireThat(process.env.GITHUB_OUTPUT, "Missing GitHub output file for frontend plan digest");
     appendFileSync(process.env.GITHUB_OUTPUT, planOutputEntry(process.env.RUNNER_OS, hash(readFileSync(output))));
   }
-  console.log(`Planned ${collected.length} files and ${collected.reduce((n, file) => n + file.tests.length, 0)} tests in ${count} disjoint shards.`);
+  console.log(`Planned ${discovered.length} files in ${count} disjoint shards without importing tests.`);
 }
 
 function runShard(options) {
@@ -191,19 +234,34 @@ function runShard(options) {
   const output = checkedOutput(options.output ?? `tmp/frontend-ci/shard-${index}`);
   requireThat(!existsSync(output), "Refusing to reuse a frontend shard output directory");
   mkdirSync(output, { recursive: true });
+  checkSourceFiles(plan, join(output, "source-files.json"));
+  const shardEnv = { AIOLM_FRONTEND_PLAN: planPath, AIOLM_FRONTEND_SHARD: String(index), AIOLM_FRONTEND_OUTPUT: output };
+  const cases = {
+    formatVersion: VERSION, sourceSha: plan.sourceSha, planSha256: hash(planBytes), index, shardCount: plan.shardCount,
+    files: collect(join(output, "collected.json"), { config: "vitest.ci.config.ts", env: shardEnv }),
+  };
+  verifyCases(plan, index, cases, hash(planBytes));
+  const casesPath = join(output, "cases.json");
+  writeJson(casesPath, cases);
+  const casesSha256 = hash(readFileSync(casesPath));
+  if (process.env.GITHUB_ACTIONS === "true") {
+    requireThat(process.env.GITHUB_OUTPUT, "Missing GitHub output file for frontend case digest");
+    appendFileSync(process.env.GITHUB_OUTPUT, casesOutputEntry(process.env.RUNNER_OS, index, casesSha256));
+  }
   const blob = join(output, "blob.json");
   const results = join(output, "results.json");
   const code = runVitest(["run", "--config", "vitest.ci.config.ts", "--coverage", "--reporter=blob", "--reporter=json", `--outputFile.blob=${blob}`, `--outputFile.json=${results}`], {
-    AIOLM_FRONTEND_PLAN: planPath, AIOLM_FRONTEND_SHARD: String(index), AIOLM_FRONTEND_OUTPUT: output,
+    ...shardEnv,
   });
   // Preserve failure status even when Vitest managed to write partial reports.
   writeJson(join(output, "record.json"), {
     formatVersion: VERSION, sourceSha: plan.sourceSha, planSha256: hash(planBytes), index, shardCount: plan.shardCount, exitCode: code,
+    casesSha256,
     blobSha256: existsSync(blob) ? hash(readFileSync(blob)) : null,
     resultsSha256: existsSync(results) ? hash(readFileSync(results)) : null,
   });
   if (code !== 0) return code;
-  verifyReport(plan, index, json(results));
+  verifyReport(cases, json(results));
   return 0;
 }
 
@@ -225,27 +283,39 @@ function merge(options) {
   if (trustedPlan) verifyPlanDigest(planBytes, options["expected-plan-sha"]);
   const plan = JSON.parse(planBytes);
   validateCheckout(plan);
+  requireThat(trustedPlan === Object.hasOwn(options, "expected-cases-shas"), "Trusted merge requires both plan and all case producer digests");
+  const trustedCases = trustedPlan ? expectedCaseDigests(options["expected-cases-shas"], plan.shardCount) : undefined;
   const output = checkedOutput(options.output ?? "tmp/frontend-ci/merged");
   requireThat(!existsSync(output), "Refusing to reuse a frontend merge output directory");
   mkdirSync(output, { recursive: true });
-  const expected = plan.files.map(({ path, tests }) => ({ path, tests }));
-  let current;
-  if (trustedPlan) {
-    // CI passes the producing job's digest separately from downloaded artifacts.
-    // That authenticates the once-collected names; source hashes and the cheap
-    // fresh file inventory still prevent stale/new/omitted source files.
-    checkSourceFiles(plan, join(output, "source-files.json"));
-    current = expected;
-  } else {
-    // Local callers without an independently trusted digest retain the full
-    // recollection check; artifact metadata alone never authorizes omissions.
+  // File discovery is cheap and independent of the downloaded plan or cases.
+  checkSourceFiles(plan, join(output, "source-files.json"));
+  const input = resolve(ROOT, options.input);
+  const directories = readdirSync(input).map((name) => join(input, name));
+  requireThat(directories.every((path) => lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink()
+    && existsSync(join(path, "record.json"))), "Unexpected frontend shard report entry");
+  const records = directories.map((path) => json(join(path, "record.json")));
+  verifyRecords(plan, records, hash(planBytes));
+  const cases = directories.map((path, position) => {
+    const record = records[position];
+    const file = join(path, "cases.json");
+    requireThat(lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink(), "Invalid frontend case inventory file");
+    const bytes = readFileSync(file);
+    requireThat(hash(bytes) === record.casesSha256, "Changed frontend case inventory");
+    if (trustedPlan) verifyCaseDigest(bytes, trustedCases[String(record.index)]);
+    const collected = JSON.parse(bytes);
+    verifyCases(plan, record.index, collected, hash(planBytes));
+    return collected;
+  });
+  const expected = cases.flatMap((entry) => entry.files).sort((a, b) => a.path.localeCompare(b.path));
+  same(expected.map((file) => file.path).sort(), plan.files.map((file) => file.path).sort(), "Merged collected file inventory");
+  let current = expected;
+  if (!trustedPlan) {
+    // Artifact self-hashes alone never authenticate collected names. Local
+    // callers retain independent full collection from the current checkout.
     current = collect(join(output, "collected.json"));
     same(current, expected, "Merged source test inventory");
   }
-  const input = resolve(ROOT, options.input);
-  const directories = readdirSync(input).map((name) => join(input, name)).filter((path) => lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink() && existsSync(join(path, "record.json")));
-  const records = directories.map((path) => json(join(path, "record.json")));
-  verifyRecords(plan, records, hash(planBytes));
   const blobs = join(output, "blobs");
   mkdirSync(blobs);
   directories.forEach((path, position) => {
@@ -254,7 +324,7 @@ function merge(options) {
       const file = join(path, name);
       requireThat(lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink() && hash(readFileSync(file)) === expected, `Changed frontend report: ${name}`);
     }
-    verifyReport(plan, record.index, json(join(path, "results.json")));
+    verifyReport(cases[position], json(join(path, "results.json")));
     copyFileSync(join(path, "blob.json"), join(blobs, `shard-${record.index}.json`));
   });
   const results = join(output, "results.json");
@@ -274,7 +344,7 @@ function parseOptions(args) {
   const options = {};
   while (args.length) {
     const key = args.shift();
-    requireThat(/^--(?:plan|index|output|input|shards|timings|expected-plan-sha)$/.test(key ?? "") && args.length > 0, `Unknown or incomplete argument: ${key}`);
+    requireThat(/^--(?:plan|index|output|input|shards|timings|expected-plan-sha|expected-cases-shas)$/.test(key ?? "") && args.length > 0, `Unknown or incomplete argument: ${key}`);
     requireThat(!Object.hasOwn(options, key.slice(2)), `Repeated argument: ${key}`);
     options[key.slice(2)] = args.shift();
   }
