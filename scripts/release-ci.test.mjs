@@ -15,13 +15,13 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 function workflowScript(source, name, next) {
   const parts = source.replace(/\r\n/g, "\n").split(`      - name: ${name}\n`);
   assert.equal(parts.length, 2, `Expected one ${name} step`);
-  const step = parts[1].split(`      - name: ${next}\n`)[0];
+  const step = parts[1].split(next.startsWith("\n") ? next : `      - name: ${next}\n`)[0];
   assert.ok(step.includes("          script: |\n"), `Expected inline ${name} policy`);
   const script = step.split("          script: |\n")[1].split("\n").filter(line => line.trim()).map(line => {
     assert.ok(line.startsWith("            "), `Unexpected ${name} script indentation`);
     return line.slice(12);
   }).join("\n");
-  return new AsyncFunction("github", "context", "process", "core", script);
+  return new AsyncFunction("github", "context", "process", "core", "require", script);
 }
 
 function publicationFixture(options = {}, workflow = releaseWorkflow) {
@@ -52,13 +52,31 @@ function publicationFixture(options = {}, workflow = releaseWorkflow) {
       ...Object.fromEntries(["createRef", "updateRef", "deleteRef"].map(name => [name, mutation(name)])),
     },
   } };
-  const context = { repo: { owner: "synthetic", repo: "synthetic" } };
+  const context = { repo: { owner: "synthetic", repo: "synthetic" }, ref: "refs/heads/main", sha: state.source };
   const process = { env: { TARGET_SHA: state.source, TAG_NAME: state.tag, CI_RUN_ID: "1" } };
-  const core = { info: () => {} };
+  const outputs = {};
+  const core = { info: () => {}, setOutput: (key, value) => { outputs[key] = value; } };
   const ci = workflowScript(workflow, "Recheck CI after approval", "Recheck staged checksums");
   const release = workflowScript(workflow, "Recheck release and tag state after approval", "Publish GitHub release");
+  const prepare = workflowScript(workflow, "Resolve version and release state", "\n  build:\n");
+  const version = state.tag.slice(1);
+  const files = {
+    "package.json": JSON.stringify({ version }),
+    "package-lock.json": JSON.stringify({ packages: { "": { version } } }),
+    "src-tauri/Cargo.toml": `version = "${version}"`,
+    "src-tauri/Cargo.lock": `[[package]]\nname = "aiolm"\nversion = "${version}"`,
+    "src-tauri/tauri.conf.json": JSON.stringify({ version }),
+    "src-tauri/tauri-cli-build.conf.json": JSON.stringify({ version }),
+  };
+  const runPrepare = async () => {
+    await prepare(github, context, process, core, name => {
+      assert.equal(name, "node:fs");
+      return { readFileSync: path => { assert.ok(Object.hasOwn(files, path)); return files[path]; } };
+    });
+    return outputs;
+  };
   const runState = () => release(github, context, process, core);
-  return { calls, mutations, runState, run: async () => { await ci(github, context, process, core); await runState(); } };
+  return { calls, mutations, runPrepare, runState, run: async () => { await ci(github, context, process, core); await runState(); } };
 }
 
 function inputArtifacts(t) {
@@ -249,6 +267,118 @@ test("publication state is checked after hashes and before the non-overwriting p
   await fixture.run();
   assert.deepEqual(fixture.calls.map(call => call.name), ["getWorkflowRun", "getReleaseByTag", "listReleases", "getLatestRelease", "getRef"]);
   assert.deepEqual(fixture.mutations, []);
+});
+
+test("preflight and fresh publication reject unusable versions before scheduling platform builds", async () => {
+  const page = Array.from({ length: 100 }, (_, index) => ({ tag_name: `v0.0.${index}`, draft: false, prerelease: false }));
+  for (const options of [
+    { tag: "v01.2.3" }, { tag: "v1.2.3\n" }, { source: sha + "\n" },
+    { releases: [[{ tag_name: "v1.3.0", draft: false, prerelease: false }]] },
+    { releases: [page, [{ tag_name: "v1.3.0", draft: false, prerelease: false }]] },
+    { releases: [[{ tag_name: "stable-tip", draft: false, prerelease: false }]] },
+    { latest: { tag_name: "v1.2.3", draft: false, prerelease: false } },
+    { latest: { tag_name: "stable-tip", draft: false, prerelease: false } },
+    { latest: { tag_name: "v1.2.2", draft: true, prerelease: false } },
+    { tag: "v9007199254740992.0.0", latest: { tag_name: "v9007199254740993.0.0", draft: false, prerelease: false } },
+  ]) {
+    for (const method of ["runPrepare", "runState"]) {
+      const fixture = publicationFixture(options);
+      await assert.rejects(fixture[method]());
+      assert.deepEqual(fixture.mutations, []);
+    }
+  }
+  for (const options of [
+    {}, { latest: undefined },
+    { tag: "v9007199254740993.0.0", latest: { tag_name: "v9007199254740992.999.999", draft: false, prerelease: false } },
+    { releases: [[{ tag_name: "v9.0.0", draft: true, prerelease: false }, { tag_name: "v9.0.0-rc.1", draft: false, prerelease: true }]] },
+  ]) {
+    const fixture = publicationFixture(options);
+    assert.deepEqual(await fixture.runPrepare(), { should_release: "true", tag_name: options.tag ?? "v1.2.3", target_sha: sha, version: (options.tag ?? "v1.2.3").slice(1) });
+    await fixture.runState();
+    assert.deepEqual(fixture.mutations, []);
+  }
+});
+
+test("existing candidate releases skip preflight but still stop a fresh publication attempt", async () => {
+  for (const draft of [true, false]) {
+    const options = { existing: { tag_name: "v1.2.3", draft, prerelease: false }, errors: { listReleases: new Error("Existing releases require no listing") } };
+    const fixture = publicationFixture(options);
+    assert.deepEqual(await fixture.runPrepare(), { should_release: "false", tag_name: "v1.2.3", target_sha: sha, version: "1.2.3" });
+    assert.deepEqual(fixture.calls.map(call => call.name), ["getReleaseByTag"]);
+    await assert.rejects(fixture.runState(), /release already exists/);
+    assert.deepEqual(fixture.mutations, []);
+  }
+  const page = Array.from({ length: 100 }, (_, index) => ({ tag_name: `v0.0.${index}`, draft: false, prerelease: false }));
+  const fixture = publicationFixture({ releases: [page, [{ tag_name: "v1.2.3", draft: true, prerelease: false }]], errors: { getLatestRelease: new Error("Drafts must skip before latest/tag checks") } });
+  assert.equal((await fixture.runPrepare()).should_release, "false");
+  assert.deepEqual(fixture.calls.map(call => call.name), ["getReleaseByTag", "listReleases", "listReleases"]);
+  await assert.rejects(fixture.runState(), /matching draft or published release/);
+  assert.deepEqual(fixture.mutations, []);
+});
+
+test("preflight and publication require complete bounded release reads and fail closed on API errors", async () => {
+  const page = Array.from({ length: 100 }, (_, index) => ({ tag_name: `v0.0.${index}`, draft: false, prerelease: false }));
+  for (const method of ["runPrepare", "runState"]) {
+    const complete = publicationFixture({ releases: [page, []] });
+    await complete[method]();
+    assert.deepEqual(complete.calls.filter(call => call.name === "listReleases").map(call => call.args.page), [1, 2]);
+    for (const releases of [Array.from({ length: 10 }, () => page), [null], [[{}]], [[{ tag_name: "v0.1.0", prerelease: false }]], [[...page, page[0]]]]) {
+      const fixture = publicationFixture({ releases });
+      await assert.rejects(fixture[method](), /listing limit|Invalid release listing/);
+      assert.ok(fixture.calls.filter(call => call.name === "listReleases").length <= 10);
+      assert.deepEqual(fixture.mutations, []);
+    }
+    for (const name of ["getReleaseByTag", "listReleases", "getLatestRelease", "getRef"]) {
+      const error = Object.assign(new Error(`Synthetic ${name} read error`), { status: 503 });
+      const fixture = publicationFixture({ errors: { [name]: error } });
+      await assert.rejects(fixture[method](), candidate => candidate === error);
+      assert.deepEqual(fixture.mutations, []);
+    }
+    for (const options of [{ existing: null }, { latest: null }]) {
+      const fixture = publicationFixture(options);
+      await assert.rejects(fixture[method](), /Invalid GitHub release state response/);
+      assert.deepEqual(fixture.mutations, []);
+    }
+    const missingListing = Object.assign(new Error("Synthetic missing release listing"), { status: 404 });
+    const fixture = publicationFixture({ errors: { listReleases: missingListing } });
+    await assert.rejects(fixture[method](), candidate => candidate === missingListing);
+    assert.deepEqual(fixture.mutations, []);
+  }
+});
+
+test("both release policies resolve bounded tags to the exact main source with LF or CRLF", async () => {
+  const first = "b".repeat(40), second = "c".repeat(40);
+  const ref = object => ({ ref: "refs/tags/v1.2.3", object });
+  const acceptedChain = Object.fromEntries(Array.from({ length: 4 }, (_, index) => [(index + 1).toString(16).repeat(40), {
+    object: index === 3 ? { type: "commit", sha } : { type: "tag", sha: (index + 2).toString(16).repeat(40) },
+  }]));
+  const chain = Object.fromEntries(Array.from({ length: 5 }, (_, index) => [(index + 1).toString(16).repeat(40), {
+    object: index === 4 ? { type: "commit", sha } : { type: "tag", sha: (index + 2).toString(16).repeat(40) },
+  }]));
+  for (const newline of ["\n", "\r\n"]) {
+    const workflow = releaseWorkflow.replace(/\n/g, newline);
+    for (const method of ["runPrepare", "runState"]) {
+      for (const options of [{}, { reference: ref({ type: "commit", sha }) }, { reference: ref({ type: "tag", sha: first }), tags: { [first]: { object: { type: "tag", sha: second } }, [second]: { object: { type: "commit", sha } } } },
+        { reference: ref({ type: "tag", sha: "1".repeat(40) }), tags: acceptedChain }]) {
+        const fixture = publicationFixture(options, workflow);
+        await fixture[method]();
+        assert.deepEqual(fixture.mutations, []);
+      }
+      for (const options of [
+        { reference: ref({ type: "commit", sha: first }) },
+        { reference: { ref: "refs/tags/other", object: { type: "commit", sha } } },
+        { reference: ref({ type: "tree", sha }) }, { reference: ref({ type: "commit", sha: "bad" }) },
+        { reference: ref({ type: "tag", sha: first }), tags: { [first]: { object: { type: "tag", sha: first } } } },
+        { reference: ref({ type: "tag", sha: first }) },
+        { reference: ref({ type: "tag", sha: "1".repeat(40) }), tags: chain },
+        { reference: ref({ type: "tag", sha: first }), errors: { getTag: Object.assign(new Error("Synthetic nested API error"), { status: 503 }) } },
+      ]) {
+        const fixture = publicationFixture(options, workflow);
+        await assert.rejects(fixture[method]());
+        assert.deepEqual(fixture.mutations, []);
+      }
+    }
+  }
 });
 
 test("publication still requires the approved exact-main CI before reading release state", async () => {
