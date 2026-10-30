@@ -141,7 +141,8 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          # Model pins live in native_cpu.rs; helper-only edits reuse verified data.
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Real macOS CPU runtime and CLI lifecycle
         id: macos_cpu
         if: runner.os == 'macOS'
@@ -159,7 +160,7 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: macOS Keychain roundtrip
         if: (success() || failure()) && runner.os == 'macOS'
         timeout-minutes: 5
@@ -258,7 +259,8 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          # Model pins live in native_cpu.rs; helper-only edits reuse verified data.
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Real PR source build and CLI lifecycle
         id: native_source
         timeout-minutes: 100
@@ -272,7 +274,7 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
 
   install:
     if: inputs.package_run_id != ''

@@ -328,7 +328,8 @@ jobs:
           # native test rechecks the full pinned size and digest on every hit.
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          # Model pins live in native_cpu.rs; helper-only edits reuse verified data.
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Real CPU runtime and model lifecycle
         id: native_cpu
         timeout-minutes: 15
@@ -342,7 +343,7 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Windows Credential Manager roundtrip
         if: success() || failure()
         env:
@@ -456,7 +457,8 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          # Model pins live in native_cpu.rs; helper-only edits reuse verified data.
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Observe generated inputs before the CPU compilation
         if: runner.os == 'macOS'
         run: node scripts/native-build-inputs.mjs --source "${{ github.sha }}" --phase before --output tmp/native-build-inputs/before-cpu.json
@@ -477,7 +479,7 @@ jobs:
         with:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
-          key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+          key: native-model-v2-${{ hashFiles('src-tauri/tests/native_cpu.rs') }}
       - name: Build macOS debug app with embedded WebDriver
         if: runner.os == 'macOS'
         env:
