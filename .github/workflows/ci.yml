@@ -456,6 +456,9 @@ jobs:
           path: tmp/native-model-cache
           enableCrossOsArchive: true
           key: native-model-v1-${{ hashFiles('src-tauri/tests/native_cpu.rs', 'src-tauri/tests/support/native_model.rs') }}
+      - name: Observe generated inputs before the CPU compilation
+        if: runner.os == 'macOS'
+        run: node scripts/native-build-inputs.mjs --source "${{ github.sha }}" --phase before --output tmp/native-build-inputs/before-cpu.json
       - name: Real macOS CPU model lifecycle
         id: macos_cpu
         if: runner.os == 'macOS'
@@ -464,6 +467,9 @@ jobs:
           AIOLM_NATIVE_CPU: "1"
           AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+      - name: Observe generated inputs after the CPU compilation
+        if: (success() || failure()) && runner.os == 'macOS' && steps.macos_cpu.outcome != 'skipped'
+        run: node scripts/native-build-inputs.mjs --source "${{ github.sha }}" --phase after --output tmp/native-build-inputs/after-cpu.json
       - name: Save successfully exercised native test model
         if: runner.os == 'macOS' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.macos_cpu.outcome == 'success' && steps.native-model.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -516,6 +522,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: .codex-target/cargo-timings
+      - name: Retain bounded generated-input observations
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-build-inputs-${{ matrix.os }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: tmp/native-build-inputs
 
   macos-default:
     name: Default-feature native tests (${{ matrix.os }})

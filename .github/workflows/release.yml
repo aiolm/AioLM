@@ -277,6 +277,7 @@ jobs:
         with:
           name: windows-release-assets
           path: release-assets
+          compression-level: 0
           if-no-files-found: error
 
   build-linux:
@@ -389,6 +390,7 @@ jobs:
         with:
           name: linux-release-assets
           path: release-assets
+          compression-level: 0
           if-no-files-found: error
 
   build-macos:
@@ -481,6 +483,7 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}-release-assets
           path: release-assets
+          compression-level: 0
           if-no-files-found: error
 
   verify-ci:
@@ -557,6 +560,7 @@ jobs:
         with:
           name: approved-installers
           path: release-assets
+          compression-level: 0
           if-no-files-found: error
 
   publish:
@@ -607,6 +611,101 @@ jobs:
             if ($actual -ne $digest) { throw "Staged asset changed: $name" }
           }
           if ($seen.Count -ne 9) { throw "Expected nine checked payloads" }
+      - name: Recheck release and tag state after approval
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.TAG_NAME;
+            const sha = process.env.TARGET_SHA;
+            const isSha = value => typeof value === 'string' && value.length === 40 && /^[a-f0-9]{40}$/.test(value);
+            const parseVersion = (value) => {
+              if (typeof value !== 'string' || value.length > 256) return null;
+              const match = /^v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$/.exec(value);
+              return match && match[0] === value ? match[1].split('.').map(BigInt) : null;
+            };
+            const candidate = parseVersion(tag);
+            if (!candidate || !isSha(sha)) {
+              throw new Error('Invalid approved release tag or source commit.');
+            }
+            const compareVersions = (left, right) => {
+              for (let index = 0; index < left.length; index += 1) {
+                if (left[index] !== right[index]) return left[index] > right[index] ? 1 : -1;
+              }
+              return 0;
+            };
+            const notFound = async (read) => {
+              try {
+                const response = await read();
+                if (!response || !response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
+                  throw new Error('Invalid GitHub release state response.');
+                }
+                return response.data;
+              } catch (error) { if (error?.status === 404) return null; throw error; }
+            };
+            const existing = await notFound(() => github.rest.repos.getReleaseByTag({ owner, repo, tag }));
+            if (existing !== null) throw new Error('The release already exists; preserve it instead of updating it.');
+
+            // The direct endpoint may omit drafts. Establish complete absence
+            // within a bounded listing and fail rather than assume beyond it.
+            let complete = false;
+            for (let page = 1; page <= 10; page += 1) {
+              const { data } = await github.rest.repos.listReleases({ owner, repo, per_page: 100, page });
+              if (!Array.isArray(data) || data.length > 100 || data.some(release => !release || typeof release.tag_name !== 'string'
+                || typeof release.draft !== 'boolean' || typeof release.prerelease !== 'boolean')) {
+                throw new Error('Invalid release listing; publication stopped.');
+              }
+              for (const release of data) {
+                if (release.tag_name === tag) throw new Error('A matching draft or published release already exists; preserve it.');
+                if (!release.draft && !release.prerelease) {
+                  const version = parseVersion(release.tag_name);
+                  if (!version) throw new Error('Cannot verify an existing published stable release version.');
+                  // An operator may have marked a newer stable release as
+                  // non-latest. This workflow must not promote an older one.
+                  if (compareVersions(candidate, version) <= 0) {
+                    throw new Error('A same or newer published stable release exists; publication stopped.');
+                  }
+                }
+              }
+              if (data.length < 100) { complete = true; break; }
+            }
+            if (!complete) throw new Error('Cannot establish release absence within the listing limit.');
+
+            const latest = await notFound(() => github.rest.repos.getLatestRelease({ owner, repo }));
+            if (latest !== null) {
+              const version = parseVersion(latest.tag_name);
+              if (!version || latest.draft !== false || latest.prerelease !== false) {
+                throw new Error('Cannot verify the latest stable release version.');
+              }
+              if (compareVersions(candidate, version) <= 0) throw new Error('A same or newer stable release now exists; publication stopped.');
+            }
+
+            const reference = await notFound(() => github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` }));
+            if (reference !== null) {
+              if (reference.ref !== `refs/tags/${tag}`) throw new Error('Unexpected release tag reference.');
+              let object = reference.object;
+              const seen = new Set();
+              let resolved = false;
+              for (let depth = 0; depth < 5; depth += 1) {
+                if (!object || !isSha(object.sha) || seen.has(object.sha)) {
+                  throw new Error('Invalid or cyclic release tag object.');
+                }
+                seen.add(object.sha);
+                if (object.type === 'commit') {
+                  if (object.sha !== sha) throw new Error('The release tag no longer points to the approved source.');
+                  resolved = true;
+                  break;
+                }
+                if (object.type !== 'tag') throw new Error('The release tag does not resolve to a commit.');
+                // A missing nested object is an error, not an absent tag.
+                object = (await github.rest.git.getTag({ owner, repo, tag_sha: object.sha })).data.object;
+              }
+              if (!resolved) throw new Error('Release tag nesting exceeds the verification limit.');
+            }
+            core.info(`Release and tag state permit publication of ${tag} from ${sha}.`);
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -646,6 +745,7 @@ jobs:
           make_latest: true
           generate_release_notes: true
           fail_on_unmatched_files: true
+          overwrite_files: false
           files: release-assets/*
 
   verify-public:
