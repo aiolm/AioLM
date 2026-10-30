@@ -15,9 +15,6 @@ concurrency:
 jobs:
   frontend-checks:
     name: Frontend checks (${{ matrix.os }})
-    outputs:
-      linux_plan: ${{ steps.plan.outputs.linux_plan }}
-      windows_plan: ${{ steps.plan.outputs.windows_plan }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,13 +61,42 @@ jobs:
         run: |
           npm run typecheck
           npm run build
+
+  frontend-plan:
+    name: Frontend file plan (${{ matrix.os }})
+    outputs:
+      linux_plan: ${{ steps.plan.outputs.linux_plan }}
+      windows_plan: ${{ steps.plan.outputs.windows_plan }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Rebuild esbuild
+        run: npm rebuild esbuild
       - name: Restore measured frontend durations
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: tmp/frontend-ci-history/timings.json
           key: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ github.sha }}
           restore-keys: frontend-times-v1-${{ matrix.os }}-${{ hashFiles('.node-version', 'package-lock.json') }}-
-      - name: Plan complete frontend test coverage
+      - name: Plan complete frontend file coverage without importing tests
         id: plan
         run: node scripts/frontend-ci.mjs plan --shards 2 --timings tmp/frontend-ci-history/timings.json --output tmp/frontend-ci/plan.json
       - name: Retain test plan
@@ -81,8 +107,13 @@ jobs:
           if-no-files-found: error
 
   frontend-shards:
-    needs: frontend-checks
+    needs: frontend-plan
     name: Frontend tests (${{ matrix.os }}, shard ${{ matrix.shard }}/2)
+    outputs:
+      linux_1_cases: ${{ steps.tests.outputs.linux_1_cases }}
+      linux_2_cases: ${{ steps.tests.outputs.linux_2_cases }}
+      windows_1_cases: ${{ steps.tests.outputs.windows_1_cases }}
+      windows_2_cases: ${{ steps.tests.outputs.windows_2_cases }}
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +146,7 @@ jobs:
           name: frontend-plan-${{ matrix.os }}
           path: tmp/frontend-ci
       - name: Execute assigned tests with coverage
+        id: tests
         run: node scripts/frontend-ci.mjs shard --plan tmp/frontend-ci/plan.json --index ${{ matrix.shard }} --output tmp/frontend-ci/shard-${{ matrix.shard }}
       - name: Retain shard results even on failure
         if: always()
@@ -125,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   frontend-merge:
-    needs: [frontend-checks, frontend-shards]
+    needs: [frontend-plan, frontend-shards]
     name: Frontend global coverage (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -165,8 +197,12 @@ jobs:
       - name: Verify complete test inventory and original global thresholds
         shell: bash
         env:
-          EXPECTED_PLAN_SHA: ${{ matrix.os == 'windows-latest' && needs.frontend-checks.outputs.windows_plan || needs.frontend-checks.outputs.linux_plan }}
-        run: node scripts/frontend-ci.mjs merge --plan tmp/frontend-ci/plan.json --input tmp/frontend-ci/shards --expected-plan-sha "$EXPECTED_PLAN_SHA"
+          EXPECTED_PLAN_SHA: ${{ needs.frontend-plan.outputs[matrix.os == 'windows-latest' && 'windows_plan' || 'linux_plan'] }}
+          EXPECTED_CASE_1: ${{ needs.frontend-shards.outputs[matrix.os == 'windows-latest' && 'windows_1_cases' || 'linux_1_cases'] }}
+          EXPECTED_CASE_2: ${{ needs.frontend-shards.outputs[matrix.os == 'windows-latest' && 'windows_2_cases' || 'linux_2_cases'] }}
+        run: |
+          cases="$(node -p 'JSON.stringify({"1":process.env.EXPECTED_CASE_1,"2":process.env.EXPECTED_CASE_2})')"
+          node scripts/frontend-ci.mjs merge --plan tmp/frontend-ci/plan.json --input tmp/frontend-ci/shards --expected-plan-sha "$EXPECTED_PLAN_SHA" --expected-cases-shas "$cases"
       - name: Prepare duration history for future plans
         run: node -e "const fs=require('node:fs'); fs.mkdirSync('tmp/frontend-ci-history',{recursive:true}); fs.copyFileSync('tmp/frontend-ci/merged/timings.json','tmp/frontend-ci-history/timings.json');"
       - name: Save successful main duration history
@@ -188,7 +224,7 @@ jobs:
   frontend:
     name: Frontend tests and build
     if: always()
-    needs: [frontend-checks, frontend-shards, frontend-merge]
+    needs: [frontend-checks, frontend-plan, frontend-shards, frontend-merge]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -250,14 +286,16 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-      - name: Rust tests
-        env:
-          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
+      # Let the regular library initialize generated Tauri context inputs
+      # before the first library-test compilation.
       # The only extra feature is macOS-only. On Windows all-features tests
       # cover the default native code too; preserve doc-tests separately.
       - name: Rust documentation tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features --timings
+      - name: Rust tests
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
       - name: Frontend build for Tauri metadata validation
         run: npm run build
       # Reuse the feature set already compiled by the Windows test suite.
@@ -380,12 +418,6 @@ jobs:
         env:
           AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/all-features
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings
-      # macos-ui-smoke changes native code only on macOS; verify both paths.
-      - name: Default-feature native tests
-        if: runner.os == 'macOS'
-        env:
-          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
       - name: Linux documentation tests
         if: runner.os == 'Linux'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --doc --all-features
@@ -480,3 +512,106 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: .codex-target/cargo-timings
+
+  macos-default:
+    name: Default-feature native tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      # Keep the two default-feature variants off the desktop/UI critical
+      # path while reserving at most one additional hosted Mac at a time.
+      max-parallel: 1
+      matrix:
+        os: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
+      AIOLM_NATIVE_MODEL_CACHE: ${{ github.workspace }}/tmp/native-model-cache
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Rebuild esbuild
+        run: npm rebuild esbuild
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
+        with:
+          toolchain: "1.98.0"
+          components: rustfmt, clippy
+      - name: Record default-feature verification inputs
+        run: node scripts/release-ci.mjs record-inputs --sha "${{ github.sha }}" --output tmp/build-inputs.json
+      - name: Restore Cargo dependencies (verify)
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2, reviewed commit
+        with:
+          workspaces: "src-tauri -> ../.codex-target"
+          shared-key: "verify-${{ runner.os }}-${{ runner.arch }}"
+          env-vars: "AIOLM_BENCHMARK_API_URL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG CARGO_INCREMENTAL CFLAGS CXXFLAGS"
+          cache-bin: false
+          # The original native job remains the sole writer for this target.
+          save-if: false
+      - name: Retain default-feature verification input fingerprint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          # Keep the release verifier's exact four ci-inputs artifacts intact.
+          name: ci-default-inputs-${{ runner.os }}-${{ runner.arch }}
+          path: tmp/build-inputs.json
+          if-no-files-found: error
+      # macos-ui-smoke changes native code on macOS. This is the unchanged
+      # default-feature suite, including its documentation tests.
+      - name: Default-feature native tests
+        env:
+          AIOLM_CLI_FIXTURE_EVIDENCE: ${{ runner.temp }}/headless-cli-evidence/default
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Retain default-feature Cargo timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-default-timings-${{ matrix.os }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: .codex-target/cargo-timings
+
+  native:
+    name: Native verification
+    if: always()
+    needs: [rust, rust-portability, macos-default]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every platform and feature variant
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'const results = JSON.parse(process.env.RESULTS); for (const [name, job] of Object.entries(results)) { if (job.result !== "success") throw new Error(name + ": " + job.result); }'
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - name: Download original platform verification inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ci-inputs-*
+          path: tmp/native-inputs
+      - name: Download both default-feature verification inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: ci-default-inputs-*
+          path: tmp/native-default-inputs
+      - name: Verify shared source and compiler inputs across Mac variants
+        run: node scripts/release-ci.mjs verify-default-inputs --sha "${{ github.sha }}" --ci-inputs tmp/native-inputs --default-inputs tmp/native-default-inputs

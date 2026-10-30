@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BUILD_INPUT_FILES, assertMainCI, matchingMainCI, parseReleaseArguments, prepareAssets, recordBuildInputs, releaseAssets, validateBuildInput, verifyBuildInputs, waitForMainCI } from "./release-ci.mjs";
+import { BUILD_INPUT_FILES, assertMainCI, matchingMainCI, parseReleaseArguments, prepareAssets, recordBuildInputs, releaseAssets, validateBuildInput, verifyBuildInputs, verifyDefaultFeatureInputs, waitForMainCI } from "./release-ci.mjs";
 
 const sha = "a".repeat(40);
 const success = { id: 1, head_sha: sha, head_branch: "main", event: "push", path: ".github/workflows/ci.yml", status: "completed", conclusion: "success", html_url: "https://github.com/aiolm/AioLM/actions/runs/1" };
@@ -128,6 +128,42 @@ test("recording observes checkout, compiler and raw origin without storing the o
   assert.throws(() => validateBuildInput({ ...input, sourceInputs: input.sourceInputs.slice(1) }, sha), /pinned/);
 });
 
+test("split default-feature checks must match both Mac compiler and source inputs", t => {
+  const inputs = inputArtifacts(t);
+  const defaults = join(inputs.ciInputs, "..", "defaults");
+  const records = inputs.records.filter(record => record.directory === inputs.ciInputs && record.input.runner.os === "macOS");
+  for (const record of records) {
+    const directory = join(defaults, record.input.runner.arch);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "build-inputs.json"), JSON.stringify(record.input));
+  }
+  assert.deepEqual(verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), ["macOS/ARM64", "macOS/X64"]);
+  const record = records[0];
+  const file = join(defaults, record.input.runner.arch, "build-inputs.json");
+  for (const change of [
+    input => { input.sourceSha = "d".repeat(40); },
+    input => { input.rustcVersion = "rustc 1.99.0 (different compiler)"; },
+    input => { input.benchmarkOriginSha256 = "d".repeat(64); },
+    input => { input.sourceInputs[0].sha256 = "d".repeat(64); },
+    input => { input.runner.os = "Windows"; },
+  ]) {
+    const altered = structuredClone(record.input);
+    change(altered);
+    writeFileSync(file, JSON.stringify(altered));
+    assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha));
+  }
+  writeFileSync(file, JSON.stringify(record.input));
+  const otherFile = join(defaults, records[1].input.runner.arch, "build-inputs.json");
+  writeFileSync(otherFile, JSON.stringify(record.input));
+  assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /Duplicate/);
+  writeFileSync(otherFile, JSON.stringify(records[1].input));
+  rmSync(otherFile);
+  assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /contents/);
+  writeFileSync(otherFile, JSON.stringify(records[1].input));
+  mkdirSync(join(defaults, "extra"));
+  assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /exactly 2/);
+});
+
 test("release commands reject missing, duplicate, unknown and malformed arguments", () => {
   assert.deepEqual(parseReleaseArguments("record-inputs", ["--sha", sha, "--output", "tmp/build-inputs.json"]), { sha, output: "tmp/build-inputs.json" });
   for (const args of [[], ["--sha", sha], ["--sha", sha, "--output"], ["--sha", sha, "--output", "tmp/a", "--unknown", "bad"], ["--sha", sha, "--output", "tmp/a", "--sha", sha]]) {
@@ -138,4 +174,7 @@ test("release commands reject missing, duplicate, unknown and malformed argument
   const badRun = [...complete]; badRun[7] = "../bad";
   assert.throws(() => parseReleaseArguments("prepare-assets", badRun), /CI run/);
   assert.throws(() => parseReleaseArguments("prepare-assets", complete.slice(0, -2)), /Missing/);
+  assert.deepEqual(parseReleaseArguments("verify-default-inputs", ["--sha", sha, "--ci-inputs", "ci", "--default-inputs", "defaults"]),
+    { sha, "ci-inputs": "ci", "default-inputs": "defaults" });
+  assert.throws(() => parseReleaseArguments("verify-default-inputs", ["--sha", sha, "--ci-inputs", "ci"]), /Missing/);
 });

@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INPUT_VERSION = 1;
 const TARGETS = ["Linux/X64", "Windows/X64", "macOS/ARM64", "macOS/X64"].sort();
+const DEFAULT_TARGETS = TARGETS.filter(target => target.startsWith("macOS/"));
 export const BUILD_INPUT_FILES = [
   ".cargo/config.toml", "rust-toolchain.toml", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock",
   "src-tauri/tauri.conf.json", "src-tauri/tauri-package.conf.json", "src-tauri/tauri-cli-build.conf.json",
@@ -52,12 +53,12 @@ export function recordBuildInputs({ sha, root = ROOT, env = process.env, spawn =
   return validateBuildInput(input, sha);
 }
 
-function inputDirectory(directory, sha) {
+function inputDirectory(directory, sha, targets = TARGETS) {
   failUnless(typeof directory === "string" && directory.length > 0, "Build-input directory is required");
   const stat = lstatSync(directory);
   failUnless(stat.isDirectory() && !stat.isSymbolicLink(), "Build-input root must be a regular directory");
   const entries = readdirSync(directory);
-  failUnless(entries.length === TARGETS.length, "Expected exactly four build-input artifacts");
+  failUnless(entries.length === targets.length, `Expected exactly ${targets.length} build-input artifacts`);
   const inputs = new Map();
   for (const entry of entries) {
     const artifact = join(directory, entry);
@@ -69,11 +70,24 @@ function inputDirectory(directory, sha) {
     failUnless(size.isFile() && !size.isSymbolicLink() && size.size > 0 && size.size <= 65536, "Invalid build-input artifact file");
     const input = validateBuildInput(JSON.parse(readFileSync(file, "utf8")), sha);
     const target = `${input.runner.os}/${input.runner.arch}`;
+    failUnless(targets.includes(target), "Unexpected build-input target");
     failUnless(!inputs.has(target), "Duplicate build-input target");
     inputs.set(target, input);
   }
-  failUnless(JSON.stringify([...inputs.keys()].sort()) === JSON.stringify(TARGETS), "Missing build-input target");
+  failUnless(JSON.stringify([...inputs.keys()].sort()) === JSON.stringify(targets), "Missing build-input target");
   return inputs;
+}
+
+const sharedInputs = input => [input.benchmarkOriginSha256, input.rustcVersion, input.sourceInputs.map(file => [file.path, file.sha256])];
+
+export function verifyDefaultFeatureInputs(ciDirectory, defaultDirectory, sha) {
+  const ci = inputDirectory(ciDirectory, sha);
+  const defaults = inputDirectory(defaultDirectory, sha, DEFAULT_TARGETS);
+  for (const target of DEFAULT_TARGETS) {
+    failUnless(JSON.stringify(sharedInputs(ci.get(target))) === JSON.stringify(sharedInputs(defaults.get(target))),
+      `Default and all-feature verification inputs differ for ${target}`);
+  }
+  return DEFAULT_TARGETS;
 }
 
 export function verifyBuildInputs(ciDirectory, packageDirectory, sha) {
@@ -82,8 +96,7 @@ export function verifyBuildInputs(ciDirectory, packageDirectory, sha) {
   for (const target of TARGETS) {
     // Verification and packaging intentionally use different Cargo profiles and
     // feature sets. Bind their shared source, compiler and mutable origin only.
-    const shared = input => [input.benchmarkOriginSha256, input.rustcVersion, input.sourceInputs.map(file => [file.path, file.sha256])];
-    failUnless(JSON.stringify(shared(ci.get(target))) === JSON.stringify(shared(packages.get(target))), `CI and package build inputs differ for ${target}`);
+    failUnless(JSON.stringify(sharedInputs(ci.get(target))) === JSON.stringify(sharedInputs(packages.get(target))), `CI and package build inputs differ for ${target}`);
   }
   failUnless(new Set([...packages.values()].map(input => input.benchmarkOriginSha256)).size === 1,
     "Platform packages used different benchmark origins");
@@ -145,9 +158,10 @@ export function parseReleaseArguments(command, args) {
   const required = {
     wait: ["sha", "output"],
     "record-inputs": ["sha", "output"],
+    "verify-default-inputs": ["sha", "ci-inputs", "default-inputs"],
     "prepare-assets": ["sha", "directory", "version", "ci-run-id", "ci-inputs", "package-inputs"],
   }[command];
-  failUnless(Array.isArray(required), "Expected wait, record-inputs or prepare-assets");
+  failUnless(Array.isArray(required), "Expected wait, record-inputs, verify-default-inputs or prepare-assets");
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index]?.slice(2);
@@ -176,6 +190,11 @@ async function main() {
     mkdirSync(dirname(resolve(options.output)), { recursive: true });
     writeFileSync(options.output, JSON.stringify(input, null, 2) + "\n", { flag: "wx" });
     process.stdout.write(`Recorded build inputs for ${input.runner.os}/${input.runner.arch} at ${sha}\n`);
+    return;
+  }
+  if (command === "verify-default-inputs") {
+    const targets = verifyDefaultFeatureInputs(options["ci-inputs"], options["default-inputs"], sha);
+    process.stdout.write(`Default and all-feature verification inputs match for ${targets.join(", ")} at ${sha}\n`);
     return;
   }
   const api = async endpoint => {
