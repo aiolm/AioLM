@@ -2,7 +2,7 @@
 
 > **Language:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli.exe`. Packaged builds ship it as an auxiliary binary next to `aiolm.exe`; locate the installed copy in the app's install directory. On macOS it is `/Applications/AioLM.app/Contents/MacOS/aiolm-cli` (or under `~/Applications`). Output is JSON, the server is loopback-only, and credentials are not persisted.
+Installers ship `aiolm-cli` next to the desktop app; on Windows, find `aiolm-cli.exe` beside `aiolm.exe` in the app's install directory. A [source build](install.md#build-from-source) also leaves it at `.codex-target/release/aiolm-cli.exe` (`aiolm-cli` on Linux/macOS). On macOS it is `/Applications/AioLM.app/Contents/MacOS/aiolm-cli` (or under `~/Applications`). Output is JSON, the server is loopback-only, and credentials are not persisted.
 
 ```powershell
 ./aiolm-cli.exe --help
@@ -38,7 +38,7 @@ Install or import a runtime in the desktop app, then choose its backend/build fr
 - `config set` rejects credential-like and unknown fields.
 - `config get` redacts credential-like values; `server_args`, `chat_options`, and `lora_adapters` require JSON values when set.
 - `models delete` accepts inactive `.gguf`/`.mmproj` files and app-owned snapshot directories inside `models_dir`. It preserves files outside the snapshot manifest and refuses active model/companion bindings.
-- `runtime device` detects local GPUs and recommended backends; `runtime probe` runs version/help/device/bench preflight.
+- `runtime device` detects local GPUs and recommended backends; `runtime probe` runs the llama-server version/help/device preflight and reports whether the optional llama-bench helper works; a missing or failing llama-bench does not fail the preflight.
 - `server start` uses the configured model, binds to `127.0.0.1`, and intentionally disables API-key auth. Use it only on a trusted machine and do not expose or forward the port.
 - Headless stdout is JSON; server logs are bounded.
 
@@ -62,6 +62,6 @@ aiolm-cli runtime export <vllm|mlx-vlm> <runtime-id> <new-bundle.zip>
 aiolm-cli runtime import <bundle.zip>
 ```
 
-See [Inference runtimes](../reference/inference-runtimes.md) for engine-specific artifacts, options, profiles and native validation requirements.
+See [Inference runtimes](../reference/inference-runtimes.md) for engine-specific artifacts, options and profiles. To register another engine from a runtime manifest, use `runtime register-manifest <manifest.json>`; see [external engine connections](../reference/automatic-engine-connections.md#advanced-manual-registration).
 
 Export downloads exact wheels for the installed engine dependency closure and preserves platform, ABI and hashes. Import installs those wheels offline into a new environment and probes it; a compatible base Python interpreter must already be installed. Models are managed separately. Stop the headless server before export/import; Ctrl-C cleans up unfinished operations. Export preserves existing destination files.

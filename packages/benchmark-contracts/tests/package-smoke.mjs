@@ -54,7 +54,7 @@ try {
   assert(packedPaths.includes('dist/index.js') && packedPaths.includes('dist/index.d.ts'));
   assert(packedPaths.includes('schema/public-benchmark.schema.json') && packedPaths.includes('schema/publication.schema.json') && packedPaths.includes('schema/openapi.json'));
   assert(packedPaths.includes('LICENSE'));
-  for (const path of packedPaths) assert(/^(?:dist\/[^/]+\.(?:js|d\.ts)|schema\/(?:public-benchmark\.schema|publication\.schema|openapi)\.json|package\.json|README\.md|LICENSE)$/.test(path), `Unexpected packed file: ${path}`);
+  for (const path of packedPaths) assert(/^(?:dist\/[^/]+\.(?:js|d\.ts)|schema\/(?:public-benchmark\.schema|publication\.schema|openapi)\.json|package\.json|LICENSE)$/.test(path), `Unexpected packed file: ${path}`);
 
   const consumer = join(scratch, 'consumer');
   mkdirSync(consumer);

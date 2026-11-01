@@ -1,8 +1,8 @@
 # Privacy policy
 
-Last updated: 2026-10-02
+Last updated: 2026-11-01
 
-AioLM is a local-first Windows desktop application. It checks public GitHub release metadata at desktop startup to notify users of application updates. Other network operations occur when using the corresponding features described below.
+AioLM is a local-first desktop application for Windows, macOS and Linux. It checks public GitHub release metadata at desktop startup to notify users of application updates. Other network operations occur when using the corresponding features described below.
 
 ## Data collection
 
@@ -19,14 +19,15 @@ The following network requests can occur:
 - A local or remote LLM endpoint selected by the user for chat, embeddings, model lists, or compatible API features. The endpoint receives the request data required to perform that operation.
 - Chat requests include available user AGENTS.md instructions and the text of skills selected by the user or read by the model. These files remain on the user's computer; their loaded text is sent to the selected chat endpoint as request context. See [chat personalization](../reference/personalization.md).
 - User-configured MCP servers and developer gateways. These are third-party programs or endpoints and should be trusted and reviewed by the user.
-- GitHub release metadata and assets when the user runs `install.ps1` to install or verify a release.
+- GitHub release metadata and assets when the user runs `install.ps1` or `install.sh` to install or verify a release.
+- The AioLM benchmark website (`https://aiolm.vercel.app`, unless the build selects another service) when the user publishes a benchmark result, opens shared-result management, browses public benchmarks or creates a profile from a public result. Published results contain measurements, model, runtime and hardware details and the user's description, without local file paths or device identifiers. See [benchmark history and sharing](../reference/benchmark-sharing.md).
 - One GitHub release metadata check at desktop startup, and additional checks requested in **Settings → General → Application updates**. The request identifies the app version in its User-Agent and sends normal network metadata, without local settings, models or conversations. Installer assets and checksums are downloaded only after the user confirms an update; **Open release page** opens the public release page in the user's browser.
 
 AioLM does not silently upload local models, documents, chat history, prompts, or settings to the project maintainer. A user-selected remote endpoint or third-party service may process data sent to it; users should review that service’s privacy policy and terms.
 
 ## Credentials and local services
 
-Credentials for a user-configured endpoint are used for that endpoint request and are not sent to aiolm maintainers. The desktop-managed server binds to the local loopback interface and uses a per-start local bearer token; users must not expose or forward that endpoint. See [SECURITY.md](../SECURITY.md).
+Credentials for a user-configured endpoint are used for that endpoint request and are not sent to aiolm maintainers. Benchmark owner keys are kept in the operating system's credential store and sent only to the configured benchmark service to manage the user's own published results. The desktop-managed server binds to the local loopback interface and uses a per-start local bearer token; users must not expose or forward that endpoint. See [SECURITY.md](../SECURITY.md).
 
 ## Third-party services
 

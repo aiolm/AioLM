@@ -2,15 +2,15 @@
 
 GPU layers use an explicit **app default of 99**, shared by the display, reset, new configuration, server launch and benchmark launch. Context size uses the existing **app default of 4096** for the display, reset, new configuration and server launch. Both values are labeled as app defaults; newer llama.cpp builds describe their own upstream GPU behavior as `auto` and context default as `0`. Other inherited settings continue to use the selected runtime's defaults. CPU thread/slot controls represent automatic counts as `0`; manually setting context size to `0` still uses the model's context.
 
-Reset discards saved manual values and pending drafts. Reopening a dedicated control starts from the selected runtime's default (or its documented reference), including configs saved by older app versions. Resetting raw aliases also clears their dedicated-field mirrors. An editable catalog argument is initialized from its known scalar default.
+**Reset to default** restores an option's default in the working draft; saving the profile makes the change permanent, and discarding the draft keeps the saved value. A reset option shows the selected runtime's default (or its documented reference), including in configurations saved by older app versions. Resetting raw aliases also clears their dedicated-field mirrors. An editable catalog argument is initialized from its known scalar default.
 
-Numeric draft GPU defaults remain numeric when stored in the string-valued draft control. Reasoning preservation follows each runtime's reported policy: `enabled` → `on`, `disabled` → `off`, or template-dependent → `auto`. Genuine automatic defaults include an explanation rather than an invented fixed number. Numeric display/reset agreement is checked for every dedicated numeric control and advanced sampler in `tuningResetValues.test.ts`.
+Numeric draft GPU defaults remain numeric when stored in the string-valued draft control. Reasoning preservation follows each runtime's reported policy: `enabled` → `on`, `disabled` → `off`, or template-dependent → `auto`. Genuine automatic defaults include an explanation rather than an invented fixed number.
 
 Each setting displays its llama.cpp CLI signature (including aliases), the request JSON key where applicable, and the upstream default even while a custom value is being edited. Defaults from the selected executable's help take precedence. Model-dependent defaults and sentinel explanations are preserved; a missing default is explicitly marked as unspecified instead of substituting an old form value. Reference-only defaults are labeled and linked to their source. Request-only settings show their JSON key without inventing CLI flags. The catalog shows defaults even when an entry is collapsed.
 
 The request-only defaults for `n_probs`, `min_keep`, `t_max_predict_ms` and `id_slot` are checked against the pinned upstream source linked in the UI. The prediction time limit's reference default is `-1`; both `-1` and `0` disable the limit. Deprecated memory switches show the default of `--load-mode` when the runtime delegates to it.
 
-Open **Model settings**, choose the runtime, select a profile, then adjust its options in the same dialog. Runtime options come from the selected executable's `--help`; the standalone Tuning page has been retired. The option controls and **Direct input** are two views of the same draft. Direct input preserves argument order, repeated options and values containing spaces. Changes are saved through the profile controls rather than through a second per-option save flow.
+Open **Model settings**, choose the runtime, select a profile, then adjust its options in the same dialog. Runtime options come from the selected executable's `--help`. The option controls and **Direct input** are two views of the same draft. Direct input preserves argument order, repeated options and values containing spaces. Changes are saved through the profile controls rather than through a second per-option save flow.
 
 Model loading and memory options such as mmap, mlock, DirectIO, load-mode, lazy-mode, NUMA, cache RAM, KV/operation offload, repacking, automatic fitting and SWA appear when reported by that runtime. Defaults are inherited by omitting an override; the reference catalog does not impose defaults from another version. Other engines use their own discovered schema instead of the llama.cpp field catalog.
 
@@ -45,14 +45,6 @@ The runtime help is authoritative, including options from custom PR builds. If t
 
 Dedicated model, adapter, GPU, context and reasoning controls remain the owners of their corresponding flags. The shared model settings dialog edits these values as a draft until the user saves the profile or saves and starts it. Local binding and ephemeral authentication are managed by the application. Commands that print information and exit (`--help`, `--version`, etc.) are not persistent startup settings.
 
-Options continue to use the existing configuration save queue and `server_args`, so existing configuration files, execution profiles and project snapshots retain them. Correct invalid input before switching between guided controls and **Direct input**. Direct input provides the server-argument and chat-JSON editors without a second editable copy on screen.
+Options are saved as server arguments with the profile, so existing configuration files, execution profiles and project snapshots keep them. Correct invalid input before switching between guided controls and **Direct input**. Direct input provides the server-argument and chat-JSON editors without a second editable copy on screen.
 
 Benchmarks use the selected model's server configuration to launch a dedicated `llama-server`. Workload controls temporarily override context size, concurrent slots, prompt-cache reuse, and the loopback port. Other compatible tuning and memory options remain server arguments. These temporary overrides do not change saved settings; see [Benchmarks](benchmarks.md) for the workflow and recorded configuration.
-
-To refresh the checked-in reference catalog from an upstream commit or tag:
-
-```powershell
-node scripts/sync-server-options.mjs <commit-or-tag>
-```
-
-The generated file records the resolved commit and source URL. Review the diff when updating. The runtime reader continues to discover new options without requiring a catalog update.

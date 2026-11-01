@@ -27,7 +27,7 @@ The one-line command downloads the `install.ps1` copy included in the selected r
 
 ## Verify download
 
-Release installers are unsigned. Compare the SHA-256 value with `checksums.txt` from the same release.
+Release installers are unsigned. Compare the SHA-256 value with `checksums.txt` from the same release. A matching checksum shows that the file was downloaded intact; it does not establish who published it.
 
 ```powershell
 $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
@@ -54,7 +54,7 @@ AioLM checks its public GitHub release metadata once each time the desktop app s
 
 Choose **Download and install** and confirm to download the matching Windows x64 installer. AioLM verifies the SHA-256 digest published with that release, stops managed servers and tasks, opens the installer, and closes. Save active work first, follow the installer instructions, and reopen AioLM afterward. The download progress and verification status appear in settings. Installation is never started by the automatic check. If the download or verification fails, running sessions continue; if opening the installer fails after cleanup, the app stays open and servers can be started again.
 
-The updater matches the running application's Windows uninstall registration to use the same NSIS or MSI installer type. The Linux/macOS implementation also recognizes a Debian package owned by `aio-lm`, or an app installed in `/Applications` or the user's `Applications` folder, and selects the matching DEB/DMG architecture when that asset is published. After verification it opens the system installation screen; complete installation there before reopening AioLM. For a DMG, replace the app in its existing installation folder. AppImage, development and other manual installations use **Open release page**. Update checks and downloads use the same public release source as `install.ps1`; no separate update server or signing secret is required. Checksum verification does not replace publisher code signing.
+The updater matches the running application's Windows uninstall registration to use the same NSIS or MSI installer type. The Linux/macOS implementation also recognizes a Debian package owned by `aio-lm`, or an app installed in `/Applications` or the user's `Applications` folder, and selects the matching DEB/DMG architecture when that asset is published. After verification it opens the system installation screen; complete installation there before reopening AioLM. For a DMG, replace the app in its existing installation folder. AppImage, source-built and other manual installations use **Open release page**. Update checks and downloads use the same public release source as `install.ps1`; no separate update server or signing secret is required. Checksum verification does not replace publisher code signing.
 
 ## Uninstall
 
@@ -62,9 +62,9 @@ Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **
 
 ## Linux
 
-Ubuntu 24.04 or newer, x86_64. DEB is recommended for desktop integration; AppImage is portable. ARM64 and NVIDIA DGX systems are not covered by this validation.
+Ubuntu 24.04 or newer, x86_64. DEB is recommended for desktop integration; AppImage is portable. Release packages are built for x86_64 only; ARM64 systems, including NVIDIA DGX, have no published package and have not been tested.
 
-Download the DEB or AppImage and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). **Linux assets are included starting with v0.2.1.** For pre-release validation builds, sign in to GitHub, open a successful [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) run, and download `desktop-packages-ubuntu-24.04` from Artifacts. Artifacts expire; if unavailable, use the [source build instructions](development.md). Validation builds are not published releases.
+Download the DEB or AppImage and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). **Linux assets are included starting with v0.2.1.** To use a revision that is not in a release yet, [build from source](#build-from-source).
 
 Compare the SHA-256 value with the corresponding entry in the downloaded checksum file. In the directory containing only the DEB version you want:
 
@@ -77,27 +77,29 @@ Launch AioLM from the application menu. The DEB installs the launcher and icon. 
 
 The managed Linux llama.cpp CPU runtime requires GNU OpenMP (`libgomp.so.1`). The DEB installs `libgomp1` as a dependency.
 
-For AppImage, put the file in a permanent folder, verify its checksum, then make it executable. Install `libgomp1` for the managed CPU runtime and, on Ubuntu 24.04+, `libfuse2t64` if FUSE 2 is missing:
+For AppImage, put the file in a permanent folder, verify its checksum, then make it executable. Install `libgomp1` for the managed CPU runtime, `zenity` for MCP tool approval dialogs and, on Ubuntu 24.04+, `libfuse2t64` if FUSE 2 is missing. The DEB installs `zenity` as a dependency, but AppImage does not; if the approval dialog cannot open, the requested tool is not run and the call fails:
 
 ```bash
-sudo apt install libgomp1 libfuse2t64
+sudo apt install libgomp1 libfuse2t64 zenity
 chmod +x ./AioLM_*.AppImage
 ./AioLM_*.AppImage
 ```
 
-AppImage alone does not register a launcher. Download `register-linux-desktop.py` from the same release (for validation builds, use [the helper from the matching source revision](../../scripts/register-linux-desktop.py)); Python 3 is required. After verifying the helper against the release checksums, register the selected AppImage:
+AppImage alone does not register a launcher. Download `register-linux-desktop.py` from the same release (for a source build, use [the helper from the same checkout](../../scripts/register-linux-desktop.py)); Python 3 is required. After verifying the helper against the release checksums, register the selected AppImage:
 
 ```bash
 python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
 ```
 
-This copies the icon and registers a launcher in your XDG user data directory; it does not move the AppImage. If you move or replace the file at a new path, run registration again. Before switching to DEB, remove this local registration with `python3 register-linux-desktop.py --remove`. A development checkout registers its icon automatically with `npm run tauri -- dev`; see [development](development.md).
+This copies the icon and registers a launcher in your XDG user data directory; it does not move the AppImage. If you move or replace the file at a new path, run registration again. Before switching to DEB, remove this local registration with `python3 register-linux-desktop.py --remove`. The helper refuses to replace or remove desktop entries it does not own.
 
 DEB updates open the verified installer in the system package interface for you to finish. Update AppImage from the release page and register its new path. GPU drivers and a compatible llama.cpp runtime are required for GPU acceleration.
 
+Quit AioLM normally from its window or tray menu. A normal quit stops the model processes it started; a Force Quit or `kill -9` of AioLM does not, so stop any remaining `llama-server` processes yourself in that case.
+
 ## macOS
 
-AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime. macOS packages are included starting with **v0.3.0**. Hosted acceptance and remaining device checks are described in [macOS validation](../reference/macos-validation.md).
+AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime, and Metal runtimes and Metal PR builds are not offered there. macOS packages are included starting with **v0.3.0**.
 
 ### Install from the terminal
 
@@ -112,3 +114,55 @@ The script downloads the DMG for your Mac, verifies its SHA-256 against the rele
 Download `AioLM_<version>_aarch64.dmg` (Apple silicon) or `AioLM_<version>_x64.dmg` (Intel), compare `shasum -a 256` with `checksums.txt` from the same release, open it and drag AioLM to Applications. The app is ad-hoc signed but not notarized, so macOS blocks the first launch of a browser-downloaded copy: open it once, then choose **System Settings → Privacy & Security → Open Anyway**. On macOS 13 and 14 you can instead Control-click the app and choose **Open**. This is needed once per installed copy.
 
 AioLM keeps its data in `~/.aiolm`; replacing or removing the app keeps it. When the app is installed in `/Applications` or `~/Applications`, **Download and install** in settings downloads the DMG for your Mac; replace the app with the new copy. Because unsigned builds change their code identity, macOS may ask again for access to Keychain items such as benchmark sharing credentials after an update. To uninstall, quit AioLM and move `AioLM.app` to the Trash; delete `~/.aiolm` to remove your data.
+
+### Commands started from Finder or the Dock
+
+An app opened from Finder or the Dock does not read your shell startup files. AioLM adds the directories listed in `/etc/paths` and `/etc/paths.d` and Homebrew's `/opt/homebrew/bin` and `/opt/homebrew/sbin`, so MCP commands such as `npx` and build tools from the official installers or Homebrew are found. Commands that only your shell profile adds, for example through nvm, Volta, asdf or `~/.local/bin`, need an absolute path in AioLM; a script that starts with `#!/usr/bin/env node` also needs `node` in one of those directories. CMake for PR builds is found on that path or as `CMake.app` in `/Applications` or `~/Applications`.
+
+As on Linux, a normal quit stops AioLM's model processes, but a Force Quit does not.
+
+## Build from source
+
+Building from source is optional. Use it for a revision that has no release yet, or to produce installers for your own machine. The resulting installers are unsigned, like release installers.
+
+### Requirements
+
+- Windows 10/11 x64, Linux x86_64 (Ubuntu 24.04 or newer) or macOS 13.3 or later (Apple silicon or Intel, with the Xcode command line tools)
+- Node `22.23.2` and npm `12.0.2` (pinned in `.node-version` and `package.json`)
+- Rust `1.98.0` (pinned in `rust-toolchain.toml`; `rustup` installs it automatically)
+- The [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system
+- Git
+
+On Ubuntu, the Tauri prerequisites and the DEB/AppImage tools are below. They are needed only for building; running a built AppImage still needs the packages listed under [Linux](#linux).
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
+```
+
+### Build installers
+
+```bash
+git clone https://github.com/aiolm/AioLM.git
+cd AioLM
+npm ci
+npm run package:tauri
+```
+
+`npm run package:tauri` builds the interface, the desktop app and `aiolm-cli` together and creates the installers for the current operating system under `.codex-target/release/bundle/`: NSIS and MSI on Windows, DEB and AppImage on Linux, APP and DMG on macOS. The CLI is installed beside the app. Use this command rather than running `tauri build` directly: it also removes the build machine's directory paths from the compiled binaries.
+
+Install the result as described for your platform above. A source build uses the same data folder as a release installation, `~/.aiolm` or `AIOLM_HOME`.
+
+Builds publish shared benchmark results to the official AioLM website, `https://aiolm.vercel.app`. To build with publishing disabled, set `AIOLM_BENCHMARK_API_URL=off` before packaging; a root HTTPS origin selects another service, and an invalid value disables publishing. Local benchmark history and exports work either way. See [benchmark sharing](../reference/benchmark-sharing.md#publishing-service).
+
+### Linux AppImage runtime
+
+Linux packaging builds the AppImage runtime from pinned sources on first use and caches it under `.codex-target/appimage-runtime/`. This step needs an x86_64 host, network access, `/dev/fuse` and these tools:
+
+```bash
+sudo apt install bubblewrap git curl gnupg patch
+```
+
+The build runs inside an unprivileged bubblewrap namespace and uses no root access. Ubuntu 24.04 and newer restrict unprivileged user namespaces through AppArmor; packaging checks this first and stops with an explanation if `bwrap` is blocked. Allow `bwrap` with a scoped AppArmor profile instead of turning the restriction off for the whole system. If you already have a runtime binary that matches the pinned hash in `scripts/appimage-runtime/pins.conf`, set `LDAI_RUNTIME_FILE` to its path to use it instead of building one; any other file stops packaging.
+
+To prepare the runtime before packaging, run `node scripts/package-tauri.mjs --prepare-runtime`; packaging verifies the cached copy again. Component sources and licenses are listed in [NOTICE](../../NOTICE).

@@ -2,7 +2,7 @@
 
 > **言語:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-開発中の `aiolm-cli.exe` は `.codex-target/release/aiolm-cli.exe` に生成されます。パッケージ版では補助バイナリとして含まれるため、インストール後は `aiolm.exe` と同じインストールディレクトリにあります。macOS では `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`（または `~/Applications` 配下）です。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
+`aiolm-cli` はインストーラーに補助バイナリとして含まれます。Windows では `aiolm.exe` と同じインストールディレクトリに `aiolm-cli.exe` があります。[ソースからビルド](install.ja.md#ソースからビルド)した場合は `.codex-target/release/` にもあります。macOS では `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`（または `~/Applications` 配下）です。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
 
 ```powershell
 ./aiolm-cli.exe --help
@@ -39,7 +39,7 @@
 - `config get` は認証情報に見える値を伏せ字にします。`server_args`、`chat_options`、`lora_adapters` の設定値には JSON が必要です。
 - `models delete` は `models_dir` 内の非アクティブな `.gguf`/`.mmproj` とアプリ所有のモデルスナップショットを削除できます。マニフェスト外のファイルを保持し、実行中のモデルと補助モデルの削除を拒否します。
 
-- `runtime device` はローカル GPU と推奨バックエンドを検出し、`runtime probe` は version/help/device/bench の事前チェックを実行します。
+- `runtime device` はローカル GPU と推奨バックエンドを検出し、`runtime probe` は llama-server の version/help/device の事前チェックを実行し、任意ツール llama-bench が動作するかも報告します。llama-bench がない、または失敗しても事前チェックは失敗しません。
 - `server start` は設定済みモデルを使用し、`127.0.0.1` にバインドして API-key 認証を意図的に無効化します。信頼できる PC だけで使用し、ポートを外部公開・転送しないでください。
 - 標準出力は JSON で、サーバーログのサイズには上限があります。
 

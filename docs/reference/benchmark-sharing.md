@@ -1,299 +1,129 @@
 # Benchmark history and sharing
 
-The website backend owns accepted benchmark results: database writes, anonymous
-owner-proof authorization, public queries, edits and deletion belong to that
-service. There are no user accounts in v1; management uses the owner recovery
-secret, never a stored access token. The app measures workloads, prepares
-reviewed submissions and calls the service. It does not contain the website API
-server, database migrations or database credentials. The website owns its
-PostgreSQL schema, migrations and runtime roles. Repository ownership is
-described in [Project boundaries](project-boundaries.md).
+Benchmark results are saved on your computer. Sharing a result on the AioLM
+website is optional and happens only when you publish it. The website stores
+published results and handles their public pages, edits and deletion. There are
+no user accounts: a published result is managed with an owner key that AioLM
+keeps in your operating system's credential store.
 
-Benchmark recovery data is saved by the native runner in `benchmarks/runs` under the
-data folder (`~/.aiolm`). Each journal contains launch metadata, completed trials
-and final status. A completed trial is synced outside the timed interval before
-the progress event is emitted. Local results are loaded in pages of at most 100
-records. An interrupted journal recovers its
-complete events; corrupt records are preserved and reported without blocking
-other history. Active runs are excluded until the runner releases their journal.
+## Local history
 
-The first history read imports valid legacy browser records in batches of 100.
-Imports preserve existing native run IDs and leave the original localStorage
-bytes intact. Retrying an interrupted migration is safe. Excel, CSV and Markdown
-exports contain a readable results report without local paths. Website sharing
-uses the separate public contract below.
+The benchmark runner saves each run in `benchmarks/runs` under the data folder
+(`~/.aiolm`, or `AIOLM_HOME`). A run's journal contains its launch metadata,
+completed trials and final status. Completed trials are written as they finish,
+so an interrupted run keeps the measurements it completed. A damaged record is
+kept and reported without hiding the rest of the history. History loads in
+pages of at most 100 runs.
 
-## Public data contract
+Results that earlier versions kept in browser storage are imported the first
+time history opens. The original browser data is left unchanged, and an
+interrupted import is safe to retry.
 
-- `packages/benchmark-contracts/schema/public-benchmark.schema.json` defines public version 1.
-- `packages/benchmark-contracts/schema/openapi.json` defines `POST /v1/benchmark-runs`.
-- `@aiolm/benchmark-contracts` provides standalone DTOs, validation and measurement
-  summaries, with no app, Tauri, React, HTTP or database dependency.
-- `shared/contracts/benchmark/publicBenchmark.ts` is the app-specific adapter
-  that constructs public fields from local measurement records.
+Excel, CSV and Markdown exports contain a readable results report without local
+paths. See [Benchmarks](benchmarks.md) for measurement details, exports and
+deletion.
 
-Submissions contain numeric measurements, workload and corpus identity, model
-identity, runtime version, selected execution settings, the measured launch
-options and an environment snapshot. They exclude local filenames and paths,
-error messages, machine fingerprints, persistent device identifiers and local
-record IDs. Unknown values remain null. Public labels are bounded and reject
-path-like content. A reviewed submission has its own UUID; changing its content
-requires a new UUID.
+## What a shared result contains
 
-Contract 0.6.0 additionally accepts optional `environment.cpu.physical_cores`
-beside the existing `logical_cores` thread count. The two differ on any
-processor with simultaneous multithreading, and a thread-count setting is
-measured against `logical_cores`, so a submission reports both rather than
-letting one stand in for the other. A machine whose operating system does not
-report the count sends null; the count is never obtained by dividing the thread
-count, which would be wrong on every processor without multithreading. The
-website must accept contract 0.6.0 before an app build starts sending this
-field, and a record archived without it keeps no value at all.
+A shared result contains numeric measurements, the workload and corpus
+identity, model identity and format (plus declared metadata for GGUF models),
+the inference engine and its version, selected execution settings, the launch options used for the measurement and a
+hardware snapshot (including the CPU's thread count and, when the operating
+system reports it, its physical core count).
 
-The published `runtime.version` is the line llama.cpp's own version banner
-states, release name first: `0.3.0-dev (build 10638, commit bf9421646)`. The
-runtime probe reduces the banner to that line, so the compiler and build-host
-details it prints alongside are never published. A runtime whose banner states
-no version publishes none; the build tag in `runtime.build` is a separate
-field and is never reworked into a version the runtime did not report.
+It never contains local file names or paths, error messages, machine
+fingerprints, persistent device identifiers or local record IDs. Launch options
+that name your machine, such as model, projector, draft and LoRA files, host and
+port, aliases, prompt text and anything that looks like a credential, are
+removed together with their values. Unknown values stay empty rather than being
+filled in from your current machine.
 
-Contract 0.5.0 additionally accepts optional `execution.effective_args`: the
-llama-server options the measured run was started with, in order, as separate
-tokens, so a reader can reproduce the setup rather than infer it from the
-curated `execution.settings` fields. The adapter publishes an option only with
-the value it was given, and drops every option that names the publisher's
-machine: model, projector, draft model, LoRA and other file arguments, the
-listening host and port, aliases, prompt text, and anything whose option name
-reads as a credential. A token that would still contain a path separator,
-scheme or address is refused by the schema, so an option a newer runtime adds
-cannot leak one either. What remains is the tuning configuration. The website
-must accept contract 0.5.0 before an app build starts sending this field: older
-validators reject fields they do not recognize.
+The engine is llama.cpp, vLLM or MLX, and its version is the one the engine
+itself reports: the version line of the llama.cpp runtime, for example
+`0.3.0-dev (build 10638, commit bf9421646)`, or the installed vLLM or MLX package
+version. vLLM on Apple Silicon (Metal) also records its Metal plugin version
+separately. Compiler and build-host details are not included. A runtime that
+reports no version publishes none.
 
-Contract 0.3.0 additionally accepts optional `model.metadata`. New runs can record
-declared GGUF name, architecture, parameter size label, weight quantization,
-quantizer and public base-model repositories. A public repository identifies its
-distributor; the quantizer is a separate field. A file-matched download receipt
-may add a repository-relative artifact name, which is not a local filename or
-filesystem path. Filename guesses never supply a publisher or quantization.
-These declarations do not establish model quality or identical tensors; use the
-model digest to distinguish exact files. Old records and frozen publication
-snapshots keep their original metadata. Roll out the accepting web contract
-before distributing an app that submits the optional metadata.
+When you compare results, keep these limits in mind:
 
-The method and corpus versions identify how a result was produced. The UI no
-longer hashes models. Digests already stored in saved results and in the
-model-identity cache remain valid: runs read that metadata-validated cache without
-hashing the model, and a cached digest is discarded once the file's size or
-timestamps change, leaving the model unidentified. Existing saved results keep
-their recorded digests, and download receipts are still matched to the file by the
-same size and timestamp stamp. Multipart models remain
-`multipart` with an unknown digest until a complete shard-manifest format is
-implemented. Legacy records without provenance remain unidentified. These values describe reported local measurements; they do not
-provide server-verified authenticity or a universal hardware ranking.
+- A selected GPU records how the run was configured, not proof that every layer
+  ran there. CPU mode, explicit selection and automatic placement stay distinct.
+- Compare speedups only between runs with the same prompt size, output size and
+  timing method. Cached prompts and failed or missing samples cannot establish a
+  speedup.
+- For GGUF models, declared metadata states what the file says about itself; it
+  does not prove identical tensors or quality. A complete SHA-256 distinguishes exact files when
+  available; multipart models have no single digest.
+- Results are self-reported local measurements. The website does not verify them
+  and they are not a universal hardware ranking.
 
-Installed GPUs are recorded separately from configured selection. CPU mode,
-explicit selections, automatic placement and unconfirmed overrides remain
-distinct. A selected GPU is a launch configuration fact, not telemetry proving
-that every layer or kernel ran there. Missing runtime-default settings remain
-unknown instead of being inferred from the current UI. Only compare speedups
-with matching prompt size, output size and timing method; cached prompts and
-failed or missing samples cannot establish an uncontaminated speedup.
+## Publishing a result
 
-## Connecting a service
+Select a result and expand **Share result**. It shows a readable summary of the
+public model information, hardware, runtime, measurement conditions and
+results, an optional description and one publish action. The description
+accepts Markdown paragraphs, lists, HTTP(S) links and code blocks, up to 4000
+characters.
 
-The selected result has an expanded **Share result** section. It shows
-a readable summary of the public model information, hardware, runtime,
-measurement conditions and results, followed by an optional description and
-one publish action. Raw JSON and queue-management controls are not part of this
-flow. Publishing shows browser-verification instructions when needed, and
-completion replaces the publish action with website management. Reopening an
-accepted submission restores that completion state without another upload.
+AioLM freezes the exact reviewed content before publishing, so retries send the
+identical result and cannot create duplicates. The website may ask you to
+complete a browser verification first. After the upload, the publish action is
+replaced by website management; reopening the result later shows the same
+state without uploading again. Uploads are paused while a benchmark is
+measuring, and starting a measurement cancels an upload in progress. Because a
+cancelled request may already have reached the website, publishing again
+returns the existing result rather than a copy.
 
-Anonymous publishing uses a service origin resolved natively at build time,
-and no access token is stored. Builds publish to the official AioLM website,
-`https://aiolm.vercel.app`, unless the `AIOLM_BENCHMARK_API_URL` build
-environment overrides it; the native configuration command reports the result.
-An unset or blank value selects the official website, a root HTTPS origin
-selects another service, and `off` (any case) disables publishing. An invalid
-value also disables publishing rather than falling back to the official
-website. When publishing is disabled, the summary and local result exports
-remain available. Packaged Windows releases receive the override from the
-release workflow's `AIOLM_BENCHMARK_API_URL` repository variable, and build
-verification rejects a value a release build cannot use, so a release cannot
-ship with publishing silently off. See [Development](../guides/development.md)
-for packaging a build with the official, a custom or no service. Publishing is
-opt-in per configured
-origin in this order: the reviewer writes a Markdown description (max 4000
-characters, paragraphs/lists/HTTP(S) links/code blocks only), the app durably
-persists the exact unbound `{benchmark, description_md}` wrapper first, the
-native runner then binds the OS-vault owner key to that body hash and the
-binding metadata attaches idempotently to the same wrapper, and a browser
-verification binds a short-lived upload permit before the identical bytes are
-submitted. A cancelled or late native binding never attaches or sends, but the
-original unbound wrapper stays in internal storage for explicit retry and restart. The frozen
-snapshot never changes afterwards, and retries resend the identical bytes under
-the `Idempotency-Key` equal to `submission_id`. Owner secrets and upload
-permits stay in the native runner and never enter WebView state. Review
-hydrates the persisted wrapper before the summary or publishing becomes usable, so a
-reload restores the exact frozen bytes rather than a re-derived draft.
+### Publishing service
 
-```ts
-import { createNativeSelectedTransport } from '../../shared/sharing/nativeTransport';
-import { createPublicationController } from '../../shared/sharing/publicationController';
-import { dispatchSelectedBenchmark } from '../../shared/sharing/benchmarkOutbox';
+Builds publish to the official AioLM website, `https://aiolm.vercel.app`. A build
+can choose another service, or disable publishing, with the
+`AIOLM_BENCHMARK_API_URL` setting at build time: an unset or blank value uses
+the official website, a root HTTPS origin selects another service, and `off`
+disables publishing. An invalid value also disables publishing rather than
+falling back to the official website. When publishing is disabled, the summary
+and local exports remain available. See
+[Build from source](../guides/install.md#build-from-source).
 
-// The controller persists the exact unbound wrapper, binds the native
-// owner key, runs browser verification, then dispatches the exact selected
-// entry. Owner secrets and upload permits never cross into WebView state.
-const controller = createPublicationController({ measurement, outbox });
-await controller.prepare({ benchmark, description_md }, { runId });
-await controller.publishSelected(submissionId, createNativeSelectedTransport(destination), abortController.signal);
-```
+## Managing shared results
 
-Existing internal outbox records are retained. The legacy HTTP client remains
-separate from selected publication: it cannot carry descriptions or exact
-frozen wrapper bytes. Previously attempted bare submissions cannot be silently
-converted into a new body for the same submission ID.
+**Shared results** lists the results you have published from this computer,
+with a website management action for each. Choosing it signs you in to the
+website's management page in your browser without showing the owner key. The
+sign-in link expires after two minutes and works once. Opening management never
+edits or deletes a result by itself.
 
-The native transport accepts a configured origin over HTTPS; loopback HTTP is
-allowed for local integration tests. It refuses credential-bearing URLs and
-redirects, omits browser cookies and referrers, and attaches the owner proof
-and single-use upload permit inside the native runner for each attempt. The
-reviewed bytes are frozen before the owner key is bound. Requests carry
-`Idempotency-Key` equal to `submission_id`; the service must atomically enforce
-that key within the owner scope. Identical retries return the same receipt,
-including accepted-request replay without a fresh permit. Reusing a key with a
-different payload returns 409. Both 200 and 201 return `{submission_id, id, url?}`;
-the client verifies the submission ID and only retains same-origin result URLs.
-Permission expiry surfaces a recoverable verification block rather than a
-permanent rejection; deleted submissions are terminal and never retried.
-The website must configure CORS for its supported clients.
+Edit a result's description or delete it on the website. Deleting removes the
+result's data; the website keeps only a minimal record that it existed.
+Removing local history or cached copies in AioLM never deletes a published
+result.
 
-The internal outbox is stored in IndexedDB separately from native history; users
-do not enqueue, browse or remove submissions through a separate sharing queue.
-Preparation succeeds only after the write transaction commits; unavailable storage and quota failures are
-reported instead of silently falling back to memory. Entries are independently
-addressable, and reads return cursor pages of at most 100 entries. Browser storage
-clearing or eviction can remove this internal state; native run history is
-independent. A retry is explicit and retains the saved body and service binding.
+### Backup and restore
 
-Ownership records live in a permanent native registry outside the queue, so
-pruning the acknowledged cache never strands owner keys. The app lists them
-through a paginated native command independent of queue/history in **Shared
-results**, with a website management action for each entry. Its expanded
-**Backup and restore** section offers per-result backup-file export and code
-copy, and backup-file import remains available even on a new device with no
-entries. The explanation identifies the backup as permission to edit or delete
-a shared result after reinstalling or on another device. Recovery codes use `aiolm-recovery-v1.` base64url JSON
-`{version, origin, submission_id, secret}`, are handled by native file dialogs
-and pasted-code validation, and never kept in WebView state or navigation URLs.
-A recovered secret conveys exactly the original authority. A lost key and a
-lost backup cannot be recovered automatically.
+Your owner key is the only permission to edit or delete a published result.
+Expand **Backup and restore** in **Shared results** to save a backup file or
+copy a recovery code for each result. Keep backups private: anyone with one has
+the same permission you do.
 
-The website management action signs in without showing the key. The native
-command refuses during a measurement, reads the owner key from the OS vault
-only when the saved ownership origin matches the configured service, and sends
-`POST <origin>/v1/management-handoffs` with body `{submission_id}` and the
-base64url owner key as the bearer credential, using the same restricted
-no-redirect, cookie-free, timeout- and size-bounded client. The response
-`{handoff_id, handoff_token, expires_at}` is accepted only with a lowercase
-canonical UUID v4 id and a canonical unpadded base64url 32-byte token. The app
-then opens the system browser at `<origin>/manage#handoff=<id>.<token>`, built
-natively from those validated parts; the ticket rides only in the URL fragment,
-which browsers do not send to servers or in `Referer`. The website redeems it
-once for its ordinary management session and removes the fragment. The owner
-key, recovery code, ticket and URL never reach the WebView or logs; the command
-returns only success or a structured error. Every failure opens nothing:
-ownership saved for a different service is a binding conflict, unknown submissions
-and invalid owner proofs both report `ownership_missing`, malformed responses are
-invalid, and redirects are refused. Cancel or a measurement start aborts the
-pending request and suppresses the browser launch.
+- To manage results after reinstalling or on another computer, import the
+  backup file there. Import works even when the list is empty.
+- The website's management page also accepts AioLM backup `.txt` files; you can
+  select several and choose a result from the list. Pasting a recovery code
+  remains available as a fallback.
 
-Each handoff expires after two minutes and can be used only once. The website
-removes the fragment before redeeming it for its normal result-scoped management
-cookie and CSRF token. Opening management never edits or deletes a result
-automatically.
+A lost owner key without a backup cannot be recovered.
 
-The website also accepts the app's existing backup `.txt` files through a file
-picker. Users can select multiple files and choose a result from the imported
-list without pasting a recovery code. Files are validated against the existing
-recovery contract and service origin; credentials stay in page memory rather
-than browser persistent storage. The manual-code form remains a fallback.
+## Local copies of published results
 
-Automatic app-to-web management requires the website's management-handoff API
-to be deployed before the updated desktop client. The website reuses its
-management session storage with a separate ticket hash domain and does not
-require a database migration.
-The native client issues `POST /v1/management-handoffs` with `{submission_id}`
-and owner bearer proof. A successful response contains `{handoff_id,
-handoff_token, expires_at}`. The website redeems the ticket at
-`POST /v1/management-handoffs/<id>/redeem` with `{handoff_token}` under an exact
-Origin check and atomically consumes it while creating the management session.
+After the website confirms a result, AioLM records the receipt before cleaning up
+local data, so a failed local step is retried without uploading again. AioLM
+keeps the 100 most recent local copies of runs it measured and published; older
+copies of those runs are removed automatically. Runs that are in progress,
+interrupted, not uploaded, failed or cancelled, imported from earlier versions,
+or saved before this policy are always kept, so history can hold more than 100
+runs.
 
-Edits and deletion belong to the website: descriptions change only through a
-revision-checked request, and deletion removes payload data while the service
-retains a minimal tombstone. Retrying an accepted deleted submission reports a
-terminal state. Local queue removal or cache eviction never deletes website
-results and never calls the website deletion API.
-
-## Accepted results and local cache
-
-The reviewed queue entry keeps an optional local run reference outside the
-public request. After a successful response, the outbox commits the server receipt
-before acknowledging it to the native recovery store. A local write failure
-leaves the item uploaded; later reconciliation retries only the local operation
-and never resends an accepted submission. Cache cleanup warnings are reported
-separately and do not block acknowledgement of a durable receipt. Later native
-acknowledgements retry cache maintenance. History initialization and
-explicit dispatch perform bounded reconciliation while measurement is idle.
-
-Only records created by the native runner under the new cache policy, finalized
-as complete or partial, and newly acknowledged by the service are eligible for
-automatic eviction. The app retains the 100 most recent eligible local copies.
-Native receipt files remain after eviction so migration cannot resurrect an
-evicted journal. The native store verifies a journal still matches the acknowledged
-copy before deleting it. Active, interrupted, unuploaded, failed, cancelled,
-legacy-imported and existing records without the new origin marker are protected.
-These protections can leave more than 100 total local records.
-Operating-system file locks serialize storage changes across app processes and
-protect active journals until their owner exits. Lock filenames remain stable;
-process exit releases the lock without requiring stale-file deletion. Before
-eviction, the store confirms both the receipt and its directory entries are durable,
-including retries after an earlier sync failure.
-Activity markers keep lock checks limited to current/recovering runs and the
-requested history page; reading a page does not open every archived journal's lock.
-
-New source-linked queue entries that have completed local acknowledgement also
-retain at most the latest 100 eligible entries after bounded maintenance. Pending,
-rejected, unacknowledged and pre-policy entries are retained. Eviction and manual
-queue removal affect local copies only: neither action deletes the website's
-result. Server-side deletion is a separate owner-proof website operation.
-
-Dispatch uses atomic leases so concurrent workers cannot claim the same active
-entry. A lease expires after 120 seconds; a single dispatch attempt is cancelled
-after 60 seconds, including a stalled credential provider. The HTTP attempt has
-its own 30-second default deadline and a 16 KiB receipt limit. Network and retryable
-HTTP failures use exponential backoff with jitter; `Retry-After` can extend that
-delay. The retry deadline is persisted per destination and stops subsequent jobs
-and workers from immediately retrying the same service. Permanent failures remain
-rejected until explicitly retried. An entry stays bound to its first destination.
-
-The desktop adapter observes benchmark tasks: it defers dispatch while measuring
-and aborts an in-flight upload when measurement starts. Other hosts can inject
-their own measurement activity source. No implementation can guarantee that a
-cancelled request was not accepted remotely; idempotent receipt replay is required
-to handle response loss, cancellation and process restarts correctly.
-
-## Validation
-
-Unit tests cover public-field exclusion, malformed data, aggregation, migration,
-recovery UI, leases, cancellation, retries and errors. HTTP integration tests use
-a synthetic loopback server. Native persistence and identity tests use unique
-temporary directories and synthetic model files, including acknowledged-cache
-eviction and protection of recovery data. Package tests install a packed archive
-offline into an isolated consumer and check Node/browser imports and declarations.
-Browser checks use a distinct
-test database to verify transaction rollback, concurrent claims, cursor pages and
-reload persistence, including the v1-to-v2 queue migration, without altering the
-app's queue.
+Publishing state is kept in the app's browser storage, separately from run
+history. Clearing that storage can lose unfinished publishing state; your run
+history and owner keys are not affected.

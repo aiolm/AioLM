@@ -24,12 +24,16 @@ API 服务器同样仅限本地使用。MCP 服务器是以用户权限启动的
 
 ## 从源码构建 PR
 
-以用户权限编译第三方代码。下载前显示来源（标题/作者/仓库/分支/提交/状态）并固定到该提交 — 如果 head 移动则拒绝。通过提交固定的 HTTPS 获取 PR 源码归档并检查预期的提交目录；GitHub 不会为该源码归档发布可信摘要，因此存储的 SHA-256 为本地审计记录。发布安装程序会在可用时使用 GitHub 资产摘要，否则使用 `checksums.txt` 作为备用。构建限制在归档内（BoringSSL/libcurl/OpenSSL 关闭），需两步确认，所有 PR 状态均会明示。支持的后端：`cpu` `vulkan` `cuda` `rocm`（拒绝 SYCL/OpenVINO）。
+以用户权限编译第三方代码。下载前显示来源（标题/作者/仓库/分支/提交/状态）并固定到该提交 — 如果 head 移动则拒绝。通过提交固定的 HTTPS 获取 PR 源码归档并检查预期的提交目录；GitHub 不会为该源码归档发布可信摘要，因此存储的 SHA-256 为本地审计记录。发布安装程序会在可用时使用 GitHub 资产摘要，否则使用 `checksums.txt` 作为备用。校验和只能确认文件完整性，不能证明发布者身份。构建限制在归档内（BoringSSL/libcurl/OpenSSL 关闭），需两步确认，所有 PR 状态均会明示。支持的后端：`cpu` `vulkan` `cuda` `rocm`（拒绝 SYCL/OpenVINO）。
 
 ## 子进程环境
 
-`llama-server`、`llama-bench` 和 CMake 构建在清空的 env + 按平台的显式白名单下运行。代理/TLS 变量为企业构建而传递，敏感信息（`GITHUB_TOKEN`、`*_TOKEN`、`*_PASSWORD`、`SSH_AUTH_SOCK` 等）被排除并经过测试。Git 凭证助手已禁用。
+`llama-server`、`llama-bench` 和 CMake 构建在清空的 env + 按平台的显式白名单下运行。代理/TLS 变量为企业构建而传递，敏感信息（`GITHUB_TOKEN`、`*_TOKEN`、`*_PASSWORD`、`SSH_AUTH_SOCK` 等）会被排除。Git 凭证助手已禁用。
 
 ## 支持的版本
 
 最新版本和 `main` 会获得修复。旧版本可能需要升级。
+
+## 隐私
+
+网络请求、本地数据、凭据和第三方服务的处理请参阅[隐私政策](privacy.md)。

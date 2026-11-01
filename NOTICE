@@ -8,3 +8,40 @@ https://github.com/ggml-org/llama.cpp
 AioLM does not claim ownership of upstream runtime binaries. Users and
 redistributors must comply with the upstream license and any third-party
 notices included in a selected runtime asset.
+
+------------------------------------------------------------------------------
+AppImage type2 runtime (Linux AppImage packages)
+------------------------------------------------------------------------------
+
+Linux AppImage packages embed a source-built AppImage type2 runtime instead of
+the upstream release download.
+
+Upstream: https://github.com/AppImage/type2-runtime
+Commit:   fedfad51acc2860b2916a1eef32ba4a500ff31ef
+License:  MIT; the unchanged upstream license text is in
+          scripts/appimage-runtime/LICENSE.type2-runtime
+
+AioLM applies two patches, distributed under the same MIT license, from
+scripts/appimage-runtime/patches/:
+
+- 0001-rm_recursive-pass-positive-nftw-fd_limit.patch
+- 0002-extract-and-run-use-a-per-instance-directory.patch
+
+The pinned inputs and expected runtime digest are recorded in
+scripts/appimage-runtime/pins.conf. The runtime is built in an Alpine Linux
+3.21.0 minirootfs using upstream's build scripts; the exact Alpine package set
+is recorded in scripts/appimage-runtime/apk.lock.
+
+As in upstream's release, the runtime statically links the following
+components, each distributed under its own license:
+
+- libfuse 3.15.0 (LGPL-2.1)
+- squashfuse 0.5.2 (BSD-2-Clause)
+- zstd 1.5.6 (BSD-3-Clause or GPL-2.0)
+- zlib 1.3.2 (Zlib)
+- mimalloc 2.1.7 (MIT)
+- musl 1.2.5 (MIT)
+
+Their exact sources are the pinned upstream tarballs fetched by upstream's
+install-dependencies.sh at the commit above and the Alpine packages listed in
+scripts/appimage-runtime/apk.lock.

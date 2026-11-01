@@ -2,7 +2,7 @@
 
 > **언어:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-개발 중 `aiolm-cli.exe`는 `.codex-target/release/aiolm-cli.exe`에 생성됩니다. 패키지 빌드에서는 보조 바이너리로 포함되므로 설치 후 `aiolm.exe`와 같은 설치 디렉터리에서 찾을 수 있습니다. macOS에서는 `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`(또는 `~/Applications` 아래)에 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
+`aiolm-cli`는 설치 파일에 보조 바이너리로 포함됩니다. Windows에서는 `aiolm.exe`와 같은 설치 디렉터리에서 `aiolm-cli.exe`를 찾을 수 있습니다. [소스에서 빌드](install.ko.md#소스에서-빌드)했다면 `.codex-target/release/`에도 있습니다. macOS에서는 `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`(또는 `~/Applications` 아래)에 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
 
 ```powershell
 ./aiolm-cli.exe --help
@@ -40,7 +40,7 @@
 - `config get`은 자격 증명처럼 보이는 값을 가립니다. `server_args`, `chat_options`, `lora_adapters`는 설정 시 JSON 값이 필요합니다.
 - `models delete`는 `models_dir` 내부의 비활성 `.gguf`/`.mmproj` 파일과 앱 소유 모델 스냅샷을 삭제할 수 있습니다. 스냅샷 목록에 없는 사용자 파일을 보존하고 실행 중 모델과 보조 모델의 삭제를 차단합니다.
 
-- `runtime device`는 로컬 GPU와 권장 백엔드를 검색하고, `runtime probe`는 버전/help/device/bench 사전 점검을 실행합니다.
+- `runtime device`는 로컬 GPU와 권장 백엔드를 검색하고, `runtime probe`는 llama-server의 버전/help/device 사전 점검을 실행하고 선택 도구인 llama-bench의 동작 여부를 함께 보고합니다. llama-bench가 없거나 실패해도 사전 점검은 실패하지 않습니다.
 - `server start`는 설정된 모델을 사용하고 `127.0.0.1`에 바인딩하며 API-key 인증을 의도적으로 끕니다. 신뢰할 수 있는 컴퓨터에서만 사용하고 포트를 외부에 노출하거나 전달하지 마세요.
 - 표준 출력은 JSON이며 서버 로그 크기는 제한됩니다.
 

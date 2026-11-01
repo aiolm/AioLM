@@ -2,7 +2,7 @@
 
 > **语言:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-开发时，`aiolm-cli.exe` 会生成在 `.codex-target/release/aiolm-cli.exe`。打包版本会将它作为辅助二进制文件包含；安装后请在与 `aiolm.exe` 相同的安装目录中查找。macOS 上位于 `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`（或 `~/Applications` 下）。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
+`aiolm-cli` 作为辅助二进制文件包含在安装程序中。Windows 上请在与 `aiolm.exe` 相同的安装目录中查找 `aiolm-cli.exe`；如果[从源码构建](install.zh.md#从源码构建)，`.codex-target/release/` 中也有一份。macOS 上位于 `/Applications/AioLM.app/Contents/MacOS/aiolm-cli`（或 `~/Applications` 下）。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
 
 ```powershell
 ./aiolm-cli.exe --help
@@ -39,7 +39,7 @@
 - `config get` 会隐藏类似凭证的值；设置 `server_args`、`chat_options`、`lora_adapters` 时需要 JSON 值。
 - `models delete` 可删除 `models_dir` 内未激活的 `.gguf`/`.mmproj` 文件和应用拥有的模型快照。它保留清单外的用户文件，并拒绝删除正在使用的模型及辅助模型。
 
-- `runtime device` 会检测本地 GPU 和推荐后端；`runtime probe` 会运行 version/help/device/bench 预检。
+- `runtime device` 会检测本地 GPU 和推荐后端；`runtime probe` 会运行 llama-server 的 version/help/device 预检，并报告可选工具 llama-bench 是否可用；缺少 llama-bench 或其运行失败不会导致预检失败。
 - `server start` 使用已配置的模型并绑定到 `127.0.0.1`，且会有意禁用 API-key 认证。仅在可信计算机上使用，不要将端口暴露或转发到外部。
 - 标准输出为 JSON，服务器日志大小有限制。
 

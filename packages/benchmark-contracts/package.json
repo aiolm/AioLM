@@ -22,7 +22,6 @@
     "dist/*.js",
     "dist/*.d.ts",
     "schema/*.json",
-    "README.md",
     "LICENSE"
   ],
   "scripts": {

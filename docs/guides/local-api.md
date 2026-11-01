@@ -74,7 +74,7 @@ Desktop model processes now use private loopback ports. External applications
 should use the URL and key shown on the API server page, rather than a session's
 private URL or key. Anthropic and Responses clients that used the former separate
 gateway on port 8081 should switch to the API server's configured port and key.
-The **Diagnostics** page shows model diagnostics only; it has no server controls.
+A model's startup error and runtime log appear where the failure is shown: in the loaded-model list of the model library, the application error banner and Chat. There is no separate diagnostics page, and these places have no API server controls.
 
 The existing `auto_start` preference loads the selected model at app startup; it
 does not enable the external API. Closing or quitting the app keeps the existing

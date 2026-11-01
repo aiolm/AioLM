@@ -57,6 +57,4 @@ Skipped entries are reported.
 
 AGENTS.md and loaded skill text become part of the request to the selected chat
 endpoint. They are not copied into the conversation's stored system prompt or
-preference exports. Tests use synthetic files in temporary directories; the
-development machine's personal instructions and skills are never fixtures or
-distribution assets.
+preference exports.

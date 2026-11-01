@@ -10,9 +10,8 @@ remain attached to the response in conversation history.
 | Output generation (Decode / TG) | Server `timings.predicted_n`, including reasoning tokens | Server `timings.predicted_ms` | Server `timings.predicted_per_second` |
 
 Compact rows display PP/TG. Their accessible names and tooltips use the same
-localized phase names as benchmark tables, sharing and exports, from
-`src/shared/i18n/inferenceMetricCopy.ts`. Benchmark PP is explicitly an estimate;
-chat PP uses runtime phase timings.
+localized phase names as benchmark tables, sharing and exports. Benchmark PP is
+explicitly an estimate; chat PP uses runtime phase timings.
 
 When a server rate is missing, AioLM divides the corresponding stage's token count
 by its duration. Usage fields can supply the TG count from `completion_tokens`,

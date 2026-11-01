@@ -2,70 +2,48 @@
 
 > **Language:** [English](README.md) | [한국어](docs/guides/overview.ko.md) | [日本語](docs/guides/overview.ja.md) | [中文](docs/guides/overview.zh.md)
 
-[Documentation index](docs/README.md) — installation, development, architecture, and policies.
+[Documentation](docs/README.md) — installation, usage guides and reference. The documentation describes the current source; a published release may not include the latest changes yet.
 
-AioLM (All-in-One LM) — Windows/macOS/Linux desktop runtime manager with a Tauri v2 UI for models, runtimes, chat, and benchmarks. Select llama.cpp, vLLM on Linux or Apple Silicon macOS via vllm-metal, or MLX on Apple Silicon macOS; see [inference runtimes](docs/reference/inference-runtimes.md) for compatibility and validation limits.
+AioLM (All-in-One LM) is a desktop app for Windows, macOS and Linux that finds, runs and compares local language models. It manages llama.cpp runtimes, vLLM on Linux or Apple Silicon macOS (via vllm-metal), and MLX on Apple Silicon macOS, and can connect other local engines that serve an OpenAI-compatible API. See [inference runtimes](docs/reference/inference-runtimes.md) for platform and model-format details.
 
 ## Features
 
-- GGUF and safetensors snapshot discovery, runtime compatibility filters and safe management
-- Engine-specific settings profiles, execution options and multimodal inputs
-- Managed runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO) with portable ZIP support
-- PR builds by number/URL with provenance review
-- Streaming chat with local threads, document context, and embeddings
-- User AGENTS.md instructions, local skills, and an in-app personalization editor
-- Projects, Hugging Face Discover, and MCP servers
-- Independent model loading and one API server page for OpenAI- and Anthropic-compatible clients
-- External engine connections through a common process and verified OpenAI v1 boundary, independent of implementation language
-- Tuning for server and sampling parameters
-- New-version notification at startup and verified installer updates from Settings
+- Hugging Face model search across all repository formats, sorted by Trending by default, with optional GGUF, safetensors and MLX filters
+- In-app downloads of GGUF files and complete safetensors snapshots, with a local model library and safe deletion
+- Managed llama.cpp runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO), portable runtime archives and llama.cpp PR builds with provenance review
+- Settings profiles per engine, resource estimates before loading, and multimodal inputs where the model and engine support them
+- Loaded-model management with start/stop, settings and runtime logs in the model library
+- Streaming chat with local conversations, projects, document search and MCP tools
+- Personal AGENTS.md instructions and local skills, edited in **Settings → Personalization**
+- A local API server for OpenAI- and Anthropic-compatible clients
+- Serving benchmarks with history, exports and optional public sharing
+- Automatic connection of other local inference engines
+- Update notification at startup and verified installer updates from Settings
+- A headless CLI
 
-In Tuning, **Reset all tuning** removes all overrides, including raw server arguments and chat JSON; each field also has **Reset to default**. Defaults are inherited from the selected llama.cpp runtime/model, not hard-coded recommendation presets. **Set custom value** opts back into an override, and profiles retain the default-mode selection. Model files, adapters, GPU assignments, runtime selection and saved profiles are preserved. Server changes require **Apply & restart**; default context size and memory use can vary by runtime/model.
+Search shows every repository, but in-app downloads handle only GGUF files and complete safetensors snapshots. A repository in another format stays visible with its model card; an external engine may still be able to run it. Search results do not select or favor an inference engine.
 
-Loading a model makes it available to internal chat. Start the API server separately
-from **API server** in the sidebar to use loaded models from other applications: copy
-the URL, key and model ID, and pick the OpenAI or Anthropic example on the same page.
-The API stays up when models are unloaded or replaced, and stopping it leaves internal
-chat and loaded models available. See [API server and model lifecycle](docs/guides/local-api.md).
+Loading a model makes it available to internal chat. To use loaded models from other applications, start **API server** from the sidebar and copy its URL, key and model ID. See [API server and model lifecycle](docs/guides/local-api.md).
 
-Use **Settings → Personalization** to edit your shared and AioLM-specific
-AGENTS.md instructions. Chat reads these files for new turns and can load local
-skills automatically or through the skill picker and `$skill-name` references.
-See [chat personalization](docs/reference/personalization.md).
+To connect another engine, open **Inference engines → Add inference engine → Find automatically**, choose a model and **Connect**. AioLM registers the engine only after a real chat and streaming check. See [external engine connections](docs/reference/automatic-engine-connections.md).
 
-Starting with **v0.3.3**, the automatic external connection flow is available.
-In **Inference engines → Add inference engine**, use
-**Find automatically → Choose a model → Connect**. If no server is found, choose
-its installation folder. AioLM saves the connection internally after an actual
-chat and streaming check; no JSON or separate probe program is needed in this
-flow. Advanced explicit registration remains available.
+## Install
 
-Discovery does not install engines or guarantee model support. Running local
-OpenAI v1 servers can be attached without taking ownership of their processes.
-Automatic managed launch requires unambiguous documented arguments and verified
-model routing. Other protocols, ambiguous launch commands, authentication setup
-and container creation require further configuration. Text checks do not certify
-media, tools or response quality. See the [connection contract](docs/reference/automatic-engine-connections.md).
-
-## Platform support
-
-Windows x64, macOS 13.3+ (Apple Silicon and Intel) and Linux x86_64 (Ubuntu 24.04+) builds are available. Windows uses NSIS/MSI, macOS uses DMG and Linux uses DEB/AppImage. Linux packages are included starting with **v0.2.1**; see the [Linux installation guide](docs/guides/install.md#linux). macOS 13.3+ DMGs for Apple Silicon (with Metal) and Intel (CPU) are included starting with **v0.3.0**, ad-hoc signed but not notarized, with a verified [terminal installer](docs/guides/install.md#macos); [macOS validation](docs/reference/macos-validation.md) describes the hosted checks and remaining device work. Linux ARM64/NVIDIA DGX acceptance remains pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
-
-## Download
-
-[Linux: DEB / AppImage](docs/guides/install.md#linux)
-
-Windows:
+Windows (PowerShell):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
 ```
 
-Or get installer files directly from [GitHub Releases](https://github.com/aiolm/AioLM/releases).
+macOS 13.3 or later:
 
-For advanced install options, verification, development setup, and CLI usage, see [install.md](docs/guides/install.md), [development.md](docs/guides/development.md), and [cli.md](docs/guides/cli.md).
+```bash
+curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
+```
 
-For data migration and compatibility, see [the migration guide](docs/reference/migration.md).
+Linux (Ubuntu 24.04 or later, x86_64): download the DEB or AppImage from [GitHub Releases](https://github.com/aiolm/AioLM/releases) and follow the [Linux instructions](docs/guides/install.md#linux).
+
+Installers are unsigned; macOS builds are ad-hoc signed but not notarized. Each release includes SHA-256 checksums. The [installation guide](docs/guides/install.md) covers verification, first launch, updates, uninstalling and [building from source](docs/guides/install.md#build-from-source). See also the [CLI guide](docs/guides/cli.md) and [data folder and migration](docs/reference/migration.md).
 
 ## Security and privacy
 
@@ -73,4 +51,4 @@ See [Security](docs/SECURITY.md) and [Privacy](docs/policies/privacy.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). llama.cpp binaries — see [NOTICE](NOTICE).
+MIT — see [LICENSE](LICENSE). Third-party notices, including llama.cpp runtimes and the Linux AppImage runtime, are in [NOTICE](NOTICE).

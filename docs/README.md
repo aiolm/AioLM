@@ -1,68 +1,33 @@
 # AioLM documentation
 
-Guides, technical reference, and policies for the current AioLM implementation.
+Guides and reference for installing and using AioLM.
 
-## Guides
+## Get started
 
 | Topic | English | 한국어 | 日本語 | 中文 |
 | --- | --- | --- | --- | --- |
-| Project overview | [English](../README.md) | [한국어](guides/overview.ko.md) | [日本語](guides/overview.ja.md) | [中文](guides/overview.zh.md) |
-| Installation (Windows / Linux) | [English](guides/install.md) | [한국어](guides/install.ko.md) | [日本語](guides/install.ja.md) | [中文](guides/install.zh.md) |
+| Overview | [English](../README.md) | [한국어](guides/overview.ko.md) | [日本語](guides/overview.ja.md) | [中文](guides/overview.zh.md) |
+| Install, update and uninstall | [English](guides/install.md) | [한국어](guides/install.ko.md) | [日本語](guides/install.ja.md) | [中文](guides/install.zh.md) |
 | Command-line interface | [English](guides/cli.md) | [한국어](guides/cli.ko.md) | [日本語](guides/cli.ja.md) | [中文](guides/cli.zh.md) |
-| Development | [English](guides/development.md) | [한국어](guides/development.ko.md) | [日本語](guides/development.ja.md) | [中文](guides/development.zh.md) |
-| API server and model lifecycle | [English](guides/local-api.md) | — | — | — |
+| Security | [English](SECURITY.md) | [한국어](policies/security.ko.md) | [日本語](policies/security.ja.md) | [中文](policies/security.zh.md) |
 
-## Technical reference
+To build installers yourself, see [Build from source](guides/install.md#build-from-source).
 
-- [Functional specification (한국어)](reference/functional-spec.ko.md): concise overview of current features and operating conditions.
-- [Source architecture](reference/architecture.md): folder layout, module responsibilities, and dependency rules.
-- [Windows ROCm runtimes](reference/windows-rocm.md): vendor dependencies, multi-GPU correctness, portable packaging, and validation.
-- [Cross-platform validation](reference/cross-platform-validation.md): Linux/macOS build gates, isolated tests, packaging and native acceptance checks.
-- [Linux·macOS handoff (한국어)](reference/linux-macos-handoff.ko.md): completed Windows checks and the remaining Linux/macOS implementation and acceptance work.
-- [Server options](reference/server-options.md): tuning controls and runtime option behavior.
-- [Model selection and settings](reference/model-settings.md): shared settings dialog, named profiles, and model and session execution.
-- [Inference runtimes](reference/inference-runtimes.md): engine selection, provider-specific profiles, compatible artifacts, Python environments and multimodal routing.
-- [Provider native acceptance](reference/provider-native-acceptance.md): Linux GPU and Apple Silicon continuation procedures, isolated CLI harness, and explicit actual-engine validation status.
-- [Linux·Mac 런타임 검증 인계](reference/provider-runtime-handoff.ko.md): 기기에서 이어서 실행할 전체 기능 점검과 번들·멀티모달 검증 절차.
-- [Linux 기기 기능 검증·개선 인계](reference/linux-device-handoff.ko.md): 현재 source의 기능 검증·후속 개선과 Git 공유 브랜치에서 이어받는 절차.
-- [Mac 기기 작업 인계](reference/macos-device-handoff.ko.md): Apple Silicon/Intel별 작업, 분리된 Metal·MLX 환경, 실제 기기·Finder·Keychain·DMG 검증 절차.
-- [Chat response metrics](reference/chat-metrics.md): PP/TG counts, durations, throughput, request timing, and persistence.
-- [Chat personalization](reference/personalization.md): user AGENTS.md files, skill discovery and manual invocation, and the in-app editor.
-- [Benchmarks](reference/benchmarks.md): serving workloads, metric definitions, result history, and CSV export.
-- [Data migration](reference/migration.md): storage migration and compatibility.
+## Use AioLM
 
-## Repository policies
+The following guides are in English.
 
-- Security: [English](SECURITY.md) · [한국어](policies/security.ko.md) · [日本語](policies/security.ja.md) · [中文](policies/security.zh.md).
-- [Privacy policy](policies/privacy.md).
-- [License](../LICENSE) and [third-party notices](../NOTICE).
+- **Choose an inference engine and model formats:** [Inference runtimes](reference/inference-runtimes.md) covers llama.cpp, vLLM and MLX, model search and downloads, multimodal input and portable runtime archives.
+- **Connect another engine:** [External engine connections](reference/automatic-engine-connections.md) covers automatic discovery and advanced manual registration.
+- **Configure and load models:** [Model selection and settings](reference/model-settings.md) covers settings profiles, resource estimates and loaded-model actions. [Server options](reference/server-options.md) explains tuning controls.
+- **Use models from other applications:** [API server and model lifecycle](guides/local-api.md).
+- **Chat with your own instructions and skills:** [Chat personalization](reference/personalization.md) and [chat response metrics](reference/chat-metrics.md).
+- **Measure performance:** [Benchmarks](reference/benchmarks.md) and [benchmark history and sharing](reference/benchmark-sharing.md).
+- **Find, back up or move your data:** [Data folder and migration](reference/migration.md).
+- **Use AMD GPUs on Windows with ROCm:** [Windows ROCm runtimes](reference/windows-rocm.md).
 
-## Adding documentation
+## Policies and licenses
 
-```text
-README.md                 Repository introduction (English)
-LICENSE, NOTICE           Repository license and third-party notices
-docs/
-  README.md               Documentation index
-  SECURITY.md             Canonical security policy
-  guides/                 Installation, CLI, development, translated overviews
-  reference/              Architecture, server options, migration behavior
-  policies/               Privacy and security translations
-```
-
-Keep each topic in one document per language. The `.ko.md`, `.ja.md`, and `.zh.md`
-files are translations, not separate versions of the same guide. Update relevant
-translations when changing shared instructions. Overviews link to detailed guides
-instead of repeating installation commands and migration procedures.
-
-Document current behavior and reproducible validation commands. Remove superseded
-plans, one-off verification logs, and obsolete audit findings instead of keeping
-them alongside active guides.
-
-Only the repository introduction and repository-wide license/notices stay at the
-root. Bundled asset licenses stay with their assets. Local tool metadata and build
-outputs are not project documentation. Keep the canonical security policy at
-`docs/SECURITY.md` for [GitHub discovery](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/creating-a-default-community-health-file).
-
-Add new documents to this index and use relative links. When moving a document,
-update incoming links, release URLs, and CODEOWNERS paths in the same change.
+- [Privacy policy](policies/privacy.md)
+- [Security policy](SECURITY.md)
+- [License](../LICENSE) and [third-party notices](../NOTICE)
