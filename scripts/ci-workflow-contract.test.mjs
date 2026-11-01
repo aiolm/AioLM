@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { readCiWorkflowSources, verifyCiWorkflowContracts } from "./ci-workflow-contract.mjs";
 
 // Windows checks out YAML with CRLF. Use one canonical mutation fixture so a
@@ -113,4 +117,126 @@ test("ambiguous environment maps fail instead of silently losing cache inputs", 
 test("new cache consumers must join a reviewed cache group", () => {
   const packages = `${sources.packages}\n  additional-cache:\n    steps:\n      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0\n`;
   assert.throws(() => verify({ packages }), /Unreviewed additional Rust cache consumer/);
+});
+
+test("only the reviewed macOS-gated WebDriver use is found in native sources", () => {
+  assert.match(sources.featureUses, /^src-tauri\/src\/lib\.rs:\d+: +#\[cfg\(all\(debug_assertions, target_os = "macos", feature = "macos-ui-smoke"\)\)\]$/);
+});
+
+test("Windows and Linux binaries reuse the all-feature test build while macOS keeps default features", () => {
+  const linuxBuild = "        if: runner.os == 'Linux'\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --all-features --timings";
+  const macBuild = "        if: runner.os == 'macOS'\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings";
+  for (const [ci, error] of [
+    [changeCiJob(sources.ci, "rust", job => job.replace("--bins --all-features", "--bins")), /Windows binaries must reuse/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace(" --all-features", ""))), /Linux binaries must reuse/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace("        if: runner.os == 'Linux'\n", ""))), /Expected one Linux and one macOS binary build/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins --all-features"))), /macOS binaries must keep the default features/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins --no-default-features"))), /macOS binaries must keep the default features/],
+    // Cargo's short feature flag, separate or attached, also selects features.
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins -F macos-ui-smoke"))), /macOS binaries must keep the default features/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins -Fmacos-ui-smoke"))), /macOS binaries must keep the default features/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins --features=macos-ui-smoke"))), /macOS binaries must keep the default features/],
+    [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace("--bins", "--bins --release"))), /Linux binaries must reuse/],
+  ]) assert.throws(() => verify({ ci }), error);
+});
+
+const stepText = (job, name) => {
+  const text = job.match(new RegExp(`^ {6}- name: ${name}\\n(?: {8}.*\\n)*`, "m"))?.[0];
+  assert.ok(text, `Expected step ${name}`);
+  return text;
+};
+const moveStepAfter = (job, name, anchor) => {
+  const without = job.replace(stepText(job, name), "");
+  return without.replace(stepText(without, anchor), `${stepText(without, anchor)}${stepText(job, name)}`);
+};
+const addToStep = (job, name, lines) => job.replace(`      - name: ${name}\n`, `      - name: ${name}\n${lines}`);
+const insertBefore = (job, name, step) => job.replace(`      - name: ${name}\n`, `${step}      - name: ${name}\n`);
+
+test("binary reuse needs the required all-feature tests first and binaries before their consumers", () => {
+  for (const [name, tests, build, beforeTests, cli] of [
+    ["rust", "Rust tests", "Build desktop and CLI", "Clippy", "Native CLI with a clean home"],
+    ["rust-portability", "Native tests", "Build desktop and CLI", "Lint native code", "Native CLI with a clean home"],
+  ]) {
+    for (const [change, error] of [
+      [job => job.replace("--all-targets --all-features --timings", "--all-targets --timings"), /must follow the required all-feature test build/],
+      [job => moveStepAfter(job, build, beforeTests), /must follow the required all-feature test build/],
+      [job => addToStep(job, tests, "        continue-on-error: true\n"), /All-feature tests must stay unconditional, required and compile-identical/],
+      [job => addToStep(job, tests, "        if: runner.os != 'Linux'\n"), /All-feature tests must stay unconditional, required and compile-identical/],
+      [job => job.replace("          AIOLM_CLI_FIXTURE_EVIDENCE:", "          RUSTFLAGS: \"-C debuginfo=2\"\n          AIOLM_CLI_FIXTURE_EVIDENCE:"), /All-feature tests must stay unconditional, required and compile-identical/],
+      [job => addToStep(job, build, "        continue-on-error: true\n"), /Binary build must be required and keep the job compiler inputs/],
+      [job => addToStep(job, build, "        env:\n          RUSTFLAGS: \"-C debuginfo=2\"\n"), /Binary build must be required and keep the job compiler inputs/],
+      [job => addToStep(job, build, "        shell: env CARGO_PROFILE_DEV_DEBUG=2 bash -e {0}\n"), /Binary build must be required and keep the job compiler inputs/],
+      [job => insertBefore(job, build, "      - name: Write compiler environment\n        run: echo RUSTFLAGS=-Cdebuginfo=2 >> \"$GITHUB_ENV\"\n"), /Only reviewed run steps may separate/],
+      [job => moveStepAfter(job, build, cli), /Binaries must be built before their consumers/],
+      [job => insertBefore(job, cli, "      - name: Rebuild CLI\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm-cli -F macos-ui-smoke\n"), /Binaries must be built before their consumers/],
+    ]) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), error, `${name}: ${String(change)}`);
+  }
+  // The macOS default binaries must also exist before the generated-input observer.
+  const ci = changeCiJob(sources.ci, "rust-portability", job => moveStepAfter(job, "Observe generated inputs before the CPU compilation", "Native tests"));
+  assert.throws(() => verify({ ci }), /Binaries must be built before their consumers/);
+});
+
+test("a Cargo feature or optional dependency outside the reviewed macOS-only set rejects the reuse", () => {
+  for (const cargoManifest of [
+    sources.cargoManifest.replace("test-fixtures = []\n", "test-fixtures = []\nlinux-extra = []\n"),
+    sources.cargoManifest.replace("default = [\"test-fixtures\"]", "default = []"),
+  ]) assert.throws(() => verify({ cargoManifest }), /Cargo features changed/);
+  const webdriver = 'tauri-plugin-wdio-webdriver = { version = "=1.4.0", optional = true }\n';
+  for (const cargoManifest of [
+    sources.cargoManifest.replace(webdriver, "").replace("[dependencies]\n", `[dependencies]\n${webdriver}`),
+    sources.cargoManifest.replace("[target.'cfg(target_os = \"linux\")'.dependencies]\n", "[target.'cfg(target_os = \"linux\")'.dependencies]\nextra = { version = \"1\", optional = true }\n"),
+  ]) assert.throws(() => verify({ cargoManifest }), /only optional, macOS-only dependency/);
+  for (const cargoManifest of [
+    sources.cargoManifest.replace('[[bin]]\nname = "fake-llama-server"', '[[bin]]\nname = "webdriver-helper"\npath = "src/bin/webdriver-helper.rs"\nrequired-features = ["macos-ui-smoke"]\n\n[[bin]]\nname = "fake-llama-server"'),
+    sources.cargoManifest.replace('path = "tests/smoke_fake.rs"\nrequired-features = ["test-fixtures"]', 'path = "tests/smoke_fake.rs"\nrequired-features = [\n  "test-fixtures",\n  "macos-ui-smoke",\n]'),
+    `${sources.cargoManifest}\n[target.'cfg(feature = "macos-ui-smoke")'.dependencies]\n`,
+  ]) assert.throws(() => verify({ cargoManifest }), /Only the reviewed feature entry may name macos-ui-smoke/);
+});
+
+test("WebDriver feature code must remain inside an all(..., target_os = macOS) gate", () => {
+  for (const line of [
+    'src-tauri/src/lib.rs:1: #[cfg(feature = "macos-ui-smoke")]',
+    'src-tauri/src/lib.rs:1: #[cfg(all(any(windows, target_os = "macos"), feature = "macos-ui-smoke"))]',
+    'src-tauri/src/lib.rs:1: #[cfg(all(not(target_os = "macos"), feature = "macos-ui-smoke"))]',
+    'src-tauri/src/lib.rs:1:     if cfg!(feature = "macos-ui-smoke") { register(); }',
+    'src-tauri/build.rs:1:     if std::env::var_os("CARGO_FEATURE_MACOS_UI_SMOKE").is_some() {}',
+    // rustc accepts whitespace before the parenthesis of a nested predicate.
+    'src-tauri/src/lib.rs:1: #[cfg(all(any (unix, target_os = "macos"), feature = "macos-ui-smoke"))]',
+    'src-tauri/src/lib.rs:1: #[cfg(all(not (windows), target_os = "macos", feature = "macos-ui-smoke"))]',
+    // A trailing comment or code must not make an ungated use look gated.
+    'src-tauri/src/lib.rs:1:   if cfg!(feature = "macos-ui-smoke") { register(); } // #[cfg(all(target_os = "macos"))]',
+    'src-tauri/src/lib.rs:1: #[cfg(all(target_os = "macos", feature = "macos-ui-smoke"))] fn a() {} #[cfg(feature = "macos-ui-smoke")] fn b() {}',
+    'src-tauri/src/lib.rs:1: #[cfg_attr(all(target_os = "macos", feature = "macos-ui-smoke"), allow(dead_code))]',
+    // An attribute split across lines is not interpreted.
+    'src-tauri/src/lib.rs:2:     feature = "macos-ui-smoke",',
+    'src-tauri/src/lib.rs:1: // macos-ui-smoke is reviewed',
+  ]) assert.throws(() => verify({ featureUses: `${sources.featureUses}\n${line}` }), /macos-ui-smoke must stay gated to macOS/);
+});
+
+test("the source reader finds feature uses in nested modules, tests, examples and benches", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiolm-ci-contract-"));
+  try {
+    const repository = join(dirname(fileURLToPath(import.meta.url)), "..");
+    for (const path of [".github/workflows/ci.yml", ".github/workflows/release.yml", ".github/workflows/desktop-packages.yml", "rust-toolchain.toml", "src-tauri/Cargo.toml", "src-tauri/build.rs"]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      copyFileSync(join(repository, path), join(root, path));
+    }
+    mkdirSync(join(root, "src-tauri/src/nested"), { recursive: true });
+    writeFileSync(join(root, "src-tauri/src/lib.rs"), "pub mod nested;\n");
+    writeFileSync(join(root, "src-tauri/src/nested/mod.rs"), '#[cfg(all(target_os = "macos", feature = "macos-ui-smoke"))]\npub fn gated() {}\n');
+    assert.deepEqual(verifyCiWorkflowContracts(readCiWorkflowSources(root)), verify());
+    writeFileSync(join(root, "src-tauri/src/nested/mod.rs"), '#[cfg(feature = "macos-ui-smoke")]\npub fn ungated() {}\n');
+    assert.throws(() => verifyCiWorkflowContracts(readCiWorkflowSources(root)), /must stay gated to macOS: src-tauri\/src\/nested\/mod\.rs:1:/);
+    writeFileSync(join(root, "src-tauri/src/nested/mod.rs"), "pub fn plain() {}\n");
+    // Integration tests, examples and benches are compiled by the all-target tests too.
+    for (const path of ["tests/support/mod.rs", "examples/probe.rs", "benches/startup.rs"]) {
+      mkdirSync(dirname(join(root, "src-tauri", path)), { recursive: true });
+      writeFileSync(join(root, "src-tauri", path), '#[cfg(feature = "macos-ui-smoke")]\nfn ungated() {}\n');
+      assert.throws(() => verifyCiWorkflowContracts(readCiWorkflowSources(root)), new RegExp(`must stay gated to macOS: src-tauri/${path}:1:`));
+      rmSync(join(root, "src-tauri", path));
+    }
+    assert.deepEqual(verifyCiWorkflowContracts(readCiWorkflowSources(root)), verify());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

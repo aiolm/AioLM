@@ -3,7 +3,7 @@
 // deliberately not a general YAML parser. Unsupported cache/env syntax fails
 // instead of silently omitting an input. Runner-inherited values remain the
 // pinned cache action's responsibility, including its actual compiler hash.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,6 +105,102 @@ function frontendBeforeNativeCompile(source) {
   }
 }
 
+// Windows and Linux build their binaries from the all-feature units their tests
+// already compiled. That is the default-feature code only while every
+// non-default feature stays macOS-only, so check the manifest and each use.
+const REVIEWED_FEATURES = JSON.stringify(['default=["test-fixtures"]', 'macos-ui-smoke=["dep:tauri-plugin-wdio-webdriver"]', 'test-fixtures=[]']);
+const MACOS_DEPENDENCIES = `target.'cfg(target_os = "macos")'.dependencies`;
+const FEATURE_USE = /macos[-_]ui[-_]smoke/i;
+// Exact commands: any other flag, including -F/-Ffoo, a profile or a target,
+// changes which units are compiled and needs review.
+const ALL_FEATURE_TESTS = "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features --timings";
+const ALL_FEATURE_BINS = "cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --all-features --timings";
+const DEFAULT_BINS = "cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings";
+const NATIVE_CLI = /^\s*npm\s+run\s+test:native-cli(?:\s|$)/m;
+const INPUTS_BEFORE_CPU = /scripts\/native-build-inputs\.mjs\s[^\n]*--phase\s+before(?:\s|$)/;
+
+function nativeFeatureReuse(ci, cargoManifest, featureUses) {
+  const workflow = mapAt(ci.replace(/\r\n/g, "\n").split("\n"), 0, "workflow");
+  const jobs = mapping(workflow.get("jobs"), 2, "jobs");
+  const jobSteps = name => stepsFrom(mapping(jobs.get(name), 4, `jobs.${name}`).get("steps"), name).map(step => {
+    const run = step.get("run");
+    return { step, script: !run ? "" : run.lines.length ? [run.value, ...run.lines].join("\n") : scalar(run, `${name}.run`) };
+  });
+  const find = (steps, pattern) => steps.flatMap(({ script }, index) => pattern.test(script) ? [index] : []);
+  const condition = build => build.step.has("if") ? scalar(build.step.get("if"), "binary build if") : "";
+  const binaryBuilds = steps => find(steps, /^\s*cargo\s+build\s[^\n]*--bins(?:\s|$)/m);
+  // Each binary build is required (no continue-on-error) and inherits exactly
+  // the job's compiler environment, and nothing but the OS-exclusive binary
+  // builds may compile between it and the steps that run its binaries.
+  const checkBinaries = (name, steps, build, keys, consumers) => {
+    const builds = binaryBuilds(steps);
+    requireThat([...steps[build].step.keys()].every(key => keys.includes(key)), `Binary build must be required and keep the job compiler inputs in ${name}`);
+    for (const pattern of consumers) {
+      const uses = find(steps, pattern);
+      requireThat(uses.length === 1 && build < uses[0] && steps.slice(build + 1, uses[0])
+        .every(({ script }, offset) => builds.includes(build + 1 + offset) || !/^\s*cargo\s/m.test(script)),
+      `Binaries must be built before their consumers in ${name}`);
+    }
+  };
+  // Reuse needs the one all-target, all-feature test compile to run first,
+  // unconditionally, with only the runtime fixture directory added to its
+  // environment and no later step able to change compiler inputs.
+  const checkReuse = (name, steps, build) => {
+    const tests = find(steps, /^\s*cargo\s+test\s[^\n]*--all-targets(?:\s|$)/m);
+    requireThat(tests.length === 1 && steps[tests[0]].script === ALL_FEATURE_TESTS && tests[0] < build,
+      `Binaries must follow the required all-feature test build in ${name}`);
+    const test = steps[tests[0]].step;
+    requireThat([...test.keys()].every(key => ["name", "env", "run"].includes(key))
+      && [...mapping(test.get("env"), 10, `${name}.tests.env`).keys()].every(key => key === "AIOLM_CLI_FIXTURE_EVIDENCE"),
+    `All-feature tests must stay unconditional, required and compile-identical in ${name}`);
+    requireThat(steps.slice(tests[0] + 1, build).every(({ step, script }) => !step.has("uses") && !/GITHUB_(?:ENV|PATH)/.test(script)),
+      `Only reviewed run steps may separate the all-feature tests and binaries in ${name}`);
+  };
+
+  const rust = jobSteps("rust");
+  const windows = binaryBuilds(rust);
+  requireThat(windows.length === 1 && rust[windows[0]].script === ALL_FEATURE_BINS, "Windows binaries must reuse the all-feature test build");
+  checkReuse("rust", rust, windows[0]);
+  checkBinaries("rust", rust, windows[0], ["name", "run"], [NATIVE_CLI]);
+  const unix = jobSteps("rust-portability");
+  const unixBuilds = binaryBuilds(unix);
+  const linux = unixBuilds.filter(index => condition(unix[index]) === "runner.os == 'Linux'");
+  const mac = unixBuilds.filter(index => condition(unix[index]) === "runner.os == 'macOS'");
+  requireThat(unixBuilds.length === 2 && linux.length === 1 && mac.length === 1, "Expected one Linux and one macOS binary build");
+  requireThat(unix[linux[0]].script === ALL_FEATURE_BINS, "Linux binaries must reuse the all-feature test build");
+  requireThat(unix[mac[0]].script === DEFAULT_BINS, "macOS binaries must keep the default features");
+  checkReuse("rust-portability", unix, linux[0]);
+  checkBinaries("rust-portability", unix, linux[0], ["name", "if", "run"], [NATIVE_CLI]);
+  checkBinaries("rust-portability", unix, mac[0], ["name", "if", "run"], [NATIVE_CLI, INPUTS_BEFORE_CPU]);
+
+  let table = "";
+  const features = [];
+  const optional = [];
+  const named = [];
+  for (const line of cargoManifest.split(/\r?\n/)) {
+    // A target's required-features or a cfg(feature) table would change the
+    // all-feature target set, so only the feature's own entry may name it.
+    if (FEATURE_USE.test(line) && !line.trimStart().startsWith("#")) named.push(table);
+    const header = line.match(/^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/);
+    if (header) { table = header[1].trim(); continue; }
+    if (table === "features" && line.trim() && !line.trimStart().startsWith("#")) features.push(line.replace(/\s+#.*$/, "").replace(/\s+/g, ""));
+    // Any other optional dependency would add an implicit Cargo feature.
+    if (/\boptional\s*=\s*true\b/.test(line)) optional.push(`${table}:${line.match(/^\s*([A-Za-z0-9_-]+)\s*=/)?.[1]}`);
+  }
+  requireThat(JSON.stringify(features.sort()) === REVIEWED_FEATURES, "Cargo features changed; review the all-feature build reuse");
+  requireThat(JSON.stringify(optional) === JSON.stringify([`${MACOS_DEPENDENCIES}:tauri-plugin-wdio-webdriver`]),
+    "The WebDriver feature dependency must stay the only optional, macOS-only dependency");
+  requireThat(JSON.stringify(named) === JSON.stringify(["features"]), "Only the reviewed feature entry may name macos-ui-smoke in Cargo.toml");
+  // A use counts only when its whole line is a cfg(all(...)) attribute with
+  // flat predicates that include the macOS target. Nested any/not, code,
+  // comments and split attributes are rejected rather than interpreted.
+  for (const use of featureUses.split(/\r?\n/).filter(line => FEATURE_USE.test(line))) {
+    const gate = use.match(/^[^:]+:\d+:\s*#\[cfg\(all\(([^()]*)\)\)\]\s*$/)?.[1].split(",").map(term => term.replace(/\s+/g, "")).filter(Boolean) ?? [];
+    requireThat(gate.includes('target_os="macos"') && gate.includes('feature="macos-ui-smoke"') && gate.every(term => /^\w+(?:="[\w-]*")?$/.test(term)),
+      `macos-ui-smoke must stay gated to macOS: ${use.trim()}`);
+  }
+}
+
 function cacheRecipe(source, jobName, purpose, helper, pin) {
   const workflow = mapAt(source.replace(/\r\n/g, "\n").split("\n"), 0, "workflow");
   const jobs = mapping(workflow.get("jobs"), 2, "jobs");
@@ -164,7 +260,7 @@ function cacheRecipe(source, jobName, purpose, helper, pin) {
   return { purpose, env: effective };
 }
 
-export function verifyCiWorkflowContracts({ ci, release, packages, rustManifest }) {
+export function verifyCiWorkflowContracts({ ci, release, packages, rustManifest, cargoManifest, featureUses }) {
   const match = rustManifest.match(/^channel\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$/m);
   requireThat(match, "Missing exact Rust manifest pin");
   const pin = match[1];
@@ -182,13 +278,24 @@ export function verifyCiWorkflowContracts({ ci, release, packages, rustManifest 
   }
   // Keep frontend inputs stable while build-time context generation is reused.
   frontendBeforeNativeCompile(ci);
+  nativeFeatureReuse(ci, cargoManifest, featureUses);
   return { guardedJobs: verification.length + packaging.length, rustPin: pin };
 }
 
 export function readCiWorkflowSources(root = ROOT) {
   const read = path => readFileSync(join(root, path), "utf8");
+  // Only the lines naming the feature are kept, labelled with their file. Every
+  // package Rust file outside the build output is read, so tests, examples and
+  // benches are covered along with the build script, library and binaries.
+  const rust = readdirSync(join(root, "src-tauri"), { withFileTypes: true }).filter(entry => entry.name !== "target")
+    .flatMap(entry => entry.isDirectory()
+      ? readdirSync(join(root, "src-tauri", entry.name), { recursive: true }).map(path => `${entry.name}/${String(path).replaceAll("\\", "/")}`)
+      : [entry.name])
+    .filter(path => path.endsWith(".rs")).map(path => `src-tauri/${path}`).sort();
+  const featureUses = rust.flatMap(path => read(path).split(/\r?\n/).flatMap((line, index) => FEATURE_USE.test(line) ? [`${path}:${index + 1}: ${line}`] : []));
   return {
     ci: read(".github/workflows/ci.yml"), release: read(".github/workflows/release.yml"),
     packages: read(".github/workflows/desktop-packages.yml"), rustManifest: read("rust-toolchain.toml"),
+    cargoManifest: read("src-tauri/Cargo.toml"), featureUses: featureUses.join("\n"),
   };
 }

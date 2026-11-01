@@ -433,7 +433,14 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: python3 scripts/smoke-linux-vault.py
+      # Like Windows, reuse the feature set the Linux tests already compiled.
+      # macos-ui-smoke adds no Linux code or Linux target dependency.
       - name: Build desktop and CLI
+        if: runner.os == 'Linux'
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --all-features --timings
+      # macos-ui-smoke changes native code on macOS; build the default features.
+      - name: Build default-feature desktop and CLI
+        if: runner.os == 'macOS'
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings
       - name: Native CLI with a clean home
         run: npm run test:native-cli
