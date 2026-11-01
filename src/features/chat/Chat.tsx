@@ -223,6 +223,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
       && !(documents.length >= 4 && attachments.length >= 4),
     onDrop: addDroppedAttachments, setError });
 
+  // An empty idle conversation shows its guidance from the top; like the
+  // message effect below, resizing does not pin it to the bottom.
+  const followLatestRef = useRef(false);
+  followLatestRef.current = viewMessages.length > 0 || phase !== "idle";
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -231,7 +235,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     // A reader who scrolled into history retains their place.
     const observer = new ResizeObserver(() => {
       scrollViewportRef.current = { width: element.clientWidth, height: element.clientHeight };
-      if (atBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+      if (atBottomRef.current && followLatestRef.current) element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
     });
     observer.observe(element);
     return () => observer.disconnect();

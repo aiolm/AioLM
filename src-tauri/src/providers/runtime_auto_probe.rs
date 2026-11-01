@@ -102,12 +102,16 @@ pub fn normalize_base_url(base_url: &str) -> Result<String, String> {
 }
 
 fn client() -> Result<Client, String> {
+    client_builder()
+        .build()
+        .map_err(|_| "could not create local verification client".into())
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
     Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(750))
-        .build()
-        .map_err(|_| "could not create local verification client".into())
 }
 
 fn authenticated(
@@ -199,7 +203,42 @@ pub async fn inspect_endpoint(
 ) -> Result<EndpointInfo, String> {
     let base_url = normalize_base_url(base_url)?;
     let client = client()?;
-    let models = tokio::time::timeout(INSPECT_TIMEOUT, models(&client, &base_url, api_key))
+    inspect_normalized_endpoint(&client, base_url, api_key).await
+}
+
+/// A single discovery/inspection operation may examine several listeners.
+/// Share only its transport configuration; every endpoint still gets a fresh
+/// bounded model request and no result survives the operation.
+pub(super) struct EndpointInspector(Client);
+
+impl EndpointInspector {
+    pub(super) fn new() -> Result<Self, String> {
+        // Previously every inspection dropped its client and idle sockets.
+        // Retain that boundary even when several inspections share a builder's
+        // result: a later request must connect to the current listener.
+        client_builder()
+            .pool_max_idle_per_host(0)
+            .build()
+            .map(Self)
+            .map_err(|_| "could not create local verification client".into())
+    }
+
+    pub(super) async fn inspect(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+    ) -> Result<EndpointInfo, String> {
+        let base_url = normalize_base_url(base_url)?;
+        inspect_normalized_endpoint(&self.0, base_url, api_key).await
+    }
+}
+
+async fn inspect_normalized_endpoint(
+    client: &Client,
+    base_url: String,
+    api_key: Option<&str>,
+) -> Result<EndpointInfo, String> {
+    let models = tokio::time::timeout(INSPECT_TIMEOUT, models(client, &base_url, api_key))
         .await
         .map_err(|_| "local model discovery timed out")??;
     Ok(EndpointInfo { base_url, models })
@@ -512,7 +551,7 @@ mod tests {
     use super::*;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
         task::JoinHandle,
     };
 
@@ -547,6 +586,34 @@ mod tests {
         .into_bytes()
     }
 
+    // Drain the complete request before checking for client EOF: one TCP read
+    // can stop within the headers and leave request bytes on the socket.
+    async fn read_request(socket: &mut TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert_ne!(n, 0, "incomplete fixture request");
+            request.extend_from_slice(&chunk[..n]);
+            assert!(request.len() <= 64 * 1024);
+            if let Some(headers_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..headers_end]);
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= headers_end + 4 + length {
+                    break;
+                }
+            }
+        }
+        request
+    }
+
     async fn server(responses: Vec<Vec<u8>>) -> (String, JoinHandle<Vec<Vec<u8>>>) {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
@@ -556,37 +623,119 @@ mod tests {
             let mut requests = Vec::new();
             for response in responses {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0_u8; 4096];
-                loop {
-                    let n = socket.read(&mut chunk).await.unwrap();
-                    if n == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&chunk[..n]);
-                    assert!(request.len() <= 64 * 1024);
-                    if let Some(headers_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let headers = String::from_utf8_lossy(&request[..headers_end]);
-                        let length: usize = headers
-                            .lines()
-                            .find_map(|line| {
-                                line.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse().unwrap())
-                            })
-                            .unwrap_or(0);
-                        if request.len() >= headers_end + 4 + length {
-                            break;
-                        }
-                    }
-                }
-                requests.push(request);
+                requests.push(read_request(&mut socket).await);
                 socket.write_all(&response).await.unwrap();
                 socket.shutdown().await.unwrap();
             }
             requests
         });
         (url, task)
+    }
+
+    #[tokio::test]
+    async fn inspection_operation_reconnects_and_observes_listener_and_model_changes() {
+        let inspector = EndpointInspector::new().unwrap();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = format!("http://{address}");
+        let serving = tokio::spawn(async move {
+            for count in [1, MODEL_LIMIT] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = String::from_utf8(read_request(&mut socket).await).unwrap();
+                assert!(request.starts_with("GET /v1/models HTTP/1.1\r\n"));
+                assert!(request.contains("authorization: Bearer synthetic-key\r\n"));
+                let data = json!({"data": (0..count).map(|n| json!({"id":format!("model-{n}")})).collect::<Vec<_>>()}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{data}", data.len()).as_bytes()).await.unwrap();
+                // A new operation-local request must not retain the old
+                // listener's idle socket, even if the peer allows keep-alive.
+                let mut byte = [0];
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), socket.read(&mut byte))
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    0
+                );
+            }
+            address
+        });
+        assert_eq!(
+            inspector
+                .inspect(&url, Some("synthetic-key"))
+                .await
+                .unwrap()
+                .models
+                .len(),
+            1
+        );
+        assert_eq!(
+            inspector
+                .inspect(&url, Some("synthetic-key"))
+                .await
+                .unwrap()
+                .models
+                .len(),
+            MODEL_LIMIT
+        );
+        let address = serving.await.unwrap();
+        let replacement = TcpListener::bind(address).await.unwrap();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = replacement.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+            socket
+                .write_all(b"this listener is not HTTP\r\n")
+                .await
+                .unwrap();
+        });
+        assert!(inspector.inspect(&url, None).await.is_err());
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_inspection_closes_silent_work_and_allows_fresh_retry() {
+        let inspector = EndpointInspector::new().unwrap();
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (accepted, started) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+            accepted.send(()).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), socket.read(&mut byte))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+            let (mut retry, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut retry).await;
+            assert!(request.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+            retry
+                .write_all(&response("200 OK", "application/json", &model_list()))
+                .await
+                .unwrap();
+        });
+        {
+            let operation = inspector.inspect(&url, None);
+            tokio::pin!(operation);
+            tokio::select! {
+                _ = started => {},
+                result = &mut operation => panic!("silent inspection unexpectedly settled: {result:?}"),
+            }
+        }
+        assert_eq!(
+            inspector.inspect(&url, None).await.unwrap().models[0].id,
+            MODEL
+        );
+        serving.await.unwrap();
     }
 
     #[test]

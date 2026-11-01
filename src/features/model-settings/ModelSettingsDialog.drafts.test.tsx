@@ -1,7 +1,9 @@
 import { cfg, mount, numeric, openOptions } from '../../testing/modelSettingsDialog';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { type ModelSettingsDialogProps } from './ModelSettingsDialog';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
+import { I18nProvider } from '../../shared/i18n/i18n';
+import { ModelSettingsDialog, type ModelSettingsDialogProps } from './ModelSettingsDialog';
 import { rememberExecution } from '../models/modelExecutionState';
 import { captureProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
@@ -152,6 +154,68 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  describe('focus after cancelling a pending start', () => {
+    // The dialog stays open while its own start check runs and settles.
+    let begin!: () => void;
+    let settle!: () => void;
+    function PendingStart() {
+      const [busy, setBusy] = useState(false);
+      begin = () => setBusy(true);
+      settle = () => setBusy(false);
+      return <ModelSettingsDialog open initialConfig={structuredClone(cfg)} mode="default" targetLabel="Default execution" initialSection="model"
+        busy={busy} liveState="stopped" preflightState={busy ? 'checking' : undefined} onCancelStart={vi.fn()}
+        onApply={vi.fn(async () => {})} onClose={vi.fn()} onProfileCommit={vi.fn()} onReloadProfile={vi.fn()} />;
+    }
+    const start = () => screen.getByRole('button', { name: 'Save profile & start' });
+    const pending = async () => {
+      render(<I18nProvider initialLocale="en"><PendingStart /></I18nProvider>);
+      openOptions();
+      await waitFor(() => expect(start()).toBeEnabled());
+      act(() => begin());
+      return screen.getByRole('button', { name: 'Cancel' });
+    };
+
+    it('returns from its removed Cancel to the start action instead of the page behind the dialog', async () => {
+      const cancel = await pending();
+      cancel.focus();
+      fireEvent.click(cancel);
+      act(() => settle());
+      expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+      expect(start()).toBeEnabled();
+      expect(start()).toHaveFocus();
+    });
+
+    it('keeps focus the user moved, and leaves focus alone when the start settles without its Cancel', async () => {
+      const cancel = await pending();
+      cancel.focus();
+      fireEvent.click(cancel);
+      const close = screen.getByRole('button', { name: 'Close' });
+      const title = screen.getByRole('heading', { name: 'Model & settings' });
+      title.focus();
+      act(() => settle());
+      expect(title).toHaveFocus();
+      cleanup();
+      await pending();
+      (document.activeElement as HTMLElement | null)?.blur();
+      act(() => settle());
+      expect(start()).not.toHaveFocus();
+      expect(close).not.toBeInTheDocument();
+    });
+
+    it('does not take focus from a dialog opened over it', async () => {
+      const cancel = await pending();
+      cancel.focus();
+      fireEvent.click(cancel);
+      const over = document.body.appendChild(document.createElement('dialog'));
+      over.setAttribute('open', '');
+      try {
+        cancel.blur();
+        act(() => settle());
+        expect(start()).not.toHaveFocus();
+      } finally { over.remove(); }
+    });
+  });
+
   it('reports preflight cancellation while preventing repeated cancellation', () => {
     mount({ busy: true, liveState: 'stopped', preflightState: 'cancelling', onCancelStart: vi.fn() });
     expect(screen.getByText('Cancelling the engine and model check…')).toHaveAttribute('role', 'status');
@@ -273,13 +337,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('waits for the %s inventory before reporting a selected runtime as missing', async provider => {
     let finish!: () => void;
+    const validateOptions = vi.fn(async () => []);
     if (provider === 'llama.cpp') {
       vi.mocked(api.rtList).mockReturnValueOnce(new Promise(resolve => {
         finish = () => resolve([{ backend: 'cpu', build: 'b123', dir: 'runtime', size_mb: 30 }]);
       }));
     } else {
       vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
-      vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+      vi.spyOn(api, 'providerOptionIssues').mockImplementation(validateOptions);
       vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
       vi.spyOn(api, 'providerRuntimes').mockReturnValue(new Promise(resolve => {
         finish = () => resolve([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
@@ -289,6 +354,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
       ...cfg, active_provider: provider, active_runtime: provider === 'llama.cpp' ? '' : 'synthetic',
     } });
     await waitFor(() => expect(api.deviceProfile).toHaveBeenCalled());
+    // Inventory is the gate under test; settle unrelated option validation first.
+    if (provider !== 'llama.cpp') await waitFor(() => expect(validateOptions).toHaveBeenCalled());
     expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
     expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();

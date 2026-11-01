@@ -1287,3 +1287,42 @@ describe('saved names for running chat targets', () => {
     expect(await screen.findByRole('option', { name: 'Runtime fallback · 8091 · Running' })).toBeInTheDocument();
   });
 });
+describe("ChatPanel conversation log sizing", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it("keeps an empty conversation's guidance at the top when the window shrinks, and the latest reply in view once there is one", async () => {
+    // A native 360x520 window left the empty conversation log about 98px tall
+    // and pinned to the bottom of its guidance. jsdom has no layout, so the
+    // log reports that geometry and the resize is delivered by hand.
+    const resized: Array<{ target: Element; callback: ResizeObserverCallback }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) { resized.push({ target, callback: this.callback }); }
+      unobserve() {}
+      disconnect() {}
+    });
+    try {
+      renderPanel();
+      const log = screen.getByRole("log", { name: "Conversation" });
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 281 });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 98 });
+      log.scrollTo = ((options: ScrollToOptions) => { log.scrollTop = options.top ?? log.scrollTop; }) as typeof log.scrollTo;
+      const resize = () => act(() => { for (const entry of resized.filter(item => item.target === log)) entry.callback([], {} as ResizeObserver); });
+      expect(screen.getByText("Start a new conversation")).toBeVisible();
+      resize();
+      expect(log.scrollTop).toBe(0);
+
+      respondWithText("Latest synthetic reply");
+      await sendMessage("Hello");
+      await screen.findByText("Latest synthetic reply", { exact: true });
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 640 });
+      resize();
+      expect(log.scrollTop).toBe(640);
+    } finally { vi.unstubAllGlobals(); }
+  });
+});

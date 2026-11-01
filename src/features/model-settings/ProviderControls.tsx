@@ -219,8 +219,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   }, [provider, external, cfg.active_runtime, cfg.active_backend, cfg.active_build, selectedRuntime, usesEffective, effectiveRevision]);
   // Until the schema answers, absence from this list is not evidence that a
   // saved option is unsupported. Do not offer destructive resets while probing.
-  const known = (key: string) => effective ? effective.schema.options.some(option => option.key === key) : schema.some(option => option.key === key);
-  const unknown = schemaKnown && (!usesEffective || effective) ? Object.keys(values).filter(key => !known(key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model', ORDER_KEY].includes(key)
+  // Rebuild for each render so in-place schema updates remain visible.
+  const knownKeys = new Set((effective ? effective.schema.options : schema).map(option => option.key));
+  const unknown = schemaKnown && (!usesEffective || effective) ? Object.keys(values).filter(key => !knownKeys.has(key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model', ORDER_KEY].includes(key)
     && !(key === 'trust_remote_code' && values[key] === false)) : [];
   const supports = (...flags: string[]) => !runtimeFlags || flags.every(flag => runtimeFlags.includes(flag));
   const showLora = provider !== 'llama.cpp' && !api.isExternalProvider(provider) && (supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined);

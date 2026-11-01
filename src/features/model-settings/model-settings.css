@@ -23,6 +23,8 @@
 .model-settings-nav .app-tab { flex-shrink: 0; text-align: start; white-space: normal; }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
+/* The header names the model; only the one-column narrow layout repeats it here. */
+.model-settings-context-model { display: none; }
 /* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
 .model-settings-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 28px; scroll-padding-block: 1em; overscroll-behavior: contain; }
 .model-settings-runtime-selection { min-width: 0; margin-block-end: 6px; }
@@ -121,6 +123,28 @@
      profile actions and setup notices scrollable without consuming the editor. */
   .model-settings-context { padding-block: 8px; max-height: min(120px, 40%); overflow-y: auto; }
   .model-settings-footer { padding-block: 8px; max-height: 20%; }
+}
+/* At the native minimum window (360x488 CSS px) the fixed header, steps,
+   profile bar, tabs and footer left the options editor 52-63px, and the model
+   metadata, profile buttons and resource notice each sat in its own clipped
+   scroller. Narrow short windows scroll the dialog as one column instead: the
+   model and steps scroll with the editor; the tab row and the profile bar stay
+   pinned above it and the footer's notices and launch action below it. The
+   dialog publishes the tab row height (--model-settings-tabs). */
+@media (max-width: 720px) and (max-height: 650px) {
+  /* The dialog keeps a focused control clear of the pinned bands (ModelSettingsDialog). */
+  .model-settings-shell { overflow-y: auto; overscroll-behavior: contain; }
+  .model-settings-header > div, .model-settings-header .model-badges, .model-settings-context { max-height: none; overflow: visible; }
+  .model-settings-layout, .model-settings-content, .model-settings-body { flex: none; min-height: auto; overflow: visible; }
+  .model-settings-nav { position: sticky; top: 0; z-index: 1; background: var(--ui-panel); }
+  .model-settings-context { position: sticky; top: var(--model-settings-tabs, 0px); z-index: 1; }
+  /* The profile name shares its row with the actions when they fit. */
+  .model-settings-context .settings-profile-selected-name { flex: 1 1 10em; }
+  /* The header scrolls away when the options step opens; the pinned profile
+     bar keeps naming the selected model (full path in its title). */
+  .model-settings-context-model { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 4px; color: var(--ui-muted); font-size: var(--ui-text-support); }
+  .model-settings-context-model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-settings-footer { position: sticky; bottom: 0; z-index: 1; max-height: 35%; }
 }
 .model-settings-profile-status { display: grid; gap: 0.25rem; margin-block: 0.6rem 1.1rem; font-size: var(--ui-text-support); color: var(--ui-muted); overflow-wrap: anywhere; }
 .model-settings-profile-status p { margin: 0; }

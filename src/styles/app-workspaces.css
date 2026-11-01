@@ -33,7 +33,9 @@
 .adapter-journey > li::before { content: counter(adapter-step) ". "; }
 .adapter-count { margin-block: 8px 0; }
 .adapter-list { display: grid; gap: 8px; margin: 8px 0 12px; padding: 0; list-style: none; }
-.adapter-row { padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); content-visibility: auto; contain-intrinsic-size: auto 52px; }
+/* Cached inventory rows are focused when their hidden list is shown again.
+   WKWebView render-skipping can drop their text and pointer target mid-click. */
+.adapter-row { padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 .adapter-row__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .adapter-row__open { display: grid; flex: 1 1 12rem; gap: 2px; min-width: 0; min-height: var(--ui-control); padding: 4px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-ink); font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
 .adapter-row__open:hover:not(:disabled) { background: var(--ui-row-hover); }

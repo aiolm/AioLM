@@ -82,6 +82,8 @@ it('lets users select among discoveries without preferring names or interpreting
   await screen.findByRole('radio', { name: /Another local service/ });
   expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('radio', { name: /Another local service/ }));
+  expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
   await waitFor(() => expect(api.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(second));
   expect(await screen.findByText(/AioLM starts and stops this engine/)).toBeInTheDocument();
 });
@@ -216,4 +218,80 @@ it('blocks all launch actions while the parent has locked runtime changes', () =
   expect(screen.getByRole('button', { name: 'Find automatically' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Choose installation folder' })).toBeDisabled();
   expect(api.runtimeAutoDiscover).not.toHaveBeenCalled();
+});
+
+it('can recheck a sole failed candidate without repeating full discovery', async () => {
+  vi.mocked(api.runtimeAutoInspect).mockRejectedValueOnce(new Error('Temporary inspection failure.'));
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+  expect(api.runtimeAutoDiscover).toHaveBeenCalledTimes(1);
+  expect(api.runtimeAutoInspect).toHaveBeenCalledTimes(2);
+});
+
+it('keeps candidate selection separate from inspection so the group remains navigable', async () => {
+  const second = { ...candidate, id: 'second-entry', entrypoint_path: '/synthetic/other/service' };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [candidate, second], warnings: [], truncated: false });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  const radios = await screen.findAllByRole('radio');
+  fireEvent.click(radios[0]);
+  expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
+  expect(radios[1]).toBeEnabled();
+  fireEvent.click(radios[1]);
+  expect(radios[1]).toBeChecked();
+  expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(api.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(second));
+});
+
+it('distinguishes identical installation names by the observed entry-point path', async () => {
+  const installed = { ...candidate, source: 'selected_folder' as const, endpoints: [], pid: null };
+  const second = { ...installed, id: 'other-installation', entrypoint_path: '/synthetic/other/service' };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [installed, second], warnings: [], truncated: false });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  expect(await screen.findByRole('radio', { name: /\/synthetic\/service/ })).toBeEnabled();
+  expect(screen.getByRole('radio', { name: /\/synthetic\/other\/service/ })).toBeEnabled();
+});
+
+it('discards a cancelled inspection and can recheck the same candidate', async () => {
+  let resolve!: (value: api.PreparedRuntimeConnection) => void;
+  vi.mocked(api.runtimeAutoInspect).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  await screen.findByText('Checking the launch method and models…');
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await act(async () => resolve(prepared));
+  expect(screen.getByText('The operation was cancelled.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+  expect(api.runtimeAutoDiscover).toHaveBeenCalledTimes(1);
+  expect(api.runtimeAutoInspect).toHaveBeenCalledTimes(2);
+});
+
+it('clears the inspected model when choosing another candidate and requires checking it', async () => {
+  const second = { ...candidate, id: 'other-service', display_name: 'Other service' };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [candidate, second], warnings: [], truncated: false });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  fireEvent.click(await screen.findByRole('radio', { name: /Example local service/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('radio', { name: /Other service/ }));
+  expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+  expect(api.runtimeAutoInspect).toHaveBeenCalledTimes(1);
+  expect(api.runtimeAutoConnect).not.toHaveBeenCalled();
+});
+
+it('keeps a successful per-model registration from being rechecked in place', async () => {
+  show();
+  await find();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await screen.findByText('Connection verified.');
+  expect(screen.getByRole('button', { name: 'Check selected item' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Connect another item' })).toBeEnabled();
 });

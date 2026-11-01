@@ -351,19 +351,32 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it.each(['custom.profile-edit', 'vllm'] as const)('validates %s options before saving from profile selection without visiting the option tab', async provider => {
     let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    // Module-factory mocks keep implementations across tests (restoreAllMocks
+    // only restores spies), so declare the runtime schema this journey checks
+    // instead of inheriting whichever schema an earlier test left behind.
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
     const check = vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const { onProfileCommit, onApply } = mount({ initialSection: 'profiles', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
     await waitFor(() => expect(check).toHaveBeenCalled());
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    // Reset only remounts the option editors, so the save action stays the same
+    // element. Polling it directly keeps each wait check from re-running a
+    // role query over the whole dialog while revalidation is still settling.
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    expect(save).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save as new' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Reset options to defaults' })).toBeEnabled();
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    expect(reset).toBeEnabled();
     await act(async () => { finish([{ key: 'workers', code: 'synthetic-review', message: 'Synthetic option needs review' }]); });
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(save).toBeDisabled();
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
     check.mockResolvedValue([]);
-    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled());
+    fireEvent.click(reset);
+    // Clearing the reported issue does not enable saving until the reset
+    // values have been validated again.
+    expect(save).toBeDisabled();
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
   });
 
   it('resets options while retaining the saved prompt and profile identity', async () => {

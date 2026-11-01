@@ -154,9 +154,13 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
   useEffect(() => () => {
     generation.current += 1;
     pendingRegistration.current = null;
-    if (pendingHelp.current) void entrypointHelpCancel(pendingHelp.current).catch(() => undefined);
+    // Only help discovery still in flight is cancelled. A settled run keeps its
+    // record: a failure stays with its detail until the user dismisses it.
+    if (pendingHelp.current) {
+      void entrypointHelpCancel(pendingHelp.current).catch(() => undefined);
+      finishTask(taskId, 'cancelled');
+    }
     pendingHelp.current = null;
-    finishTask(taskId, 'cancelled');
   }, [taskId]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => onBusyChange?.(false), [onBusyChange]);

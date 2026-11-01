@@ -9,6 +9,7 @@ import { providerTelemetryCopy } from './providerTelemetry';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ORDER_KEY } from '../runtimes/optionOrder';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import { ProfileRuntimeSchemaContext } from './useProfileRuntimeSchema';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -59,6 +60,40 @@ describe('runtime inventory readiness', () => {
 });
 
 describe('runtime-specific option controls', () => {
+  it('refreshes unknown-option validation when schema and saved values change in place in an unvisited section', async () => {
+    const provider = 'custom.synthetic';
+    const option = (key: string) => schemaOption({ key, flag: `--${key}`, group: 'other', target: 'launch', kind: { type: 'text' } });
+    const effective = effectiveSchema([], [option('first')]);
+    const shared = { provider: provider as api.ProviderId, runtime: 'build', view: effective, pending: false, retry: vi.fn() };
+    const values: Record<string, unknown> = { first: 'saved', added: 'keep' };
+    const cfg: api.AppConfig = { ...testConfig, active_provider: provider, active_runtime: 'build', provider_options: { [provider]: values } };
+    const onInvalid = vi.fn();
+    const onChange = vi.fn();
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const view = () => <I18nProvider initialLocale="en"><ProfileRuntimeSchemaContext.Provider value={shared}>
+      <ProviderOptions cfg={cfg} section="sampling" disabled={false} onChange={onChange} onInvalid={onInvalid} />
+    </ProfileRuntimeSchemaContext.Provider></I18nProvider>;
+    const rendered = render(view());
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true));
+    expect(screen.getByRole('alert')).toHaveTextContent('added');
+    effective.schema.options.push(option('added'));
+    rendered.rerender(view());
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    effective.schema.options.splice(0, 1);
+    values.retired = 'preserve';
+    rendered.rerender(view());
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true));
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent('first');
+    expect(alerts[1]).toHaveTextContent('retired');
+    expect(values).toEqual({ first: 'saved', added: 'keep', retired: 'preserve' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('restores declared external options by omission, keeping connections, unknown values and other engine settings', async () => {
     const provider = 'custom.defaults';
     const options = [

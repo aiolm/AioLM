@@ -437,6 +437,31 @@ it('cancels only the pending entry point when the registration panel unmounts', 
   expect(api.entrypointHelpCancel).toHaveBeenCalledWith(entry);
 });
 
+it('keeps a settled help failure and its full detail when the registration panel unmounts', async () => {
+  const diagnostic = 'help output is incomplete; rediscover before building options\nHelp capture: success=false, exit_code=17';
+  vi.mocked(api.entrypointHelpDiscover).mockRejectedValueOnce(diagnostic);
+  const rendered = render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('alert');
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: diagnostic })]);
+  rendered.unmount();
+  // The failure is the only record of what went wrong once the panel is gone.
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: diagnostic })]);
+  expect(api.entrypointHelpCancel).not.toHaveBeenCalled();
+});
+
+it('does not report completed help discovery as cancelled when the registration panel unmounts', async () => {
+  const rendered = render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'completed' })]);
+  rendered.unmount();
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'completed' })]);
+  expect(api.entrypointHelpCancel).not.toHaveBeenCalled();
+});
+
 it('carries explicit option metadata in the entry so its help review and registration use the same metadata', async () => {
   const metadata = { version: 1, engine_id: 'custom.synthetic', adapter: { id: 'synthetic.adapter', revision: 'r1' },
     options: [{ flag: '--fresh-secret', sensitive: true }] };

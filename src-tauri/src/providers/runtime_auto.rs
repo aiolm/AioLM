@@ -20,12 +20,12 @@ pub const INTERNAL: &str = "--internal-runtime-auto";
 const KEY_ENV: &str = "AIO_CONNECT_KEY";
 const SPEC_LIMIT: u64 = 262_144;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelChoice {
     pub id: String,
     pub name: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedConnection {
     pub kind: String,
     pub models: Vec<ModelChoice>,
@@ -103,6 +103,14 @@ pub async fn discover(folder: Option<&Path>) -> Result<discovery::DiscoveryRepor
     // model-list response is offered as a running connection candidate.
     use futures_util::{stream, StreamExt};
     let candidates = std::mem::take(&mut report.candidates);
+    let inspector = candidates
+        .iter()
+        .any(|candidate| {
+            candidate.pid != Some(std::process::id()) && !candidate.endpoints.is_empty()
+        })
+        .then(probe::EndpointInspector::new)
+        .and_then(Result::ok);
+    let inspector = inspector.as_ref();
     report.candidates = stream::iter(candidates)
         .map(|candidate| async move {
             // The application's own API is already managed here; attaching it
@@ -122,7 +130,11 @@ pub async fn discover(folder: Option<&Path>) -> Result<discovery::DiscoveryRepor
                 } else {
                     endpoint.host.clone()
                 };
-                if probe::inspect_endpoint(&format!("http://{host}:{}/v1", endpoint.port), None)
+                let Some(inspector) = inspector else {
+                    continue;
+                };
+                if inspector
+                    .inspect(&format!("http://{host}:{}/v1", endpoint.port), None)
                     .await
                     .is_ok()
                 {
@@ -160,7 +172,7 @@ fn known_candidate(
         .get(&candidate.id)
         .ok_or("find the installation again before connecting")?;
     // The renderer cannot replace captured argv, PID, endpoint or file evidence.
-    if serde_json::to_value(known).ok() != serde_json::to_value(candidate).ok() {
+    if known != candidate {
         return Err("discovered installation changed; find it again".into());
     }
     Ok(known.clone())
@@ -171,8 +183,11 @@ pub async fn inspect(
     local_models: Vec<ModelChoice>,
 ) -> Result<PreparedConnection, String> {
     let candidate = known_candidate(candidate)?;
-    discovery::revalidate(&candidate)?;
+    discovery::revalidate_with_cancel(&candidate, &cancellation())?;
     let mut found = Vec::new();
+    let inspector = (!candidate.endpoints.is_empty())
+        .then(probe::EndpointInspector::new)
+        .and_then(Result::ok);
     for endpoint in &candidate.endpoints {
         check_cancel()?;
         let base = format!(
@@ -184,7 +199,10 @@ pub async fn inspect(
             },
             endpoint.port
         );
-        if let Ok(info) = probe::inspect_endpoint(&base, None).await {
+        let Some(inspector) = inspector.as_ref() else {
+            continue;
+        };
+        if let Ok(info) = inspector.inspect(&base, None).await {
             found.push(info);
         }
     }
@@ -423,13 +441,11 @@ pub async fn connect(
         .get(&prepared.plan)
         .cloned()
         .ok_or("find the installation again before connecting")?;
-    if serde_json::to_value(&known).ok() != serde_json::to_value(prepared).ok()
-        || !known.models.iter().any(|m| m.id == model_id)
-    {
+    if known != *prepared || !known.models.iter().any(|m| m.id == model_id) {
         return Err("connection or selected model changed; inspect it again".into());
     }
     check_cancel()?;
-    discovery::revalidate(&known.candidate)?;
+    discovery::revalidate_with_cancel(&known.candidate, &cancel)?;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let engine = ProviderId::parse(&format!("custom.auto-{}", &suffix[..16]))
         .ok_or("cannot allocate connection identity")?;
@@ -828,6 +844,67 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    #[tokio::test]
+    async fn cancelled_inspection_does_not_revalidate_a_stale_process() {
+        let candidate = discovery::RuntimeCandidate {
+            id: "synthetic-cancelled-process".into(),
+            source: discovery::DiscoverySource::LocalProcess,
+            display_name: "Synthetic stopped service".into(),
+            entrypoint_path: None,
+            entrypoint_fingerprint: None,
+            command: None,
+            endpoints: vec![],
+            entrypoint_kind: discovery::EntrypointKind::Attached,
+            state: discovery::DiscoveryState::NeedsConfiguration,
+            pid: None,
+            process_identity: None,
+            reasons: vec![],
+        };
+        inventory()
+            .lock()
+            .unwrap()
+            .candidates
+            .insert(candidate.id.clone(), candidate.clone());
+        cancellation().store(true, Ordering::Release);
+        let result = inspect(&candidate, vec![]).await;
+        cancellation().store(false, Ordering::Release);
+        inventory().lock().unwrap().candidates.remove(&candidate.id);
+        assert_eq!(result.unwrap_err(), "runtime discovery cancelled");
+
+        let prepared = PreparedConnection {
+            kind: "attached".into(),
+            models: vec![ModelChoice {
+                id: "synthetic-model".into(),
+                name: "Synthetic model".into(),
+            }],
+            candidate,
+            detail: String::new(),
+            base_url: Some("http://127.0.0.1:43121/v1".into()),
+            plan: "synthetic-cancelled-plan".into(),
+        };
+        inventory().lock().unwrap().preparations.insert(
+            prepared.plan.clone(),
+            (
+                prepared.clone(),
+                Target::Attached {
+                    base_url: prepared.base_url.clone().unwrap(),
+                },
+            ),
+        );
+        let result = connect(
+            &prepared,
+            "synthetic-model",
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await;
+        inventory()
+            .lock()
+            .unwrap()
+            .preparations
+            .remove(&prepared.plan);
+        assert_eq!(result.unwrap_err(), "runtime discovery cancelled");
+    }
+
     struct Area(PathBuf);
     impl Area {
         fn new() -> Self {
@@ -851,6 +928,119 @@ mod tests {
                 let _ = fs::remove_dir_all(&self.0);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn captured_candidate_and_preparation_reject_changed_renderer_fields() {
+        let candidate = discovery::RuntimeCandidate {
+            id: "synthetic-immutable-candidate".into(),
+            source: discovery::DiscoverySource::LocalProcess,
+            display_name: "Synthetic service".into(),
+            entrypoint_path: Some("/synthetic/entry".into()),
+            entrypoint_fingerprint: Some("captured-stamp".into()),
+            command: Some(discovery::ObservedCommand {
+                program: "/synthetic/entry".into(),
+                args: vec!["first".into(), "second".into()],
+                working_directory: Some("/synthetic".into()),
+                argv_source: discovery::ArgvSource::OsArguments,
+            }),
+            endpoints: vec![discovery::LocalEndpoint {
+                host: "127.0.0.1".into(),
+                port: 43121,
+            }],
+            entrypoint_kind: discovery::EntrypointKind::Attached,
+            state: discovery::DiscoveryState::NeedsConfiguration,
+            pid: Some(12345),
+            process_identity: Some("captured-creation".into()),
+            reasons: vec!["captured-evidence".into()],
+        };
+        inventory()
+            .lock()
+            .unwrap()
+            .candidates
+            .insert(candidate.id.clone(), candidate.clone());
+        assert!(known_candidate(&candidate).is_ok());
+        let changes: Vec<fn(&mut discovery::RuntimeCandidate)> = vec![
+            |c| c.source = discovery::DiscoverySource::SelectedFolder,
+            |c| c.display_name.push('!'),
+            |c| c.entrypoint_path = None,
+            |c| c.entrypoint_fingerprint = None,
+            |c| c.command.as_mut().unwrap().program.push('!'),
+            |c| c.command.as_mut().unwrap().args.reverse(),
+            |c| c.command.as_mut().unwrap().working_directory = None,
+            |c| c.command.as_mut().unwrap().argv_source = discovery::ArgvSource::Shebang,
+            |c| c.endpoints[0].host = "::1".into(),
+            |c| c.endpoints[0].port += 1,
+            |c| c.entrypoint_kind = discovery::EntrypointKind::Unknown,
+            |c| c.pid = None,
+            |c| c.process_identity = None,
+            |c| c.reasons.clear(),
+        ];
+        for change in changes {
+            let mut changed = candidate.clone();
+            change(&mut changed);
+            assert_eq!(
+                known_candidate(&changed).unwrap_err(),
+                "discovered installation changed; find it again"
+            );
+        }
+        inventory().lock().unwrap().candidates.remove(&candidate.id);
+        let prepared = PreparedConnection {
+            kind: "attached".into(),
+            models: vec![
+                ModelChoice {
+                    id: "model-a".into(),
+                    name: "Model A".into(),
+                },
+                ModelChoice {
+                    id: "model-b".into(),
+                    name: "Model B".into(),
+                },
+            ],
+            candidate,
+            detail: "Captured detail".into(),
+            base_url: Some("http://127.0.0.1:43121/v1".into()),
+            plan: "synthetic-immutable-plan".into(),
+        };
+        inventory().lock().unwrap().preparations.insert(
+            prepared.plan.clone(),
+            (
+                prepared.clone(),
+                Target::Attached {
+                    base_url: prepared.base_url.clone().unwrap(),
+                },
+            ),
+        );
+        let changes: Vec<fn(&mut PreparedConnection)> = vec![
+            |p| p.kind = "managed".into(),
+            |p| p.models[0].id.push('!'),
+            |p| p.models[0].name.push('!'),
+            |p| p.models.reverse(),
+            |p| p.candidate.command.as_mut().unwrap().args.reverse(),
+            |p| p.detail.clear(),
+            |p| p.base_url = None,
+        ];
+        for change in changes {
+            let mut changed = prepared.clone();
+            change(&mut changed);
+            assert_eq!(
+                connect(&changed, "model-a", Arc::new(AtomicBool::new(true)))
+                    .await
+                    .unwrap_err(),
+                "connection or selected model changed; inspect it again"
+            );
+        }
+        assert_eq!(
+            connect(&prepared, "missing-model", Arc::new(AtomicBool::new(true)))
+                .await
+                .unwrap_err(),
+            "connection or selected model changed; inspect it again"
+        );
+        inventory()
+            .lock()
+            .unwrap()
+            .preparations
+            .remove(&prepared.plan);
     }
 
     #[test]

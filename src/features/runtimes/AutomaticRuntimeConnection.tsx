@@ -116,6 +116,11 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     const next = await runtimeAutoInspect(candidate);
     if (current()) applyInspection(next);
   });
+  const chooseCandidate = (candidate: RuntimeCandidate) => {
+    if (locked || running.current) return;
+    setSelected(candidate.id); setPrepared(null); setModel('');
+    setError(''); setCancelled(false); setResult(null);
+  };
   const connect = () => {
     if (!prepared || !model || !prepared.models.some(item => item.id === model)) return;
     const connection = prepared;
@@ -128,12 +133,13 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     });
   };
   const disabled = locked || phase !== null;
+  const selectedCandidate = candidates.find(candidate => candidate.id === selected);
 
   return <section className="app-card mb-4" aria-labelledby={`${id}-title`}>
     <h3 ref={titleRef} id={`${id}-title`} tabIndex={-1} className="app-section-title">{copy.title}</h3>
     <p className="app-section-hint">{copy.intro}</p>
     <ol className="adapter-journey" aria-label={copy.title}>
-      <li>{copy.find}</li><li>{copy.chooseModel}</li><li>{copy.connect}</li>
+      <li>{copy.find}</li><li>{copy.check}</li><li>{copy.chooseModel}</li><li>{copy.connect}</li>
     </ol>
     <div className="app-page-actions">
       <button type="button" className="app-button app-button--primary" disabled={disabled} onClick={() => void search()}>{result ? copy.selectAgain : copy.find}</button>
@@ -150,11 +156,16 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       <p className="app-section-hint">{copy.candidateHint}</p>
       {candidates.map(candidate => <label key={candidate.id} className="entrypoint-path">
         <input type="radio" name={`${id}-candidate`} value={candidate.id} checked={selected === candidate.id}
-          onChange={() => void inspect(candidate)} />
+          onChange={() => chooseCandidate(candidate)} />
         <span className="flex min-w-0 flex-col gap-1">{normalizeDisplayText(candidate.display_name)}
+          <small className="app-section-hint">{candidate.source === 'local_process' ? copy.running : copy.installation}{candidate.pid != null && ` · ${copy.process} ${candidate.pid}`}</small>
+          {candidate.entrypoint_path && <small className="app-section-hint break-all">{normalizeDisplayText(candidate.entrypoint_path)}</small>}
           {candidate.endpoints.length > 0 && <small className="app-section-hint">{candidate.endpoints.map(endpoint => `${endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}`).join(', ')}</small>}
         </span>
       </label>)}
+      <div className="app-page-actions">
+        <button type="button" className="app-button app-button--secondary" disabled={!selectedCandidate || result !== null} onClick={() => { if (selectedCandidate) void inspect(selectedCandidate); }}>{copy.check}</button>
+      </div>
     </fieldset>}
     {prepared && <form action="#" method="POST" className="model-settings-fields" onSubmit={event => { event.preventDefault(); void connect(); }}>
       <p>{prepared.kind === 'attached' ? copy.attached : copy.managed}</p>

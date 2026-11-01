@@ -178,6 +178,149 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(chip).toHaveFocus();
     navigate(/^Choose runtime/, 'Choose runtime');
   });
+  it('returns to the panel start and keeps the stage heading clear of the footer when a short narrow window scrolls the whole dialog', () => {
+    mount({ initialSection: undefined });
+    // jsdom has no layout: reproduce the measured 360x488 geometry, where the
+    // shell scrolls, the tab row and profile bar are pinned at the top and the
+    // editor begins 340px into the scroll.
+    const outer = document.querySelector<HTMLElement>('.model-settings-shell')!;
+    const stage = document.querySelector<HTMLElement>('.model-settings-body')!;
+    outer.style.overflowY = 'auto';
+    Object.defineProperty(outer, 'scrollHeight', { configurable: true, value: 2400 });
+    Object.defineProperty(outer, 'clientHeight', { configurable: true, value: 472 });
+    outer.scrollTo = ((options: ScrollToOptions) => { outer.scrollTop = options.top ?? outer.scrollTop; }) as typeof outer.scrollTo;
+    stage.scrollTo = (() => undefined) as typeof stage.scrollTo;
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 344, width: 344, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    outer.getBoundingClientRect = () => rect(8, 472);
+    stage.getBoundingClientRect = () => rect(8 + 340 - outer.scrollTop, 2000);
+    const reveal = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = reveal;
+    // The pinned bands are measured as they appear and resize.
+    const resized: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resized.push(callback); } observe() {} disconnect() {} });
+    let contextHeight = 40;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.matches('.model-settings-nav')) return rect(8, 50);
+      if (this.matches('.model-settings-context')) return rect(58, contextHeight);
+      return originalRect.call(this);
+    };
+    try {
+      openOptions();
+      // The options step opens with its editor just under the pinned tab row and
+      // profile bar, which names the selected model and profile.
+      expect(outer.scrollTop).toBe(250);
+      expect(screen.getByRole('heading', { name: 'Adjust options' })).toHaveFocus();
+      expect(document.querySelector('.model-settings-context-model')).toHaveTextContent('a.gguf');
+      // The profile bar fills in after that commit; the editor start follows it.
+      contextHeight = 60;
+      resized.forEach(callback => callback());
+      expect(outer.scrollTop).toBe(230);
+      // Once the dialog has been scrolled another way, a later resize keeps that position.
+      outer.scrollTop = 500;
+      contextHeight = 70;
+      resized.forEach(callback => callback());
+      expect(outer.scrollTop).toBe(500);
+      contextHeight = 60;
+      // Deep in a long section, the next section starts right under the pinned tabs and profile bar.
+      outer.scrollTop = 900;
+      fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
+      expect(outer.scrollTop).toBe(230);
+      // A panel start that is still in view keeps the header and steps where they are.
+      outer.scrollTop = 120;
+      fireEvent.click(screen.getByRole('tab', { name: 'Model' }));
+      expect(outer.scrollTop).toBe(120);
+      // A step change starts that step from the top of the dialog.
+      outer.scrollTop = 600;
+      fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+      expect(screen.getByRole('heading', { name: 'Choose profile' })).toHaveFocus();
+      expect(outer.scrollTop).toBe(0);
+      expect(reveal.mock.contexts.at(-1)).toBe(screen.getByRole('heading', { name: 'Choose profile' }));
+    } finally { Element.prototype.scrollIntoView = original; HTMLElement.prototype.getBoundingClientRect = originalRect; vi.unstubAllGlobals(); }
+  });
+  it('keeps focused controls visible after browser focus scrolling without moving pinned actions or a newer focus target', async () => {
+    mount({ initialSection: undefined });
+    openOptions();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Adjust options' })).toHaveFocus());
+    const outer = document.querySelector<HTMLElement>('.model-settings-shell')!;
+    outer.style.overflowY = 'auto';
+    Object.defineProperty(outer, 'scrollHeight', { configurable: true, value: 2400 });
+    Object.defineProperty(outer, 'clientHeight', { configurable: true, value: 472 });
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 344, width: 344, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const context = document.querySelector<HTMLElement>('.model-settings-context')!;
+    const footer = document.querySelector<HTMLElement>('.model-settings-footer')!;
+    const field = screen.getByRole('textbox', { name: 'Model path' });
+    const save = within(context).getByRole('button', { name: 'Save profile' });
+    let inFlow = false;
+    // jsdom has no layout. In-flow controls move with the scroll; pinned bands do not.
+    const at = new Map<Element, () => DOMRect>([
+      [outer, () => rect(8, 472)],
+      [document.querySelector('.model-settings-nav')!, () => rect(8, 50)],
+      [context, () => inFlow ? rect(Math.max(58, 300 - outer.scrollTop), 140) : rect(58, 100)],
+      [footer, () => rect(380, 100)],
+      [field, () => rect(720 - outer.scrollTop, 34)],
+      [save, () => inFlow ? rect(400 - outer.scrollTop, 32) : rect(110, 32)],
+    ]);
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalRects = HTMLElement.prototype.getClientRects;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) { return at.get(this)?.() ?? originalRect.call(this); };
+    HTMLElement.prototype.getClientRects = function (this: HTMLElement) { return (at.has(this) ? [at.get(this)!()] : []) as unknown as DOMRectList; };
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => {
+      const id = ++frameId; frames.set(id, callback); return id;
+    });
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+    const flush = () => act(() => {
+      const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0));
+    });
+    try {
+      outer.scrollTop = 600;
+      act(() => field.focus());
+      // WebKit can overwrite the React focus handler's scroll before the next frame.
+      outer.scrollTop = 700;
+      flush();
+      expect(field).toHaveFocus();
+      expect(field.getBoundingClientRect().top).toBeGreaterThanOrEqual(context.getBoundingClientRect().bottom);
+      expect(field.getBoundingClientRect().bottom).toBeLessThanOrEqual(footer.getBoundingClientRect().top);
+      outer.scrollTop = 600;
+      act(() => save.focus());
+      flush();
+      expect(save).toHaveFocus();
+      expect(outer.scrollTop).toBe(600);
+      inFlow = true;
+      outer.scrollTop = 0;
+      act(() => save.blur());
+      act(() => save.focus());
+      flush();
+      expect(save.getBoundingClientRect().top).toBeGreaterThanOrEqual(outer.getBoundingClientRect().top);
+      expect(save.getBoundingClientRect().bottom).toBeLessThanOrEqual(footer.getBoundingClientRect().top);
+      inFlow = false;
+      outer.scrollTop = 600;
+      act(() => field.focus());
+      outer.scrollTop = 700;
+      // A newer pinned control owns focus before the pending reveal runs.
+      act(() => save.focus());
+      flush();
+      expect(save).toHaveFocus();
+      expect(outer.scrollTop).toBe(700);
+      outer.scrollTop = 600;
+      act(() => field.focus());
+      outer.scrollTop = 700;
+      const overlay = document.createElement('dialog');
+      document.body.append(overlay);
+      overlay.showModal();
+      try {
+        flush();
+        expect(outer.scrollTop).toBe(700);
+      } finally { overlay.close(); overlay.remove(); }
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+      HTMLElement.prototype.getClientRects = originalRects;
+      vi.restoreAllMocks();
+    }
+  });
   it('shows only the chosen external engine profiles and reconfirms after changing runtime builds', async () => {
     const provider = 'custom.new-engine';
     const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };

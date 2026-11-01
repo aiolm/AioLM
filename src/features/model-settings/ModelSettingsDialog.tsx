@@ -68,6 +68,40 @@ export interface ModelSettingsDialogProps {
 
 const normalizeSection = (section = 'model') => ({ setup: 'runtime', gpu: 'runtime', lora: 'adapters', server: 'tuning', options: 'advanced', escape: 'advanced' }[section] ?? section);
 
+// Narrow short windows scroll the whole dialog as one column (model-settings.css).
+const dialogScroller = (outer: HTMLElement | null) =>
+  outer && getComputedStyle(outer).overflowY === 'auto' && outer.scrollHeight > outer.clientHeight ? outer : null;
+const pinnedHeight = (outer: HTMLElement) => ['.model-settings-nav', '.model-settings-context']
+  .reduce((sum, selector) => sum + (outer.querySelector(selector)?.getBoundingClientRect().height ?? 0), 0);
+// Keyboard focus in a dialog-wide scroll keeps the focused control clear of the
+// pinned bands it is not part of. The WebView's own focus scroll ignores scroll
+// margins, and a scroll padding on the dialog treated the pinned bands' own
+// controls as hidden, scrolling the editor away when they took focus.
+const revealFocused = (outer: HTMLElement, target: HTMLElement) => {
+  // Portalled menus bubble focus here through React but are not in this scroll.
+  if (!outer.contains(target)) return;
+  const shown = (element: HTMLElement | null): element is HTMLElement => !!element && element.getClientRects().length > 0;
+  const footer = outer.querySelector<HTMLElement>('.model-settings-footer');
+  if (footer?.contains(target)) return;
+  const bands = ['.model-settings-nav', '.model-settings-context']
+    .map(selector => outer.querySelector<HTMLElement>(selector)).filter(shown);
+  const box = outer.getBoundingClientRect();
+  const field = target.getBoundingClientRect();
+  const gap = 16;
+  const bottom = (shown(footer) ? footer.getBoundingClientRect().top : box.bottom) - gap;
+  // The model and steps come before the bands: covered by them, they scroll back into view.
+  if (bands[0] && bands[0].compareDocumentPosition(target) & Node.DOCUMENT_POSITION_PRECEDING) {
+    if (field.top < box.top || field.bottom > bands[0].getBoundingClientRect().top) outer.scrollTop += field.top - box.top - gap;
+    return;
+  }
+  const top = (bands.some(band => band.contains(target)) ? box.top : Math.max(box.top, ...bands.map(band => band.getBoundingClientRect().bottom))) + gap;
+  if (field.top < top) outer.scrollTop -= top - field.top;
+  else if (field.bottom > bottom) outer.scrollTop += Math.min(field.bottom - bottom, field.top - top);
+};
+// The dialog scroll position that puts the options panel start just under the pinned bands.
+const panelStart = (outer: HTMLElement, panel: HTMLElement) =>
+  outer.scrollTop + panel.getBoundingClientRect().top - outer.getBoundingClientRect().top - pinnedHeight(outer);
+
 const modalityLabel: Record<Locale, Record<string, string>> = {
   en: { text: 'text', image: 'image', audio: 'audio', video: 'video' },
   ko: { text: '텍스트', image: '이미지', audio: '오디오', video: '비디오' },
@@ -108,9 +142,23 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     ? 'options' : !external && requestedSection === 'prompt' ? 'sampling' : requestedSection;
   const section = sections.find(value => value === mappedSection) ?? (external ? 'options' : 'model');
   const body = useRef<HTMLDivElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
+  const focusFrame = useRef<number | null>(null);
+  useLayoutEffect(() => () => {
+    if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = null;
+  }, [open]);
   // Sections are tall; arriving at one part-scrolled from the last shows its
-  // middle, which reads as a half-rendered panel.
-  const showSection = (value: string) => { setSection(value); body.current?.scrollTo({ top: 0 }); };
+  // middle, which reads as a half-rendered panel. When the dialog scrolls as a
+  // whole, the panel start returns under the pinned tab row and profile bar
+  // unless it is already in view.
+  const showSection = (value: string) => {
+    setSection(value); body.current?.scrollTo({ top: 0 });
+    const outer = dialogScroller(shell.current); const panel = body.current;
+    if (!outer || !panel) return;
+    const start = panelStart(outer, panel);
+    if (start < outer.scrollTop) outer.scrollTo({ top: Math.max(0, start) });
+  };
   const [query, setQuery] = useState('');
   const [pathDraft, setPathDraft] = useState(normalizeDisplayPath(initial.current.active_model));
   const [error, setError] = useState('');
@@ -146,6 +194,20 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const selectedMetadata = useSelectedModelMetadata(llama ? cfg.active_model : '', open && llama);
   const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
+  // The focused Cancel of a pending start is removed when the start settles.
+  // Focus then returns to the start action (or the dialog title), not to the
+  // page behind this still-open dialog; a focus moved elsewhere is kept.
+  const startButton = useRef<HTMLButtonElement>(null);
+  const cancelFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (disabled || !cancelFocus.current) return;
+    cancelFocus.current = false;
+    const own = dialog.current;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (!own?.open || !lost || Array.from(document.querySelectorAll('dialog[open]')).at(-1) !== own) return;
+    const start = startButton.current;
+    (start && !start.disabled && !start.closest('[hidden], [inert]') ? start : heading.current)?.focus();
+  }, [disabled]);
   const benchmark = mode === 'benchmark';
   const savedApplication = useMemo(() => initialApplication ?? appliedProfile(initialConfig, sessionId), [initialApplication, initialConfig, sessionId]);
   const profiles = useProfileEditor(initialConfig, cfg, savedApplication, benchmark, entry => profileDisplayName(entry, locale));
@@ -172,7 +234,42 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     stepFocus.current = null;
     if (document.activeElement === request.previous || document.activeElement === document.body || document.activeElement === heading.current) flowHeading.current?.focus({ preventScroll: true });
     body.current?.scrollTo({ top: 0 });
+    // A dialog-wide scroll also starts the step from the top, with its focused
+    // heading moved just clear of the pinned footer.
+    const outer = dialogScroller(shell.current);
+    if (outer) { outer.scrollTo({ top: 0 }); flowHeading.current?.scrollIntoView({ block: 'nearest' }); }
   }, [flow]);
+  // The pinned profile bar sits just below the pinned tab row; its height
+  // changes with locale and wrapping.
+  // In a dialog-wide scroll the options step opens with the model, steps and
+  // their metadata scrolled above the pinned bands (the profile bar keeps the
+  // model and profile named) and the editor starting just below them. The
+  // profile bar can still grow after this commit, so the start is kept until
+  // the dialog is scrolled some other way.
+  const optionsStep = step === 'options';
+  useLayoutEffect(() => {
+    const outer = shell.current;
+    const tabs = outer?.querySelector<HTMLElement>('.model-settings-nav');
+    const context = outer?.querySelector<HTMLElement>('.model-settings-context');
+    if (!outer || !tabs || !context || typeof ResizeObserver === 'undefined') return;
+    let entryTop: number | null = null;
+    const alignEntry = () => {
+      const panel = body.current;
+      if (!dialogScroller(outer) || !panel) { entryTop = null; return; }
+      outer.scrollTo({ top: Math.max(0, panelStart(outer, panel)) });
+      entryTop = outer.scrollTop;
+    };
+    const publish = () => {
+      outer.style.setProperty('--model-settings-tabs', `${tabs.offsetHeight}px`);
+      if (entryTop !== null) {
+        if (outer.scrollTop === entryTop) alignEntry(); else entryTop = null;
+      }
+    };
+    if (optionsStep) alignEntry();
+    const observer = new ResizeObserver(publish);
+    observer.observe(tabs); observer.observe(context); publish();
+    return () => { observer.disconnect(); outer.style.removeProperty('--model-settings-tabs'); };
+  }, [optionsStep]);
   const navigateStep = (next: SettingsStep) => {
     if (disabled || profileDirty || next === 'profile' && !canProfile || next === 'options' && !canOptions) return;
     setFlow(previous => ({ ...previous, step: next }));
@@ -443,7 +540,26 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     }}
     onCancel={event => { event.preventDefault(); if (!disabled && !managerBusy) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else if (managerOpen) closeRuntimeManager(); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
-      <div className="model-settings-shell">
+      <div className="model-settings-shell" ref={shell} onFocus={event => {
+        if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+        focusFrame.current = null;
+        const outer = dialogScroller(event.currentTarget);
+        const target = event.target;
+        if (!outer || !(target instanceof HTMLElement)) return;
+        revealFocused(outer, target);
+        // WebKit scrolls interactive focus after dispatch. Recheck after that
+        // scroll; programmatic step headings stay synchronous for pointer entry.
+        if (!open || target.tabIndex < 0 || !outer.contains(target)) return;
+        const own = dialog.current;
+        focusFrame.current = requestAnimationFrame(() => {
+          focusFrame.current = null;
+          if (!own?.open || dialog.current !== own || shell.current !== outer
+            || !target.isConnected || document.activeElement !== target
+            || target.closest('dialog') !== own || target.closest('[hidden], [inert]')
+            || Array.from(document.querySelectorAll('dialog[open]')).at(-1) !== own) return;
+          revealFocused(outer, target);
+        });
+      }}>
         <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{managerOpen ? copy.manageRuntime : copy.title}</h2>{!managerOpen && step === 'options' && <><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></>}</div>
           <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled || managerBusy} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></header>
         <div hidden={managerOpen} inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={`${api.providerDisplayName(provider)} · ${runtimeSelection || flowCopy.choose}`} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
@@ -451,7 +567,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           {step === 'options' && <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />}
           <div className="model-settings-content">
-            <div className="model-settings-context" hidden={step !== 'options'}><div ref={setProfileBannerTarget} /></div>
+            <div className="model-settings-context" hidden={step !== 'options'}>
+              <p className="model-settings-context-model" title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} /><span><ModelName model={cfg.active_model} empty={copy.model} /></span></p>
+              <div ref={setProfileBannerTarget} />
+            </div>
             <div className="model-settings-body" ref={body} id={`${id}-panel`} role={step === 'options' ? 'tabpanel' : 'region'} aria-labelledby={step === 'options' ? `${id}-tab-${section}` : `${id}-step-title`}>
             <h3 id={`${id}-step-title`} ref={flowHeading} tabIndex={-1}>{flowCopy[step]}</h3>
             <p className="app-section-hint">{flowCopy[`${step}Hint`]}</p>
@@ -560,8 +679,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             {step !== 'options' && <button type="button" className="app-button app-button--primary" disabled={disabled || profileDirty || !runtimeSelection || step === 'profile' && !!profilePreview && profilePreview !== displayId} onClick={continueStep}>{step === 'runtime' ? flowCopy.nextProfile : flowCopy.nextOptions}</button>}
             {step === 'options' && !benchmark && mode !== 'project' && (live
               ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
-              : <button type="button" className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || !runtimeKnown || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
-            {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" disabled={preflightState === 'cancelling'} onClick={onCancelStart}>{copy.cancel}</button>}
+              : <button type="button" ref={startButton} className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || !runtimeKnown || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
+            {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" disabled={preflightState === 'cancelling'} onClick={event => { cancelFocus.current = document.activeElement === event.currentTarget; onCancelStart(); }}>{copy.cancel}</button>}
           </div>
         </footer>
       </div>

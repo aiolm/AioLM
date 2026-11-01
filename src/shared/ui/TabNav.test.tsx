@@ -80,4 +80,27 @@ describe("TabNav", () => {
     press("Home");
     expect(onSelect).toHaveBeenLastCalledWith("one");
   });
+
+  it("brings a partly clipped tab into its own scrolling row when the keys move to it", () => {
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 0; });
+    const box = (left: number, right: number) => ({ left, right, top: 0, bottom: 20, width: right - left, height: 20, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+    try {
+      render(<Harness />);
+      const list = screen.getByRole("tablist");
+      const last = screen.getByRole("tab", { name: "Three" });
+      list.getBoundingClientRect = () => box(0, 100);
+      last.getBoundingClientRect = () => box(80 - list.scrollLeft, 140 - list.scrollLeft);
+      press("End");
+      expect(last).toHaveFocus();
+      expect(list.scrollLeft).toBe(40);
+      // Back to a tab clipped at the start of the row.
+      screen.getByRole("tab", { name: "One" }).getBoundingClientRect = () => box(-40, 10);
+      press("Home");
+      expect(list.scrollLeft).toBe(0);
+      // A tab already inside the row leaves the row where it is.
+      screen.getByRole("tab", { name: "Two" }).getBoundingClientRect = () => box(20, 60);
+      press("ArrowRight");
+      expect(list.scrollLeft).toBe(0);
+    } finally { frame.mockRestore(); }
+  });
 });

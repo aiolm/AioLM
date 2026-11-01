@@ -31,6 +31,19 @@ interface TabNavProps<T extends string> {
  * All three navigation levels (top bar, section sidebar, settings sidebar) use
  * this so they behave identically from the keyboard.
  */
+/** Focus can leave a partly clipped tab in a list that scrolls on its own
+ * (a narrow row of tabs); scroll only that list until the tab is inside it. */
+function reveal(tab: HTMLElement) {
+  const list = tab.parentElement;
+  if (!list) return;
+  const t = tab.getBoundingClientRect();
+  const l = list.getBoundingClientRect();
+  if (t.left < l.left) list.scrollLeft -= l.left - t.left;
+  else if (t.right > l.right) list.scrollLeft += t.right - l.right;
+  if (t.top < l.top) list.scrollTop -= l.top - t.top;
+  else if (t.bottom > l.bottom) list.scrollTop += t.bottom - l.bottom;
+}
+
 export default function TabNav<T extends string>({
   items,
   active,
@@ -47,7 +60,11 @@ export default function TabNav<T extends string>({
 
   const activate = (id: T) => {
     onSelect(id);
-    window.requestAnimationFrame(() => tabRefs.current[id]?.focus());
+    window.requestAnimationFrame(() => {
+      const tab = tabRefs.current[id];
+      tab?.focus();
+      if (tab) reveal(tab);
+    });
   };
 
   const move = (delta: number) => {

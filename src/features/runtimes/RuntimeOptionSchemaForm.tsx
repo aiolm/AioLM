@@ -666,7 +666,9 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
     };
   }, [schema, scopeKey]);
 
-  const groups = useMemo(() => [...new Set(schema.options.map(option => option.group || 'runtime'))].sort(), [schema]);
+  // Rebuilt on each render like the field list: hosts may update the same
+  // schema object in place, and the category chooser must follow it.
+  const groups = [...new Set(schema.options.map(option => option.group || 'runtime'))].sort();
   const schemaKeys = useMemo(() => new Set(schema.options.map(option => option.key)), [schema]);
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
