@@ -92,9 +92,9 @@ describe("destructive-action confirmation preference", () => {
   });
 
   it("reports the stored choice so panels can skip the dialog", () => {
-    savePreferences({ ...defaultPreferences(), advanced: { developerMode: false, confirmDestructiveActions: false } });
+    savePreferences({ ...defaultPreferences(), advanced: { confirmDestructiveActions: false } });
     expect(shouldConfirmDestructive()).toBe(false);
-    savePreferences({ ...defaultPreferences(), advanced: { developerMode: false, confirmDestructiveActions: true } });
+    savePreferences({ ...defaultPreferences(), advanced: { confirmDestructiveActions: true } });
     expect(shouldConfirmDestructive()).toBe(true);
   });
 });

@@ -40,8 +40,8 @@ function storeWith(status: ServerStatus = { state: "stopped" }, overrides: Parti
   return { ...createTestStore(), status, ...overrides };
 }
 
-function page(store: AppStore, section: "api" | "diagnostics" = "api"): ReactElement {
-  return <I18nProvider initialLocale="en"><DeveloperPanel store={store} section={section} /></I18nProvider>;
+function page(store: AppStore): ReactElement {
+  return <I18nProvider initialLocale="en"><DeveloperPanel store={store} /></I18nProvider>;
 }
 
 /** Port settings and the API reference are native details, closed until the user opens them. */

@@ -129,6 +129,33 @@ describe('model management and settings', () => {
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'a.gguf' }) }));
     expect(screen.queryByRole('spinbutton', { name: /Context size/ })).not.toBeInTheDocument();
   });
+  it('lists a loaded model outside the scanned folder with its own controls above the library', async () => {
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: 'work', name: 'Work', state: 'running', model: '/synthetic/elsewhere/outside.gguf' }]);
+    mount(createTestStore({ active_model: '' }));
+    const loaded = within(await screen.findByRole('group', { name: 'Loaded models' }));
+    const row = within(loaded.getByRole('article', { name: 'Work' }));
+    expect(row.getByText('outside.gguf')).toBeInTheDocument();
+    expect(row.getByRole('button', { name: 'Stop session' })).toBeEnabled();
+    // The library itself still lists only the scanned folder.
+    await findModelButton('a.gguf');
+    expect(within(document.querySelector<HTMLElement>('[data-testid="models-list"]')!).queryByText('outside.gguf')).not.toBeInTheDocument();
+  });
+  it('reads session status for loaded controls and library marks only while the page is shown', async () => {
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    const base = createTestStore({ active_model: 'a.gguf' });
+    const page = (active: boolean) => <I18nProvider initialLocale="en"><ModelWorkspace store={base} onSelectModel={vi.fn()} active={active} section={{ id: 'setup', revision: 0 }} onNavigate={vi.fn()} /></I18nProvider>;
+    const view = render(page(true));
+    await waitFor(() => expect(api.sessionList).toHaveBeenCalledOnce());
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: 'work', name: 'Work', state: 'running', model: 'b.gguf' }]);
+    act(() => notifySessionStatusChanged());
+    await waitFor(() => expect(api.sessionList).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('article', { name: 'Work' })).toBeInTheDocument();
+    view.rerender(page(false));
+    act(() => notifySessionStatusChanged());
+    await act(async () => {});
+    expect(api.sessionList).toHaveBeenCalledTimes(2);
+  });
   it('allows choosing a library model when no model is configured', async () => {
     mount(createTestStore({ active_model: '' }));
     fireEvent.click(await findModelButton('b.gguf'));

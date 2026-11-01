@@ -610,12 +610,6 @@ export interface DownloadProgress {
   total: number;
 }
 
-export interface ServerLoraAdapter {
-  id: number;
-  path: string;
-  scale: number;
-}
-
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | ChatContentPart[];

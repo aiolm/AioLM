@@ -8,6 +8,7 @@ import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import MessageBubble from "./MessageBubble";
 import EmptyState from "../../shared/ui/EmptyState";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import RuntimeFailureDetails from "../models/RuntimeFailureDetails";
 import type { ResponseMetrics } from "../../shared/lib/metrics";
 
 interface ChatMessageLogProps {
@@ -38,7 +39,6 @@ interface ChatMessageLogProps {
   ct: (key: ChatTextKey) => string;
   onOpenModels?: () => void;
   modelSettingsLabel?: string;
-  onOpenDiagnostics?: () => void;
   onStart: () => void;
   starting: boolean;
 }
@@ -46,10 +46,14 @@ interface ChatMessageLogProps {
 export default function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
   copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
-  onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
+  onOpenModels, modelSettingsLabel, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
   const isStarting = !serverOn && (starting || status.state === "starting");
+  // The selected model's failure is shown once: inside the blocked view of an
+  // empty conversation, otherwise after the retained messages.
+  const showsEmptyState = disabled && msgs.length === 0;
+  const hasFailureDetails = isFailed && Boolean(status.error?.trim() || status.log_tail?.trim());
   return (
     <div
       ref={scrollRef}
@@ -62,7 +66,7 @@ export default function ChatMessageLog({
       }}
       className="chat-message-log"
     >
-      {disabled && msgs.length === 0 && (
+      {showsEmptyState && (
         <div className="mt-10">
           <EmptyState
             icon={isFailed ? (
@@ -76,8 +80,9 @@ export default function ChatMessageLog({
           <div className="app-empty-actions">
             {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting || isStarting}>{modelSettingsLabel ?? ct("openModels")}</button>}
             {model && !serverOn && !isFailed && !isStarting && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
-            {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" data-icon="probe" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
+          {/* The failed launch's own error and log, read where the failure is shown. */}
+          {hasFailureDetails && <div className="chat-failure-details"><RuntimeFailureDetails error={status.error} log={status.log_tail} /></div>}
           </EmptyState>
         </div>
       )}
@@ -105,6 +110,10 @@ export default function ChatMessageLog({
           onCopy={onCopy}
         />
       ))}
+
+      {hasFailureDetails && !showsEmptyState && <FeedbackBanner tone="error" title={ct("requestFailed")}>
+        <RuntimeFailureDetails error={status.error} log={status.log_tail} />
+      </FeedbackBanner>}
 
       {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>

@@ -179,7 +179,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     }
     setConfirmReset(false);
   };
-  const toggle = (key: "enterToSend" | "showTimestamps" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
+  const toggle = (key: "enterToSend" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
   const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} checked={checked} onChange={onChange} />;
   const downloadExport = () => {
     const blob = new Blob([exportPreferences(preferences)], { type: "application/json" });
@@ -249,7 +249,6 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         {(normalizedQuery || section === "chat") && <>
           <h3>{t("settings.chat")}</h3>
           <Row id="settings-enter-to-send" label={t("settings.enterToSend")} description={t("settings.enterToSendDesc")}>{bool("settings-enter-to-send", preferences.chat.enterToSend, (value) => toggle("enterToSend", value))}</Row>
-          <Row id="settings-timestamps" label={t("settings.timestamps")} description={t("settings.timestampsDesc")}>{bool("settings-timestamps", preferences.chat.showTimestamps, (value) => toggle("showTimestamps", value))}</Row>
           <Row id="settings-stream" label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
           <Row id="settings-compact-messages" label={t("settings.compactMessages")} description={t("settings.compactMessagesDesc")}>{bool("settings-compact-messages", preferences.chat.compactMessages, (value) => toggle("compactMessages", value))}</Row>
           <Row id="settings-chat-line-spacing" label={prefCopy.lineSpacing} description={prefCopy.lineSpacingDesc}>
@@ -270,9 +269,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         {(normalizedQuery || section === "server") && <>
           <h3>{t("settings.server")}</h3>
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
-          {isNativeRuntimeAvailable()
-            ? <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>
-            : <Row id="settings-auto-stop" label={t("settings.autoStop")} description={t("settings.autoStopDesc")}>{bool("settings-auto-stop", preferences.server.autoStopOnExit, (value) => patch({ server: { ...preferences.server, autoStopOnExit: value } }))}</Row>}
+          {isNativeRuntimeAvailable() && <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>}
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div>
               <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
@@ -285,7 +282,6 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         </>}
         {(normalizedQuery || section === "advanced") && <>
           <h3>{t("settings.advanced")}</h3>
-          <Row id="settings-developer-mode" label={t("settings.developerMode")} description={t("settings.developerModeDesc")}>{bool("settings-developer-mode", preferences.advanced.developerMode, (value) => patch({ advanced: { ...preferences.advanced, developerMode: value } }))}</Row>
           <Row id="settings-confirm-destructive" label={t("settings.confirmDestructive")} description={t("settings.confirmDestructiveDesc")}>{bool("settings-confirm-destructive", preferences.advanced.confirmDestructiveActions, (value) => patch({ advanced: { ...preferences.advanced, confirmDestructiveActions: value } }))}</Row>
           <div className="settings-danger app-card app-card--tight"><strong>{t("settings.resetAction")}</strong><p>{resetCopy.resetHint}</p><button type="button" className="app-button app-button--danger" data-icon="reset" onClick={() => { setResetScope('all'); setConfirmReset(true); }}>{t("settings.resetAction")}</button></div>
           {ioError && !normalizedQuery && <FeedbackBanner tone="error" className="m-3">{normalizeDisplayText(ioError)}</FeedbackBanner>}

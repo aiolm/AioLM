@@ -1,6 +1,6 @@
 import { readBoundedResponseText } from "./http.ts";
 import { trackInitialRead } from "../ui/initialLayout.ts";
-import type { LocalModelInfo, ServerLoraAdapter } from "./types.ts";
+import type { LocalModelInfo } from "./types.ts";
 import { invoke } from './transport.ts';
 import type { ModelArtifact } from './providers.ts';
 
@@ -80,30 +80,4 @@ export async function embedText(
     throw new Error("Embedding endpoint returned an invalid vector payload.");
   }
   return vectors as number[][];
-}
-
-export const listServerLoraAdapters = (baseUrl: string, apiKey: string) => trackInitialRead(() => readServerLoraAdapters(baseUrl, apiKey));
-async function readServerLoraAdapters(baseUrl: string, apiKey: string): Promise<ServerLoraAdapter[]> {
-  const response = await fetch(`${baseUrl.replace(/\/$/, "").replace(/\/v1$/, "")}/lora-adapters`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const body = await readBoundedResponseText(response);
-  if (!response.ok) throw new Error(`LoRA endpoint HTTP ${response.status}: ${body.slice(0, 500)}`);
-  const parsed = JSON.parse(body) as unknown;
-  if (!Array.isArray(parsed)) throw new Error("LoRA endpoint returned an invalid adapter list.");
-  return parsed.filter((value): value is ServerLoraAdapter => {
-    if (!value || typeof value !== "object") return false;
-    const item = value as Record<string, unknown>;
-    return typeof item.id === "number" && typeof item.path === "string" && typeof item.scale === "number";
-  });
-}
-
-export async function setServerLoraAdapters(baseUrl: string, apiKey: string, adapters: Array<{ id: number; scale: number }>): Promise<void> {
-  const response = await fetch(`${baseUrl.replace(/\/$/, "").replace(/\/v1$/, "")}/lora-adapters`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(adapters),
-  });
-  const body = await readBoundedResponseText(response);
-  if (!response.ok) throw new Error(`LoRA apply HTTP ${response.status}: ${body.slice(0, 500)}`);
 }

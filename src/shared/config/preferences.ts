@@ -10,10 +10,10 @@ export interface NotificationPreferences { chat: boolean; downloads: boolean; be
 export interface AppPreferences {
   locale: Locale;
   theme: ThemeMode;
-  chat: { enterToSend: boolean; showTimestamps: boolean; streamResponses: boolean; compactMessages: boolean; lineSpacing: ChatLineSpacing };
-  server: { autoStart: boolean; autoStopOnExit: boolean; pollIntervalMs: number };
+  chat: { enterToSend: boolean; streamResponses: boolean; compactMessages: boolean; lineSpacing: ChatLineSpacing };
+  server: { autoStart: boolean; pollIntervalMs: number };
   appearance: { reduceMotion: boolean; density: "comfortable" | "compact"; fontFamily: AppFontFamily; codeFontFamily: CodeFontFamily };
-  advanced: { developerMode: boolean; confirmDestructiveActions: boolean };
+  advanced: { confirmDestructiveActions: boolean };
   notifications: NotificationPreferences;
 }
 
@@ -22,11 +22,11 @@ const KEY = "aiolm-preferences";
 
 export const defaultPreferences = (): AppPreferences => ({
   locale: "en", theme: "system",
-  chat: { enterToSend: true, showTimestamps: true, streamResponses: true, compactMessages: false, lineSpacing: "normal" },
-  server: { autoStart: false, autoStopOnExit: false, pollIntervalMs: 1000 },
+  chat: { enterToSend: true, streamResponses: true, compactMessages: false, lineSpacing: "normal" },
+  server: { autoStart: false, pollIntervalMs: 1000 },
   // "default" keeps the bundled typography the app shipped with.
   appearance: { reduceMotion: false, density: "comfortable", fontFamily: "default", codeFontFamily: "default" },
-  advanced: { developerMode: false, confirmDestructiveActions: true },
+  advanced: { confirmDestructiveActions: true },
   // Off until the user opts in, so an upgrade never starts raising OS alerts.
   notifications: { chat: false, downloads: false, benchmark: false },
 });
@@ -35,6 +35,14 @@ const isLocale = (v: unknown): v is Locale => v === "ko" || v === "en" || v === 
 const isTheme = (v: unknown): v is ThemeMode => v === "light" || v === "dark" || v === "system";
 const oneOf = <T extends string>(values: readonly T[], v: unknown, fallback: T): T => values.includes(v as T) ? v as T : fallback;
 const strictBool = (v: unknown, fallback: boolean): boolean => typeof v === "boolean" ? v : fallback;
+/**
+ * Removes one retired setting from a freshly built group copy. Other keys a
+ * group carries, including ones this version does not know, stay untouched.
+ */
+const withoutRetired = <T extends object>(group: T, key: string): T => {
+  delete (group as Record<string, unknown>)[key];
+  return group;
+};
 
 export function validatePreferences(input: Partial<AppPreferences> | null | undefined): AppPreferences {
   const d = defaultPreferences();
@@ -42,10 +50,13 @@ export function validatePreferences(input: Partial<AppPreferences> | null | unde
   return {
     locale: isLocale(p.locale) ? p.locale : d.locale,
     theme: isTheme(p.theme) ? p.theme : d.theme,
-    chat: { ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), showTimestamps: Boolean(p.chat?.showTimestamps ?? d.chat.showTimestamps), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages), lineSpacing: oneOf(["compact", "normal", "relaxed"], p.chat?.lineSpacing, d.chat.lineSpacing) },
-    server: { ...d.server, ...(p.server ?? {}), autoStart: Boolean(p.server?.autoStart ?? d.server.autoStart), autoStopOnExit: Boolean(p.server?.autoStopOnExit ?? d.server.autoStopOnExit), pollIntervalMs: [500, 1000, 2000, 5000].includes(Number(p.server?.pollIntervalMs)) ? Number(p.server?.pollIntervalMs) : d.server.pollIntervalMs },
+    // Retired settings from older saves or imports (timestamps, the frontend
+    // unload hook, developer mode) are dropped so they cannot ride along into
+    // state or future exports.
+    chat: withoutRetired({ ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages), lineSpacing: oneOf(["compact", "normal", "relaxed"], p.chat?.lineSpacing, d.chat.lineSpacing) }, "showTimestamps"),
+    server: withoutRetired({ ...d.server, ...(p.server ?? {}), autoStart: Boolean(p.server?.autoStart ?? d.server.autoStart), pollIntervalMs: [500, 1000, 2000, 5000].includes(Number(p.server?.pollIntervalMs)) ? Number(p.server?.pollIntervalMs) : d.server.pollIntervalMs }, "autoStopOnExit"),
     appearance: { ...d.appearance, ...(p.appearance ?? {}), reduceMotion: Boolean(p.appearance?.reduceMotion ?? d.appearance.reduceMotion), density: p.appearance?.density === "compact" ? "compact" : "comfortable", fontFamily: oneOf(["default", "system", "serif"], p.appearance?.fontFamily, d.appearance.fontFamily), codeFontFamily: oneOf(["default", "system"], p.appearance?.codeFontFamily, d.appearance.codeFontFamily) },
-    advanced: { ...d.advanced, ...(p.advanced ?? {}), developerMode: Boolean(p.advanced?.developerMode ?? d.advanced.developerMode), confirmDestructiveActions: Boolean(p.advanced?.confirmDestructiveActions ?? d.advanced.confirmDestructiveActions) },
+    advanced: withoutRetired({ ...d.advanced, ...(p.advanced ?? {}), confirmDestructiveActions: Boolean(p.advanced?.confirmDestructiveActions ?? d.advanced.confirmDestructiveActions) }, "developerMode"),
     // Built field by field: preferences saved before this group existed, or a
     // hand-edited import, can only enable a category with a real boolean.
     notifications: { chat: strictBool(p.notifications?.chat, d.notifications.chat), downloads: strictBool(p.notifications?.downloads, d.notifications.downloads), benchmark: strictBool(p.notifications?.benchmark, d.notifications.benchmark) },

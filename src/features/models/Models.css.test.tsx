@@ -21,9 +21,6 @@ vi.mock("../../shared/api/index", () => ({
   listModels: vi.fn(),
   deleteModel: vi.fn(),
   pickModelsDir: vi.fn(),
-  pickLoraAdapter: vi.fn(),
-  listServerLoraAdapters: vi.fn(),
-  setServerLoraAdapters: vi.fn(),
   unloadModel: vi.fn(),
 }));
 
@@ -239,17 +236,6 @@ describe("ModelsPanel CSS cascade", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
-  });
-
-  it("gives the LoRA add button an explicit hover class instead of the unsupported hover:app-bg-accent-solid variant", async () => {
-    render(createElement(I18nProvider, {
-      initialLocale: "en",
-      children: createElement(ModelsPanel, { store: storeFor(baseCfg), focus: "lora" }),
-    }));
-
-    const addButton = await screen.findByRole("button", { name: "Add GGUF" });
-    expect(addButton).toHaveClass("app-button--primary");
-    expect(addButton.className).not.toMatch(/hover:app-bg-accent-solid/);
   });
 
   it("gives the model row start/switch button the same explicit hover class", async () => {

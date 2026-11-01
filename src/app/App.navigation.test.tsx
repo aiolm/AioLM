@@ -30,9 +30,8 @@ vi.mock("../features/projects/Projects", () => ({ default: ({ onOpenTuning }: { 
 vi.mock("../features/models/Models", () => ({ default: () => <p>Model library</p> }));
 vi.mock('../features/models/ModelWorkspace', () => ({ default: ({ section }: { section: { id: string } }) => <><p>Model library</p>{section.id === 'tuning' && <p>Parameter form</p>}{section.id === 'profiles' && <p>Saved profiles</p>}</> }));
 vi.mock("../features/runtimes/Runtimes", () => ({ default: ({ onOpenProfiles }: { onOpenProfiles: () => void }) => <button onClick={onOpenProfiles}>Saved runtime settings</button> }));
-vi.mock("../features/sessions/Sessions", () => ({ default: () => <p>Sessions content</p> }));
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
-vi.mock("../features/developer/Developer", () => ({ default: ({ section, onNavigate }: { section?: string; onNavigate?: (view: ViewId) => void }) => <><p>Developer section: {section}</p><button onClick={() => onNavigate?.("models")}>Load a model</button></> }));
+vi.mock("../features/developer/Developer", () => ({ default: ({ onNavigate }: { onNavigate?: (view: ViewId) => void }) => <><p>API server content</p><button onClick={() => onNavigate?.("models")}>Load a model</button></> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => {
   if (benchmarkLoading) throw benchmarkLoading;
   return <><input aria-label="Benchmark result" />{showBenchmarkCancel && <LocalTaskCancelButton taskId="performance-benchmark-active" onClick={cancelBenchmark}>Cancel benchmark</LocalTaskCancelButton>}</>;
@@ -367,11 +366,27 @@ describe("Workspace navigation", () => {
     expect(within(navigation).getAllByRole("button", { name: /API server|Gateways|Local API/ })).toHaveLength(1);
     expect(within(navigation).queryByRole("button", { name: /Gateways/ })).not.toBeInTheDocument();
     fireEvent.click(mainTab("API server"));
-    expect(await screen.findByText("Developer section: api")).toBeVisible();
+    expect(await screen.findByText("API server content")).toBeVisible();
     expect(screen.getByRole("heading", { level: 1, name: "API server" })).toBeVisible();
-    fireEvent.click(mainTab("Diagnostics"));
-    expect(await screen.findByText("Developer section: diagnostics")).toBeVisible();
-    expect(screen.getByRole("heading", { level: 1, name: "Diagnostics" })).toBeVisible();
+  });
+
+  it("has no separate diagnostics or loaded-sessions destinations", () => {
+    mount();
+    const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    for (const name of [/Diagnostics/, /Loaded sessions/]) expect(within(navigation).queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed launch's runtime log with its error and offers no diagnostics page", async () => {
+    store.status = { state: "failed", error: "Synthetic startup failure", log_tail: "synthetic engine log tail" };
+    mount();
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(alert).toBeVisible());
+    expect(alert).toHaveTextContent("Synthetic startup failure");
+    expect(within(alert).queryByRole("button", { name: /diagnostics/i })).not.toBeInTheDocument();
+    const full = within(alert).getByLabelText("Full diagnostic");
+    expect(full).not.toBeVisible();
+    fireEvent.click(within(alert).getByText("Show full diagnostic"));
+    expect(full).toHaveTextContent("synthetic engine log tail");
   });
 
   it("lets the API server page send people to the model library to load a model", async () => {
@@ -382,11 +397,11 @@ describe("Workspace navigation", () => {
     expect(mainTab("Run a model")).toHaveAttribute("aria-current", "page");
   });
 
-  it("keeps eleven destinations and opens model selection over the current screen", async () => {
+  it("keeps nine destinations and opens model selection over the current screen", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
-    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(11);
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(9);
     fireEvent.click(mainTab("Inference engines"));
     await screen.findByText("Saved runtime settings");
     fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
@@ -408,7 +423,7 @@ describe("Workspace navigation", () => {
     expect(collapse).toHaveFocus();
     expect(container.querySelector(".app-shell")).toHaveClass("app-shell--rail");
     const rail = within(sidebar).getByRole("navigation", { name: "Primary navigation" });
-    expect(within(rail).getAllByRole("button")).toHaveLength(11);
+    expect(within(rail).getAllByRole("button")).toHaveLength(9);
     expect(within(rail).getByRole("heading", { name: "Workspace" })).toBeInTheDocument();
     expect(within(rail).getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
     fireEvent.click(within(rail).getByRole("button", { name: "Projects" }));
@@ -417,7 +432,7 @@ describe("Workspace navigation", () => {
     expect(within(rail).getByRole("button", { name: "Projects" })).toHaveAttribute("title", "Projects");
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
     const drawerLinks = container.querySelectorAll(".aiolm-drawer .aiolm-nav-link");
-    expect(drawerLinks).toHaveLength(11);
+    expect(drawerLinks).toHaveLength(9);
     drawerLinks.forEach(link => expect(link).not.toHaveAttribute("title"));
     fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(collapse).toHaveAttribute("aria-expanded", "true");

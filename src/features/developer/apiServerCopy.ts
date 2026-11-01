@@ -18,7 +18,7 @@ const en = {
   key: 'API key', keyHint: 'Copy the key while the server is running. It changes when AioLM is reopened.',
   settings: 'Server settings', examples: 'API reference & examples', language: 'Example language', copyExample: 'Copy example',
   exampleHint: 'Replace <LOCAL_API_KEY> with your key and <MODEL_ID> with an ID above.',
-  endpoint: 'Endpoint', method: 'Method', diagnostics: 'Open model diagnostics',
+  endpoint: 'Endpoint', method: 'Method',
 };
 
 export const apiServerCopy: Record<Locale, typeof en> = {
@@ -38,7 +38,7 @@ export const apiServerCopy: Record<Locale, typeof en> = {
     key: 'API 키', keyHint: '서버가 실행 중일 때 키를 복사할 수 있습니다. AioLM을 다시 열면 키가 바뀝니다.',
     settings: '서버 설정', examples: 'API 문서와 예제', language: '예제 언어', copyExample: '예제 복사',
     exampleHint: '<LOCAL_API_KEY>는 복사한 키로, <MODEL_ID>는 위 모델 ID로 바꿔 주세요.',
-    endpoint: '엔드포인트', method: '메서드', diagnostics: '모델 진단 열기',
+    endpoint: '엔드포인트', method: '메서드',
   },
   ja: {
     intro: '他のアプリからこのコンピューターのモデルを使うときに起動します。AioLM内のチャットには不要です。',
@@ -55,7 +55,7 @@ export const apiServerCopy: Record<Locale, typeof en> = {
     key: 'APIキー', keyHint: 'サーバーの実行中にキーをコピーできます。AioLMを開き直すとキーが変わります。',
     settings: 'サーバー設定', examples: 'APIリファレンスと例', language: 'サンプル言語', copyExample: '例をコピー',
     exampleHint: '<LOCAL_API_KEY>をキーに、<MODEL_ID>を上のモデルIDに置き換えてください。',
-    endpoint: 'エンドポイント', method: 'メソッド', diagnostics: 'モデル診断を開く',
+    endpoint: 'エンドポイント', method: 'メソッド',
   },
   zh: {
     intro: '需要让其他应用使用此电脑上的模型时，启动此服务器。AioLM 内部聊天无需启动它。',
@@ -72,6 +72,6 @@ export const apiServerCopy: Record<Locale, typeof en> = {
     key: 'API 密钥', keyHint: '服务器运行时可复制密钥。重新打开 AioLM 后密钥会更改。',
     settings: '服务器设置', examples: 'API 文档与示例', language: '示例语言', copyExample: '复制示例',
     exampleHint: '将 <LOCAL_API_KEY> 替换为密钥，将 <MODEL_ID> 替换为上方的模型 ID。',
-    endpoint: '端点', method: '方法', diagnostics: '打开模型诊断',
+    endpoint: '端点', method: '方法',
   },
 };

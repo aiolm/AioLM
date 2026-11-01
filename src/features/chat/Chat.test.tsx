@@ -469,17 +469,21 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
   });
 
-  it.each(['failed', 'crashed'] as const)('keeps %s diagnostics ahead of a pending model command', state => {
-    const diagnostics = vi.fn();
+  it.each(['failed', 'crashed'] as const)('keeps the %s error and runtime log ahead of a pending model command', state => {
     render(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ChatPanel, {
-      store: { ...store, status: { state, model: cfg.active_model }, busy: true }, onOpenDiagnostics: diagnostics,
+      store: { ...store, status: { state, model: cfg.active_model, error: 'Synthetic startup failure', log_tail: 'synthetic engine log tail' }, busy: true },
     }) }));
     expect(screen.getByRole('heading', { name: 'Request failed' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Loading model' })).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'No model loaded — select a model and load it');
-    fireEvent.click(screen.getByRole('button', { name: 'Open diagnostics' }));
-    expect(diagnostics).toHaveBeenCalledOnce();
+    // The failure is read where it is shown; there is no separate diagnostics page.
+    expect(screen.getByText('Synthetic startup failure')).toBeVisible();
+    const full = screen.getByLabelText('Full diagnostic');
+    expect(full).not.toBeVisible();
+    fireEvent.click(screen.getByText('Show full diagnostic'));
+    expect(full).toHaveTextContent('synthetic engine log tail');
+    expect(screen.queryByRole('button', { name: /diagnostics/i })).not.toBeInTheDocument();
   });
 
   it("keeps a conversation and offers no settings action of its own once its server stops", async () => {
@@ -503,6 +507,26 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByText("Conversation retained", { exact: true })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Model & settings" })).not.toBeInTheDocument();
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("shows a model failure once after a retained conversation, with its runtime log", async () => {
+    mocked.sessionList.mockResolvedValue([]);
+    const view = renderPanel();
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    respondWithText("Conversation retained");
+    await sendMessage("Hello");
+    await screen.findByText("Conversation retained", { exact: true });
+    view.rerender(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ChatPanel, { store: { ...store, status: { state: "crashed", model: cfg.active_model, error: "Synthetic engine crash", log_tail: "synthetic engine log tail" } } }),
+    }));
+    expect(screen.getByText("Conversation retained", { exact: true })).toBeInTheDocument();
+    expect(screen.getAllByText("Show full diagnostic")).toHaveLength(1);
+    const full = screen.getByLabelText("Full diagnostic");
+    expect(full).not.toBeVisible();
+    fireEvent.click(screen.getByText("Show full diagnostic"));
+    expect(full).toHaveTextContent("synthetic engine log tail");
+    expect(screen.getByText("Synthetic engine crash")).toBeVisible();
   });
 
   it("starts a stopped session with its saved settings regardless of its legacy enabled value", async () => {

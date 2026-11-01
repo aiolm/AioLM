@@ -5,7 +5,7 @@ import StatusBadge from "../../shared/ui/StatusBadge";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import EmptyState from "../../shared/ui/EmptyState";
 import Switch from "../../shared/ui/Switch";
-import "./sessions.css";
+import "./loaded-models.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
@@ -20,9 +20,10 @@ import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
 import { profileTargetKey } from "../../shared/config/settingsProfiles";
-import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import RuntimeFailureDetails from './RuntimeFailureDetails';
+import { loadedModelsCopy } from './loadedModelsCopy';
 import {
   DEFAULT_SESSION_ID,
   cloneGpuPlacement,
@@ -34,17 +35,13 @@ import {
   sessionStatusLabel,
 } from "../../shared/runtime/sessionUtils";
 
+/** One delivery from the library's shared detailed session subscription. */
+export type SessionPoll = { sessions: api.SessionStatus[]; error?: undefined } | { sessions: api.SessionStatus[]; error: unknown };
+
 type PendingNavigation =
   | { kind: "select"; definition: api.SessionDefinition }
   | { kind: "new" }
   | { kind: "close" };
-
-const sessionCopy = {
-  en: { options: "Load options", details: "Session details", emptyTitle: "No saved sessions" },
-  ko: { options: "로드 옵션", details: "세션 상세", emptyTitle: "저장된 세션 없음" },
-  ja: { options: "ロードオプション", details: "セッション詳細", emptyTitle: "保存されたセッションはありません" },
-  zh: { options: "加载选项", details: "会话详情", emptyTitle: "没有已保存的会话" },
-};
 
 const SESSION_STATES = ["stopped", "starting", "running", "stopping", "failed", "crashed"] as const;
 
@@ -78,8 +75,18 @@ function modelLabel(path: string, empty: string): string {
   return modelDisplayName(path) || empty;
 }
 
-export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
+/**
+ * Loaded, loading and failed models — the default target and every named
+ * session, including sessions that are not saved and models outside the
+ * scanned folder — with their own stop, unload, cancel and retry actions.
+ * Saved-session creation and editing stay in a collapsed secondary area.
+ *
+ * Status comes from the library's single detailed session subscription, which
+ * pauses while the page is hidden; this component adds no polling of its own.
+ */
+export default function LoadedModels({ store, poll, refresh }: { store: AppStore; poll: SessionPoll; refresh: () => Promise<void> }) {
   const { t, locale } = useI18n();
+  const copy = loadedModelsCopy[locale];
   const modelSettings = useModelSettings();
   const cfg = store.cfg;
   const [definitions, setDefinitions] = useState<api.SessionDefinition[]>(() => cfg?.sessions ?? []);
@@ -112,6 +119,8 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const legacyIdleSeconds = store.status.idle_seconds;
   const legacyLogTail = store.status.log_tail;
   const legacyError = store.status.error;
+  const legacyExecution = store.status.execution;
+  const legacyEngine = store.status.engine;
 
   const defaultDefinition = useMemo(() => {
     const current = cfg ?? ({ active_model: "", mmproj: "", spec_draft_model: "", gpu: undefined } as api.AppConfig);
@@ -142,6 +151,8 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     ];
   }, [cfg, defaultDefinition, definitions, editing, statuses]);
 
+  // Without a polled default entry the default row follows the app store's
+  // own status, so it stays current where the session list is unavailable.
   const fallbackDefaultStatus = useCallback((): api.SessionStatus => ({
     id: DEFAULT_SESSION_ID,
     name: t("ui.defaultSession"),
@@ -157,21 +168,25 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     log_tail: legacyLogTail,
     error: legacyError,
     gpu: cloneGpuPlacement(cfg?.gpu),
-  }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, t]);
+    // The loaded runtime, not a selection saved after the launch.
+    execution: legacyExecution,
+    engine: legacyEngine,
+  }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, legacyExecution, legacyEngine, t]);
 
-  const refresh = useSessionPolling({
-    active,
-    details: true,
-    onData: listed => {
-      const defaultStatus = fallbackDefaultStatus();
-      setStatuses(Object.fromEntries([defaultStatus, ...listed].map((status) => [status.id, status])));
-    },
-    onError: error => {
-      if (!isMissingSessionFacade(error)) setFailure(errorText(error));
-      setStatuses((current) => ({ ...current, [DEFAULT_SESSION_ID]: fallbackDefaultStatus() }));
-    },
-  });
-
+  // Each poll replaces the previous snapshot, including the local placeholders
+  // set while a load or cancellation was in flight.
+  useEffect(() => {
+    if (poll.error !== undefined) {
+      if (!isMissingSessionFacade(poll.error)) setFailure(errorText(poll.error));
+      setStatuses(current => {
+        const next = { ...current };
+        delete next[DEFAULT_SESSION_ID];
+        return next;
+      });
+      return;
+    }
+    setStatuses(Object.fromEntries(poll.sessions.map((status) => [status.id, status])));
+  }, [poll]);
 
   useEffect(() => {
     if (!cfg) return;
@@ -304,12 +319,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       finishTask(taskId, "completed");
     } catch (error) {
       const message = errorText(error);
-      // Launch validation also forwards probe/dependency cancellation. Runtime
-      // diagnostics and model paths containing "cancel" remain visible failures.
-      const cancelled = [
-        'Session load cancelled.', 'server start cancelled', 'runtime probe cancelled',
-        'runtime installation cancelled', 'runtime install cancelled',
-      ].includes(message);
+      // Preparation normalizes an acknowledged native launch cancellation.
+      // The local sentinel covers cancellation before the native hand-off.
+      const cancelled = message === 'Session load cancelled.' || message === 'server start cancelled';
       if (cancelled) {
         setNotice(t("ui.taskCancelled"));
         finishTask(taskId, "cancelled");
@@ -455,87 +467,137 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       },
     });
   };
-  const visibleDefinitions = allDefinitions.filter((definition) => {
-    if (definition.id !== DEFAULT_SESSION_ID) return true;
-    const status = statuses[DEFAULT_SESSION_ID] ?? fallbackDefaultStatus();
-    return status.state !== "stopped";
-  });
+
+  // Polled state, kept as the local load or cancellation while that is in
+  // flight: preparation can precede creation of the native session, and a
+  // stopped poll must not erase it.
+  const rowFor = (definition: api.SessionDefinition) => {
+    const status = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
+    const polledState = status?.state ?? "stopped";
+    const state = loadingId === definition.id && (polledState === 'stopped' || loadCancelling && polledState === 'starting')
+      ? loadCancelling ? 'stopping' : 'starting' : polledState;
+    const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
+    const live = state === "running" || state === "starting" || state === "stopping";
+    const model = live ? loadedModelPath(status, rowDefinition.models.primary_model) : rowDefinition.models.primary_model;
+    const runtime = live ? status?.execution ?? rowDefinition.execution : rowDefinition.execution;
+    const runtimeConfig = { ...cfg, ...runtime, ...(live && status?.engine
+      ? { active_provider: status.engine.provider, active_runtime: status.engine.runtime_id } : {}) };
+    return { status, state, rowDefinition, model, runtimeConfig };
+  };
+  const controlsDisabled = busyId !== null || savingId !== null || store.busy;
+  const settingsButton = (definition: api.SessionDefinition) =>
+    // Opening settings only reads; the apply itself is what has to wait for a
+    // transition, and it says so, so a loading or stopping model stays inspectable.
+    <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings} data-icon="settings" onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>;
+  const lifecycleButton = (definition: api.SessionDefinition, state: api.SessionStatus["state"], rowDefinition: api.SessionDefinition) =>
+    (loadingId === definition.id || state === "starting") && state !== "stopping"
+      ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
+      : state === "running"
+        ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
+        : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || state === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{state === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>;
+  const rowSummary = (name: string, model: string) =>
+    <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} /><ModelName model={model} empty={t("ui.sessionNoModel")} /></span><ModelBadges mode="compact" model={model} localPath={model} /></span>;
+  const rowName = (definition: api.SessionDefinition) => normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
+
+  // A stopped default with nothing reported is not a resource; named sessions
+  // appear while loading, loaded, stopping or failed, saved or not.
+  const liveDefinitions = allDefinitions.filter(definition => rowFor(definition).state !== "stopped");
+  const savedDefinitions = allDefinitions.filter(definition => definition.id !== DEFAULT_SESSION_ID
+    && (definitionsById.has(definition.id) || editing?.id === definition.id));
 
   return (
-    <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4" data-testid="sessions-panel">
-      <header className="app-page-header">
-        <div><h2 className="app-page-title">{t("ui.sessionsTitle")}</h2><p className="app-page-description">{t("ui.sessionsIntro")}</p></div>
-        <div className="app-page-actions"><button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button></div>
-      </header>
-
+    <section className="loaded-models" aria-labelledby="loaded-models-heading" data-testid="loaded-models">
+      <div className="models-list-heading"><h2 id="loaded-models-heading">{t("ui.loadedModels")}</h2><span className="models-list-count">{liveDefinitions.length}</span></div>
       {(notice || failure) && <FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner>}
+      {liveDefinitions.length === 0
+        ? <p className="loaded-models-empty">{copy.empty}</p>
+        : <div className="app-card app-card--tight sessions-list" role="group" aria-label={t("ui.loadedModels")}>
+          {liveDefinitions.map((definition) => {
+            const { status, state, rowDefinition, model, runtimeConfig } = rowFor(definition);
+            const name = rowName(definition);
+            const failed = state === "failed" || state === "crashed";
+            return (
+              <article key={definition.id} className="app-list-row session-entry" aria-label={name}>
+                <div className="session-entry-main">
+                  <div className="session-entry-name">{rowSummary(name, model)}</div>
+                  <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
+                  <div className="session-entry-actions">
+                    {settingsButton(definition)}
+                    {lifecycleButton(definition, state, rowDefinition)}
+                  </div>
+                </div>
+                {(status?.error || failed && status?.log_tail) && <FeedbackBanner tone="error" className="session-entry-error"><RuntimeFailureDetails error={status.error} log={failed ? status.log_tail : undefined} /></FeedbackBanner>}
+                <details className="session-entry-disclosure">
+                  <summary>{copy.details}</summary>
+                  <div className="session-entry-details">
+                    <div className="session-entry-diagnostics text-xs ui-color-muted">
+                      <span><RuntimeSelectionLabel config={runtimeConfig} /></span>
+                      {status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status) || "—" })}</span>}
+                      {status?.pid && <span>{t("ui.sessionPidLabel", { pid: status.pid })}</span>}
+                      {status?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: status.active_requests })}</span>}
+                    </div>
+                    {!failed && <pre tabIndex={0} role="region" aria-label={t("ui.diagnosticsTitle")} className="session-entry-log">{normalizeDisplayText(status?.log_tail || t("ui.noDiagnostics"))}</pre>}
+                    {definition.id !== DEFAULT_SESSION_ID && state === "running" && <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>
+                    </div>}
+                  </div>
+                </details>
+              </article>
+            );
+          })}
+        </div>}
 
-      <div className="app-card app-card--tight sessions-list">
-        {visibleDefinitions.map((definition) => {
-          const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-          const polledState = rowStatus?.state ?? "stopped";
-          // Preparation can precede creation of a native session. A stopped
-          // poll must not erase the local load/cancellation already in flight.
-          const rowState = loadingId === definition.id && (polledState === 'stopped' || loadCancelling && polledState === 'starting')
-            ? loadCancelling ? 'stopping' : 'starting' : polledState;
-          const expanded = detailsOpen && selectedId === definition.id;
-          const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
-          const rowName = normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
-          const live = rowState === "running" || rowState === "starting" || rowState === "stopping";
-          const model = live ? loadedModelPath(rowStatus, rowDefinition.models.primary_model) : rowDefinition.models.primary_model;
-          const runtime = live ? rowStatus?.execution ?? rowDefinition.execution : rowDefinition.execution;
-          const runtimeConfig = { ...cfg, ...runtime, ...(live && rowStatus?.engine
-            ? { active_provider: rowStatus.engine.provider, active_runtime: rowStatus.engine.runtime_id } : {}) };
-          const controlsDisabled = busyId !== null || savingId !== null || store.busy;
-          return (
-            <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={rowName}>
-              <div className="session-entry-main">
-                <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
-                  <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
-                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{<ModelName model={model} empty={t("ui.sessionNoModel")} />}</span><ModelBadges mode="compact" model={model} localPath={model} /></span>
-                </button>
-                <StatusBadge tone={statusTone(rowState)} label={statusCopy(rowState, t)} labels={SESSION_STATES.map(state => statusCopy(state, t))} />
-                <div className="session-entry-actions">
-                  {/* Opening settings only reads; the apply itself is what has to
-                      wait for a transition, and it says so. Disabling the button
-                      here left no way to look at a session while it loaded or stopped. */}
-                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings} data-icon="settings" onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
-                  {(loadingId === definition.id || rowState === "starting") && rowState !== "stopping"
-                    ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
-                    : rowState === "running"
-                      ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
-                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
-                </div>
-              </div>
-              {rowStatus?.error && <FeedbackBanner tone="error" className="session-entry-error">{normalizeDisplayText(rowStatus.error)}</FeedbackBanner>}
-              {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
-                {definition.id !== DEFAULT_SESSION_ID && <div className="grid gap-3 app-form-grid">
-                  <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
-                </div>}
-                <div className="session-entry-diagnostics text-xs ui-color-muted">
-                  <span><RuntimeSelectionLabel config={runtimeConfig} /></span>
-                  {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus) || "—" })}</span>}
-                  {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
-                  {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}
-                </div>
-                {rowStatus?.log_tail && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs ui-color-muted">{normalizeDisplayText(rowStatus.log_tail)}</pre>}
-                <div className="flex flex-wrap items-center gap-2">
-                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>}
-                  {definition.id !== DEFAULT_SESSION_ID && rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
-                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>}
-                </div>
-              </div>}
-            </article>
-          );
-        })}
-        {visibleDefinitions.length === 0 && <EmptyState title={sessionCopy[locale].emptyTitle} description={t("ui.sessionEmpty")} />}
-      </div>
-      {/* A single switch that changes what Load does; shown by default so the current choice is visible. */}
-      <details className="sessions-load-options text-xs ui-color-muted" open>
-        <summary>{sessionCopy[locale].options}</summary>
-        <div className="mt-3 flex items-center gap-2">
-          <Switch id="sessions-stop-existing" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(next) => { setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
-          <label htmlFor="sessions-stop-existing">{t("ui.sessionStopExisting")}</label>
+      {/* Advanced: saved sessions with their own engine, profile and GPU
+          assignment. Collapsed so the loaded models above stay the main view. */}
+      <details className="loaded-models-saved">
+        <summary><span>{copy.saved}</span> <span className="models-list-count">{definitions.length}</span></summary>
+        <div className="loaded-models-saved-content">
+          <div className="loaded-models-saved-heading">
+            <p className="text-xs ui-color-muted">{t("ui.sessionsIntro")}</p>
+            <button type="button" className="app-button app-button--secondary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
+          </div>
+          {savedDefinitions.length === 0
+            ? <EmptyState title={copy.savedEmpty} description={t("ui.sessionEmpty")} />
+            : <div className="app-card app-card--tight sessions-list" role="group" aria-label={copy.saved}>
+              {savedDefinitions.map((definition) => {
+                const { state, rowDefinition, model, runtimeConfig } = rowFor(definition);
+                const expanded = detailsOpen && selectedId === definition.id;
+                const name = rowName(definition);
+                return (
+                  <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={name}>
+                    <div className="session-entry-main">
+                      <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={copy.sessionDetails}>
+                        <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
+                        {rowSummary(name, model)}
+                      </button>
+                      <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
+                      <div className="session-entry-actions">
+                        {settingsButton(definition)}
+                        {/* Lifecycle actions for a session that is loading, loaded or
+                            failed live in the loaded list above, once per session. */}
+                        {state === "stopped" && lifecycleButton(definition, state, rowDefinition)}
+                      </div>
+                    </div>
+                    {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
+                      <div className="grid gap-3 app-form-grid">
+                        <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
+                      </div>
+                      <div className="session-entry-diagnostics text-xs ui-color-muted"><span><RuntimeSelectionLabel config={runtimeConfig} /></span></div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>
+                        <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>
+                      </div>
+                    </div>}
+                  </article>
+                );
+              })}
+            </div>}
+          {/* A single switch that changes what Load does for every session. */}
+          <div className="loaded-models-option text-xs ui-color-muted">
+            <span className="loaded-models-option-title">{copy.options}</span>
+            <Switch id="sessions-stop-existing" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(next) => { setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
+            <label htmlFor="sessions-stop-existing">{t("ui.sessionStopExisting")}</label>
+          </div>
         </div>
       </details>
       <ConfirmDialog open={pendingNavigation !== null} title={t("ui.gpuUnsaved")} description={t("ui.sessionUnsavedSwitchHint")} confirmLabel={t("ui.undoProfileChanges")} tone="danger" onConfirm={() => {
@@ -549,6 +611,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           setDetailsOpen(false);
         }
       }} onCancel={() => setPendingNavigation(null)} />
-    </div>
+    </section>
   );
 }

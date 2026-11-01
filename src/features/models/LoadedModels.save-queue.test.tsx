@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { createConfigSaveQueue, type ConfigPatch } from '../../shared/state/configSaveQueue';
 import type { AppStore } from '../../shared/state/store';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
-import SessionsPanel from './Sessions';
+import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
+import LoadedModels, { type SessionPoll } from './LoadedModels';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/index', () => ({
@@ -52,7 +53,10 @@ function queuedStore(transform: (saved: api.AppConfig) => api.AppConfig = saved 
   } as unknown as AppStore;
   function Harness() {
     useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => current);
-    return <I18nProvider initialLocale="en"><SessionsPanel store={store} /></I18nProvider>;
+    // The library's single detailed subscription, as the model workspace provides it.
+    const [poll, setPoll] = useState<SessionPoll>({ sessions: [] });
+    const refresh = useSessionPolling({ active: true, details: true, onData: sessions => setPoll({ sessions }), onError: error => setPoll(previous => ({ sessions: previous.sessions, error })) });
+    return <I18nProvider initialLocale="en"><LoadedModels store={store} poll={poll} refresh={refresh} /></I18nProvider>;
   }
   return { store, Harness, persist, persisted,
     release: () => { if (!finishHead) throw new Error('Head persistence not started'); finishHead(); },
@@ -60,12 +64,18 @@ function queuedStore(transform: (saved: api.AppConfig) => api.AppConfig = saved 
   };
 }
 
-describe('session name saves in the configuration queue', () => {
+/** Saved-session editing is a secondary area that starts collapsed. */
+function openSaved() {
+  fireEvent.click(screen.getByText('Saved sessions', { selector: 'summary > span' }).closest('summary')!);
+}
+
+describe('saved session name saves in the configuration queue', () => {
   beforeEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); vi.clearAllMocks(); });
 
   it.each(['sessions', 'execution'] as const)('preserves earlier queued %s updates when saving a session name', async target => {
     const harness = queuedStore();
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(within(screen.getByRole('article', { name: 'Work session' })).getByRole('button', { name: /Work session/ }));
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Renamed' } });
 
@@ -107,6 +117,7 @@ describe('session name saves in the configuration queue', () => {
   it('retains already-published newer execution settings and other sessions on a name save', async () => {
     const harness = queuedStore();
     render(<harness.Harness />);
+    openSaved();
     let head!: Promise<api.AppConfig>;
     await act(async () => { head = harness.store.updateConfig({ sessions: [
       { ...work, enabled: false, execution: { ...work.execution, ctx_size: 32768 } }, other, later,
@@ -126,6 +137,7 @@ describe('session name saves in the configuration queue', () => {
   ])('saves a new session with entered name %j only after explicit Save', async (name, savedName) => {
     const harness = queuedStore();
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(screen.getByRole('button', { name: 'New session' }));
     expect(harness.store.updateConfig).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: name } });
@@ -145,6 +157,7 @@ describe('session name saves in the configuration queue', () => {
   it('preserves the unsaved name and original definitions after failure, then saves on retry', async () => {
     const harness = queuedStore();
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(within(screen.getByRole('article', { name: 'Work session' })).getByRole('button', { name: /Work session/ }));
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Keep my draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
@@ -163,6 +176,7 @@ describe('session name saves in the configuration queue', () => {
     const harness = queuedStore(saved => ({ ...saved, sessions: saved.sessions?.map(item => item.id === 'work'
       ? { ...item, name: 'Saved canonical name', execution: { ...item.execution, ctx_size: 24576 } } : item) }));
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(within(screen.getByRole('article', { name: 'Work session' })).getByRole('button', { name: /Work session/ }));
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Requested name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
@@ -178,6 +192,7 @@ describe('session name saves in the configuration queue', () => {
   it('preserves another selected session and its later unsaved name when an older save completes', async () => {
     const harness = queuedStore();
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(within(screen.getByRole('article', { name: 'Work session' })).getByRole('button', { name: /Work session/ }));
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Saved work name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
@@ -198,6 +213,7 @@ describe('session name saves in the configuration queue', () => {
   it('does not recreate a session omitted from the authoritative saved configuration', async () => {
     const harness = queuedStore(saved => ({ ...saved, sessions: saved.sessions?.filter(item => item.id !== 'work') }));
     render(<harness.Harness />);
+    openSaved();
     fireEvent.click(within(screen.getByRole('article', { name: 'Work session' })).getByRole('button', { name: /Work session/ }));
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Requested name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));

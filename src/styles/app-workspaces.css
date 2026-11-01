@@ -181,6 +181,8 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-conversation { display: flex; position: relative; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .chat-message-log { min-height: 100px; flex: 1; overflow: auto; padding: 8px; }
 .chat-message-log > * + * { margin-top: 12px; }
+/* A failed launch's error and log, left-aligned for reading inside the centered empty state. */
+.chat-failure-details { margin-top: 12px; text-align: start; color: var(--ui-ink); }
 .chat-composer-actions { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; margin-top: 8px; flex-shrink: 0; }
 .chat-composer-actions textarea { grid-column: 1 / -1; min-height: 64px; max-height: 160px; }
 .chat-composer-actions > button:last-child { justify-self: end; }

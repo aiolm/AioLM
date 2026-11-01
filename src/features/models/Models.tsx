@@ -5,7 +5,7 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
@@ -34,7 +34,10 @@ import { providerCopy } from '../../shared/i18n/providerCopy';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 
-export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
+/** `sessions` comes from a parent that already holds the detailed session
+ * subscription; without it the panel subscribes itself. `children` render the
+ * parent's loaded-model controls between the page heading and the library. */
+export default function ModelsPanel({ store, onSelectModel, onModels, compact = false, active = true, sessions: providedSessions, children }: { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; children?: ReactNode }) {
   const { t, locale } = useI18n();
   useSyncExternalStore(subscribeRuntimeCatalog, runtimeCatalogSnapshot, runtimeCatalogSnapshot);
   const copy = executionText[locale];
@@ -54,21 +57,18 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [scanRequest, setScanRequest] = useState(0);
   const [showVision, setShowVision] = useState(false);
   const [flash, notify, dismissFlash] = useFlashMessage();
-  const [adapterScale, setAdapterScale] = useState("1");
-  const [serverAdapters, setServerAdapters] = useState<api.ServerLoraAdapter[]>([]);
-  const [serverAdapterScales, setServerAdapterScales] = useState<Record<number, string>>({});
-  const [adapterBusy, setAdapterBusy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; confirmIcon?: string; onConfirm: () => void } | null>(null);
   const pendingDeletions = useRef(new Set<string>());
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
   const requestedScanDirRef = useRef("");
-  const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const [ownSessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const sessions = providedSessions ?? ownSessions;
   const modelSettings = useModelSettings();
 
   useSessionPolling({
-    active: active && focus === 'library' && api.isNativeRuntimeAvailable(),
+    active: active && !providedSessions && api.isNativeRuntimeAvailable(),
     details: true,
     onData: setSessions,
   });
@@ -182,65 +182,6 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   if (isServerRunning(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
   const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
 
-  const refreshServerAdapters = useCallback(async () => {
-    if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {
-      setServerAdapters([]);
-      return;
-    }
-    setAdapterBusy(true);
-    try {
-      const loaded = await api.listServerLoraAdapters(store.status.url, store.status.api_key);
-      setServerAdapters(loaded);
-      setServerAdapterScales(Object.fromEntries(loaded.map((adapter) => [adapter.id, String(adapter.scale)])));
-    } catch (error) {
-      setServerAdapters([]);
-      notify(`${t("ui.loraHotSwapUnavailable")}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setAdapterBusy(false);
-    }
-  }, [t, notify, store.status.api_key, store.status.state, store.status.url]);
-
-  useEffect(() => {
-    if (focus === 'lora') void refreshServerAdapters();
-  }, [focus, refreshServerAdapters]);
-
-  const addAdapter = async () => {
-    try {
-      const path = await api.pickLoraAdapter();
-      if (!path) return;
-      const scale = Number.parseFloat(adapterScale);
-      if (!Number.isFinite(scale) || scale < 0 || scale > 4) {
-        notify(t("ui.loraScaleRange"));
-        return;
-      }
-      const next = [...(cfg?.lora_adapters ?? []).filter((adapter) => adapter.path !== path), { path, scale, enabled: scale > 0 }];
-      await store.updateConfig({ lora_adapters: next });
-      notify(isServerRunning(store.status.state) ? t("ui.loraSavedRestart") : t("ui.loraSaved"));
-    } catch (error) {
-      notify(`${t("ui.loraSelectionFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const removeAdapter = async (path: string) => {
-    try {
-      await store.updateConfig({ lora_adapters: (cfg?.lora_adapters ?? []).filter((adapter) => adapter.path !== path) });
-      notify(t("ui.loraRemoved"));
-    } catch (error) {
-      notify(`${t("ui.loraUpdateFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const applyServerAdapters = async () => {
-    if (!store.status.url || !store.status.api_key) return;
-    try {
-      await api.setServerLoraAdapters(store.status.url, store.status.api_key, serverAdapters.map((adapter) => ({ id: adapter.id, scale: Math.max(0, Math.min(4, Number.parseFloat(serverAdapterScales[adapter.id] ?? String(adapter.scale)) || 0)) })));
-      await refreshServerAdapters();
-      notify(t("ui.loraScalesApplied"));
-    } catch (error) {
-      notify(`${t("ui.loraHotSwapFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
   const selectModel = async (model: api.GgufModel) => {
     if (model.shards?.missing.length) return;
     try {
@@ -352,14 +293,12 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   return (
     <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
-      {compact && focus !== "lora" && <header className="app-page-header"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.hint}</p></div></header>}
-      {focus === "lora" && <div className="mb-4"><div className="app-eyebrow">{t("panel.models")}</div><h2 className="mt-1 text-xl font-semibold tracking-tight text-ink">{t("panel.loraAdapters")}</h2><p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">{t("ui.loraDescription")}</p></div>}
+      {compact && <header className="app-page-header"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.hint}</p></div></header>}
 
-      {/* Rendered outside the library-only fragment so LoRA actions report too. */}
       <PanelFeedback>
-        {focus !== "lora" && !scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
+        {!scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
-        {focus !== "lora" && folderSaved && (
+        {folderSaved && (
           <FeedbackBanner tone="info" onDismiss={() => setFolderSaved(false)}>
             <div className="flex items-center justify-between gap-2">
               <span>{t("panel.modelsSaved")}</span>
@@ -367,10 +306,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             </div>
           </FeedbackBanner>
         )}
-        {focus !== "lora" && scanTruncated && <FeedbackBanner tone="warning">{t("ui.modelsScanTruncated")}</FeedbackBanner>}
+        {scanTruncated && <FeedbackBanner tone="warning">{t("ui.modelsScanTruncated")}</FeedbackBanner>}
       </PanelFeedback>
 
-      {focus !== "lora" && <>
+      {children}
+
       <div className="models-folder">
       <div className="models-folder-actions min-w-0 items-center gap-2.5">
         <label htmlFor="models-dir" className="text-sm text-muted">{t("panel.modelsDirectory")}</label>
@@ -418,35 +358,15 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           </FeedbackBanner>
         )}
 
-      </>}
-
-      {focus !== "library" && <section className="mt-4 app-card"  aria-labelledby="lora-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 id="lora-heading" className="app-section-title">{t("panel.loraAdapters")}</h2>
-            <p className="mt-1 text-xs ui-color-muted" >{t("ui.loraSectionHint")}</p>
-            <TuningOptionMetadata fieldKey="raw-server:--lora" />
-            <TuningOptionMetadata fieldKey="raw-server:--lora-scaled" />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs ui-color-muted"  htmlFor="lora-scale">{t("ui.loraScale")}</label>
-            <input id="lora-scale" value={adapterScale} onChange={(event) => setAdapterScale(event.target.value)} inputMode="decimal" className="app-input w-16" />
-            <button type="button" onClick={() => void addAdapter()} disabled={store.busy} className="app-button app-button--primary app-button--sm">{t("ui.loraAdd")}</button>
-          </div>
-        </div>
-        {(cfg?.lora_adapters ?? []).length > 0 ? <div className="mt-3 space-y-2">{(cfg?.lora_adapters ?? []).map((adapter) => { const displayPath = normalizeDisplayPath(adapter.path); return <div key={adapter.path} className="app-list-row flex min-w-0 flex-wrap items-center justify-between gap-2 px-3 py-2"><div className="min-w-0 flex-1"><div className="app-text-wrap text-xs font-medium ui-color-ink"  title={displayPath}>{displayPath.split(/[\\/]/).pop()}</div><div className="app-text-wrap text-xs ui-color-faint"  title={displayPath}>{displayPath}</div></div><span className="text-xs tabular-nums ui-color-muted" >{t("ui.loraStartupScale", { scale: adapter.scale })}</span><button type="button" onClick={() => void removeAdapter(adapter.path)} disabled={store.busy} className="app-button app-button--ghost app-button--sm">{t("panel.remove")}</button></div>; })}</div> : <div className="mt-3 text-xs ui-color-faint" >{t("ui.loraNoStartup")}</div>}
-        {serverRunning && <div className="mt-3 border-t pt-3 ui-border-color-border" ><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-medium ui-color-ink" >{t("ui.loraServerAdapters")}</span><div className="flex gap-2"><button type="button" onClick={() => void refreshServerAdapters()} disabled={adapterBusy} className="app-button app-button--secondary app-button--sm"><StableLabel value={adapterBusy ? t("ui.reading") : t("ui.refresh")} labels={[t("ui.reading"), t("ui.refresh")]} /></button><button type="button" onClick={() => void applyServerAdapters()} disabled={adapterBusy || serverAdapters.length === 0} className="app-button app-button--primary app-button--sm">{t("ui.loraApplyScales")}</button></div></div>{serverAdapters.length > 0 ? <div className="mt-2 space-y-2">{serverAdapters.map((adapter) => { const displayPath = normalizeDisplayPath(adapter.path); return <label key={adapter.id} className="flex items-center gap-2 text-xs ui-color-muted" ><span className="min-w-0 flex-1 app-text-wrap" title={displayPath}>{displayPath.split(/[\\/]/).pop()}</span><input value={serverAdapterScales[adapter.id] ?? String(adapter.scale)} onChange={(event) => setServerAdapterScales((current) => ({ ...current, [adapter.id]: event.target.value }))} inputMode="decimal" className="app-input w-16" aria-label={t("ui.loraScaleFor", { name: displayPath.split(/[\\/]/).pop() ?? displayPath })} /></label>; })}</div> : <div className="mt-2 text-xs ui-color-faint" >{t("ui.loraNoServerAdapters")}</div>}</div>}
-      </section>}
-
-      {focus !== "lora" && <div className="models-list-toolbar">
+      <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
         <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
         <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
-      </div>}
+      </div>
 
-      {focus !== "lora" && runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
+      {runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
         if (modelSettings && cfg) modelSettings.open({ target: { kind: 'default' }, config: cfg, section: 'runtime' });
         else window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES));
       } }}>{runSetupGapMessage('runtime', locale)}</FeedbackBanner>}
@@ -461,7 +381,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         onCancel={() => setPendingConfirm(null)}
       />
 
-      {focus !== "lora" && <div className="models-model-list min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
+      <div className="models-model-list min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
         {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
@@ -515,7 +435,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             </div>
           );
         })}
-      </div>}
+      </div>
     </div>
   );
 }

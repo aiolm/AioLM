@@ -42,8 +42,8 @@ function storeWith(status: ServerStatus = { state: "stopped" }, overrides: Parti
   return { ...createTestStore(), status, ...overrides };
 }
 
-function page(store: AppStore, section: "api" | "diagnostics" = "api", onNavigate?: (view: ViewId) => void): ReactElement {
-  return <I18nProvider initialLocale="en"><DeveloperPanel store={store} section={section} onNavigate={onNavigate} /></I18nProvider>;
+function page(store: AppStore, onNavigate?: (view: ViewId) => void): ReactElement {
+  return <I18nProvider initialLocale="en"><DeveloperPanel store={store} onNavigate={onNavigate} /></I18nProvider>;
 }
 
 /** Port settings and the API reference are native details, closed until the user opens them. */
@@ -212,7 +212,7 @@ describe("model IDs and navigation", () => {
     vi.mocked(api.apiServerStatus).mockResolvedValue(status);
     const onNavigate = vi.fn();
     const store = storeWith();
-    render(page(store, "api", onNavigate));
+    render(page(store, onNavigate));
     await waitFor(() => expect(screen.getByRole("button", { name: status.running ? "Stop API" : "Start API" })).toBeEnabled());
     await waitFor(() => expect(api.localModels).toHaveBeenCalledTimes(status.running ? 1 : 0));
     const modelReads = vi.mocked(api.localModels).mock.calls.length;
@@ -227,30 +227,18 @@ describe("model IDs and navigation", () => {
     expect(store.start).not.toHaveBeenCalled();
     modelLifecycleCommands().forEach(command => expect(command).not.toHaveBeenCalled());
   });
-
-  it("opens model diagnostics from the server settings once they are expanded", async () => {
-    const onNavigate = vi.fn();
-    render(page(storeWith(), "api", onNavigate));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
-    openDisclosure("Server settings");
-
-    fireEvent.click(screen.getByRole("button", { name: "Open model diagnostics" }));
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("diagnostics");
-    expect(api.stopApiServer).not.toHaveBeenCalled();
-  });
 });
 
 describe("closed details", () => {
   it("keeps port settings and the API reference hidden until they are expanded", async () => {
-    render(page(storeWith(), "api", vi.fn()));
+    render(page(storeWith(), vi.fn()));
     const start = await screen.findByRole("button", { name: "Start API" });
     await waitFor(() => expect(start).toBeEnabled());
     const port = screen.getByLabelText("API port");
-    const diagnosticsLink = screen.getByRole("button", { name: "Open model diagnostics" });
     const reference = snippet()!;
     const table = screen.getByRole("table");
 
-    for (const hidden of [port, diagnosticsLink, reference, table]) expect(hidden).not.toBeVisible();
+    for (const hidden of [port, reference, table]) expect(hidden).not.toBeVisible();
     // The everyday controls never sit behind a disclosure.
     for (const shown of [start, screen.getByRole("button", { name: "Copy URL" }), screen.getByLabelText("Connection format"), screen.getByRole("button", { name: "Open model library" })]) {
       expect(shown).toBeVisible();
@@ -258,7 +246,6 @@ describe("closed details", () => {
 
     openDisclosure("Server settings");
     expect(port).toBeVisible();
-    expect(diagnosticsLink).toBeVisible();
     expect(reference).not.toBeVisible();
 
     openDisclosure("API reference & examples");
@@ -267,64 +254,27 @@ describe("closed details", () => {
   });
 });
 
-describe("diagnostics screen", () => {
-  it("shows model diagnostics only, with no API status request, control or polling", async () => {
-    vi.useFakeTimers();
-    const store = storeWith({ ...privateModel, log_tail: "llama-server: model loaded in 4.2s" });
-    const { container } = render(page(store, "diagnostics"));
-    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-
-    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Diagnostics");
-    expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("Runtime diagnostics");
-    expect(container.querySelector(".api-hint")).toHaveTextContent("Default model: model loaded · loaded.gguf");
-    const diagnostics = screen.getByRole('region', { name: 'Runtime diagnostics' });
-    expect(diagnostics).toHaveTextContent("llama-server: model loaded in 4.2s");
-    diagnostics.focus();
-    expect(diagnostics).toHaveFocus();
-    expect(diagnostics).not.toHaveAttribute('aria-live');
-    // No API state is read, shown or controlled here, and the model's private server details stay private.
-    for (const command of [api.apiServerStatus, api.startApiServer, api.stopApiServer, api.localModels, api.sessionSummaryList, ...modelLifecycleCommands()]) {
-      expect(command).not.toHaveBeenCalled();
-    }
-    expect(screen.queryByRole("button", { name: /API/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    for (const selector of [".developer-api-status", ".api-model-count", ".api-model-list", "details"]) {
-      expect(container.querySelector(selector)).not.toBeInTheDocument();
-    }
-    expect(container.textContent).not.toContain("private-internal-key");
-    expect(container.textContent).not.toContain("127.0.0.1:49152");
-  });
-
-  it.each([
-    ["the log tail over the error", { log_tail: "log line", error: "boom" }, "log line"],
-    ["the error when there is no log", { error: "boom" }, "boom"],
-    ["a note when nothing was reported", {}, "No runtime diagnostics reported."],
-  ] as const)("shows %s", (_name, fields, expected) => {
-    const { container } = render(page(storeWith({ state: "failed", ...fields }), "diagnostics"));
-    expect(container.querySelector("pre")?.textContent).toBe(expected);
-  });
-
-  it("stops every API read when the app moves from the API screen to diagnostics, without stopping the API", async () => {
+describe("hidden API page", () => {
+  it("stops every API read when the app moves to another page, without stopping the API", async () => {
     vi.useFakeTimers();
     vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
-    const view = render(page(storeWith(), "api"));
+    const panel = (active: boolean) => <ActivePanelContext.Provider value={active}>{page(storeWith())}</ActivePanelContext.Provider>;
+    const view = render(panel(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     expect(api.localModels).toHaveBeenCalledWith(API_URL, SECRET);
     await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
     // While the API screen is shown its status is re-read periodically.
     expect(vi.mocked(api.apiServerStatus).mock.calls.length).toBeGreaterThan(1);
 
-    view.rerender(page(storeWith(), "diagnostics"));
+    view.rerender(panel(false));
     const reads = () => [api.apiServerStatus, api.localModels, api.sessionSummaryList].map(command => vi.mocked(command).mock.calls.length);
     const before = reads();
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     expect(reads()).toEqual(before);
-    expect(screen.queryByRole("button", { name: "Stop API" })).not.toBeInTheDocument();
     expect(api.stopApiServer).not.toHaveBeenCalled();
 
     // Coming back reads the real state again instead of trusting a stale one.
-    view.rerender(page(storeWith(), "api"));
+    view.rerender(panel(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     expect(vi.mocked(api.apiServerStatus).mock.calls.length).toBe(before[0] + 1);
     expect(screen.getByRole("button", { name: "Stop API" })).toBeEnabled();

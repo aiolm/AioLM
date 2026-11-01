@@ -45,7 +45,7 @@ import PanelFeedback from '../../shared/ui/PanelFeedback';
 import { displayChatTitle } from './chatThreadTitle';
 import { executionText } from '../../shared/i18n/executionI18n';
 
-export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
+export default function ChatPanel({ store, preferences, onOpenModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
@@ -418,7 +418,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             ct={ct}
             onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}
             modelSettingsLabel={modelSettings ? modelSettingsCopy[locale].title : undefined}
-            onOpenDiagnostics={onOpenDiagnostics}
             onStart={() => void startSelectedSession()}
             starting={store.busy || startingSession}
           />

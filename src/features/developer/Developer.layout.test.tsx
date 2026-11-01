@@ -20,10 +20,10 @@ const store = {
   start: async () => "",
 } as unknown as AppStore;
 
-function renderPanel(section: "api" | "diagnostics") {
+function renderPanel() {
   return render(createElement(I18nProvider, {
     initialLocale: "en",
-    children: createElement(DeveloperPanel, { store, section }),
+    children: createElement(DeveloperPanel, { store }),
   }));
 }
 
@@ -35,10 +35,9 @@ const legacySections = [
 
 describe("DeveloperPanel layout", () => {
   it("renders the API server as one screen: control, models, connection, then closed details", async () => {
-    const { container } = renderPanel("api");
+    const { container } = renderPanel();
     await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
 
-    expect(container.querySelector(".api-server-page")).toHaveAttribute("data-developer-section", "api");
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("API server");
     const control = container.querySelector(".api-server-control")!;
     const models = container.querySelector(".api-models")!;
@@ -53,23 +52,12 @@ describe("DeveloperPanel layout", () => {
   });
 
   it("has no summary cards and none of the old API / Gateways sections", async () => {
-    const { container } = renderPanel("api");
+    const { container } = renderPanel();
     await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
 
     for (const selector of legacySections) expect(container.querySelector(selector)).not.toBeInTheDocument();
-    expect(container.querySelector(".developer-section--diagnostics")).not.toBeInTheDocument();
     // The model count appears beside the model list heading only once the API has answered.
     expect(container.querySelector(".api-model-count")).not.toBeInTheDocument();
     expect(container.textContent).not.toMatch(/gateway/i);
-  });
-
-  it("keeps model diagnostics on the diagnostics screen only", () => {
-    const { container } = renderPanel("diagnostics");
-
-    expect(container.querySelector(".api-server-page")).toHaveAttribute("data-developer-section", "diagnostics");
-    expect(container.querySelector(".developer-section--diagnostics")).toBeInTheDocument();
-    for (const selector of [...legacySections, ".api-server-control", ".api-models", ".api-connection", ".developer-api-status", "details"]) {
-      expect(container.querySelector(selector)).not.toBeInTheDocument();
-    }
   });
 });

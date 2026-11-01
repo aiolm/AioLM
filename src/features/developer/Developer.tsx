@@ -1,12 +1,10 @@
-import ModelName from '../../shared/ui/ModelName';
 import { useContext, useEffect, useRef, useState } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import type { ViewId } from '../../shared/types/navigation';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { useI18n } from '../../shared/i18n/i18n';
-import { modelStatusKey } from '../../shared/lib/serverLifecycle';
-import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -19,40 +17,14 @@ import ApiExamples, { type ApiFormat } from './ApiExamples';
 import { apiServerCopy } from './apiServerCopy';
 import { useApiServer } from './useApiServer';
 import './api-server.css';
-import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
-import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
-type Props = { store: AppStore; section?: 'api' | 'diagnostics'; onNavigate?: (view: ViewId) => void };
+type Props = { store: AppStore; onNavigate?: (view: ViewId) => void };
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-export default function DeveloperPanel({ store, section = 'api', onNavigate }: Props) {
-  return section === 'diagnostics' ? <ModelDiagnostics store={store} /> : <ApiServerPanel store={store} onNavigate={onNavigate} />;
-}
-
-function ModelDiagnostics({ store }: { store: AppStore }) {
-  const { t } = useI18n();
-  const model = loadedModelPath(store.status);
-  const execution = store.status.execution ? { ...store.cfg, ...store.status.execution } : store.cfg;
-  const runtime = store.status.engine ? { ...execution, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : execution;
-  return <div className="app-page-scroll developer-panel api-server-page" data-developer-section="diagnostics">
-    <div className="api-server-content">
-      <header className="api-page-heading"><h2>{t('section.diagnostics')}</h2><p>{t('ui.diagnosticsDescription')}</p></header>
-      <section className="developer-section--diagnostics api-section">
-        <h3>{t('ui.diagnosticsTitle')}</h3>
-        <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
-          {model && <> · <span title={normalizeDisplayPath(model)}>{<ModelName model={model} />}</span></>}
-        </p>
-        <p className="api-hint"><RuntimeSelectionLabel config={runtime} /></p>
-        <pre tabIndex={0} role="region" aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
-      </section>
-    </div>
-  </div>;
-}
-
-function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
+export default function DeveloperPanel({ store, onNavigate }: Props) {
   const { t, locale } = useI18n();
   const copy = apiServerCopy[locale];
   const [models, setModels] = useState<api.LocalModelInfo[]>([]);
@@ -138,7 +110,7 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
     : !modelsFetched ? copy.modelsUnavailable : models.length ? ''
       : store.status.state === 'starting' ? copy.modelsLoading : copy.modelsEmpty;
 
-  return <div className="app-page-scroll developer-panel api-server-page" data-developer-section="api">
+  return <div className="app-page-scroll developer-panel api-server-page">
     <div className="api-server-content">
       <header className="api-page-heading"><h2>{t('section.api')}</h2><p>{copy.intro}</p></header>
       <ol className="api-steps">{copy.steps.map((step, index) => <li key={step}><span aria-hidden="true">{index + 1}</span>{step}</li>)}</ol>
@@ -196,7 +168,6 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
         <div className="api-disclosure-content">
           {store.cfg && <ApiPortControl savedPort={configuredPort} running={apiRunning} runningPort={apiServer.status.port}
             disabled={!apiServer.checked || apiPending !== null} onApply={applyPort} onRestart={() => void apiServer.restart()} />}
-          {onNavigate && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="open" onClick={() => onNavigate('diagnostics')}>{copy.diagnostics}</button>}
         </div>
       </details>
       <ApiExamples baseUrl={displayUrl} format={format} onCopy={text => void copyText('example', text)} copied={copied === 'example'} />

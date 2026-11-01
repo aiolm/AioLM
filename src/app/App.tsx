@@ -38,13 +38,13 @@ import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '
 import { modelActions } from '../shared/i18n/modelActions';
 import AppUpdateNotice from '../features/updates/AppUpdateNotice';
 import { loadedModelPath } from '../shared/runtime/loadedModel';
+import RuntimeFailureDetails from '../features/models/RuntimeFailureDetails';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
 const DeveloperPanel = lazy(() => import("../features/developer/Developer"));
 const McpPanel = lazy(() => import("../features/mcp/Mcp"));
 const ModelWorkspace = lazy(() => import("../features/models/ModelWorkspace"));
-const SessionsPanel = lazy(() => import("../features/sessions/Sessions"));
 
 const BenchPanel = lazy(() => import("../features/bench/Bench"));
 const RuntimesPanel = lazy(() => import("../features/runtimes/Runtimes"));
@@ -156,7 +156,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [view, setView] = useState<ViewId>("chat");
   const [runtimeEngineRequest, setRuntimeEngineRequest] = useState<{ provider: ProviderId; revision: number }>();
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
-  const [developerSection, setDeveloperSection] = useState<"api" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
   // Desktop-only rail state; the mobile drawer always shows full labels.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -187,10 +186,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [dismissedRuntimeError, setDismissedRuntimeError] = useState<string | null>(null);
   useEffect(() => { setDismissedRuntimeError(null); }, [store.status.error]);
   const serverState = store.status.state;
-  const stopServer = store.stop;
   const runtimeError = store.status.error === dismissedRuntimeError ? undefined : store.status.error;
   const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError;
   const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? "";
+  // A failed launch keeps its runtime log with the error it explains; boot and
+  // status-read failures are not about the model process and carry no log.
+  const failureLog = (serverState === "failed" || serverState === "crashed") && !store.bootError && !store.statusPollError ? store.status.log_tail : undefined;
   const dismissErrors = () => {
     setDismissedRuntimeError(store.status.error ?? null);
     store.clearErrors();
@@ -208,10 +209,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     document.documentElement.lang = locale;
     document.documentElement.dataset.density = preferences.appearance.density;
     document.documentElement.classList.toggle("app-reduce-motion", preferences.appearance.reduceMotion);
-    document.documentElement.classList.toggle("app-developer-mode", preferences.advanced.developerMode);
     if (preferences.theme !== "system") return undefined;
     return subscribeToSystemTheme(() => applyTheme("system"));
-  }, [locale, preferences.theme, preferences.appearance.density, preferences.appearance.reduceMotion, preferences.advanced.developerMode]);
+  }, [locale, preferences.theme, preferences.appearance.density, preferences.appearance.reduceMotion]);
 
   // Applied as root custom properties so open panels restyle in place; nothing
   // remounts, so chat drafts and scroll positions survive a font change.
@@ -220,15 +220,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   useEffect(() => {
     applyTypography(document.documentElement, { appearance: { fontFamily, codeFontFamily }, chat: { lineSpacing } });
   }, [fontFamily, codeFontFamily, lineSpacing]);
-
-  useEffect(() => {
-    if (!preferences.server.autoStopOnExit) return undefined;
-    const stopOnExit = () => {
-      if (serverState === "running") void stopServer().catch(() => undefined);
-    };
-    window.addEventListener("beforeunload", stopOnExit);
-    return () => window.removeEventListener("beforeunload", stopOnExit);
-  }, [preferences.server.autoStopOnExit, serverState, stopServer]);
 
   useEffect(() => {
     if (preferences.locale !== locale) {
@@ -265,7 +256,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
     setVisited(current => current.has(next) ? current : new Set([...current, next]));
-    if (next === "api" || next === "diagnostics") setDeveloperSection(next);
     setView(next);
     setMenuOpen(false);
     return true;
@@ -281,7 +271,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);
   }, []);
   const openModels = () => { modelSettings.open({ target: { kind: 'default' }, section: 'model' }); };
-  const openDiagnostics = () => { navigate("diagnostics"); };
   const openTuning = () => { navigate("tuning"); };
   const openProfiles = () => { navigate("profiles"); };
   const stopDefaultSession = async () => {
@@ -294,7 +283,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
 
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
   const title = labelFor(view);
-  const showDeveloper = view === "api" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
   const liveModelName = useModelName(liveModel);
   const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
@@ -336,25 +324,22 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
         <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} indicator={<PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} />}>
         <PanelFeedback>
-          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
+          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
-            action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(errorText)}</FeedbackBanner>}
+            action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : undefined}><RuntimeFailureDetails error={errorText} log={failureLog} /></FeedbackBanner>}
           {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
         </PanelFeedback>
         <TaskStrip />
         <PanelFeedbackOutlet />
         </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
-          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} />)}
+          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
-          {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
           {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} />)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
-          <section hidden={!showDeveloper} aria-label={t(navigationEntries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
-            <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} onNavigate={navigate} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
-          </section>
+          {panel("api", <DeveloperPanel store={store} onNavigate={navigate} />)}
           {panel("mcp", <McpPanel store={store} />)}
           {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} store={store} updateRequest={settingsUpdateRequest} />)}
         </main>

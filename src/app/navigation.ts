@@ -14,7 +14,6 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
   { id: 'discover', label: 'section.discover', icon: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z' },
  ] },
  { id: 'execution', items: [
-  { id: 'sessions', label: 'ui.sessionsTitle', icon: 'M4 5h16v14H4V5Z m6 4 5 3-5 3V9Z' },
   { id: 'runtimes', label: 'section.runtimes', icon: 'M6 6h12v12H6V6Z M9 1v5M15 1v5M9 18v5M15 18v5M1 9h5M1 15h5M18 9h5M18 15h5' },
   { id: 'benchmark', label: 'section.benchmark', icon: 'M4 3v17h17M8 16v-5M13 16V7M18 16V4' },
  ] },
@@ -23,7 +22,6 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
   { id: 'mcp', label: 'section.mcp', icon: 'M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-12 0V8Zm6 10v4' },
  ] },
  { id: 'tools', items: [
-  { id: 'diagnostics', label: 'section.diagnostics', icon: 'M3 12h4l3-8 4 16 3-8h4' },
   { id: 'settings', label: 'tab.settings', icon: 'M4 5h16M4 12h16M4 19h16M8 2v6M16 9v6M10 16v6' },
  ] },
 ];
