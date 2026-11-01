@@ -37,6 +37,18 @@ describe('model library replacement launches', () => {
     expect(store.status).toMatchObject({ state: 'running', model: 'models/current.gguf' });
   });
 
+  it.each([
+    ['a failure naming cancellation in its path', 'model file does not exist or is unreadable: /synthetic/cancelled-runs/next.gguf (No such file or directory (os error 2))', /^Start failed: model file does not exist/],
+    ['a requested stop', 'server start cancelled', /^Cancelled$/],
+  ])('reports %s from a model library load accordingly', async (_case, rejection, notice) => {
+    const store = createTestStore({ active_model: 'models/current.gguf', models_dir: 'models' });
+    vi.mocked(store.start).mockRejectedValueOnce(rejection);
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start: next.gguf' }));
+    await waitFor(() => expect(screen.getByText(notice)).toBeVisible());
+    expect(screen.queryByText(rejection === 'server start cancelled' ? /^Start failed/ : /^Cancelled$/)).not.toBeInTheDocument();
+  });
+
   it('explains why Delete is disabled when a model is running in a named session while the default server is stopped', async () => {
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
     vi.mocked(api.sessionList).mockResolvedValueOnce([

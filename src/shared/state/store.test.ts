@@ -389,6 +389,20 @@ it("lets a slow model start run past 120 seconds and succeed", async () => {
   expect(result.current.actionError).toBeNull();
 });
 
+it("reports a start failure that merely mentions cancellation and stays quiet for a requested stop", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  // Native commands reject with plain strings.
+  const failure = "model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))";
+  vi.mocked(api.startServer).mockRejectedValueOnce(failure);
+  await act(async () => { await expect(result.current.start()).rejects.toBe(failure); });
+  expect(result.current.actionError).toContain(failure);
+  vi.mocked(api.startServer).mockRejectedValueOnce("server start cancelled");
+  await act(async () => { await expect(result.current.start()).rejects.toBe("server start cancelled"); });
+  expect(result.current.actionError).toBeNull();
+  expect(result.current.status.state).toBe("stopped");
+});
+
 it("keeps a late failure from a stopped slow start from reporting an error", async () => {
   const first = deferred<string>();
   vi.mocked(api.startServer).mockReturnValueOnce(first.promise);

@@ -19,8 +19,8 @@ assert.equal(classifyLifecycleError(new Error("startup timeout")), "timeout");
 assert.match(lifecycleErrorMessage("start", new Error("port bind failed")), /port/i);
 const parserFailure = "server exited before ready (1). importing.py: Triton not installed. model /synthetic/model. setup_server(args, reuse_port=False)\nKeyError: invalid tool call parser: Hermes (chose from { hermes })";
 assert.equal(classifyLifecycleError(parserFailure), "unknown", "parser rejection must not be mistaken for a conflicting port or invalid model");
-assert.match(lifecycleErrorMessage("start", parserFailure), /Open diagnostics/);
 assert.equal(classifyLifecycleError("server exited before ready. importing.py: use_fast deprecated"), "unknown");
+assert.equal(classifyLifecycleError("server exited before ready (1)"), "unknown");
 for (const detail of ["listen EADDRINUSE", "port 8080 is already in use", "unable to bind to 127.0.0.1:8080"]) {
   assert.equal(classifyLifecycleError(detail), "port", detail);
 }
@@ -45,7 +45,6 @@ for (const [detail, kind, hint] of [
   ["runtime executable not found", "executable", "The runtime executable could not be found."],
   ["invalid model file", "model", "Check the model path and file integrity."],
   ["out of memory", "memory", "There is not enough available memory or VRAM"],
-  ["server exited before ready (1)", "unknown", "Open diagnostics for the runtime log"],
 ] as const) {
   assert.equal(classifyLifecycleError(detail), kind);
   assert.ok(lifecycleErrorMessage("start", detail).includes(hint));
@@ -59,11 +58,14 @@ for (const detail of [
   const message = lifecycleErrorMessage("start", detail);
   assert.match(message, /There is not enough available memory or VRAM/);
   assert.doesNotMatch(message, /model path|file integrity/);
-  assert.ok(message.endsWith(` (${detail})`), "the runtime allocation failure remains available in diagnostics");
+  assert.ok(message.endsWith(` (${detail})`), "the runtime allocation failure remains in the reported error");
 }
 assert.equal(classifyLifecycleError('invalid model file; inspect /synthetic/memory/loader.py'), "model");
 assert.equal(isLifecycleCancellation(new Error("server start cancelled")), true);
+assert.equal(isLifecycleCancellation("server start cancelled"), true, "native commands reject with the plain message");
 assert.equal(isLifecycleCancellation(new Error("server failed to load")), false);
+assert.equal(isLifecycleCancellation("model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))"), false, "a path naming cancellation is still a failure");
+assert.equal(isLifecycleCancellation(new Error("Selected runtime rejected this model: request canceled by upstream proxy")), false);
 assert.equal(nextPollDelay(1000, 0), 1000);
 assert.equal(nextPollDelay(1000, 5), 10000);
 assert.equal(shouldPoll("hidden"), false);

@@ -47,7 +47,18 @@ pub(super) async fn prepare_launch(
     launch_cancel: &Arc<AtomicBool>,
 ) -> Result<PreparedLaunch, String> {
     ensure_launch_allowed(state, launch_cancel)?;
-    let gpu = validate_launch_config_with_cancel(&mut cfg, Some(launch_cancel)).await?;
+    // Probes and dependency repair stop with their own cancellation messages.
+    // Normalize a failed owned launch before post-success admission checks;
+    // unrelated busy/exit state must not turn its cancellation into an alert.
+    let gpu = validate_launch_config_with_cancel(&mut cfg, Some(launch_cancel))
+        .await
+        .map_err(|error| {
+            if launch_cancel.load(Ordering::Acquire) {
+                "server start cancelled".to_string()
+            } else {
+                error
+            }
+        })?;
     ensure_launch_allowed(state, launch_cancel)?;
     if persist {
         let _config_write = state.config_write.lock().await;
@@ -1154,3 +1165,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+mod launch_preparation_tests;

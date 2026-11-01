@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import * as api from '../../shared/api/index';
 import type { AppConfig } from '../../shared/api/types';
 import { I18nProvider } from '../../shared/i18n/i18n';
+import { modelSettingsCopy } from './modelSettingsCopy';
 import { createTestStore } from '../../testing/appStore';
 import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
 // Compile the real lazy dependency before the interaction's ordinary DOM waits.
@@ -34,8 +35,9 @@ vi.mock('../../shared/api/index', async importOriginal => ({
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>(finish => { resolve = finish; });
-  return { promise, resolve };
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((finish, fail) => { resolve = finish; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function OpenTargets() {
@@ -174,5 +176,64 @@ it('keeps the current launch cancellable when a previous handed-off launch compl
     expect(store.cfg?.active_model).toBe('models/a.gguf');
   } finally {
     await act(async () => { sessionLaunch.resolve(sessionComplete); defaultLaunch.resolve('synthetic-default-completion'); defaultRefresh.resolve(); });
+  }
+});
+
+it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps a cancelled handed-off launch quiet and its saved settings in %s', async locale => {
+  const copy = modelSettingsCopy[locale];
+  const store = targets();
+  const sessionLaunch = deferred<api.SessionStatus>();
+  const refresh = deferred<void>();
+  vi.mocked(api.sessionStart).mockReturnValueOnce(sessionLaunch.promise);
+  render(<I18nProvider initialLocale={locale}><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
+
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
+    const editor = await screen.findByRole('dialog', { name: copy.title });
+    const start = editorActions(editor).getByRole('button', { name: copy.start });
+    await waitFor(() => expect(start).toBeEnabled());
+    const previousRefreshes = vi.mocked(store.refreshStatus).mock.calls.length;
+    vi.mocked(store.refreshStatus).mockReturnValueOnce(refresh.promise);
+    fireEvent.click(start);
+    await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
+    await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 1));
+    fireEvent.click(editorActions(editor).getByRole('button', { name: copy.cancel }));
+    expect(api.sessionStop).toHaveBeenCalledWith('work');
+    expect(store.stop).not.toHaveBeenCalled();
+    // The native launch reports the stop it was asked for with its canonical message.
+    await act(async () => { sessionLaunch.reject(new Error('server start cancelled')); refresh.resolve(); });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: copy.title })).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
+    // Cancelling the launch does not undo the save that preceded it.
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(store.cfg?.sessions?.find(session => session.id === 'work')?.models.primary_model).toBe('models/b.gguf');
+  } finally {
+    await act(async () => { sessionLaunch.resolve({ id: 'work', name: 'Work', state: 'stopped', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 }); refresh.resolve(); });
+  }
+});
+
+it('keeps a handed-off session launch failure that mentions cancellation visible with its full detail', async () => {
+  const store = targets();
+  const sessionLaunch = deferred<api.SessionStatus>();
+  vi.mocked(api.sessionStart).mockReturnValueOnce(sessionLaunch.promise);
+  render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
+  const failure = 'llama-server exited before ready (exit code 1)\nload_tensors: request cancelled by allocator after 0 of 291 tensors\nmodel: /synthetic/cancelled-runs/a.gguf\n' + 'synthetic placement detail retained verbatim\n'.repeat(8);
+
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
+    const editor = await screen.findByRole('dialog', { name: 'Model & settings' });
+    const start = editorActions(editor).getByRole('button', { name: 'Save profile & start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument());
+    await act(async () => { sessionLaunch.reject(new Error(failure)); });
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('llama-server exited before ready (exit code 1)');
+    expect(alert).toHaveTextContent('request cancelled by allocator');
+    expect(alert.querySelector('pre')?.textContent).toBe(failure);
+  } finally {
+    await act(async () => { sessionLaunch.resolve({ id: 'work', name: 'Work', state: 'stopped', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 }); });
   }
 });

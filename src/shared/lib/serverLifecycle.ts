@@ -26,19 +26,21 @@ export function lifecycleErrorMessage(action: "start" | "stop", error: unknown):
   const prefix = action === "start" ? "Model load failed" : "Model unload failed";
   const hint = {
     "active-response": "Finish or stop the active response, then try again.",
-    timeout: "The operation timed out. Check runtime diagnostics and try again.",
+    timeout: "The operation timed out. Check the runtime log shown with this error and try again.",
     port: "The configured port is already in use. Choose another port or stop the conflicting process.",
     executable: "The runtime executable could not be found. Check the selected runtime installation.",
     model: "The selected model could not be loaded. Check the model path and file integrity.",
     memory: "There is not enough available memory or VRAM for this configuration.",
-    unknown: "Open diagnostics for the runtime log and retry after correcting the issue.",
+    unknown: "Check the runtime log shown with this error and retry after correcting the issue.",
   }[kind];
   return `${prefix}: ${hint}${detail ? ` (${detail})` : ""}`;
 }
 
+/** A user-requested stop of a load, which every native start and preflight path
+ * reports with this exact text. A genuine failure can mention cancellation in a
+ * path or an engine diagnostic and must still be reported. */
 export function isLifecycleCancellation(error: unknown): boolean {
-  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return text.includes("cancelled") || text.includes("canceled");
+  return (error instanceof Error ? error.message : String(error)) === "server start cancelled";
 }
 
 export function nextPollDelay(baseMs: number, failures: number): number {

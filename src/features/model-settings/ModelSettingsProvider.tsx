@@ -354,8 +354,14 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         // off instead; the status badge, the header's stop button and the task
         // strip already report it, and the store records a default-target failure
         // as its own banner rather than one this dialog has to still be open for.
+        // A stop requested for this loading session, from here or elsewhere, ends
+        // it with the native canonical message. That is the requested outcome,
+        // not a failure; other diagnostics mentioning cancellation stay visible.
         void (target.kind === 'session'
-          ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => setError(String(cause)))
+          ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => {
+            const message = cause instanceof Error ? cause.message : String(cause);
+            if (message !== 'server start cancelled') setError(message);
+          })
           : latest.current.start(saved, status?.state === 'running').catch(() => undefined))
           .finally(() => { setLaunching(current => current === owner ? null : current); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
       } else if (requestOnly) {

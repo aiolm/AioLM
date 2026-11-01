@@ -261,6 +261,22 @@ describe('launch failure display', { timeout: 45000 }, () => {
     expect(within(alert).getByText('자세히')).toBeVisible();
     expect(within(alert).getByText(/llama_model_load/)).toBeInTheDocument();
   });
+  it('shows a start failure that merely names cancellation and stays quiet when the start was stopped', async () => {
+    // Native preflight rejects with plain strings; a model folder may be named after a cancelled run.
+    const failure = 'model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))';
+    const onApply = vi.fn(async () => {}).mockRejectedValueOnce(failure).mockRejectedValueOnce('server start cancelled');
+    const { onClose } = mount({ onApply });
+    openOptions();
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    expect(await screen.findByText(failure)).toBeVisible();
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    await waitFor(() => expect(onApply).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(failure)).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 describe('confirming a profile save', () => {
