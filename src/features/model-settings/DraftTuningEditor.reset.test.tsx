@@ -16,7 +16,7 @@ const runtime = {
   refresh: vi.fn(),
 };
 
-function mount(section: string, initialConfig: AppConfig) {
+function mount(section: string, initialConfig: AppConfig, benchmark = false) {
   const onInvalid = vi.fn();
   function Harness() {
     const [cfg, setCfg] = useState(initialConfig);
@@ -25,7 +25,7 @@ function mount(section: string, initialConfig: AppConfig) {
         cfg={cfg}
         section={section}
         disabled={false}
-        benchmark={false}
+        benchmark={benchmark}
         runtime={runtime}
         onChange={patch => setCfg(current => ({ ...current, ...patch }))}
         onInvalid={onInvalid}
@@ -38,6 +38,27 @@ function mount(section: string, initialConfig: AppConfig) {
 }
 
 describe('draft tuning field resets', () => {
+  it('keeps native context, server parallelism and cache settings editable in benchmark mode', () => {
+    const { config } = mount('tuning', { ...testConfig, ctx_size: 8192, parallel: 2, cache_type_k: 'q8_0', runtime_defaults: [] }, true);
+    const context = screen.getByRole('spinbutton', { name: 'Context size' });
+    const parallel = screen.getByRole('spinbutton', { name: 'Server slots' });
+    expect(context).toBeEnabled();
+    expect(parallel).toBeEnabled();
+    fireEvent.change(context, { target: { value: '32768' } });
+    fireEvent.change(parallel, { target: { value: '4' } });
+    expect(config()).toMatchObject({ ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0' });
+  });
+
+  it('preserves native request values in benchmark mode until explicitly cleared', () => {
+    const { config } = mount('sampling', { ...testConfig, temperature: 0.7, runtime_defaults: [] }, true);
+    expect(screen.getByRole('spinbutton', { name: 'Temperature' })).toBeDisabled();
+    const clear = screen.getByRole('button', { name: 'Reset Temperature to default' });
+    expect(clear).toBeEnabled();
+    expect(config().temperature).toBe(0.7);
+    fireEvent.click(clear);
+    expect(config().runtime_defaults).toContain('temperature');
+  });
+
   it('clears a custom Mirostat draft and preserves the controlled reset patch', () => {
     const { config, onInvalid } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { mirostat: 1, min_p: 0.2 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));

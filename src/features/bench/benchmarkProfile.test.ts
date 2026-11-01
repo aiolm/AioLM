@@ -1,111 +1,97 @@
-// @vitest-environment node
-import { describe, expect, it } from 'vitest';
-import { benchmarkSettingsProfile, localBenchmarkProfileSource, publicBenchmarkProfileSource, type BenchmarkProfileSource } from './benchmarkProfile';
-import { applySettingsProfile } from '../../shared/config/settingsProfiles';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RecordedSetting } from '@aiolm/benchmark-contracts';
+import { benchmarkSettingsProfile, publicBenchmarkProfileSource, type BenchmarkProfileSource } from './benchmarkProfile';
+import { runtimeHelpResolvePlan, type EffectiveSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { testConfig } from '../../testing/appStore';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import { webcrypto } from 'node:crypto';
+import type { AppConfig } from '../../shared/api/types';
 
-const source = (args: string[] = []): BenchmarkProfileSource => ({
-  runtime: { name: 'llama.cpp', version: 'b123', backend: 'cpu', build: 'b123' },
-  execution: { context_size: 32768, parallel: 4, settings: {
-    gpu_layers: 0, threads: 12, threads_batch: 16, flash_attention: 'off',
-    cache_type_k: 'q8_0', cache_type_v: 'f16', split_mode: 'none', tensor_split: null,
-  }, effective_args: args },
+vi.mock('../../shared/api/runtimeHelp', async importOriginal => ({ ...await importOriginal<object>(), runtimeHelpResolvePlan: vi.fn(async () => ({ argv: [], request: {} })) }));
+const known = <T,>(value: T) => ({ value, certainty: 'documented' as const });
+const setting = (name: string, value: RecordedSetting['value'], extra: Partial<RecordedSetting> = {}): RecordedSetting => ({ target: 'launch', scope: [], name, value, unit: null, role: null, ...extra });
+const source = (settings: RecordedSetting[]): BenchmarkProfileSource => ({ source_schema_version: 3, source_omissions: false,
+  runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
+  execution: { topology: 'unknown', memory_scope: 'unavailable', settings: [...settings].sort((a, b) =>
+    a.target === b.target ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.target < b.target ? -1 : 1) } });
+function option(key: string, extra: Partial<OptionSchemaDefinition> = {}): OptionSchemaDefinition {
+  return { ...schemaOption({ key, flag: `--${key}`, group: 'Runtime', target: 'launch', kind: { type: 'integer' } }),
+    benchmark_public: known(true), repeatable: known(false), ...extra };
+}
+function destination(options: OptionSchemaDefinition[], names: Record<string, string>, overrides: Partial<EffectiveSchema> = {}): { cfg: AppConfig; effective: EffectiveSchema } {
+  return { cfg: { ...testConfig, active_provider: 'custom.destination', active_runtime: 'destination-runtime' },
+    effective: effectiveSchema([], options, { benchmark_names: names, ...overrides }) };
+}
+
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto);
+  vi.mocked(runtimeHelpResolvePlan).mockReset().mockResolvedValue({ argv: [], request: {} });
 });
+afterEach(() => vi.unstubAllGlobals());
 
-describe('benchmark settings profiles', () => {
-  it('restores a Metal benchmark into vLLM profiles without selecting another installation', () => {
-    const local = { backend: 'metal', build: '0.30.0', result: {
-      provider: 'vllm', runtime_version: '0.30.0', runtime_accelerator: 'metal', runtime_variant: 'vllm-metal', runtime_plugin_version: '0.30.0',
-      context_size: 8192, parallel: 1, status: 'complete', args: ['--max-model-len', '8192'],
-    } } as PerformanceBenchmarkRecord;
-    const projected = localBenchmarkProfileSource(local);
-    expect(projected.runtime).toMatchObject({ name: 'vllm', variant: 'vllm-metal', plugin_version: '0.30.0' });
-    const { profile } = benchmarkSettingsProfile(projected, 'metal');
-    expect(profile.provider).toBe('vllm');
-    expect(profile.settings).toEqual({ provider_options: { vllm: { max_model_len: 8192 } } });
+describe('destination-checked benchmark profiles', () => {
+  it('restores a typed launch setting by public name, independent of the source engine identity', async () => {
+    const dest = destination([option('local_batch', { scope: ['serve'], unit: known('count') })], { local_batch: 'batch' }, { scope: ['serve'] });
+    const { profile, omitted } = await benchmarkSettingsProfile(source([setting('batch', 16, { scope: ['serve'], unit: 'count' }),
+      setting('temperature', 0, { target: 'request' })]), 'public-1', dest);
+    expect(profile.id).toBe('profile-benchmark-89575abd9c3b724d88ddd3cfb8eb89fe5c994ab34665828cdcf0e4a79ddb5293');
+    expect(profile.provider).toBe('custom.destination');
+    expect(profile.settings).toEqual({ provider_options: { 'custom.destination': { local_batch: 16 } } });
+    expect(omitted).toBe(false);
+    expect(runtimeHelpResolvePlan).toHaveBeenCalledWith(dest.effective.schema, ['serve'], [{ key: 'local_batch', values: [16] }]);
   });
-  it('imports only vLLM options and preserves explicit false flags independently of llama.cpp settings', () => {
-    const python: BenchmarkProfileSource = { runtime: { name: 'vllm', version: '0.31.0', backend: 'cuda', build: '0.31.0' },
-      execution: { context_size: 8192, parallel: 2, settings: null, effective_args: ['--max-model-len', '8192', '--enable-prefix-caching=false', '--unknown-option', 'discard'] } };
-    const { profile, omitted } = benchmarkSettingsProfile(python, 'vllm-1');
-    expect(profile.provider).toBe('vllm');
-    expect(profile.settings).toEqual({ provider_options: { vllm: { max_model_len: 8192, enable_prefix_caching: false } } });
-    expect(profile.settings).not.toHaveProperty('ctx_size');
-    expect(profile.settings).not.toHaveProperty('active_runtime');
+
+  it('omits null, ambiguous, wrong-scope, private, wrong-type, bounds, unit and role mismatches without choosing or clamping', async () => {
+    const dest = destination([
+      option('null'), option('scope', { scope: ['serve'] }), option('private', { sensitive: known(true) }),
+      option('wrong_type', { kind: known('text') }), option('bounded', { range: known({ min: 1, max: 8 }) }),
+      option('unit', { unit: known('tokens') }), option('role', { benchmark_role: known('concurrency.capacity') }),
+      option('ambiguous_a'), option('ambiguous_b'), option('path', { local_path: known(true) }),
+    ], { null: 'null', scope: 'scope', private: 'private', wrong_type: 'wrong_type', bounded: 'bounded', unit: 'unit', role: 'role', ambiguous_a: 'ambiguous', ambiguous_b: 'ambiguous', path: 'path' });
+    const { profile, omitted } = await benchmarkSettingsProfile(source([
+      setting('null', null), setting('scope', 1), setting('private', 1), setting('wrong_type', 1), setting('bounded', 99),
+      setting('unit', 1), setting('role', 1), setting('ambiguous', 1), setting('path', 1), setting('missing', 1),
+    ]), 'public-2', dest);
+    expect(profile.settings).toEqual({});
     expect(omitted).toBe(true);
   });
-  it('restores measured settings, ordered portable options and inherited defaults without capturing another profile', () => {
-    const { profile, omitted } = benchmarkSettingsProfile(source([
-      '--ctx-size', '8192', '--batch-size=1024', '-ub', '256', '--threads', '8',
-      '--threads-batch', '24', '--no-webui', '--rope-scaling', 'yarn', '--reasoning-budget', '-1',
-    ]), 'public-1');
-    expect(omitted).toBe(false);
-    const applied = applySettingsProfile({ ...testConfig, batch_size: 999, active_backend: 'vulkan',
-      spec_draft_model: '/synthetic/old-draft.gguf', server_args: ['--unknown', 'old'], temperature: 1.5,
-      gpu: { gpu_ids: ['synthetic-device'], main_gpu: 'synthetic-device', split_mode: 'row', tensor_split: [1], draft_gpu_id: null } }, profile);
-    expect(applied).toMatchObject({ active_model: testConfig.active_model, ctx_size: 32768, parallel: 4,
-      ngl: 0, threads: 12, batch_size: 1024, ubatch_size: 256, active_backend: 'vulkan', active_build: 'b123',
-      spec_draft_model: '', gpu: { gpu_ids: [], main_gpu: null },
-      server_args: ['--no-webui', '--rope-scaling', 'yarn', '--threads-batch', '16'] });
-    expect(applied.runtime_defaults).toContain('temperature');
-    expect(applied.runtime_defaults).not.toContain('ctx_size');
-    expect(applied.runtime_defaults).not.toContain('batch_size');
-    expect(profile.settings).not.toHaveProperty('active_model');
+
+  it('preserves false, zero and numeric arrays only when their exact destination shape is established', async () => {
+    const dest = destination([option('cache', { kind: known('boolean'), arity: known({ min: 0, max: 0 }) }),
+      option('zero'), option('split', { kind: known('json') }), option('repeated', { repeatable: known(true) })],
+    { cache: 'cache', zero: 'zero', split: 'split', repeated: 'repeated' });
+    const { profile } = await benchmarkSettingsProfile(source([setting('cache', false), setting('zero', 0), setting('split', [0.25, 0.75]), setting('repeated', [4, 8])]), 'arrays', dest);
+    expect(profile.settings.provider_options?.['custom.destination']).toMatchObject({ cache: false, zero: 0, split: [0.25, 0.75], repeated: { spelling: null, occurrences: [[4], [8]] } });
   });
 
-  it('reports options it cannot reproduce and excludes network, device, file and unknown arguments', () => {
-    const { profile, omitted } = benchmarkSettingsProfile(source([
-      '--rpc', 'remote-machine', '--device', 'synthetic-device', '--unknown', 'value',
-      '--model', 'model.gguf', '--flash-attn', 'unsupported', '--batch-size', 'NaN',
-    ]), 'public-2');
-    expect(omitted).toBe(true);
-    expect(profile.settings.server_args).toEqual(['--threads-batch', '16']);
-    expect(profile.settings.runtime_defaults).toContain('batch_size');
-    expect(profile.settings.flash_attn).toBe('off');
-    expect(JSON.stringify(profile)).not.toContain('remote-machine');
-    expect(JSON.stringify(profile)).not.toContain('synthetic-device');
+  it('uses native dedicated controls and never copies the current model, runtime, device or profile values', async () => {
+    const dest = destination([option('context', { spellings: [{ flag: '--ctx-size' }], managed: 'discovery', unit: known('tokens'), benchmark_role: known('context.total_tokens') })], { context: 'ctx-size' });
+    dest.cfg = { ...dest.cfg, active_provider: 'llama.cpp', active_backend: 'cpu', active_build: 'b-test', ctx_size: 32768, threads: 99 };
+    const { profile } = await benchmarkSettingsProfile(source([setting('ctx-size', 8192, { unit: 'tokens', role: 'context.total_tokens' })]), 'native', dest);
+    expect(profile.settings).toEqual({ ctx_size: 8192 });
+    expect(profile.provider).toBe('llama.cpp');
+    expect(profile).not.toHaveProperty('legacy_runtime');
+    expect(dest.effective.schema.options[0].managed).toBe('discovery');
   });
 
-  it('keeps null fields inherited in old records and rejects missing allocations or malformed metadata', () => {
-    const legacy = source();
-    legacy.execution.settings = null;
-    const profile = benchmarkSettingsProfile(legacy, 'old-1').profile;
-    expect(profile.settings.runtime_defaults).toContain('ngl');
-    expect(profile.settings.runtime_defaults).toContain('threads');
-    legacy.runtime.build = null;
-    const missingRuntime = benchmarkSettingsProfile(legacy, 'old-2');
-    expect(missingRuntime.profile.settings).not.toHaveProperty('active_backend');
-    expect(missingRuntime.profile.settings).not.toHaveProperty('active_build');
-    expect(missingRuntime.omitted).toBe(true);
-    expect(() => publicBenchmarkProfileSource({ id: 'other', benchmark: source() }, 'public-1')).toThrow();
-    expect(() => benchmarkSettingsProfile({ ...source(), execution: { ...source().execution, context_size: 0 } }, 'old')).toThrow();
-    expect(() => publicBenchmarkProfileSource({ id: 'public-1', benchmark: { ...source(), execution: {
-      ...source().execution, effective_args: ['--model', '/private/model.gguf'],
-    } } }, 'public-1')).toThrow();
-    expect(() => publicBenchmarkProfileSource({ id: 'public-1', benchmark: { ...source(), runtime: {
-      ...source().runtime, models_dir: '/private',
-    } } }, 'public-1')).toThrow();
+  it('omits resolver-rejected values but surfaces genuine API failures for retry', async () => {
+    const dest = destination([option('batch')], { batch: 'batch' });
+    vi.mocked(runtimeHelpResolvePlan).mockRejectedValueOnce([{ key: 'batch', message: 'outside destination bounds' }]);
+    expect(await benchmarkSettingsProfile(source([setting('batch', 16)]), 'invalid', dest)).toMatchObject({ omitted: true, profile: { settings: {} } });
+    vi.mocked(runtimeHelpResolvePlan).mockRejectedValueOnce(new Error('schema service unavailable'));
+    await expect(benchmarkSettingsProfile(source([setting('batch', 16)]), 'failed', dest)).rejects.toThrow('schema service unavailable');
   });
 
-  it('restores GPU split proportions from older launch arguments without importing device identities', () => {
-    const older = source(['-sm', 'row', '-ts', '1,2.5']);
-    older.execution.settings = null;
-    const { profile, omitted } = benchmarkSettingsProfile(older, 'older-gpu');
-    expect(omitted).toBe(false);
-    expect(profile.settings.gpu).toEqual({ gpu_ids: [], main_gpu: null, split_mode: 'row', tensor_split: [1, 2.5], draft_gpu_id: null });
-    expect(() => benchmarkSettingsProfile(older, 'x'.repeat(111))).toThrow();
-  });
-
-  it('imports local run settings even when measurements failed, while removing private launch values', () => {
-    const local = { backend: 'cpu', build: 'b123', result: {
-      context_size: 32768, parallel: 4, status: 'failed',
-      args: ['-m', '/synthetic/models/model.gguf', '--api-key', 'synthetic-secret', '--batch-size', '1024'],
-    } } as PerformanceBenchmarkRecord;
-    const { profile } = benchmarkSettingsProfile(localBenchmarkProfileSource(local), 'local-1');
-    expect(profile.settings.batch_size).toBe(1024);
-    expect(profile.settings.ctx_size).toBe(32768);
-    expect(JSON.stringify(profile)).not.toContain('synthetic-secret');
-    expect(JSON.stringify(profile)).not.toContain('/synthetic');
+  it('keeps destination-specific IDs and explicitly reports legacy omissions without parsing raw arguments', async () => {
+    const projected = publicBenchmarkProfileSource({ id: 'legacy', benchmark: { schema_version: 1,
+      runtime: { name: 'llama.cpp', version: null, backend: null, build: null },
+      execution: { context_size: 4096, parallel: 2, settings: null, effective_args: ['--batch-size', '1024'] } } }, 'legacy');
+    const dest = destination([], {});
+    expect((await benchmarkSettingsProfile(projected, 'legacy', dest)).omitted).toBe(true);
+    expect(projected.execution.settings.some(entry => entry.name === 'batch-size')).toBe(false);
+    const first = await benchmarkSettingsProfile(source([]), 'same', dest);
+    const second = await benchmarkSettingsProfile(source([]), 'same', { ...dest, cfg: { ...dest.cfg, active_provider: 'vllm' } });
+    expect(first.profile.id).not.toBe(second.profile.id);
+    expect(() => publicBenchmarkProfileSource({ id: 'other', benchmark: {} }, 'legacy')).toThrow();
   });
 });

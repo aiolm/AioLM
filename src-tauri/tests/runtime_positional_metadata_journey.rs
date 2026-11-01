@@ -392,15 +392,19 @@ async fn engine_journey(home: &Path) {
     // The spawned engine receives the exact planned argv, token included.
     let info = providers::execution::info(&loaded).unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) =
-        server::spawn(&loaded, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&loaded, "synthetic-key", &err, &Default::default(), None).unwrap();
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap();
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let argv: Vec<String> = serde_json::from_slice(&fs::read(&argv_file).unwrap()).unwrap();

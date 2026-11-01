@@ -24,6 +24,9 @@ pub(crate) struct ModelIdentity {
     /// download manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// Repository from a complete inspected app/HF-cache snapshot, never a folder label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     /// `artifacts::local_fingerprint` of a snapshot: relative paths, sizes,
     /// modification times and small JSON files. It detects local changes; it
     /// is not a digest of the weights.
@@ -104,6 +107,7 @@ fn unidentified(path: &Path) -> ModelIdentity {
         metadata: None,
         format: gguf_format(path),
         revision: None,
+        repository: None,
         local_fingerprint: None,
         size_bytes: if multipart {
             None
@@ -138,6 +142,19 @@ fn gguf_format(path: &Path) -> Option<ArtifactFormat> {
 
 fn snapshot(path: &Path) -> ModelIdentity {
     let artifact = artifacts::inspect_snapshot(path);
+    let repository = artifact
+        .repository
+        .as_ref()
+        .filter(|repository| {
+            artifact.ready_files()
+                && ["app", "hf-cache"].contains(&artifact.ownership)
+                && super::model_metadata::valid_repository(repository)
+                && artifact
+                    .revision
+                    .as_deref()
+                    .is_some_and(valid_source_revision)
+        })
+        .cloned();
     ModelIdentity {
         status: "unidentified".into(),
         sha256: None,
@@ -150,8 +167,16 @@ fn snapshot(path: &Path) -> ModelIdentity {
             artifact.revision.as_deref(),
         )),
         revision: artifact.revision,
+        repository,
         metadata: None,
     }
+}
+
+pub(crate) fn valid_source_revision(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn cached(root: &Path, path: &Path) -> ModelIdentity {
@@ -200,6 +225,7 @@ mod tests {
             size_bytes: Some(contents.len() as u64),
             format: Some(ArtifactFormat::Gguf),
             revision: None,
+            repository: None,
             local_fingerprint: None,
             metadata: None,
         };
@@ -269,6 +295,7 @@ mod tests {
         assert_eq!(identity.sha256, None);
         assert_eq!(identity.format, Some(ArtifactFormat::HfSafetensors));
         assert_eq!(identity.revision.as_deref(), Some(revision));
+        assert_eq!(identity.repository.as_deref(), Some("org/name"));
         let fingerprint = identity.local_fingerprint.clone().unwrap();
         assert!(
             fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -283,6 +310,61 @@ mod tests {
         let edited = cached(&root, &snapshot);
         assert_eq!(edited.revision.as_deref(), Some(revision));
         assert_ne!(edited.local_fingerprint, Some(fingerprint));
+        fs::remove_file(snapshot.join("tokenizer.json")).unwrap();
+        assert!(cached(&root, &snapshot).repository.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn app_source_requires_complete_files_safe_repository_and_immutable_revision() {
+        let root = std::env::temp_dir().join(format!("aiolm-source-{}", uuid::Uuid::new_v4()));
+        let snapshot = root.join("ordinary-local-folder");
+        fs::create_dir_all(&snapshot).unwrap();
+        fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","_name_or_path":"untrusted/folder-label"}"#,
+        )
+        .unwrap();
+        fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        fs::write(snapshot.join("model.safetensors"), b"weights").unwrap();
+        assert!(cached(&root, &snapshot).repository.is_none());
+        let manifest = |repository: &str, revision: &str, complete: bool| {
+            fs::write(
+                snapshot.join(artifacts::SNAPSHOT_MANIFEST),
+                serde_json::to_vec(&artifacts::SnapshotManifest {
+                    format: 1,
+                    repository: repository.into(),
+                    revision: revision.into(),
+                    complete,
+                    files: vec![artifacts::SnapshotFile {
+                        path: "model.safetensors".into(),
+                        size: 7,
+                        oid: None,
+                    }],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        let revision = "a".repeat(40);
+        manifest("org/model", &revision, true);
+        let source = cached(&root, &snapshot);
+        assert_eq!(source.repository.as_deref(), Some("org/model"));
+        assert_eq!(source.revision.as_deref(), Some(revision.as_str()));
+        assert!(source.sha256.is_none());
+        for (repository, revision, complete) in [
+            ("org/../model", revision.as_str(), true),
+            ("org/model", "main", true),
+            (
+                "org/model",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                true,
+            ),
+            ("org/model", revision.as_str(), false),
+        ] {
+            manifest(repository, revision, complete);
+            assert!(cached(&root, &snapshot).repository.is_none());
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

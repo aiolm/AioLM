@@ -13,7 +13,6 @@ import { tuningDisplayConfig } from '../tuning/tuningResetState';
 import { resetTuningField } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import type { useServerOptions } from '../tuning/useServerOptions';
-import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /**
  * Context beyond which an entry is a typo rather than an intent.
@@ -25,11 +24,10 @@ import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 const CONTEXT_SANITY_MAX = 4_194_304;
 
 export type DraftPatch = (patch: Partial<AppConfig>) => void;
-export { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /** All handlers edit an in-memory draft. Persistence belongs to the dialog's caller. */
-export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, contextLimit, onChange, onInvalid }: {
-  cfg: AppConfig; section: string; disabled: boolean; benchmark: boolean;
+export default function DraftTuningEditor({ cfg, section, disabled, benchmark = false, runtime, contextLimit, onChange, onInvalid }: {
+  cfg: AppConfig; section: string; disabled: boolean; benchmark?: boolean;
   /** Context the selected model was trained for, when its header states one. */
   contextLimit?: number;
   runtime: ReturnType<typeof useServerOptions>; onChange: DraftPatch;
@@ -96,11 +94,9 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
       setSelectModes(previous => { const next = { ...previous }; delete next[key]; return next; });
     }
   };
-  const filterPatch = (patch: Partial<AppConfig>) => benchmark
-    ? Object.fromEntries(Object.entries(patch).filter(([key]) => !BENCHMARK_CONTROLLED_KEYS.has(key))) as Partial<AppConfig> : patch;
   const reset = (key: string) => {
     clearDrafts(key);
-    onChange(filterPatch(resetTuningField(cfg, key, tuningResetValues(runtime.options))));
+    onChange(resetTuningField(cfg, key, tuningResetValues(runtime.options)));
   };
   const textValue = (key: ServerTextKey) => String(display[key] ?? '');
   const text = (key: ServerTextKey, value: string) => onChange({ [key]: value });
@@ -110,18 +106,17 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   // The same bound the commit above validates against, so the slider can never
   // offer a value the editor would then refuse, or refuse one it offered.
   const fields = useMemo(() => {
-    const base = SERVER_FIELDS.filter(field => !benchmark || !BENCHMARK_CONTROLLED_KEYS.has(field.key));
     const ceiling = Math.max(contextLimit ?? CONTEXT_SANITY_MAX, Number(cfg.ctx_size) || 0);
-    return base.map(field => field.key === 'ctx_size' && ceiling !== field.max ? { ...field, max: ceiling } : field);
-  }, [benchmark, contextLimit, cfg.ctx_size]);
+    return SERVER_FIELDS.map(field => field.key === 'ctx_size' && ceiling !== field.max ? { ...field, max: ceiling } : field);
+  }, [contextLimit, cfg.ctx_size]);
   return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
-    {section === 'sampling' ? <TuningSamplingSection t={t} cfg={display} disabled={disabled} {...numericProps}
+    {section === 'sampling' ? <TuningSamplingSection t={t} cfg={display} disabled={disabled || benchmark} {...numericProps}
       chatOptionDrafts={chatNumbers} setChatOptionDrafts={setChatDrafts} chatOptionSelectModes={selectModes} setChatOptionSelectModes={setSelectModes}
       onChatOptionCommit={(field, value) => { const parsed = chatNumeric(field.key, value); if (parsed !== undefined) onChange({ chat_options: { ...cfg.chat_options, [field.key]: parsed } }); }}
       samplerChain={Array.isArray(display.chat_options.samplers) ? display.chat_options.samplers.filter((value): value is string => typeof value === 'string') : []}
       onSamplerChainChange={samplers => onChange({ chat_options: { ...cfg.chat_options, samplers } })} draftMode />
       : section === 'reasoning' ? <TuningReasoningSection t={t} cfg={display} disabled={disabled} {...numericProps}
-        updateServerText={text} updateReasoningEffort={reasoning_effort => onChange({ reasoning_effort })}
+        requestReadOnly={benchmark} updateServerText={text} updateReasoningEffort={reasoning_effort => onChange({ reasoning_effort })}
         reasoningBudgetMessageValue={textValue('reasoning_budget_message')} onReasoningBudgetMessageChange={value => text('reasoning_budget_message', value)}
         onReasoningBudgetMessageCommit={value => commitText('reasoning_budget_message', value)} />
         : <TuningServerSection t={t} cfg={display} disabled={disabled} {...numericProps} fields={section === 'adapters' ? [] : fields}

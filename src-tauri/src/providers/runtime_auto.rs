@@ -65,6 +65,16 @@ struct ConnectionSpec {
     model_path: String,
     upstream_model: Option<String>,
 }
+
+impl ConnectionSpec {
+    fn compute_ownership(&self) -> super::protocol::ComputeOwnership {
+        match self.target {
+            Target::Attached { .. } => super::protocol::ComputeOwnership::Attached,
+            // The owned helper is a proxy; the compute it launches is below it.
+            Target::Managed { .. } => super::protocol::ComputeOwnership::Descendant,
+        }
+    }
+}
 #[derive(Default)]
 struct Inventory {
     candidates: BTreeMap<String, discovery::RuntimeCandidate>,
@@ -511,6 +521,8 @@ pub async fn connect(
             engine_id: engine,
             runtime_id: runtime.clone(),
             display_name: known.candidate.display_name.clone(),
+            public_engine: None,
+            compute_ownership: Some(spec.compute_ownership()),
             platforms: vec![registry::Platform {
                 os: std::env::consts::OS.into(),
                 arch: std::env::consts::ARCH.into(),
@@ -757,6 +769,9 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
     let model = &args[3];
     if args[1] == "probe" && model.is_empty() {
         let result = registry::ProbeResult {
+            public_engine: None,
+            compute_ownership: Some(spec.compute_ownership()),
+            model_format: Some(super::artifacts::ArtifactFormat::Unknown),
             schema_version: 1,
             engine_id: spec.engine_id,
             runtime_id: spec.runtime_id,
@@ -770,6 +785,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
                 modalities: super::artifacts::Modalities::default(),
                 chat: false,
                 tools: false,
+                stream_usage_supported: None,
             },
         };
         println!(
@@ -790,6 +806,9 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
     .await?;
     if args[1] == "probe" {
         let result = registry::ProbeResult {
+            public_engine: None,
+            compute_ownership: Some(spec.compute_ownership()),
+            model_format: Some(super::artifacts::ArtifactFormat::Unknown),
             schema_version: 1,
             engine_id: spec.engine_id,
             runtime_id: spec.runtime_id,
@@ -808,6 +827,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
                 },
                 chat: true,
                 tools: false,
+                stream_usage_supported: None,
             },
         };
         println!(
@@ -1121,6 +1141,63 @@ mod tests {
     }
 
     #[test]
+    fn automatic_helpers_attribute_compute_without_exposing_connection_identity() {
+        use super::super::{
+            artifacts::ArtifactFormat,
+            protocol::{PublicEngine, ServingMemoryScope, ServingMetadata, ServingTopology},
+        };
+        let mut spec = attached_spec(Path::new("/synthetic"));
+        assert_eq!(
+            spec.compute_ownership(),
+            super::super::protocol::ComputeOwnership::Attached
+        );
+        for windows in [false, true] {
+            let attached = ServingMetadata::for_platform(
+                PublicEngine::default(),
+                ArtifactFormat::Unknown,
+                spec.compute_ownership(),
+                windows,
+            );
+            assert_eq!(attached.topology, ServingTopology::Attached);
+            assert_eq!(attached.memory_scope, ServingMemoryScope::Unavailable);
+            assert_eq!(attached.model_format, ArtifactFormat::Unknown);
+            let public = serde_json::to_string(&attached).unwrap();
+            assert!(
+                !public.contains("auto-")
+                    && !public.contains("connection-")
+                    && !public.contains("43121")
+            );
+        }
+        spec.target = Target::Managed {
+            launch: registry::ProcessSpec {
+                program: "/synthetic/engine".into(),
+                args: vec![],
+                env: BTreeMap::new(),
+                working_directory: None,
+            },
+            artifacts: vec![],
+        };
+        assert_eq!(
+            spec.compute_ownership(),
+            super::super::protocol::ComputeOwnership::Descendant
+        );
+        let unix = ServingMetadata::for_platform(
+            PublicEngine::default(),
+            ArtifactFormat::Unknown,
+            spec.compute_ownership(),
+            false,
+        );
+        let windows = ServingMetadata::for_platform(
+            PublicEngine::default(),
+            ArtifactFormat::Unknown,
+            spec.compute_ownership(),
+            true,
+        );
+        assert_eq!(unix.memory_scope, ServingMemoryScope::OwnedProcessTree);
+        assert_eq!(windows.memory_scope, ServingMemoryScope::Unavailable);
+    }
+
+    #[test]
     fn connection_metadata_is_bounded_versioned_and_strictly_parsed() {
         let area = Area::new();
         let path = area.0.join("connection.json");
@@ -1159,6 +1236,8 @@ mod tests {
             engine_id: spec.engine_id,
             runtime_id: spec.runtime_id.clone(),
             display_name: "Synthetic engine".into(),
+            public_engine: None,
+            compute_ownership: Some(spec.compute_ownership()),
             platforms: vec![registry::Platform {
                 os: std::env::consts::OS.into(),
                 arch: std::env::consts::ARCH.into(),

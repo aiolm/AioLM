@@ -12,8 +12,139 @@
 use super::artifacts::Modalities;
 use super::ProviderId;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+/// Public observations, never reconstructed from local runtime identifiers.
+/// Every field is required on the wire, including an explicitly unknown null.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PublicEngine {
+    #[serde(deserialize_with = "public_label")]
+    pub name: Option<String>,
+    #[serde(deserialize_with = "public_label")]
+    pub version: Option<String>,
+    #[serde(deserialize_with = "public_label")]
+    pub backend: Option<String>,
+    #[serde(deserialize_with = "public_label")]
+    pub build: Option<String>,
+    #[serde(deserialize_with = "public_label")]
+    pub variant: Option<String>,
+    #[serde(deserialize_with = "public_label")]
+    pub plugin_version: Option<String>,
+}
+
+fn public_label<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value
+        .as_deref()
+        .is_some_and(|value| !valid_public_label(value))
+    {
+        return Err(serde::de::Error::custom("invalid public engine label"));
+    }
+    Ok(value)
+}
+
+pub fn valid_public_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 256
+        && !value
+            .chars()
+            .any(|c| matches!(c, '\\' | '/' | ':' | '@' | '\u{0}'..='\u{1f}' | '\u{7f}'))
+}
+
+impl PublicEngine {
+    pub fn validate(&self) -> Result<(), String> {
+        if [
+            &self.name,
+            &self.version,
+            &self.backend,
+            &self.build,
+            &self.variant,
+            &self.plugin_version,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| !valid_public_label(value))
+        {
+            return Err("invalid public engine label".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputeOwnership {
+    Direct,
+    Descendant,
+    Attached,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServingTopology {
+    Owned,
+    Attached,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServingMemoryScope {
+    OwnedProcessTree,
+    OwnedRootProcess,
+    Unavailable,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServingMetadata {
+    pub runtime: PublicEngine,
+    pub model_format: super::artifacts::ArtifactFormat,
+    pub topology: ServingTopology,
+    pub memory_scope: ServingMemoryScope,
+}
+
+impl ServingMetadata {
+    pub fn from_observations(
+        runtime: PublicEngine,
+        model_format: super::artifacts::ArtifactFormat,
+        ownership: ComputeOwnership,
+    ) -> Self {
+        Self::for_platform(runtime, model_format, ownership, cfg!(windows))
+    }
+
+    /// Ownership describes observed compute, not permission to stop an upstream.
+    pub fn for_platform(
+        runtime: PublicEngine,
+        model_format: super::artifacts::ArtifactFormat,
+        ownership: ComputeOwnership,
+        windows: bool,
+    ) -> Self {
+        let topology = match ownership {
+            ComputeOwnership::Direct | ComputeOwnership::Descendant => ServingTopology::Owned,
+            ComputeOwnership::Attached => ServingTopology::Attached,
+            ComputeOwnership::Unknown => ServingTopology::Unknown,
+        };
+        let memory_scope = match (ownership, windows) {
+            (ComputeOwnership::Direct | ComputeOwnership::Descendant, false) => {
+                ServingMemoryScope::OwnedProcessTree
+            }
+            (ComputeOwnership::Direct, true) => ServingMemoryScope::OwnedRootProcess,
+            _ => ServingMemoryScope::Unavailable,
+        };
+        Self {
+            runtime,
+            model_format,
+            topology,
+            memory_scope,
+        }
+    }
+}
 
 /// What a running engine session accepts. Stored with the session when it
 /// becomes ready.
@@ -32,6 +163,10 @@ pub struct EngineInfo {
     /// Text completions remain usable when chat is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_supported: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serving_metadata: Option<ServingMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_usage_supported: Option<bool>,
     /// Validated request fields from the provider's saved options.
     pub request_fields: Map<String, Value>,
     pub request_option_keys: Vec<String>,
@@ -57,6 +192,8 @@ impl EngineInfo {
             modalities,
             tasks: vec!["generate".into(), "embed".into()],
             chat_supported: None,
+            serving_metadata: None,
+            stream_usage_supported: Some(true),
             request_option_keys: Vec::new(),
             request_fields: Map::new(),
             request_lora: None,
@@ -754,6 +891,13 @@ fn adapt_audio_request(
     Ok(())
 }
 
+/// Whether saved profile request fields fill absent fields in a routed request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequestDefaultsPolicy {
+    Apply,
+    Omit,
+}
+
 /// Adapt a Chat Completions, Completions, Embeddings or audio transcription
 /// body in place. Audio endpoints carry the gateway's multipart text fields
 /// as JSON strings (plus a `timestamp_granularities` string array); the
@@ -762,6 +906,7 @@ pub fn adapt_request(
     info: &EngineInfo,
     endpoint: &str,
     body: &mut Value,
+    defaults: RequestDefaultsPolicy,
 ) -> Result<(), AdaptError> {
     if endpoint == "audio/transcriptions" || endpoint == "audio/translations" {
         return adapt_audio_request(info, endpoint, body);
@@ -861,7 +1006,7 @@ pub fn adapt_request(
     };
     check_tools(info, object)?;
     object.insert("model".into(), Value::String(model));
-    if endpoint != "embeddings" {
+    if defaults == RequestDefaultsPolicy::Apply && endpoint != "embeddings" {
         for (key, value) in &info.request_fields {
             object.entry(key.clone()).or_insert_with(|| value.clone());
         }
@@ -878,6 +1023,74 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn public_identity_requires_all_six_nullable_safe_labels() {
+        let unknown = PublicEngine::default();
+        let value = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 6);
+        assert_eq!(
+            serde_json::from_value::<PublicEngine>(value.clone()).unwrap(),
+            unknown
+        );
+        for field in [
+            "name",
+            "version",
+            "backend",
+            "build",
+            "variant",
+            "plugin_version",
+        ] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<PublicEngine>(missing).is_err());
+            let mut bounded = value.clone();
+            bounded[field] = "界".repeat(256).into();
+            assert!(serde_json::from_value::<PublicEngine>(bounded.clone()).is_ok());
+            bounded[field] = "界".repeat(257).into();
+            assert!(serde_json::from_value::<PublicEngine>(bounded).is_err());
+        }
+    }
+
+    #[test]
+    fn compute_ownership_maps_only_observed_owned_compute_to_memory() {
+        use super::super::artifacts::ArtifactFormat;
+        for windows in [false, true] {
+            for ownership in [
+                ComputeOwnership::Direct,
+                ComputeOwnership::Descendant,
+                ComputeOwnership::Attached,
+                ComputeOwnership::Unknown,
+            ] {
+                let metadata = ServingMetadata::for_platform(
+                    PublicEngine::default(),
+                    ArtifactFormat::Unknown,
+                    ownership,
+                    windows,
+                );
+                let (topology, scope) = match (ownership, windows) {
+                    (ComputeOwnership::Direct, false) | (ComputeOwnership::Descendant, false) => {
+                        (ServingTopology::Owned, ServingMemoryScope::OwnedProcessTree)
+                    }
+                    (ComputeOwnership::Direct, true) => {
+                        (ServingTopology::Owned, ServingMemoryScope::OwnedRootProcess)
+                    }
+                    (ComputeOwnership::Descendant, true) => {
+                        (ServingTopology::Owned, ServingMemoryScope::Unavailable)
+                    }
+                    (ComputeOwnership::Attached, _) => {
+                        (ServingTopology::Attached, ServingMemoryScope::Unavailable)
+                    }
+                    (ComputeOwnership::Unknown, _) => {
+                        (ServingTopology::Unknown, ServingMemoryScope::Unavailable)
+                    }
+                };
+                assert_eq!(metadata.topology, topology);
+                assert_eq!(metadata.memory_scope, scope);
+                assert_eq!(metadata.runtime, PublicEngine::default());
+            }
+        }
+    }
+
     fn info(provider: ProviderId, modalities: Modalities) -> EngineInfo {
         EngineInfo {
             provider,
@@ -888,6 +1101,8 @@ mod tests {
             modalities,
             tasks: vec!["generate".into()],
             chat_supported: None,
+            serving_metadata: None,
+            stream_usage_supported: None,
             request_option_keys: Vec::new(),
             request_fields: json!({"temperature": 0.3}).as_object().unwrap().clone(),
             request_lora: None,
@@ -895,6 +1110,77 @@ mod tests {
             embedding_namespace: None,
             tools_auto: true,
             tool_parser: true,
+        }
+    }
+
+    #[test]
+    fn omitting_saved_defaults_preserves_routing_and_request_validation() {
+        for provider in [
+            ProviderId::Vllm,
+            ProviderId::parse("custom.synthetic").unwrap(),
+        ] {
+            let mut engine = info(provider, Modalities::text_only());
+            engine.request_fields.insert("top_p".into(), json!(0.8));
+            let common = json!({
+                "model": "public-alias",
+                "messages": [{"role": "user", "content": "synthetic"}],
+                "temperature": 0,
+                "max_tokens": 128,
+                "stream": true
+            });
+            let mut applied = common.clone();
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut applied,
+                RequestDefaultsPolicy::Apply,
+            )
+            .unwrap();
+            assert_eq!(applied["top_p"], 0.8);
+            assert_eq!(applied["temperature"], 0);
+
+            let mut omitted = common.clone();
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut omitted,
+                RequestDefaultsPolicy::Omit,
+            )
+            .unwrap();
+            assert_eq!(omitted["model"], "/models/qwen-vl");
+            assert!(omitted.get("top_p").is_none());
+            assert_eq!(omitted["temperature"], 0);
+            assert_eq!(omitted["max_tokens"], 128);
+            engine.request_lora = Some("style".into());
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut omitted,
+                RequestDefaultsPolicy::Omit,
+            )
+            .unwrap();
+            assert_eq!(omitted["model"], "style");
+
+            let mut image = chat(
+                json!({"type":"image_url","image_url":{"url":"https://example.com/synthetic.png"}}),
+            );
+            let error = adapt_request(
+                &engine,
+                "chat/completions",
+                &mut image,
+                RequestDefaultsPolicy::Omit,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "unsupported_input");
+            engine.chat_supported = Some(false);
+            let error = adapt_request(
+                &engine,
+                "chat/completions",
+                &mut omitted,
+                RequestDefaultsPolicy::Omit,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "chat_template_required");
         }
     }
 
@@ -908,22 +1194,38 @@ mod tests {
         engine.tools_auto = false;
         engine.tool_parser = false;
         let mut body = json!({"model":"public-alias","messages":[{"role":"user","content":"synthetic"}],"custom_sampling":0.4,"stream":true});
-        adapt_request(&engine, "chat/completions", &mut body).unwrap();
+        adapt_request(
+            &engine,
+            "chat/completions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(body["model"], engine.upstream_model);
         assert_eq!(body["custom_sampling"], 0.4);
         assert_eq!(body["messages"][0]["content"], "synthetic");
         let mut paths = json!({"messages":[],"adapter_path":"/synthetic/unowned"});
         assert_eq!(
-            adapt_request(&engine, "chat/completions", &mut paths)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut paths,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_field"
         );
         let mut tools = json!({"messages":[],"tools":[{"type":"function","function":{"name":"synthetic","parameters":{}}}]});
         assert_eq!(
-            adapt_request(&engine, "chat/completions", &mut tools)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut tools,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_tools"
         );
     }
@@ -933,15 +1235,33 @@ mod tests {
         let mut engine = info(ProviderId::Vllm, Modalities::text_only());
         engine.chat_supported = Some(false);
         let mut chat = json!({"model":"public", "messages":[{"role":"user","content":"hello"}]});
-        let error = adapt_request(&engine, "chat/completions", &mut chat).unwrap_err();
+        let error = adapt_request(
+            &engine,
+            "chat/completions",
+            &mut chat,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap_err();
         assert_eq!(error.code, "chat_template_required");
         assert!(error.message.contains("Instruct/chat model"));
         let mut completion = json!({"model":"public", "prompt":"Once upon a time"});
-        adapt_request(&engine, "completions", &mut completion).unwrap();
+        adapt_request(
+            &engine,
+            "completions",
+            &mut completion,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(completion["model"], engine.upstream_model);
         for support in [None, Some(true)] {
             engine.chat_supported = support;
-            adapt_request(&engine, "chat/completions", &mut chat).unwrap();
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut chat,
+                RequestDefaultsPolicy::Apply,
+            )
+            .unwrap();
         }
     }
 
@@ -953,6 +1273,7 @@ mod tests {
             &EngineInfo::llama("m", Modalities::text_only()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(body, before);
@@ -963,15 +1284,33 @@ mod tests {
         let mut body = json!({"model":"qwen-vl","temperature":0.9,"messages":[]});
         let mut engine = info(ProviderId::Vllm, Modalities::text_only());
         engine.request_fields.insert("top_p".into(), json!(0.8));
-        adapt_request(&engine, "chat/completions", &mut body).unwrap();
+        adapt_request(
+            &engine,
+            "chat/completions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(body["model"], "/models/qwen-vl");
         assert_eq!(body["temperature"], 0.9);
         assert_eq!(body["top_p"], 0.8);
         engine.request_lora = Some("style".into());
-        adapt_request(&engine, "chat/completions", &mut body).unwrap();
+        adapt_request(
+            &engine,
+            "chat/completions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(body["model"], "style");
         let mut embedding = json!({"model":"qwen-vl","input":"x"});
-        adapt_request(&engine, "embeddings", &mut embedding).unwrap();
+        adapt_request(
+            &engine,
+            "embeddings",
+            &mut embedding,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(embedding["model"], "/models/embedding");
         assert!(embedding.get("temperature").is_none());
     }
@@ -983,6 +1322,7 @@ mod tests {
             &info(ProviderId::MlxVlm, Modalities::text_only()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert!(body.get("adapter_path").is_none());
@@ -998,6 +1338,7 @@ mod tests {
             &info(ProviderId::Vllm, Modalities::text_only()),
             "chat/completions",
             &mut text_only,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap_err();
         assert_eq!(error.code, "unsupported_input");
@@ -1013,6 +1354,7 @@ mod tests {
             &info(ProviderId::Vllm, vision),
             "chat/completions",
             &mut accepted,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         let mut video = json!({"messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AA=="}}]}]});
@@ -1020,6 +1362,7 @@ mod tests {
             &info(ProviderId::MlxVlm, vision),
             "chat/completions",
             &mut video,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap_err();
         assert!(error.message.contains("data URLs"));
@@ -1029,7 +1372,8 @@ mod tests {
             adapt_request(
                 &info(ProviderId::Vllm, vision),
                 "chat/completions",
-                &mut unknown
+                &mut unknown,
+                RequestDefaultsPolicy::Apply
             )
             .unwrap_err()
             .code,
@@ -1094,9 +1438,14 @@ mod tests {
         ] {
             let mut body = chat(part.clone());
             assert_eq!(
-                adapt_request(&engine, "chat/completions", &mut body)
-                    .unwrap_err()
-                    .code,
+                adapt_request(
+                    &engine,
+                    "chat/completions",
+                    &mut body,
+                    RequestDefaultsPolicy::Apply
+                )
+                .unwrap_err()
+                .code,
                 code,
                 "{part}"
             );
@@ -1107,14 +1456,24 @@ mod tests {
             json!({"type":"video_url","video_url":{"url":"data:video/mp4;base64,AA=="}}),
         ] {
             let mut body = chat(part.clone());
-            adapt_request(&engine, "chat/completions", &mut body)
-                .unwrap_or_else(|error| panic!("{part}: {error:?}"));
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut body,
+                RequestDefaultsPolicy::Apply,
+            )
+            .unwrap_or_else(|error| panic!("{part}: {error:?}"));
         }
         let five = json!({"messages":[{"role":"user","content":(0..5).map(|_| json!({"type":"image_url","image_url":{"url":"https://example.com/a.png"}})).collect::<Vec<_>>()}]});
         assert_eq!(
-            adapt_request(&engine, "chat/completions", &mut five.clone())
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut five.clone(),
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "media_limit"
         );
     }
@@ -1129,6 +1488,7 @@ mod tests {
             &info(ProviderId::Vllm, all_inputs()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -1140,7 +1500,8 @@ mod tests {
             adapt_request(
                 &info(ProviderId::Vllm, all_inputs()),
                 "chat/completions",
-                &mut bare
+                &mut bare,
+                RequestDefaultsPolicy::Apply
             )
             .unwrap_err()
             .code,
@@ -1152,6 +1513,7 @@ mod tests {
             &info(ProviderId::Vllm, all_inputs()),
             "chat/completions",
             &mut bare,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -1165,6 +1527,7 @@ mod tests {
             &EngineInfo::llama("m", all_inputs()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -1178,6 +1541,7 @@ mod tests {
             &info(ProviderId::MlxVlm, all_inputs()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -1191,7 +1555,8 @@ mod tests {
             adapt_request(
                 &info(ProviderId::MlxVlm, all_inputs()),
                 "chat/completions",
-                &mut path
+                &mut path,
+                RequestDefaultsPolicy::Apply
             )
             .unwrap_err()
             .code,
@@ -1209,6 +1574,7 @@ mod tests {
             &EngineInfo::llama("m", all_inputs()),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -1229,6 +1595,7 @@ mod tests {
                 &info(provider, Modalities::text_only()),
                 "chat/completions",
                 &mut body,
+                RequestDefaultsPolicy::Apply,
             )
             .unwrap_err();
             assert_eq!(error.code, "unsupported_input");
@@ -1248,6 +1615,7 @@ mod tests {
             ),
             "chat/completions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap_err();
         assert!(error.message.contains("llama-server") && error.message.contains("video"));
@@ -1260,29 +1628,50 @@ mod tests {
         pooling.embedding_model = Some("served".into());
         let mut body = json!({"messages":[{"role":"user","content":"hi"}]});
         assert_eq!(
-            adapt_request(&pooling, "chat/completions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &pooling,
+                "chat/completions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_task"
         );
         let mut embedding = json!({"model":"alias","input":["a","b"]});
-        adapt_request(&pooling, "embeddings", &mut embedding).unwrap();
+        adapt_request(
+            &pooling,
+            "embeddings",
+            &mut embedding,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(embedding["model"], "served");
         let mut generation = info(ProviderId::Vllm, Modalities::text_only());
         generation.embedding_model = None;
         let mut embedding = json!({"model":"alias","input":"a"});
         assert_eq!(
-            adapt_request(&generation, "embeddings", &mut embedding)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &generation,
+                "embeddings",
+                &mut embedding,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_task"
         );
         let mut image =
             json!({"input":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]});
         assert_eq!(
-            adapt_request(&pooling, "embeddings", &mut image)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &pooling,
+                "embeddings",
+                &mut image,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_input"
         );
     }
@@ -1292,7 +1681,13 @@ mod tests {
         let engine = info(ProviderId::Vllm, all_inputs());
         let image = json!({"type":"image_url","image_url":{"url":"https://example.com/a.png"}});
         let mut single = json!({"input":image.clone()});
-        adapt_request(&engine, "embeddings", &mut single).unwrap();
+        adapt_request(
+            &engine,
+            "embeddings",
+            &mut single,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(single["input"], image);
 
         let input = json!([
@@ -1307,7 +1702,13 @@ mod tests {
             image.clone()
         ]);
         let mut embedding = json!({"input":input.clone()});
-        adapt_request(&engine, "embeddings", &mut embedding).unwrap();
+        adapt_request(
+            &engine,
+            "embeddings",
+            &mut embedding,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(embedding["input"], input);
         assert_eq!(embedding["model"], "/models/embedding");
 
@@ -1316,7 +1717,13 @@ mod tests {
         let mut embedding = json!({"input":five});
         let before = embedding.clone();
         assert_eq!(
-            adapt_request(&engine, "embeddings", &mut embedding).unwrap_err(),
+            adapt_request(
+                &engine,
+                "embeddings",
+                &mut embedding,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err(),
             adapt_error(
                 "media_limit",
                 "Each message accepts up to four media files and 128 MiB of decoded media."
@@ -1329,7 +1736,13 @@ mod tests {
             {"role":"user","content":parts.clone()},
             {"role":"user","content":parts.clone()}
         ]});
-        adapt_request(&engine, "chat/completions", &mut chat).unwrap();
+        adapt_request(
+            &engine,
+            "chat/completions",
+            &mut chat,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(chat["messages"][0]["content"].as_array().unwrap(), &parts);
         assert_eq!(chat["messages"][1]["content"].as_array().unwrap(), &parts);
 
@@ -1339,7 +1752,13 @@ mod tests {
         ]});
         let before = invalid.clone();
         assert_eq!(
-            adapt_request(&engine, "embeddings", &mut invalid).unwrap_err(),
+            adapt_request(
+                &engine,
+                "embeddings",
+                &mut invalid,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err(),
             adapt_error("invalid_media", "The image part has no media reference.")
         );
         assert_eq!(invalid, before);
@@ -1362,7 +1781,8 @@ mod tests {
         assert!(adapt_request(
             &engine,
             "chat/completions",
-            &mut request(Some(json!("none")))
+            &mut request(Some(json!("none"))),
+            RequestDefaultsPolicy::Apply
         )
         .is_ok());
         for choice in [
@@ -1372,9 +1792,14 @@ mod tests {
             Some(named.clone()),
         ] {
             assert_eq!(
-                adapt_request(&engine, "chat/completions", &mut request(choice))
-                    .unwrap_err()
-                    .code,
+                adapt_request(
+                    &engine,
+                    "chat/completions",
+                    &mut request(choice),
+                    RequestDefaultsPolicy::Apply
+                )
+                .unwrap_err()
+                .code,
                 "tool_parser_required"
             );
         }
@@ -1382,17 +1807,42 @@ mod tests {
         assert!(adapt_request(
             &engine,
             "chat/completions",
-            &mut request(Some(json!("required")))
+            &mut request(Some(json!("required"))),
+            RequestDefaultsPolicy::Apply
         )
         .is_ok());
-        assert!(adapt_request(&engine, "chat/completions", &mut request(Some(named))).is_ok());
-        assert!(adapt_request(&engine, "chat/completions", &mut request(None)).is_err());
+        assert!(adapt_request(
+            &engine,
+            "chat/completions",
+            &mut request(Some(named)),
+            RequestDefaultsPolicy::Apply
+        )
+        .is_ok());
+        assert!(adapt_request(
+            &engine,
+            "chat/completions",
+            &mut request(None),
+            RequestDefaultsPolicy::Apply
+        )
+        .is_err());
         engine.tools_auto = true;
-        assert!(adapt_request(&engine, "chat/completions", &mut request(None)).is_ok());
+        assert!(adapt_request(
+            &engine,
+            "chat/completions",
+            &mut request(None),
+            RequestDefaultsPolicy::Apply
+        )
+        .is_ok());
         // Other providers parse tools themselves.
         let mut mlx = info(ProviderId::MlxVlm, Modalities::text_only());
         mlx.tools_auto = false;
-        assert!(adapt_request(&mlx, "chat/completions", &mut request(None)).is_ok());
+        assert!(adapt_request(
+            &mlx,
+            "chat/completions",
+            &mut request(None),
+            RequestDefaultsPolicy::Apply
+        )
+        .is_ok());
     }
 
     fn stt_info(tasks: &[&str]) -> EngineInfo {
@@ -1407,29 +1857,65 @@ mod tests {
         // Whisper serves both transcription and translation.
         let whisper = stt_info(&["transcription", "translate"]);
         let mut body = json!({"model": "public", "language": "en", "response_format": "json", "temperature": "0.0"});
-        adapt_request(&whisper, "audio/transcriptions", &mut body).unwrap();
+        adapt_request(
+            &whisper,
+            "audio/transcriptions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(body["model"], "/models/qwen-vl");
         let mut body = json!({"model": "public"});
-        adapt_request(&whisper, "audio/translations", &mut body).unwrap();
+        adapt_request(
+            &whisper,
+            "audio/translations",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         assert_eq!(body["model"], "/models/qwen-vl");
         // Qwen3-ASR serves transcriptions only.
         let asr = stt_info(&["transcription"]);
         let mut body = json!({"model": "public"});
-        adapt_request(&asr, "audio/transcriptions", &mut body).unwrap();
-        let error = adapt_request(&asr, "audio/translations", &mut body.clone()).unwrap_err();
+        adapt_request(
+            &asr,
+            "audio/transcriptions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
+        let error = adapt_request(
+            &asr,
+            "audio/translations",
+            &mut body.clone(),
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap_err();
         assert_eq!(error.code, "unsupported_task");
         assert!(
             error.message.contains("speech-to-text") || error.message.contains("transcription")
         );
         // Chat on an STT session is refused as speech-to-text, never as embeddings.
         let mut chat = json!({"messages": [{"role": "user", "content": "hi"}]});
-        let error = adapt_request(&asr, "chat/completions", &mut chat).unwrap_err();
+        let error = adapt_request(
+            &asr,
+            "chat/completions",
+            &mut chat,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap_err();
         assert_eq!(error.code, "unsupported_task");
         assert!(error.message.contains("speech-to-text"));
         assert!(!error.message.contains("embeddings"));
         // Embeddings on an STT session are refused as speech-to-text too.
         let mut embedding = json!({"model": "public", "input": "hi"});
-        let error = adapt_request(&asr, "embeddings", &mut embedding).unwrap_err();
+        let error = adapt_request(
+            &asr,
+            "embeddings",
+            &mut embedding,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap_err();
         assert_eq!(error.code, "unsupported_task");
         assert!(error.message.contains("speech-to-text"));
         // Generation sessions cannot transcribe.
@@ -1438,6 +1924,7 @@ mod tests {
             &info(ProviderId::Vllm, Modalities::text_only()),
             "audio/transcriptions",
             &mut body,
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap_err();
         assert_eq!(error.code, "unsupported_task");
@@ -1452,24 +1939,39 @@ mod tests {
         // response_format allowlist.
         let mut body = json!({"model": "public", "response_format": "srt"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "invalid_audio"
         );
         // Numeric fields must parse.
         let mut body = json!({"model": "public", "temperature": "warm"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "invalid_audio"
         );
         let mut body = json!({"model": "public", "top_k": "many"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "invalid_audio"
         );
         // logit_bias/min_tokens are rejected for every Metal STT request.
@@ -1477,9 +1979,14 @@ mod tests {
             let mut body = json!({"model": "public"});
             body[forbidden] = json!("0");
             assert_eq!(
-                adapt_request(&whisper, "audio/transcriptions", &mut body)
-                    .unwrap_err()
-                    .code,
+                adapt_request(
+                    &whisper,
+                    "audio/transcriptions",
+                    &mut body,
+                    RequestDefaultsPolicy::Apply
+                )
+                .unwrap_err()
+                .code,
                 "unsupported_field",
                 "{forbidden}"
             );
@@ -1487,37 +1994,69 @@ mod tests {
         // Unknown fields are rejected, not dropped.
         let mut body = json!({"model": "public", "audio_url": "https://example.com/a.wav"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_field"
         );
         // Binary file must not travel as a text field.
         let mut body = json!({"model": "public", "file": "clip.wav"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "invalid_audio"
         );
         // Translations reject language; transcriptions accept it.
         let mut body = json!({"model": "public", "language": "en"});
         assert_eq!(
-            adapt_request(&whisper, "audio/translations", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/translations",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "unsupported_field"
         );
         let mut body = json!({"model": "public", "language": "en"});
-        adapt_request(&whisper, "audio/transcriptions", &mut body).unwrap();
+        adapt_request(
+            &whisper,
+            "audio/transcriptions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         // Repeated timestamp fields travel as an array.
         let mut body = json!({"model": "public", "timestamp_granularities": ["word", "segment"]});
-        adapt_request(&whisper, "audio/transcriptions", &mut body).unwrap();
+        adapt_request(
+            &whisper,
+            "audio/transcriptions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
         let mut body = json!({"model": "public", "timestamp_granularities": "word"});
         assert_eq!(
-            adapt_request(&whisper, "audio/transcriptions", &mut body)
-                .unwrap_err()
-                .code,
+            adapt_request(
+                &whisper,
+                "audio/transcriptions",
+                &mut body,
+                RequestDefaultsPolicy::Apply
+            )
+            .unwrap_err()
+            .code,
             "invalid_audio"
         );
     }
@@ -1534,9 +2073,14 @@ mod tests {
         ] {
             let mut body = field;
             assert_eq!(
-                adapt_request(&metal, "audio/transcriptions", &mut body)
-                    .unwrap_err()
-                    .code,
+                adapt_request(
+                    &metal,
+                    "audio/transcriptions",
+                    &mut body,
+                    RequestDefaultsPolicy::Apply
+                )
+                .unwrap_err()
+                .code,
                 "unsupported_field"
             );
         }
@@ -1550,9 +2094,14 @@ mod tests {
         ] {
             let mut body = field;
             assert_eq!(
-                adapt_request(&standard, "audio/transcriptions", &mut body)
-                    .unwrap_err()
-                    .code,
+                adapt_request(
+                    &standard,
+                    "audio/transcriptions",
+                    &mut body,
+                    RequestDefaultsPolicy::Apply
+                )
+                .unwrap_err()
+                .code,
                 "invalid_audio"
             );
         }
@@ -1560,6 +2109,7 @@ mod tests {
             &metal,
             "audio/transcriptions",
             &mut json!({"temperature":"0"}),
+            RequestDefaultsPolicy::Apply,
         )
         .unwrap();
     }

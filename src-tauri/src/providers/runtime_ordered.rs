@@ -19,6 +19,12 @@
 //! record that names missing values, disagrees with an occurrence count or
 //! with the grouped spelling, or comes from a newer app is refused, never
 //! repaired, and the saved values stay untouched.
+//!
+//! Actual-spawn capture shares the import token recognizer, but keeps only
+//! local identities and token positions from raw argv. Values are interpreted
+//! from the position-preserving sanitized copy, including redacted occurrences
+//! that must supersede earlier aliases. Managed tuning remains import review
+//! while being observable at the final launch boundary.
 use super::runtime_help_store::overrides_from_map;
 use super::runtime_options::{
     Occurrence, OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions,
@@ -546,6 +552,232 @@ pub fn import_plan_for_entry(
     text: &str,
     syntax: super::options::CommandSyntax,
 ) -> Result<ImportedPlan, String> {
+    let words = super::options::split_command_with_syntax(text, syntax)?;
+    import_plan_tokens_for_entry(schema, selected_scope, entry, &words)
+}
+
+/// Import already split command words through the same recognizer used by
+/// actual-spawn capture. Review remains literal and never changes saved values.
+pub fn import_plan_tokens_for_entry(
+    schema: &OptionSchema,
+    selected_scope: &[String],
+    entry: Option<&CommandEntry>,
+    words: &[String],
+) -> Result<ImportedPlan, String> {
+    let lexed = recognize_tokens(schema, selected_scope, entry, words, false)?;
+    let mut plan = Vec::new();
+    let mut unrecognized = Vec::new();
+    for occurrence in lexed.occurrences {
+        let values = if occurrence.valid {
+            match occurrence.boolean {
+                Some(value) => Some(vec![Value::Bool(value)]),
+                None => imported_values(occurrence.option, occurrence.values(words)),
+            }
+        } else {
+            None
+        };
+        if let Some(values) = values {
+            plan.push(PlannedOccurrence {
+                key: occurrence.option.key.clone(),
+                spelling: occurrence.spelling.map(str::to_owned),
+                values,
+            });
+        } else {
+            unrecognized.push(occurrence.span);
+        }
+    }
+    unrecognized.extend(lexed.unrecognized);
+    unrecognized.sort_by_key(|span| span.start);
+    if plan.len() > MAX_PLAN {
+        return Err("too many planned option occurrences".into());
+    }
+    Ok(ImportedPlan {
+        plan,
+        managed: lexed
+            .managed
+            .into_iter()
+            .flat_map(|span| words[span].iter().cloned())
+            .collect(),
+        unrecognized: unrecognized
+            .into_iter()
+            .flat_map(|span| words[span].iter().cloned())
+            .collect(),
+    })
+}
+
+/// A capture retains local schema identity and order, never raw argument values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CapturedOccurrence {
+    pub key: String,
+    pub spelling: Option<String>,
+    pub order: usize,
+    pub state: CapturedValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CapturedValue {
+    Known(Vec<Value>),
+    Redacted,
+    Invalid,
+}
+
+/// Recognize identities and value positions in raw argv, then interpret only
+/// their position-aligned sanitized counterparts. A changed flag or value is
+/// an occurrence in its own right, so last-occurrence selection cannot revive
+/// an earlier unmasked value. Managed tuning is observable, not overridable.
+pub fn capture_plan_for_entry(
+    schema: &OptionSchema,
+    selected_scope: &[String],
+    entry: Option<&CommandEntry>,
+    raw: &[String],
+    sanitized: &[String],
+) -> Result<Vec<CapturedOccurrence>, String> {
+    if raw.len() != sanitized.len() {
+        return Err("capture requires position-aligned sanitized command words".into());
+    }
+    let lexed = recognize_tokens(schema, selected_scope, entry, raw, true)?;
+    Ok(lexed
+        .occurrences
+        .into_iter()
+        .enumerate()
+        .map(|(order, occurrence)| {
+            let state = if raw[occurrence.span.clone()] != sanitized[occurrence.span.clone()] {
+                CapturedValue::Redacted
+            } else if !occurrence.valid
+                || occurrence.option.arity.supported().is_none()
+                || occurrence.option.kind.supported().is_none()
+            {
+                CapturedValue::Invalid
+            } else {
+                let values = match occurrence.boolean {
+                    Some(value) => Some(vec![Value::Bool(value)]),
+                    None => captured_values(occurrence.option, occurrence.values(sanitized)),
+                };
+                values.map_or(CapturedValue::Invalid, CapturedValue::Known)
+            };
+            CapturedOccurrence {
+                key: occurrence.option.key.clone(),
+                spelling: occurrence.spelling.map(str::to_owned),
+                order,
+                state,
+            }
+        })
+        .collect())
+}
+
+// Some launch adapters encode a numeric vector as comma-separated argv rather
+// than JSON. This interpretation is capture-only: pasted invalid JSON must
+// continue to stay in the import review bucket.
+fn captured_values(option: &OptionDefinition, values: Vec<Value>) -> Option<Vec<Value>> {
+    if option.kind.supported() != Some(&super::runtime_options::ValueKind::Json) {
+        return imported_values(option, values);
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            let text = value.as_str()?;
+            if let Ok(value) = serde_json::from_str::<Value>(text) {
+                return json_import_has_safe_integers(&value).then_some(value);
+            }
+            if !text.contains(',') {
+                return None;
+            }
+            let numbers: Vec<Value> = text
+                .split(',')
+                .take(65)
+                .map(|part| {
+                    serde_json::from_str::<Value>(part).ok().filter(|value| {
+                        value.is_number()
+                            && value.as_f64().is_some_and(f64::is_finite)
+                            && json_import_has_safe_integers(value)
+                    })
+                })
+                .collect::<Option<_>>()?;
+            (numbers.len() <= 64).then_some(Value::Array(numbers))
+        })
+        .collect()
+}
+
+struct TokenOccurrence<'a> {
+    option: &'a OptionDefinition,
+    spelling: Option<&'a str>,
+    span: std::ops::Range<usize>,
+    // An inline value starts after '=' in the first word; all remaining
+    // values occupy whole words. No raw value is copied into the recognizer.
+    inline: Option<usize>,
+    value_start: usize,
+    boolean: Option<bool>,
+    valid: bool,
+}
+
+impl TokenOccurrence<'_> {
+    fn values(&self, words: &[String]) -> Vec<Value> {
+        if let Some(offset) = self.inline {
+            vec![Value::String(words[self.span.start][offset..].to_owned())]
+        } else {
+            words[self.value_start..self.span.end]
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect()
+        }
+    }
+}
+
+#[derive(Default)]
+struct RecognizedTokens<'a> {
+    occurrences: Vec<TokenOccurrence<'a>>,
+    managed: Vec<std::ops::Range<usize>>,
+    unrecognized: Vec<std::ops::Range<usize>>,
+}
+
+// Capture needs only the lexical shape of a negative number to distinguish a
+// value from a flag. In particular it never parses an unredacted number.
+fn numeric_word(word: &str, capture: bool) -> bool {
+    if !capture {
+        return word.parse::<f64>().is_ok_and(f64::is_finite);
+    }
+    let bytes = word.as_bytes();
+    let mut i = usize::from(bytes.first().is_some_and(|b| matches!(b, b'+' | b'-')));
+    let start = i;
+    while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+        i += 1;
+    }
+    let mut digits = i - start;
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        let start = i;
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        digits += i - start;
+    }
+    if digits == 0 {
+        return false;
+    }
+    if bytes.get(i).is_some_and(|b| matches!(b, b'e' | b'E')) {
+        i += 1;
+        if bytes.get(i).is_some_and(|b| matches!(b, b'+' | b'-')) {
+            i += 1;
+        }
+        let start = i;
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    i == bytes.len()
+}
+
+fn recognize_tokens<'a>(
+    schema: &'a OptionSchema,
+    selected_scope: &[String],
+    entry: Option<&CommandEntry>,
+    words: &'a [String],
+    capture: bool,
+) -> Result<RecognizedTokens<'a>, String> {
     schema.validate()?;
     if let Some(entry) = entry {
         entry.validate()?;
@@ -555,32 +787,22 @@ pub fn import_plan_for_entry(
             );
         }
     }
-    let words = super::options::split_command_with_syntax(text, syntax)?;
-    let mut plan: OrderedPlan = Vec::new();
-    let mut managed = Vec::new();
-    let mut unrecognized: Vec<String> = Vec::new();
+    let mut out = RecognizedTokens::default();
     let mut positional_slots: Vec<&OptionDefinition> = schema
         .options
         .iter()
-        .filter(|o| {
-            o.position.is_some()
-                && o.scope.len() <= selected_scope.len()
-                && selected_scope.starts_with(&o.scope)
-        })
+        .filter(|o| o.position.is_some() && selected_scope.starts_with(&o.scope))
         .collect();
     positional_slots.sort_by_key(|o| o.position.unwrap_or(u16::MAX));
     let mut positional_index = 0usize;
     let mut index = 0usize;
     let segments = entry.map(entry_segments);
     if let Some(entry) = entry {
-        index = entry_start(entry, &words)?;
+        index = entry_start(entry, words)?;
     } else {
-        // Skip a leading program word only when it looks like a path or file
-        // name (bare positional values must never be eaten). Scope subcommands
-        // are skipped by the scope cursor below, so pasted full lines import.
         let first_is_scope = selected_scope
             .first()
-            .is_some_and(|s| Some(s.as_str()) == words.first().map(|w| w.as_str()));
+            .is_some_and(|s| Some(s) == words.first());
         let looks_like_program = !words.is_empty()
             && !words[0].starts_with('-')
             && !first_is_scope
@@ -590,8 +812,6 @@ pub fn import_plan_for_entry(
         }
     }
     let mut separator = entry.and_then(|entry| entry.separator.as_deref());
-    // After a declared subcommand, the entry's literal tokens that follow it
-    // are skipped when they appear exactly there.
     let skip_segment = |cursor: usize, index: usize| -> usize {
         segments
             .as_ref()
@@ -600,197 +820,135 @@ pub fn import_plan_for_entry(
             .map_or(0, |segment| segment.len())
     };
     let mut scope_cursor = 0usize;
-    while index < words.len()
-        && scope_cursor < selected_scope.len()
-        && words[index] == selected_scope[scope_cursor]
-    {
-        scope_cursor += 1;
-        index += 1;
-        index += skip_segment(scope_cursor, index);
-    }
     while index < words.len() {
-        // Only a token reached outside an option's consumed values may be
-        // the next scope boundary. Equal-looking values stay values.
         if scope_cursor < selected_scope.len() && words[index] == selected_scope[scope_cursor] {
             scope_cursor += 1;
             index += 1;
             index += skip_segment(scope_cursor, index);
             continue;
         }
-        let word_start = index;
-        let word = words[index].clone();
+        let start = index;
+        let word = &words[index];
         index += 1;
         if word == "--" && separator.take().is_some() {
-            // The registered entry's own boundary after its bindings.
             continue;
         }
         if word == "--" {
             return Err("a bare -- would turn every later argument into a positional value".into());
         }
         if word.starts_with("--")
-            || (word.starts_with('-')
-                && word.len() > 1
-                && !word.parse::<f64>().is_ok_and(f64::is_finite))
+            || (word.starts_with('-') && word.len() > 1 && !numeric_word(word, capture))
         {
-            let (name, inline) = match word.split_once('=') {
-                Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
-                None => (word.clone(), None),
-            };
-            // Managed spellings can never be imported as generic options, even
-            // by alias: they have dedicated binding controls.
-            let managed_hit = schema
+            let (name, inline) = word
+                .split_once('=')
+                .map_or((word.as_str(), None), |(name, _)| {
+                    (name, Some(name.len() + 1))
+                });
+            let managed = schema
                 .options
                 .iter()
                 .find(|o| o.managed.is_some() && o.spellings.iter().any(|s| s.flag == name));
-            if let Some(option) = managed_hit {
-                managed.push(word.clone());
-                if inline.is_none() {
-                    let count = option.arity.supported().filter(|arity| arity.max == Some(arity.min)).map(|arity| usize::from(arity.min))
-                        .ok_or_else(|| format!("{name}: confirm its exact value count before importing a command; its saved values were retained"))?;
-                    if words.len().saturating_sub(index) < count {
-                        return Err(format!(
-                            "{name}: the pasted command is missing a managed option value"
-                        ));
+            if !capture {
+                if let Some(option) = managed {
+                    if inline.is_none() {
+                        let count = option.arity.supported()
+                            .filter(|arity| arity.max == Some(arity.min))
+                            .map(|arity| usize::from(arity.min))
+                            .ok_or_else(|| format!("{name}: confirm its exact value count before importing a command; its saved values were retained"))?;
+                        if words.len().saturating_sub(index) < count {
+                            return Err(format!(
+                                "{name}: the pasted command is missing a managed option value"
+                            ));
+                        }
+                        index += count;
                     }
-                    managed.extend_from_slice(&words[index..index + count]);
-                    index += count;
+                    out.managed.push(start..index);
+                    continue;
                 }
-                continue;
             }
-            let negated = name.strip_prefix("--no-").map(|rest| format!("--{rest}"));
-            // Preserve the out-of-scope review path when no eligible option
-            // matches, while allowing the selected scope's spelling to win.
+            let negated = name.strip_prefix("--no-");
             let mut first_match = None;
             let eligible = schema.options.iter().find(|o| {
-                let matches = o.spellings.iter().any(|s| s.flag == name)
-                    || (negated
-                        .as_deref()
-                        .is_some_and(|n| o.spellings.iter().any(|s| s.flag == n)));
+                let matches = o.spellings.iter().any(|s| {
+                    s.flag == name
+                        || negated.is_some_and(|rest| s.flag.strip_prefix("--") == Some(rest))
+                });
                 if matches && first_match.is_none() {
                     first_match = Some(*o);
                 }
                 matches && selected_scope.starts_with(&o.scope)
             });
             let Some(option) = eligible.or(first_match) else {
-                unrecognized.push(word.clone());
-                if inline.is_none() {
-                    if let Some(next) = words.get(index).filter(|n| !n.starts_with("--")) {
-                        unrecognized.push(next.clone());
-                        index += 1;
-                    }
+                if inline.is_none() && words.get(index).is_some_and(|n| !n.starts_with("--")) {
+                    index += 1;
                 }
+                out.unrecognized.push(start..index);
                 continue;
             };
             if !selected_scope.starts_with(&option.scope) {
-                unrecognized.push(word.clone());
+                out.unrecognized.push(start..index);
                 continue;
             }
-            // Explicit negative spellings use their documented polarity.
-            let is_negative = negated.is_some_and(|n| {
-                option.spellings.iter().any(|s| s.flag == n)
-                    && !option.spellings.iter().any(|s| s.flag == name)
-            }) || option
-                .spellings
-                .iter()
-                .any(|s| s.flag == name && s.polarity == Some(false));
+            let spelling = option.spellings.iter().find(|s| s.flag == name);
+            let is_negative = (negated.is_some_and(|rest| {
+                option
+                    .spellings
+                    .iter()
+                    .any(|s| s.flag.strip_prefix("--") == Some(rest))
+            }) && spelling.is_none())
+                || spelling.is_some_and(|s| s.polarity == Some(false));
+            let mut occurrence = TokenOccurrence {
+                option,
+                spelling: Some(name),
+                span: start..index,
+                inline,
+                value_start: index,
+                boolean: None,
+                valid: true,
+            };
             if option.kind.supported() == Some(&super::runtime_options::ValueKind::Boolean)
                 && option.arity.supported().is_some_and(|a| a.max == Some(0))
             {
-                if inline.is_some() {
-                    unrecognized.push(word.clone());
-                    continue;
+                occurrence.boolean = Some(!is_negative);
+                occurrence.valid = inline.is_none() && !(is_negative && spelling.is_none());
+            } else if let Some(arity) = option.arity.supported() {
+                let max = arity.max.unwrap_or(8).min(8) as usize;
+                let mut count = usize::from(inline.is_some());
+                if inline.is_none() {
+                    while count < max && index < words.len() && !words[index].starts_with("--") {
+                        if words[index].starts_with('-') && !numeric_word(&words[index], capture) {
+                            break;
+                        }
+                        count += 1;
+                        index += 1;
+                        if arity.max == Some(1) {
+                            break;
+                        }
+                        if count >= usize::from(arity.min)
+                            && words.get(index).is_some_and(|n| n.starts_with("--"))
+                        {
+                            break;
+                        }
+                    }
                 }
-                let enabled = !is_negative;
-                // An explicit spelling without confirmed polarity cannot set
-                // the opposite value.
-                if is_negative && !option.spellings.iter().any(|s| s.flag == name) {
-                    unrecognized.push(word.clone());
-                    continue;
-                }
-                plan.push(PlannedOccurrence {
-                    key: option.key.clone(),
-                    spelling: Some(name.clone()),
-                    values: vec![Value::Bool(enabled)],
-                });
-                continue;
-            }
-            let arity = option.arity.supported().copied();
-            let Some(arity) = arity else {
-                // Arity unknown: keep one tentative value in order; resolution
-                // still blocks argv until explicit metadata arrives.
-                if let Some(inline) = inline {
-                    plan.push(PlannedOccurrence {
-                        key: option.key.clone(),
-                        spelling: Some(name.clone()),
-                        values: vec![Value::String(inline)],
-                    });
-                } else if let Some(next) = words.get(index).filter(|n| !n.starts_with('-')) {
-                    plan.push(PlannedOccurrence {
-                        key: option.key.clone(),
-                        spelling: Some(name.clone()),
-                        values: vec![Value::String((*next).clone())],
-                    });
+                occurrence.valid = count >= usize::from(arity.min)
+                    && arity.max.is_none_or(|max| count <= usize::from(max));
+            } else if inline.is_none() {
+                if words.get(index).is_some_and(|n| !n.starts_with('-')) {
                     index += 1;
                 } else {
-                    unrecognized.push(word.clone());
-                }
-                continue;
-            };
-            let max = arity.max.unwrap_or(8).min(8) as usize;
-            let mut values: Vec<Value> = Vec::new();
-            if let Some(inline) = inline {
-                values.push(Value::String(inline));
-            } else {
-                while values.len() < max && index < words.len() && !words[index].starts_with("--") {
-                    // A flag-like text value needs a confirmed equals spelling.
-                    if words[index].starts_with('-')
-                        && !words[index].parse::<f64>().is_ok_and(f64::is_finite)
-                    {
-                        break;
-                    }
-                    values.push(Value::String(words[index].clone()));
-                    index += 1;
-                    if arity.max == Some(1) {
-                        break;
-                    }
-                    if values.len() >= arity.min as usize
-                        && words.get(index).is_some_and(|n| n.starts_with("--"))
-                    {
-                        break;
-                    }
+                    occurrence.valid = false;
                 }
             }
-            if values.len() < arity.min as usize
-                || arity.max.is_some_and(|n| values.len() > n as usize)
-            {
-                unrecognized.push(word.clone());
-                unrecognized.extend(values.into_iter().map(|v| {
-                    v.as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| v.to_string())
-                }));
-                continue;
-            }
-            let Some(values) = imported_values(option, values) else {
-                unrecognized.extend_from_slice(&words[word_start..index]);
-                continue;
-            };
-            plan.push(PlannedOccurrence {
-                key: option.key.clone(),
-                spelling: Some(name.clone()),
-                values,
-            });
+            occurrence.span.end = index;
+            out.occurrences.push(occurrence);
             continue;
         }
         if word.starts_with('-') {
-            unrecognized.push(word.clone());
+            out.unrecognized.push(start..index);
             continue;
         }
-        // Bare words fill positional slots in order.
         if let Some(entry) = entry {
-            // A slot an entry literal fills takes exactly that literal; when
-            // the pasted command does not repeat it there, the slot is the
-            // entry's and the word belongs to the next slot.
             let mut entry_token = false;
             while let Some(slot) = positional_slots.get(positional_index) {
                 let Some(super::runtime_positional::PositionalRole::Static { index: token }) =
@@ -799,7 +957,7 @@ pub fn import_plan_for_entry(
                     break;
                 };
                 positional_index += 1;
-                if entry.prefix.get(*token) == Some(&word) {
+                if entry.prefix.get(*token) == Some(word) {
                     entry_token = true;
                     break;
                 }
@@ -807,73 +965,48 @@ pub fn import_plan_for_entry(
             if entry_token {
                 continue;
             }
-            let Some(slot) = positional_slots.get(positional_index).copied() else {
-                unrecognized.push(word);
-                continue;
-            };
-            positional_index += 1;
-            if slot.managed.is_some() {
-                // A template binding's value, or a slot whose role is unmapped.
-                managed.push(word);
-                continue;
-            }
+        }
+        let Some(slot) = positional_slots.get(positional_index).copied() else {
+            out.unrecognized.push(start..index);
+            continue;
+        };
+        positional_index += 1;
+        if entry.is_some() && slot.managed.is_some() && !capture {
+            out.managed.push(start..index);
+            continue;
+        }
+        let mut valid = true;
+        if entry.is_some() {
             let (min, max) = slot
                 .arity
                 .supported()
                 .map_or((1, Some(1)), |a| (a.min.max(1), a.max));
-            let mut values = vec![Value::String(word)];
-            while max.is_none_or(|max| values.len() < usize::from(max))
-                && values.len() < 256
+            while max.is_none_or(|max| index - start < usize::from(max))
+                && index - start < 256
                 && words.get(index).is_some_and(|next| {
                     !next.starts_with('-')
                         && !(scope_cursor < selected_scope.len()
                             && *next == selected_scope[scope_cursor])
                 })
             {
-                values.push(Value::String(words[index].clone()));
                 index += 1;
             }
-            if values.len() < usize::from(min) {
-                unrecognized.extend(
-                    values
-                        .into_iter()
-                        .map(|v| v.as_str().unwrap_or_default().to_owned()),
-                );
-                continue;
-            }
-            let Some(values) = imported_values(slot, values) else {
-                unrecognized.extend_from_slice(&words[word_start..index]);
-                continue;
-            };
-            plan.push(PlannedOccurrence {
-                key: slot.key.clone(),
-                spelling: None,
-                values,
-            });
-        } else if positional_index < positional_slots.len() {
-            let slot = positional_slots[positional_index];
-            positional_index += 1;
-            if let Some(values) = imported_values(slot, vec![Value::String(word)]) {
-                plan.push(PlannedOccurrence {
-                    key: slot.key.clone(),
-                    spelling: None,
-                    values,
-                });
-            } else {
-                unrecognized.extend_from_slice(&words[word_start..index]);
-            }
-        } else {
-            unrecognized.push(word);
+            valid = index - start >= usize::from(min);
         }
+        out.occurrences.push(TokenOccurrence {
+            option: slot,
+            spelling: None,
+            span: start..index,
+            inline: None,
+            value_start: start,
+            boolean: None,
+            valid,
+        });
     }
-    if plan.len() > 512 {
+    if capture && out.occurrences.len() > MAX_PLAN {
         return Err("too many planned option occurrences".into());
     }
-    Ok(ImportedPlan {
-        plan,
-        managed,
-        unrecognized,
-    })
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -915,6 +1048,138 @@ mod tests {
             constraints: vec![],
             raw_help: vec![],
             end_of_options: Fact::default(),
+        }
+    }
+
+    fn capture_words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    fn capture_threads() -> OptionDefinition {
+        let mut threads = option("threads", "--threads", 1, Some(1));
+        threads.kind = known(ValueKind::Integer);
+        threads.spellings = serde_json::from_value(json!([
+            {"flag": "--threads"}, {"flag": "-t"}
+        ]))
+        .unwrap();
+        threads
+    }
+
+    #[test]
+    fn capture_preserves_alias_order_and_later_redacted_values() {
+        let schema = schema(vec![capture_threads()]);
+        let raw = capture_words(&["-t", "4", "--threads", "8"]);
+        let sanitized = capture_words(&["-t", "4", "--threads", "[redacted]"]);
+        let captured = capture_plan_for_entry(&schema, &[], None, &raw, &sanitized).unwrap();
+        assert_eq!(
+            captured,
+            vec![
+                CapturedOccurrence {
+                    key: "threads".into(),
+                    spelling: Some("-t".into()),
+                    order: 0,
+                    state: CapturedValue::Known(vec![json!(4)])
+                },
+                CapturedOccurrence {
+                    key: "threads".into(),
+                    spelling: Some("--threads".into()),
+                    order: 1,
+                    state: CapturedValue::Redacted
+                },
+            ]
+        );
+        assert!(!format!("{captured:?}").contains('8'));
+        // Privacy masking is based on token changes, not one marker spelling.
+        let masked_flag = capture_words(&["-t", "4", "[REDACTED]", "8"]);
+        assert_eq!(
+            capture_plan_for_entry(&schema, &[], None, &raw, &masked_flag).unwrap()[1].state,
+            CapturedValue::Redacted
+        );
+        let inline = capture_words(&["--threads=8"]);
+        let masked_inline = capture_words(&["[hidden]=8"]);
+        assert_eq!(
+            capture_plan_for_entry(&schema, &[], None, &inline, &masked_inline).unwrap()[0].state,
+            CapturedValue::Redacted
+        );
+    }
+
+    #[test]
+    fn capture_invalid_later_values_never_disappear_from_order() {
+        let mut unknown = option("unknown", "--unknown", 1, Some(1));
+        unknown.arity = Fact::default();
+        let schema = schema(vec![capture_threads(), unknown]);
+        let raw = capture_words(&["-t", "4", "--threads", "bad", "--unknown", "8", "--threads"]);
+        let captured = capture_plan_for_entry(&schema, &[], None, &raw, &raw).unwrap();
+        assert_eq!(
+            captured.iter().map(|c| c.order).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        assert_eq!(
+            captured.iter().map(|c| c.state.clone()).collect::<Vec<_>>(),
+            [
+                CapturedValue::Known(vec![json!(4)]),
+                CapturedValue::Invalid,
+                CapturedValue::Invalid,
+                CapturedValue::Invalid,
+            ]
+        );
+        let imported = import_plan_tokens_for_entry(&schema, &[], None, &raw).unwrap();
+        assert_eq!(imported.plan.len(), 2);
+        assert_eq!(imported.plan[1].values, [json!("8")]);
+        assert_eq!(imported.unrecognized, ["--threads", "bad", "--threads"]);
+        assert_eq!(
+            imported,
+            import_plan_text(&schema, &[], "-t 4 --threads bad --unknown 8 --threads").unwrap()
+        );
+        assert!(capture_plan_for_entry(&schema, &[], None, &raw, &raw[..2]).is_err());
+    }
+
+    #[test]
+    fn capture_observes_managed_tuning_without_allowing_generic_import() {
+        let mut threads = capture_threads();
+        threads.managed = Some(super::super::runtime_options::ManagedBinding::Discovery);
+        let schema = schema(vec![threads]);
+        let raw = capture_words(&["-t", "4", "--threads", "8"]);
+        let captured = capture_plan_for_entry(&schema, &[], None, &raw, &raw).unwrap();
+        assert_eq!(captured[0].state, CapturedValue::Known(vec![json!(4)]));
+        assert_eq!(captured[1].state, CapturedValue::Known(vec![json!(8)]));
+        let imported = import_plan_tokens_for_entry(&schema, &[], None, &raw).unwrap();
+        assert!(imported.plan.is_empty());
+        assert_eq!(imported.managed, raw);
+        let generic = vec![PlannedOccurrence {
+            key: "threads".into(),
+            spelling: Some("-t".into()),
+            values: vec![json!(4)],
+        }];
+        assert!(resolve_plan(&schema, &[], &generic).is_err());
+    }
+
+    #[test]
+    fn capture_converts_only_sanitized_numeric_vectors_without_changing_import() {
+        let mut split = option("tensor_split", "--tensor-split", 1, Some(1));
+        split.kind = known(ValueKind::Json);
+        let schema = schema(vec![split, capture_threads()]);
+        let raw = capture_words(&["--tensor-split", "0.6,0.4", "-t", "-1"]);
+        let captured = capture_plan_for_entry(&schema, &[], None, &raw, &raw).unwrap();
+        assert_eq!(
+            captured[0].state,
+            CapturedValue::Known(vec![json!([0.6, 0.4])])
+        );
+        assert_eq!(captured[1].state, CapturedValue::Known(vec![json!(-1)]));
+        let imported = import_plan_tokens_for_entry(&schema, &[], None, &raw).unwrap();
+        assert_eq!(imported.unrecognized, ["--tensor-split", "0.6,0.4"]);
+        assert_eq!(imported.plan[0].values, [json!(-1)]);
+        let sanitized = capture_words(&["--tensor-split", "[redacted],0.4", "-t", "-1"]);
+        assert_eq!(
+            capture_plan_for_entry(&schema, &[], None, &raw, &sanitized).unwrap()[0].state,
+            CapturedValue::Redacted
+        );
+        for value in ["1,false", "1,NaN", "1,9007199254740993"] {
+            let words = capture_words(&["--tensor-split", value]);
+            assert_eq!(
+                capture_plan_for_entry(&schema, &[], None, &words, &words).unwrap()[0].state,
+                CapturedValue::Invalid
+            );
         }
     }
 

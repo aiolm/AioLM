@@ -75,15 +75,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(rawChat()).toHaveValue('{}'));
   });
 
-  it('preserves benchmark workload values and inherits the other tuning fields when applying the Default profile', async () => {
+  it('applies the Default launch profile to a benchmark without retaining old workload overrides', async () => {
     const { onProfileCommit, getSaved } = mount({ mode: 'benchmark', initialSection: 'profiles' });
-    expect(screen.queryByRole('tab', { name: 'Generation' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     fireEvent.click(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    // The Default profile owns every tuning field, so GPU layers follow its
-    // runtime default while the benchmark keeps the workload values it controls.
-    expect(getSaved()).toMatchObject({ ctx_size: cfg.ctx_size, temperature: cfg.temperature, parallel: cfg.parallel, ngl: tuningResetValues().ngl });
+    expect(getSaved()).toMatchObject({ ctx_size: tuningResetValues().ctx_size, temperature: tuningResetValues().temperature,
+      parallel: tuningResetValues().parallel, ngl: tuningResetValues().ngl });
     expect(getSaved().runtime_defaults).toContain('ngl');
   });
 

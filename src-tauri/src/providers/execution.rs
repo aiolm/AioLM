@@ -1,5 +1,9 @@
 //! One validated selection shared by the desktop, CLI and API gateway.
-use super::{artifacts, compat, launch, protocol::EngineInfo, python_env, ProviderId};
+use super::{
+    artifacts, compat, launch,
+    protocol::{valid_public_label, ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
+    python_env, ProviderId,
+};
 use crate::config::AppConfig;
 use std::path::Path;
 
@@ -95,6 +99,11 @@ pub async fn probed_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     let mode = llama_mode(&args, None)?;
     if info.modalities.image || mode.is_none() {
         let probe = crate::runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
+        if let Some(version) = crate::runtime::parse_runtime_version(&probe.version) {
+            if let Some(metadata) = &mut info.serving_metadata {
+                metadata.runtime = native_public_engine(&version);
+            }
+        }
         if info.modalities.image {
             info.modalities.video = probe.flags.iter().any(|flag| flag == "--video-fps");
         }
@@ -149,6 +158,8 @@ pub fn keep_launch_capabilities(engine: &mut EngineInfo, launched: &EngineInfo) 
     engine.modalities = launched.modalities;
     engine.tasks = launched.tasks.clone();
     engine.chat_supported = launched.chat_supported;
+    engine.serving_metadata = launched.serving_metadata.clone();
+    engine.stream_usage_supported = launched.stream_usage_supported;
     engine.embedding_model = launched.embedding_model.clone();
     engine.tools_auto = launched.tools_auto;
     engine.tool_parser = launched.tool_parser;
@@ -334,9 +345,48 @@ fn set_llama_mode(info: &mut EngineInfo, mode: LlamaMode, model: &str) -> Result
     Ok(())
 }
 
+fn observed_label(value: &str) -> Option<String> {
+    valid_public_label(value).then(|| value.to_owned())
+}
+
+fn native_public_engine(version: &crate::runtime::RuntimeVersion) -> PublicEngine {
+    PublicEngine {
+        name: Some("llama.cpp".into()),
+        version: observed_label(&version.semver),
+        build: Some(version.build.to_string()),
+        ..PublicEngine::default()
+    }
+}
+
+fn python_public_engine(provider: ProviderId, probe: &python_env::ProbeRecord) -> PublicEngine {
+    let version = observed_label(&probe.version);
+    PublicEngine {
+        name: version.as_ref().map(|_| provider.as_str().into()),
+        version,
+        backend: observed_label(&probe.accelerator),
+        variant: observed_label(&probe.variant),
+        plugin_version: observed_label(&probe.metal_version),
+        ..PublicEngine::default()
+    }
+}
+
 fn llama_info(cfg: &AppConfig, modalities: artifacts::Modalities) -> Result<EngineInfo, String> {
     let mut info = EngineInfo::llama(&cfg.active_model, modalities);
     info.runtime_id = super::runtime_id_of(cfg);
+    let runtime =
+        crate::runtime::installed_reported_version(&cfg.active_backend, &cfg.active_build)
+            .ok()
+            .flatten()
+            .as_ref()
+            .map(native_public_engine)
+            .unwrap_or_default();
+    info.serving_metadata = Some(ServingMetadata::from_observations(
+        runtime,
+        inspect(Path::new(&cfg.active_model))
+            .map(|artifact| artifact.format)
+            .unwrap_or(artifacts::ArtifactFormat::Unknown),
+        ComputeOwnership::Direct,
+    ));
     match llama_mode(
         &super::adapter::native_arguments(cfg, "", &crate::gpu::ResolvedGpu::default())?,
         None,
@@ -423,6 +473,22 @@ pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         .collect();
     Ok(EngineInfo {
         provider,
+        serving_metadata: Some(ServingMetadata::from_observations(
+            runtime
+                .probe
+                .as_ref()
+                .map(|probe| python_public_engine(provider, probe))
+                .unwrap_or_default(),
+            inspect(Path::new(&cfg.active_model))
+                .map(|artifact| artifact.format)
+                .unwrap_or(artifacts::ArtifactFormat::Unknown),
+            if provider == ProviderId::Vllm {
+                ComputeOwnership::Descendant
+            } else {
+                ComputeOwnership::Direct
+            },
+        )),
+        stream_usage_supported: Some(true),
         runtime_id: runtime.id.clone(),
         runtime_variant: runtime
             .probe
@@ -490,6 +556,49 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn builtin_public_identity_uses_reported_binary_or_package_evidence_only() {
+        let empty = python_env::ProbeRecord::default();
+        assert_eq!(
+            python_public_engine(ProviderId::Vllm, &empty),
+            PublicEngine::default()
+        );
+        let probe = python_env::ProbeRecord {
+            version: "0.31.0".into(),
+            variant: "vllm-metal".into(),
+            accelerator: "metal".into(),
+            metal_version: "0.30.0".into(),
+            ..Default::default()
+        };
+        let identity = python_public_engine(ProviderId::Vllm, &probe);
+        assert_eq!(identity.name.as_deref(), Some("vllm"));
+        assert_eq!(identity.version.as_deref(), Some("0.31.0"));
+        assert_eq!(identity.backend.as_deref(), Some("metal"));
+        assert_eq!(identity.variant.as_deref(), Some("vllm-metal"));
+        assert_eq!(identity.plugin_version.as_deref(), Some("0.30.0"));
+        assert_eq!(identity.build, None);
+        let binary = crate::runtime::RuntimeVersion {
+            semver: "0.3.0-dev".into(),
+            build: 10638,
+            commit: "abcdef123".into(),
+        };
+        let identity = native_public_engine(&binary);
+        assert_eq!(identity.name.as_deref(), Some("llama.cpp"));
+        assert_eq!(identity.version.as_deref(), Some("0.3.0-dev"));
+        assert_eq!(identity.build.as_deref(), Some("10638"));
+        assert_eq!(identity.backend, None);
+        assert_eq!(identity.variant, None);
+        assert_eq!(identity.plugin_version, None);
+        let unsafe_probe = python_env::ProbeRecord {
+            version: "/private/runtime".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            python_public_engine(ProviderId::Vllm, &unsafe_probe),
+            PublicEngine::default()
+        );
+    }
+
+    #[test]
     fn vllm_chat_checks_the_selected_tokenizer_and_preserves_unknown_renderers() {
         let dir =
             std::env::temp_dir().join(format!("aiolm-chat-template-{}", uuid::Uuid::new_v4()));
@@ -541,8 +650,13 @@ mod tests {
     }
 
     fn adapt(info: &EngineInfo, endpoint: &str, mut body: serde_json::Value) -> Result<(), String> {
-        super::super::protocol::adapt_request(info, endpoint, &mut body)
-            .map_err(|error| format!("{}: {}", error.code, error.message))
+        super::super::protocol::adapt_request(
+            info,
+            endpoint,
+            &mut body,
+            super::super::protocol::RequestDefaultsPolicy::Apply,
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))
     }
 
     #[test]

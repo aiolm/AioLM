@@ -241,14 +241,19 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     // The spawned process receives the script prefix and options verbatim.
     let info = providers::execution::info(&cfg).unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) = server::spawn(&cfg, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&cfg, "synthetic-key", &err, &Default::default(), None).unwrap();
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap();
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let argv: Vec<String> = serde_json::from_slice(&fs::read(&argv_file).unwrap()).unwrap();

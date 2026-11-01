@@ -4,7 +4,9 @@
 
 [文档目录](../README.md) — 安装、使用指南、参考文档以及安全与隐私政策。文档以当前源代码为准，已发布的版本可能尚未包含最新更改。
 
-AioLM（All-in-One LM）— 通过 Tauri v2 UI 管理模型、运行时、聊天和基准测试的 Windows/macOS/Linux 桌面应用。可选择 llama.cpp、Linux 或 Apple Silicon macOS（vllm-metal）上的 vLLM，以及 Apple Silicon macOS 上的 MLX。兼容性和限制请参阅[推理运行时](../reference/inference-runtimes.md)。
+AioLM（All-in-One LM）不是推理引擎，而是用于管理模型、运行时、聊天和基准测试的 Windows/macOS/Linux 桌面 GUI 适配器。可使用 llama.cpp、Linux 或 Apple Silicon macOS（vllm-metal）上的 vLLM、Apple Silicon macOS 上的 MLX，以及其他已连接的 OpenAI 兼容引擎。兼容性和限制请参阅[推理运行时](../reference/inference-runtimes.md)。
+
+所有已连接且支持文本流式输出的引擎使用相同的 API 基准测试（`openai-chat-serving@1`）、历史记录、导出及共享管理。时间和输出 bytes 为客户端观测值；词元和缓存计数由引擎自行报告，未报告时保持未知。输入 UTF-8 bytes 不是词元数，最大输出 token 请求是上限而非强制生成长度。启动配置保持不变，缓存按当前配置测量，不保证冷缓存。默认值为输入 4096/16384 bytes、输出上限 128 tokens、并发 1/2/4、重复 1 次、启用预热、关闭可选 usage 请求。请参阅[基准测试指南](../reference/benchmarks.md)。
 
 模型加载与 API 服务器启动相互独立。加载模型后即可使用应用内聊天；若要让外部
 应用连接，请在侧边栏的 **API 服务器** 中启动服务器，复制 URL、密钥和模型 ID，

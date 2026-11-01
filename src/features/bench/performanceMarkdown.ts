@@ -1,108 +1,34 @@
 import type { Locale } from '../../shared/i18n/i18n';
-import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
-import { formatBytes } from '../../shared/lib/units.ts';
-import { formatBenchmarkRuntimeVersion } from '../../shared/runtime/runtimeUtils.ts';
-import { benchmarkCopy } from './benchmarkCopy.ts';
-import { withoutCancelledTrials } from './benchmarkCancellation';
-import { summarizePerformanceRows, type PerformanceBenchmarkRecord, type PerformanceSummary } from './performanceRecords.ts';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { benchmarkCopy } from './benchmarkCopy';
+import { benchmarkReport } from './benchmarkReport';
+import type { PerformanceBenchmarkRecord } from './performanceRecords';
 
-type Copy = ReturnType<typeof benchmarkCopy>;
-
-/** Labels the benchmark screen has no string for: it never prints a bare message or an empty-record note. */
-const labels: Record<Locale, { message: string; noMeasurements: string }> = {
-  en: { message: 'Message', noMeasurements: 'No measurements were recorded.' },
-  ko: { message: '메시지', noMeasurements: '기록된 측정 결과가 없습니다.' },
-  ja: { message: 'メッセージ', noMeasurements: '記録された測定結果はありません。' },
-  zh: { message: '消息', noMeasurements: '没有记录到测量结果。' },
+const notes: Record<Locale, string> = {
+  en: 'Serving measurements are client-observed; token/cache counts are self-reported and may be unknown. Statistics are per-metric medians, minima, maxima and observed sample counts. Legacy columns retain historical token measurements. Model revisions describe source snapshots, not weight integrity.',
+  ko: 'Serving 측정값은 클라이언트 관측값이며 토큰/캐시 수는 엔진 보고값으로 미확인일 수 있습니다. 통계는 지표별 중앙값·최솟값·최댓값·관측 표본 수입니다. Legacy 열은 과거 토큰 측정값을 보존합니다. 모델 리비전은 출처 스냅샷이며 가중치 무결성 증거가 아닙니다.',
+  ja: 'Serving 測定値はクライアント観測値です。トークン/キャッシュ数はエンジンの報告値で、不明な場合があります。統計は指標ごとの中央値・最小値・最大値・観測標本数です。Legacy 列は過去のトークン測定値を保持します。モデルリビジョンは出典スナップショットであり、重みの完全性の証拠ではありません。',
+  zh: 'Serving 测量值由客户端观测；token/缓存计数由引擎报告，可能未知。统计为各指标的中位数、最小值、最大值和观测样本数。Legacy 列保留历史 token 测量值。模型修订描述来源快照，并非权重完整性证明。',
 };
-
-/** Server errors can be whole log dumps; keep copied descriptions concise. */
-const MAX_TEXT = 200;
-// Drive-letter and UNC paths. A backslash-separated directory may contain spaces; a
-// slash-separated one may not, so a path never swallows the prose that follows it.
-const WINDOWS_PATH = /(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]+|\\\\+(?=[^\\\s]))(?:[^\\/:*?"<>|]+\\+|[^\\/\s:*?"<>|]+\/+)*([^\\/:*?"<>|\s]*)/g;
-const POSIX_PATH = /(?<![\w.~:/\\-])\/(?:[^/\s:*?"<>|]+\/)+([^/\s:*?"<>|]*)/g;
 const ESCAPES: Record<string, string> = { '\\': '\\\\', '`': '\\`', '*': '\\*', '[': '\\[', ']': '\\]', '|': '\\|', '&': '&amp;', '<': '&lt;', '>': '&gt;' };
 
-/**
- * One line of inert Markdown for text that came from a model file, a runtime or a server.
- * Line breaks are collapsed so the text cannot open a block or end a table row, local
- * directories are reduced to the file name, and the characters that start inline
- * Markdown, HTML or a table cell are escaped.
- */
+/** Inert table/heading text without truncating the frozen data, including public settings. */
 function markdownText(value: string): string {
-  const chars = [...normalizeDisplayText(value).replace(/[\s\p{Cc}]+/gu, ' ').trim()];
-  const clipped = chars.length > MAX_TEXT ? `${chars.slice(0, MAX_TEXT - 1).join('')}…` : chars.join('');
-  return clipped.replace(WINDOWS_PATH, '$1').replace(POSIX_PATH, '$1').replace(/[\\`*[\]|&<>]/g, (char) => ESCAPES[char]);
+  return normalizeDisplayText(value).replace(/[\r\n\p{Cc}\p{Cf}]/gu, ' ').replace(/[\\`*[\]|&<>]/g, char => ESCAPES[char]);
 }
 
-const fixed = (value: number | null | undefined, unavailable: string, digits = 1) =>
-  value == null || !Number.isFinite(value) ? unavailable : value.toFixed(digits);
-
-interface Column { label: string; numeric: boolean; cell: (row: PerformanceSummary) => string }
-
-/** Same columns, precision and missing-value rules as the result tables on the benchmark screen. */
-function table(rows: PerformanceSummary[], batch: boolean, copy: Copy, locale: Locale): string[] {
-  const count = (value: number) => value.toLocaleString(locale);
-  const unit = (label: string, unitLabel: string) => `${label} (${unitLabel})`;
-  const columns: Column[] = [
-    { label: copy.test, numeric: false, cell: (row) => `${count(row.prompt_tokens)} / ${count(row.generation_length)}${row.error ? ` · ${copy.failed}: ${markdownText(row.error)}` : ''}` },
-    ...(batch ? [{ label: copy.concurrency, numeric: true, cell: (row: PerformanceSummary) => `${row.concurrency}×` }] : []),
-    { label: copy.repeat, numeric: true, cell: (row) => String(row.samples) },
-    { label: unit(copy.ttft, copy.milliseconds), numeric: true, cell: (row) => fixed(row.ttft_ms, copy.unavailable) },
-    { label: unit(copy.tpot, copy.milliseconds), numeric: true, cell: (row) => fixed(row.tpot_ms, copy.unavailable, 2) },
-    { label: unit(copy.pp, copy.tokens), numeric: true, cell: (row) => fixed(row.pp_tps, copy.unavailable) },
-    { label: unit(copy.tg, copy.tokens), numeric: true, cell: (row) => `${fixed(row.tg_tps, copy.unavailable)}${row.samples > 1 && row.tg_stddev != null ? ` ± ${fixed(row.tg_stddev, copy.unavailable)}` : ''}` },
-    ...(batch ? [{ label: copy.speedup, numeric: true, cell: (row: PerformanceSummary) => row.speedup == null ? copy.unavailable : `${row.speedup.toFixed(2)}×` }] : []),
-    { label: unit(copy.e2e, copy.seconds), numeric: true, cell: (row) => row.error ? copy.unavailable : fixed(row.e2e_ms / 1000, copy.unavailable, 2) },
-    { label: unit(copy.throughput, copy.tokens), numeric: true, cell: (row) => fixed(row.total_tps, copy.unavailable) },
-    { label: copy.memory, numeric: true, cell: (row) => row.peak_memory_bytes == null || !Number.isFinite(row.peak_memory_bytes) ? copy.unavailable : formatBytes(row.peak_memory_bytes) },
-  ];
-  return [
-    `| ${columns.map((column) => column.label).join(' | ')} |`,
-    `| ${columns.map((column) => column.numeric ? '---:' : '---').join(' | ')} |`,
-    ...rows.map((row) => `| ${columns.map((column) => column.cell(row)).join(' | ')} |`),
-  ];
-}
-
-/**
- * Markdown for pasting one benchmark result into an issue, chat or note. Only measured
- * values appear; anything the run did not produce reads as unavailable. The full model
- * path, launch arguments and machine identifiers stay out of the summary.
- */
+/** Exactly the same frozen identity and aggregate cells as CSV and XLSX, with Markdown escaping. */
 export function performanceMarkdown(record: PerformanceBenchmarkRecord, locale: Locale): string {
   const copy = benchmarkCopy(locale);
-  const { request } = record;
-  const result = withoutCancelledTrials(record.result);
-  if (result.status === 'cancelled' && !result.rows.length) return '';
-  const count = (value: number) => value.toLocaleString(locale);
-  const summary = summarizePerformanceRows(result.rows);
-  const measured = summary.reduce((sum, row) => sum + row.samples, 0);
-  const concurrencies = [...new Set([1, ...request.batch_sizes])];
-  const planned = new Set(request.prompt_lengths).size * concurrencies.length * request.repetitions;
-  const status = { complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[result.status];
-  const runtime = formatBenchmarkRuntimeVersion(result, record.build, '');
-
-  const workload = [
-    `- ${copy.corpus}: ${copy[request.context_profile]}`,
-    `- ${copy.promptLengths}: ${request.prompt_lengths.map(count).join(' / ')}`,
-    `- ${copy.generation}: ${count(request.generation_length)}`,
-    `- ${copy.batchSizes}: ${concurrencies.map((value) => `${value}×`).join(' / ')}`,
-    `- ${copy.repetitions}: ${request.repetitions}`,
-    `- ${copy.warmup}: ${request.warmup ? copy.enabled : copy.disabled}`,
-    `- ${copy.totalTests}: ${count(measured)} / ${count(planned)}`,
-    ...(result.context_size > 0 ? [`- ${copy.contextSize}: ${count(result.context_size)}`] : []),
-    ...(result.parallel > 0 ? [`- ${copy.parallel}: ${count(result.parallel)}`] : []),
-  ];
-  const results = [[copy.single, summary.filter((row) => row.concurrency === 1), false], [copy.batch, summary.filter((row) => row.concurrency > 1), true]] as const;
-
-  const blocks = [
-    `# ${copy.title} · ${markdownText(modelDisplayName(record.model)) || copy.unavailable}`,
-    [status, markdownText(record.backend), markdownText(runtime)].filter(Boolean).join(' · '),
-    ...(result.message ? [`${labels[locale].message}: ${markdownText(result.message)}`] : []),
-    workload.join('\n'),
-    ...results.filter(([, rows]) => rows.length > 0).map(([title, rows, batch]) => [`## ${title}`, '', ...table([...rows], batch, copy, locale)].join('\n')),
-    summary.length > 0 ? copy.metricsHint : labels[locale].noMeasurements,
-  ];
-  return `${blocks.join('\n\n')}\n`;
+  const report = benchmarkReport([record], locale);
+  if (!report.rows.length) return '';
+  const text = (value: string | number | null) => value == null ? copy.unavailable : markdownText(String(value));
+  return [
+    `# ${copy.title} · ${text(report.rows[0][0]) || copy.unavailable}`,
+    '',
+    `| ${report.columns.map(column => markdownText(column.label)).join(' | ')} |`,
+    `| ${report.columns.map(column => column.numFmt ? '---:' : '---').join(' | ')} |`,
+    ...report.rows.map(row => `| ${row.map(text).join(' | ')} |`),
+    '', notes[locale], '',
+  ].join('\n');
 }

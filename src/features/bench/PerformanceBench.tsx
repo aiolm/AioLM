@@ -1,4 +1,3 @@
-import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
 import BenchmarkTableScroll from './BenchmarkTableScroll';
 import ModelName, { useModelNames } from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
@@ -11,13 +10,13 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
-import { providerOf, isExternalProvider } from '../../shared/api/providers';
+import { providerOf } from '../../shared/api/providers';
 import type { AppStore } from "../../shared/state/store";
 import { finishTask, registerTask, updateTask, useTasks } from "../../shared/state/taskRegistry";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { readPerformanceHistory, summarizePerformanceRows, type PerformanceBenchmarkRecord } from "./performanceRecords";
+import { readPerformanceHistory, recordedBenchmarkModelLabel, summarizePerformanceRows, summarizeServingPoints, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import { exportBenchmarkResults, type BenchmarkExportFormat } from './benchmarkExport';
 import { performanceMarkdown } from './performanceMarkdown';
 import { deleteBenchmarkHistoryRecord, initializeBenchmarkHistory, loadAllBenchmarkHistory, loadBenchmarkHistoryPage, rememberBenchmarkResult } from './benchmarkRepository';
@@ -26,6 +25,8 @@ import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { BenchmarkOwnedList } from './BenchmarkOwnedList';
 import { BenchmarkEnvironment } from './BenchmarkEnvironment';
+import { RecordedSettings, ServingResultTable } from './PublicBenchmarkSummary';
+import { publicModelSource } from '../../shared/contracts/benchmark/publicBenchmark';
 import { benchmarkCopy } from "./benchmarkCopy";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { executionChanges, executionConfig } from '../../shared/config/executionSettings';
@@ -45,8 +46,8 @@ import BenchmarkExplorerActions, { useBenchmarkProfileImport } from './Benchmark
 import { benchmarkExplorerCopy } from './benchmarkExplorerCopy';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 
-const PROMPT_LENGTHS = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 200000];
-const BATCH_SIZES = [2, 4, 8];
+const PROMPT_BYTES = [256, 1024, 4096, 16384, 65536, 262144, 1048576];
+const CONCURRENCIES = [1, 2, 4, 8, 16, 32, 64];
 const CORPORA = ["code_python", "code_mixed", "novel_ko", "novel_en", "novel_ja"] as const;
 const TASK_ID = "performance-benchmark-active";
 type Copy = ReturnType<typeof benchmarkCopy>;
@@ -56,7 +57,7 @@ function benchmarkTarget(current: api.AppConfig, saved?: ProfileApplication | nu
   const application = saved ?? appliedProfile(current);
   const base = application ? { ...executionConfig(current, application.settings), active_model: application.model } : current;
   const resolved = resolveProfileForExecution(base, profileLibrary(current), application);
-  const config = applyProfile(base, resolved.profile, true);
+  const config = applyProfile(base, resolved.profile);
   const next = materializeProfileApplication(config, resolved.application.system_prompt, resolved.profile);
   config.settings_profiles = { ...resolved.library, applied: { ...resolved.library.applied, [profileTargetKey(config.active_model)]: next } };
   return { config, application: next };
@@ -134,8 +135,10 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const [sessionsError, setSessionsError] = useState(false);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [stoppingSessions, setStoppingSessions] = useState(false);
-  const [promptLengths, setPromptLengths] = useState([4096, 16384]);
-  const [batchSizes, setBatchSizes] = useState([2, 4]);
+  const [promptBytes, setPromptBytes] = useState([4096, 16384]);
+  const [concurrencies, setConcurrencies] = useState([1, 2, 4]);
+  const [warmup, setWarmup] = useState(true);
+  const [requestUsage, setRequestUsage] = useState(false);
   const [generation, setGeneration] = useState("128");
   const [repetitions, setRepetitions] = useState("1");
   const [corpus, setCorpus] = useState<(typeof CORPORA)[number]>("code_python");
@@ -179,9 +182,9 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const otherBenchmark = tasks.some((task) => task.kind === "benchmark" && task.id !== TASK_ID && (task.state === "running" || task.state === "cancelling"));
   const generationNumber = Number(generation);
   const repetitionsNumber = Number(repetitions);
-  const validGeneration = Number.isInteger(generationNumber) && generationNumber >= 1 && generationNumber <= 4096;
-  const validRepetitions = Number.isInteger(repetitionsNumber) && repetitionsNumber >= 1 && repetitionsNumber <= 10;
-  const valid = promptLengths.length > 0 && validGeneration && validRepetitions;
+  const validGeneration = Number.isInteger(generationNumber) && generationNumber >= 1 && generationNumber <= 65536;
+  const validRepetitions = Number.isInteger(repetitionsNumber) && repetitionsNumber >= 1 && repetitionsNumber <= 100;
+  const valid = promptBytes.length > 0 && concurrencies.length > 0 && promptBytes.length * concurrencies.length <= 64 && validGeneration && validRepetitions;
   const serverRunning = isServerRunning(store.status.state);
   const defaultTarget = useMemo(() => store.cfg ? benchmarkTarget(store.cfg) : null, [store.cfg]);
   const target = useMemo(() => store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget, [store.cfg, targetApplication, defaultTarget]);
@@ -198,14 +201,13 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const setupGaps = targetConfig
     ? runSetupGaps({ activeModel: model, activeProvider: targetConfig.active_provider, activeRuntime: targetConfig.active_runtime, activeBackend: targetConfig.active_backend, activeBuild: targetConfig.active_build })
     : [];
-  const externalTarget = isExternalProvider(providerOf(targetConfig ?? {}));
-  const canRun = !externalTarget && !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
-  const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
+  const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
+  const total = promptBytes.length * concurrencies.length * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
   const copyTargetRef = useRef({ record: selectedRecord, locale });
   copyTargetRef.current = { record: selectedRecord, locale };
   const previousRecords = history.filter(item => item.id !== record?.id);
-  const historyModelNames = useModelNames(previousRecords.map(item => item.model));
+  const historyModelNames = useModelNames(previousRecords.map(item => item.schemaVersion === 1 ? item.model : ''));
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0].id !== selectedRecord?.id);
   const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
   const visibleResult = selectedHistory && selectedRecord ? selectedRecord.result : result;
@@ -213,9 +215,14 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const selectedGpus = provenance?.environment?.execution?.selected_gpus;
   const selectedGpuLabel = Array.isArray(selectedGpus) ? selectedGpus.map(gpu => typeof gpu?.name === 'string' ? gpu.name : '').filter(Boolean).join(' · ') : '';
   const modelHash = provenance?.model?.sha256;
-  const summary = useMemo(() => summarizePerformanceRows(visibleRows), [visibleRows]);
+  const legacyRecord = selectedRecord?.schemaVersion === 1 ? selectedRecord : null;
+  const servingRecord = selectedRecord?.schemaVersion === 2 ? selectedRecord : null;
+  const summary = useMemo(() => legacyRecord ? summarizePerformanceRows(legacyRecord.result.rows) : [], [legacyRecord]);
+  const servingPoints = useMemo(() => summarizeServingPoints(servingRecord ? servingRecord.result.rows : rows), [servingRecord, rows]);
   const singleRows = summary.filter((row) => row.concurrency === 1);
   const batchRows = summary.filter((row) => row.concurrency > 1);
+  const servingProvenance = servingRecord?.result.provenance;
+  const modelSource = servingProvenance ? publicModelSource(servingProvenance.model) : undefined;
 
   useEffect(() => {
     copyMountedRef.current = true;
@@ -293,7 +300,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     const snapshot = structuredClone(benchmarkTarget(store.getConfig?.() ?? store.cfg, targetApplication));
     const cfg = snapshot.config;
     const runId = `performance-${crypto.randomUUID()}`;
-    const request: api.PerformanceBenchmarkRequest = { run_id: runId, context_profile: corpus, prompt_lengths: [...promptLengths].sort((a, b) => a - b), generation_length: generationNumber, batch_sizes: [...batchSizes].sort((a, b) => a - b), repetitions: repetitionsNumber, warmup: true };
+    const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 1 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: generationNumber, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions: repetitionsNumber, warmup, request_usage: requestUsage };
     const createdAt = Date.now();
     setRunTarget(snapshot);
     activeRef.current = true;
@@ -316,20 +323,20 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
         updateTask(TASK_ID, { phase: cancelRequestedRef.current ? copy.cancelling : progressLabel(event.phase, copy), received: event.completed, total: event.total });
       });
       if (cancelRequestedRef.current) {
-        finalResult = { run_id: runId, rows: [], status: "cancelled", args: [], runtime_version: "", context_size: 0, parallel: 0 };
+        finalResult = { run_id: runId, rows: [], status: "cancelled", args: [] };
       } else {
         finalResult = await api.runPerformanceBench(cfg, request);
         if (!finalResult.rows.length && rowsRef.current.length) finalResult = { ...finalResult, rows: rowsRef.current };
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      finalResult = { run_id: runId, rows: rowsRef.current, status: cancelRequestedRef.current ? "cancelled" : "failed", message, args: [], runtime_version: "", context_size: 0, parallel: 0 };
+      finalResult = { run_id: runId, rows: rowsRef.current, status: cancelRequestedRef.current ? "cancelled" : "failed", message, args: [] };
     } finally {
       unlisten?.();
       void store.refreshStatus();
     }
     finalResult = withoutCancelledTrials(finalResult);
-    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: runId, createdAt, model: cfg.active_model, backend: finalResult.provider && finalResult.provider !== 'llama.cpp' ? finalResult.runtime_accelerator ?? '' : cfg.active_backend, build: finalResult.provider && finalResult.provider !== 'llama.cpp' ? finalResult.runtime_version : cfg.active_build, request, result: finalResult };
+    const saved: PerformanceBenchmarkRecord = { schemaVersion: 2, id: runId, createdAt, model: cfg.active_model, request, result: finalResult };
     const emptyCancellation = finalResult.status === 'cancelled' && !finalResult.rows.length;
     setRows(finalResult.rows); setResult(emptyCancellation ? null : finalResult); setRecord(emptyCancellation ? null : saved);
     historyRevisionRef.current++;
@@ -409,8 +416,9 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   };
 
   return <div className="app-page-scroll performance-page">
-    <header className="app-page-header performance-heading"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.description}</p></div></header>
+    <header className="app-page-header performance-heading"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.adapterDescription}</p></div></header>
     <BenchmarkExplorerActions listenerReady={profileImport.listenerReady} />
+    {profileImport.importDialog}
     <ActivePanelContext.Provider value={true}><PanelFeedback>
       {profileImport.notice && <FeedbackBanner tone={profileImport.notice.error ? 'error' : 'success'} onDismiss={profileImport.dismissNotice}>{profileImport.notice.text}</FeedbackBanner>}
     </PanelFeedback></ActivePanelContext.Provider>
@@ -433,12 +441,14 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           <legend className="performance-column-title">{copy.conditions}</legend>
           <div className="performance-input-grid">
             <label className="performance-field"><span>{copy.corpus}</span><CustomSelect ariaLabel={copy.corpus} value={corpus} disabled={busy} onChange={setCorpus} options={CORPORA.map(key => ({ value: key, label: copy[key] }))} /></label>
-            <label className="performance-field"><span>{copy.generation}</span><input className="app-input" type="number" min={1} max={4096} step={1} value={generation} aria-invalid={!validGeneration} aria-describedby="performance-validation" onChange={(event) => setGeneration(event.target.value)} /></label>
-            <label className="performance-field"><span>{copy.repetitions}</span><input className="app-input" type="number" min={1} max={10} step={1} value={repetitions} aria-invalid={!validRepetitions} aria-describedby="performance-validation" onChange={(event) => setRepetitions(event.target.value)} /></label>
+            <label className="performance-field"><span>{copy.outputCap}</span><input className="app-input" type="number" min={1} max={65536} step={1} value={generation} aria-invalid={!validGeneration} aria-describedby="performance-validation" onChange={(event) => setGeneration(event.target.value)} /></label>
+            <label className="performance-field"><span>{copy.repetitions}</span><input className="app-input" type="number" min={1} max={100} step={1} value={repetitions} aria-invalid={!validRepetitions} aria-describedby="performance-validation" onChange={(event) => setRepetitions(event.target.value)} /></label>
           </div>
-          <fieldset className="performance-choice-group"><legend>{copy.promptLengths}</legend><div className="performance-chips">{PROMPT_LENGTHS.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptLengths.includes(value)} onChange={() => toggle(value, promptLengths, setPromptLengths)} /><span>{value === 200000 ? "200K" : `${value / 1024}K`}</span></label>)}</div></fieldset>
-          <fieldset className="performance-choice-group"><legend>{copy.batchSizes}</legend><div className="performance-chips"><span className="performance-baseline-chip">1×</span>{BATCH_SIZES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={batchSizes.includes(value)} onChange={() => toggle(value, batchSizes, setBatchSizes)} /><span>{value}×</span></label>)}</div></fieldset>
-          <p className="performance-hint">{copy.batchHint} {copy.workloadNote}</p>
+          <fieldset className="performance-choice-group"><legend>{copy.inputBytes}</legend><div className="performance-chips">{PROMPT_BYTES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptBytes.includes(value)} onChange={() => toggle(value, promptBytes, setPromptBytes)} /><span>{value.toLocaleString()}</span></label>)}</div></fieldset>
+          <fieldset className="performance-choice-group"><legend>{copy.batchSizes}</legend><div className="performance-chips">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div></fieldset>
+          <label className="performance-chip"><input type="checkbox" checked={warmup} onChange={event => setWarmup(event.target.checked)} /><span>{copy.warmup}</span></label>
+          <details className="performance-choice-group"><summary>{copy.advanced}</summary><label className="performance-chip"><input type="checkbox" checked={requestUsage} onChange={event => setRequestUsage(event.target.checked)} /><span>{copy.requestUsage}</span></label><p className="performance-hint">{copy.usageHint}</p></details>
+          <p className="performance-hint">{copy.concurrencyHint} {copy.servingConditions}</p>
         </fieldset></div>
       </div>
       <div className="performance-run-bar">
@@ -446,12 +456,11 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           {busy
             ? <section className="performance-progress" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><ProgressBar label={copy.totalTests} value={(progress?.completed ?? 0) / Math.max(1, progress?.total ?? total) * 100} /></section>
             : <p className="performance-run-summary">{copy.totalTests}: <strong>{total}</strong></p>}
-          <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.validation}</p>
+          <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.servingValidation}</p>
         </div>
         {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</LocalTaskCancelButton> : <button type="submit" className="app-button app-button--primary" disabled={!canRun}>{copy.run}</button>}
       </div>
     </form>
-    {externalTarget && <FeedbackBanner tone="warning" className="performance-notice">{runtimeAdapterCopy[locale].benchmark}</FeedbackBanner>}
     {setupGaps.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice"
       action={modelSettings ? { label: setupGaps.includes('runtime') ? runCopy.needRuntimeAction : runCopy.needModelAction, onClick: () => editModel(setupGaps.includes('runtime') ? 'runtime' : 'model') } : undefined}>
       {setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ')}
@@ -469,7 +478,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       {previousRecords.length > 0 ? <label><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy || exporting || deleting}
         onChange={value => { setSelectedHistory(value); resetCopied(); setError(null); setExportNotice(null); setHistoryNotice(null); }}
         options={[{ value: '', label: copy.current }, ...previousRecords.map((item, index) => ({ value: item.id,
-          label: `${new Date(item.createdAt).toLocaleString()} · ${historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
+          label: `${new Date(item.createdAt).toLocaleString()} · ${item.schemaVersion === 2 ? recordedBenchmarkModelLabel(item) : historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
@@ -484,39 +493,72 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} /><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
-    <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
-    {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{selectedRecord.schemaVersion === 2 ? recordedBenchmarkModelLabel(selectedRecord) : <><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></>}</strong><span>{statusLabel} · {selectedRecord.schemaVersion === 1 ? `${copy.legacy} · ${selectedRecord.backend} · ${formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}` : `${selectedRecord.request.method.id}@${selectedRecord.request.method.version}`} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {legacyRecord ? <><ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} /></> : <ServingResultTable points={servingPoints} copy={copy} />}
+    {selectedRecord && (selectedRecord.schemaVersion === 1 || selectedRecord.result.status === 'complete'
+      ? <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />
+      : <details className="app-card app-card--flush performance-card performance-details" open><summary>{copy.publicReview}</summary><p>{copy.servingShareIncomplete}</p></details>)}
     <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} revision={sharingRevision} />
     {!visibleRows.length && !visibleResult && !busy && !error && <EmptyState title={copy.emptyTitle} description={copy.empty} />}
     {selectedRecord && <details className="app-card app-card--flush performance-card performance-details" open><summary>{copy.details}</summary><dl className="performance-run-config">
       <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>
-      <div><dt>{copy.promptLengths}</dt><dd>{selectedRecord.request.prompt_lengths.map((value) => value.toLocaleString()).join(" / ")}</dd></div>
-      <div><dt>{copy.generation}</dt><dd>{selectedRecord.request.generation_length.toLocaleString()}</dd></div>
-      <div><dt>{copy.batchSizes}</dt><dd>{[1, ...selectedRecord.request.batch_sizes].map((value) => `${value}×`).join(" / ")}</dd></div>
+      <div><dt>{selectedRecord.schemaVersion === 2 ? copy.inputBytes : copy.promptLengths}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.prompt_bytes : selectedRecord.request.prompt_lengths).map((value) => value.toLocaleString()).join(" / ")}</dd></div>
+      <div><dt>{selectedRecord.schemaVersion === 2 ? copy.outputCap : copy.generation}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.max_output_tokens : selectedRecord.request.generation_length).toLocaleString()}</dd></div>
+      <div><dt>{copy.batchSizes}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.concurrencies : [1, ...selectedRecord.request.batch_sizes]).map((value) => `${value}×`).join(" / ")}</dd></div>
       <div><dt>{copy.repetitions}</dt><dd>{selectedRecord.request.repetitions}</dd></div>
       <div><dt>{copy.warmup}</dt><dd>{selectedRecord.request.warmup ? copy.enabled : copy.disabled}</dd></div>
-      <div><dt>{copy.contextSize}</dt><dd>{selectedRecord.result.context_size > 0 ? selectedRecord.result.context_size.toLocaleString() : copy.unavailable}</dd></div>
-      <div><dt>{copy.parallel}</dt><dd>{selectedRecord.result.parallel > 0 ? selectedRecord.result.parallel : copy.unavailable}</dd></div>
-      <div><dt>{copy.runtimeVersion}</dt><dd>{formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}</dd></div>
+      {legacyRecord && <>
+        <div><dt>{copy.contextSize}</dt><dd>{legacyRecord.result.context_size > 0 ? legacyRecord.result.context_size.toLocaleString() : copy.unavailable}</dd></div>
+        <div><dt>{copy.parallel}</dt><dd>{legacyRecord.result.parallel > 0 ? legacyRecord.result.parallel : copy.unavailable}</dd></div>
+        <div><dt>{copy.runtimeVersion}</dt><dd>{formatBenchmarkRuntimeVersion(legacyRecord.result, legacyRecord.build, copy.unavailable)}</dd></div>
+      </>}
+      {servingRecord && <><div><dt>{copy.requestUsage}</dt><dd>{servingRecord.request.request_usage ? copy.enabled : copy.disabled}</dd></div><div><dt>{copy.cachePolicy}</dt><dd>{copy.asConfigured}</dd></div></>}
+      {servingProvenance && <>
+        <div><dt>{copy.runtimeName}</dt><dd>{servingProvenance.runtime.name ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.runtimeVersion}</dt><dd>{servingProvenance.runtime.version ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.shareBackend}</dt><dd>{servingProvenance.runtime.backend ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.runtimeBuild}</dt><dd>{servingProvenance.runtime.build ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.runtimeVariant}</dt><dd>{servingProvenance.runtime.variant ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.runtimePlugin}</dt><dd>{servingProvenance.runtime.plugin_version ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.shareAppVersion}</dt><dd>{servingProvenance.app_version}</dd></div>
+        <div><dt>{copy.topology}</dt><dd>{servingProvenance.execution.topology}</dd></div>
+        <div><dt>{copy.memoryScope}</dt><dd>{servingProvenance.execution.memory_scope}</dd></div>
+        <div><dt>{copy.modelFormat}</dt><dd>{servingProvenance.model.format}</dd></div>
+        {servingProvenance.model.format === 'gguf' && servingProvenance.model.metadata && <div><dt>{copy.shareModelName}</dt><dd>{[servingProvenance.model.metadata.name, servingProvenance.model.metadata.architecture, servingProvenance.model.metadata.size_label, servingProvenance.model.metadata.quantization].filter(Boolean).join(' · ') || copy.unavailable}</dd></div>}
+        <div><dt>{copy.modelStatus}</dt><dd>{servingProvenance.model.status}</dd></div>
+        <div><dt>{copy.shareModelSize}</dt><dd>{servingProvenance.model.size_bytes == null ? copy.unavailable : formatBytes(servingProvenance.model.size_bytes)}</dd></div>
+        <div><dt>{copy.modelSource}</dt><dd>{modelSource?.repository ?? copy.unavailable}</dd></div>
+        <div><dt>{copy.modelRevision}</dt><dd>{modelSource?.revision ?? copy.unavailable}</dd></div>
+        {servingProvenance.workload.inputs.map(input => <div key={input.bytes}><dt>{copy.inputHash} · {input.bytes}</dt><dd>{input.sha256}</dd></div>)}
+      </>}
       <div><dt>{copy.executionDevice}</dt><dd>{provenance?.environment?.execution?.mode === 'cpu' ? 'CPU' : selectedGpuLabel || copy.unavailable}</dd></div>
+      <div><dt>{copy.shareOs}</dt><dd>{provenance?.environment ? `${provenance.environment.os} · ${provenance.environment.arch}` : copy.unavailable}</dd></div>
       <div><dt>{copy.processor}</dt><dd>{provenance?.environment?.cpu ? `${normalizeDisplayText(provenance.environment.cpu.name)} · ${formatCpuCores(provenance.environment.cpu)}` : copy.unavailable}</dd></div>
       <div><dt>{copy.systemMemory}</dt><dd>{typeof provenance?.environment?.system_memory_bytes === 'number' ? formatBytes(provenance.environment.system_memory_bytes) : copy.unavailable}</dd></div>
       <div><dt>{copy.modelHash}</dt><dd>{typeof modelHash === 'string' ? modelHash : copy.unavailable}</dd></div>
-    </dl></details>}
+    </dl>{servingProvenance && <><p>{copy.hostScope}</p><p>{copy.sourceHint}</p><h4>{copy.recordedSettings}</h4><RecordedSettings settings={servingProvenance.execution.settings} copy={copy} /></>}
+      {servingRecord && <dl className="performance-run-config">{servingRecord.result.rows.map(row => <div key={row.id}><dt>{row.input_bytes.toLocaleString()} / {row.concurrency}× / {row.max_output_tokens} · {row.repetition}</dt><dd>{copy.usageStatus}: {({ complete: copy.usageComplete, partial: copy.usagePartial, missing: copy.usageMissing, invalid: copy.usageInvalid })[row.usage_status]} · {copy.finishReasons}: {row.finish_reasons.join(' / ')}</dd></div>)}</dl>}
+    </details>}
     {visibleResult && visibleResult.args.length > 0 && <details className="app-card app-card--flush performance-card performance-details" open><summary>{copy.effectiveArgs}</summary><code>{argumentLines(visibleResult.args).join("\n")}</code></details>}
     <details className="app-card app-card--flush performance-card performance-details" open><summary>{copy.metrics}</summary><dl className="performance-metric-guide">
-      <div><dt>{copy.ttft}</dt><dd>{copy.ttftHint}</dd></div>
-      <div><dt>{copy.tpot}</dt><dd>{copy.tpotHint}</dd></div>
-      <div><dt>{copy.pp}</dt><dd>{copy.ppHint}</dd></div>
-      <div><dt>{copy.tg}</dt><dd>{copy.tgHint}</dd></div>
-      <div><dt>{copy.throughput}</dt><dd>{copy.throughputHint}</dd></div>
-      <div><dt>{copy.memory}</dt><dd>{copy.memoryHint}</dd></div>
-      <div><dt>{copy.speedup}</dt><dd>{copy.speedupHint}</dd></div>
-    </dl><p>{copy.metricsHint}</p></details>
+      {legacyRecord ? <>
+        <div><dt>{copy.ttft}</dt><dd>{copy.ttftHint}</dd></div>
+        <div><dt>{copy.tpot}</dt><dd>{copy.tpotHint}</dd></div>
+        <div><dt>{copy.pp}</dt><dd>{copy.ppHint}</dd></div>
+        <div><dt>{copy.tg}</dt><dd>{copy.tgHint}</dd></div>
+        <div><dt>{copy.throughput}</dt><dd>{copy.throughputHint}</dd></div>
+        <div><dt>{copy.memory}</dt><dd>{copy.memoryHint}</dd></div>
+        <div><dt>{copy.speedup}</dt><dd>{copy.speedupHint}</dd></div>
+      </> : <>
+        <div><dt>{copy.firstOutput}</dt><dd>{copy.firstOutputHint}</dd></div>
+        <div><dt>{copy.outputRate}</dt><dd>{copy.outputRateHint}</dd></div>
+        <div><dt>{copy.outputBytes}</dt><dd>{copy.emptyOutputHint}</dd></div>
+        <div><dt>{copy.memory}</dt><dd>{copy.servingMemoryHint}</dd></div>
+      </>}
+    </dl><p>{legacyRecord ? copy.metricsHint : copy.medianHint}</p></details>
     <ConfirmDialog open={!!pendingDelete} title={copy.deleteTitle} confirmLabel={copy.deleteHistory} busy={deleting}
       confirmDisabled={busy || otherBenchmark || exporting || sharingBusy || historyLoading}
-      description={<>{pendingDelete && <p><strong><ModelName model={pendingDelete.model} /></strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
+      description={<>{pendingDelete && <p><strong>{pendingDelete.schemaVersion === 2 ? recordedBenchmarkModelLabel(pendingDelete) : <ModelName model={pendingDelete.model} />}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
       onConfirm={() => void deleteSelectedHistory()} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </div>;
 }

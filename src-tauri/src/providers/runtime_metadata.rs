@@ -11,9 +11,9 @@
 //! no option, is reported instead of applied.
 use super::{
     runtime_options::{
-        explicit_operand, identifier, Arity, Certainty, Fact, ManagedBinding, NumericRange,
-        OptionDefinition, OptionSchema, Predicate, Relation, RuntimeDefault, Source, Target,
-        ValueKind,
+        benchmark_identifier, explicit_operand, identifier, Arity, BenchmarkRole, Certainty, Fact,
+        ManagedBinding, NumericRange, OptionDefinition, OptionSchema, Predicate, Relation,
+        RuntimeDefault, Source, Target, ValueKind,
     },
     ProviderId,
 };
@@ -97,6 +97,12 @@ pub struct MetadataOption {
     pub sensitive: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_path: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_public: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_role: Option<BenchmarkRole>,
     /// Why the app owns this option (model lifecycle, tool servers). The
     /// option is locked and saved values are refused with this reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -228,9 +234,21 @@ impl MetadataOption {
             && self.restart_required.is_none()
             && self.sensitive.is_none()
             && self.local_path.is_none()
+            && self.benchmark_public.is_none()
+            && self.benchmark_name.is_none()
+            && self.benchmark_role.is_none()
             && self.reserved.is_none()
         {
             return Err("the entry declares no fact".into());
+        }
+        if self
+            .benchmark_name
+            .as_ref()
+            .is_some_and(|name| !benchmark_identifier(name))
+        {
+            return Err(
+                "a benchmark name must be a safe identifier of at most 64 ASCII characters".into(),
+            );
         }
         if self
             .reserved
@@ -574,6 +592,39 @@ pub fn apply(
             continue;
         }
         if let Some(binding) = entry.owner(option) {
+            // Shipped annotations describe dedicated adapter controls without
+            // granting generic import or launch ownership of those controls.
+            if builtin {
+                before.push((index, option.clone()));
+                if let Some(value) = entry.benchmark_public {
+                    let _ = merge(&mut option.benchmark_public, &value, &source);
+                }
+                if let Some(value) = &entry.benchmark_name {
+                    let _ = merge(&mut option.benchmark_name, value, &source);
+                }
+                if let Some(value) = &entry.benchmark_role {
+                    let _ = merge(&mut option.benchmark_role, value, &source);
+                }
+                if let Some(value) = &entry.unit {
+                    let _ = merge(&mut option.unit, value, &source);
+                }
+                if entry.sensitive == Some(true) {
+                    option.sensitive = Fact {
+                        value: Some(true),
+                        certainty: Certainty::Documented,
+                        source: Some(source.clone()),
+                    };
+                }
+                if entry.local_path == Some(true) {
+                    option.local_path = Fact {
+                        value: Some(true),
+                        certainty: Certainty::Documented,
+                        source: Some(source.clone()),
+                    };
+                }
+                view.applied.push(option.key.clone());
+                continue;
+            }
             view.conflicts.push(reported(
                 entry,
                 &option.key,
@@ -663,6 +714,9 @@ pub fn apply(
         field!(restart_required, "restart_required");
         field!(sensitive, "sensitive");
         field!(local_path, "local_path");
+        field!(benchmark_public, "benchmark_public");
+        field!(benchmark_name, "benchmark_name");
+        field!(benchmark_role, "benchmark_role");
         if applied {
             view.applied.push(option.key.clone());
         }
@@ -1025,13 +1079,23 @@ mod tests {
     }
 
     #[test]
-    fn built_in_metadata_names_only_the_documented_llama_access_token() {
+    fn built_in_metadata_describes_portable_controls_and_the_access_token() {
         let builtin = builtin(ProviderId::Llama).unwrap();
         builtin.validate(ProviderId::Llama).unwrap();
-        assert_eq!(builtin.options.len(), 1);
-        assert_eq!(builtin.options[0].flag.as_deref(), Some("--hf-token"));
-        assert_eq!(builtin.options[0].sensitive, Some(true));
-        assert!(super::builtin(ProviderId::Vllm).is_none());
+        let token = builtin
+            .options
+            .iter()
+            .find(|entry| entry.flag.as_deref() == Some("--hf-token"))
+            .unwrap();
+        assert_eq!(token.sensitive, Some(true));
+        assert!(builtin
+            .options
+            .iter()
+            .any(|entry| entry.benchmark_public == Some(true)));
+        super::builtin(ProviderId::Vllm)
+            .unwrap()
+            .validate(ProviderId::Vllm)
+            .unwrap();
         // A build without the option is not a difference worth reporting.
         let mut schema = schema();
         let view = apply(&mut schema, &builtin, true, false);
@@ -1124,6 +1188,29 @@ mod tests {
             .validate(engine())
             .unwrap_err()
             .contains("256"));
+        for name in ["-local", "bad/name", "bad name", "", &"x".repeat(65)] {
+            assert!(
+                metadata(
+                    json!([{"flag":"--cache", "benchmark_name":name}]),
+                    json!([])
+                )
+                .validate(engine())
+                .is_err(),
+                "{name}"
+            );
+        }
+        let public = metadata(
+            json!([{"flag":"--cache", "benchmark_public":true,
+            "benchmark_name":"context", "benchmark_role":"context.total_tokens"}]),
+            json!([]),
+        );
+        public.validate(engine()).unwrap();
+        assert!(serde_json::from_value::<OptionMetadata>(json!({
+            "version":1, "engine_id":"custom.example",
+            "adapter":{"id":"synthetic","revision":"r1"},
+            "options":[{"flag":"--cache", "benchmark_role":"local.private"}]
+        }))
+        .is_err());
         // Request mappings, bindings, unknown fields and null operands never
         // parse.
         for extra in [
@@ -1439,7 +1526,9 @@ mod tests {
         let parsed: OptionMetadata = serde_json::from_str(text).unwrap();
         assert_eq!(serde_json::to_string(&parsed).unwrap(), text);
         assert_eq!(parsed.digest(), FLAG_ONLY_DIGEST);
-        let llama = builtin(ProviderId::Llama).unwrap();
+        let llama: OptionMetadata = serde_json::from_str(
+            r#"{"version":1,"engine_id":"llama.cpp","adapter":{"id":"llama.cpp","revision":"aiolm-builtin-1"},"options":[{"flag":"--hf-token","sensitive":true}]}"#
+        ).unwrap();
         assert_eq!(
             serde_json::to_string(&llama).unwrap(),
             r#"{"version":1,"engine_id":"llama.cpp","adapter":{"id":"llama.cpp","revision":"aiolm-builtin-1"},"options":[{"flag":"--hf-token","sensitive":true}]}"#

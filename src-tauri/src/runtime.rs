@@ -832,6 +832,14 @@ pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), St
     Ok(())
 }
 
+/// Structured binary-reported identity only; no directory-name fallback.
+pub fn installed_reported_version(
+    backend: &str,
+    build: &str,
+) -> Result<Option<RuntimeVersion>, String> {
+    Ok(read_version_manifest(&runtime_dir(backend, build)?))
+}
+
 /// The installed runtime's identity for help caching: what its own
 /// `--version` reported at install time, or the build directory when the
 /// runtime predates the version sidecar. The executable hash is separate.

@@ -29,7 +29,7 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
     const nextLibrary = structuredClone(library);
     const profile = profileForChoice(nextLibrary, choice);
     nextLibrary.provider_recent = { ...nextLibrary.provider_recent, [providerOf(cfg)]: profile.id };
-    const next = applyProfile(cfg, profile, benchmark);
+    const next = applyProfile(cfg, profile);
     return prepared(nextLibrary, next, profile, benchmark ? systemPrompt : profile.system_prompt ?? systemPrompt);
   };
   const prepareSaveAs = (name: string, _scope: SettingsProfile['scope'] = 'global') => {
@@ -63,7 +63,7 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
     const nextLibrary = deleteSettingsProfile(library, id);
     if (profileDeletionIds(library, id).has(selected.id)) {
       const fallback = defaultSettingsProfileEntry(nextLibrary, providerOf(cfg));
-      return prepared(nextLibrary, applyProfile(cfg, fallback, benchmark), fallback, benchmark ? systemPrompt : fallback.system_prompt ?? '', false);
+      return prepared(nextLibrary, applyProfile(cfg, fallback), fallback, benchmark ? systemPrompt : fallback.system_prompt ?? '', false);
     }
     return prepared(nextLibrary, cfg, selected, systemPrompt, false);
   };
@@ -73,7 +73,7 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
     const previous = library.applied[key];
     const recent = library.entries.find(entry => entry.id === library.provider_recent?.[providerOf(next)] && (entry.provider ?? 'llama.cpp') === providerOf(next));
     const application = previous && (previous.provider ?? 'llama.cpp') === providerOf(next) && profileTargetKey(previous.model) === profileTargetKey(next.active_model) ? previous
-      : recent ? materializeProfileApplication(applyProfile(next, recent, benchmark), recent.system_prompt ?? '', recent) : applyDefaultProfile(next, library).application;
+      : recent ? materializeProfileApplication(applyProfile(next, recent), recent.system_prompt ?? '', recent) : applyDefaultProfile(next, library).application;
     const assignment = resolveProfileForExecution(next, library,
       application, key);
     original.current = assignment.application;

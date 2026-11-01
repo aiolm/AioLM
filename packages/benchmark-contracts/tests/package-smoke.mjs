@@ -25,6 +25,22 @@ const payload = { schema_version: 1, submission_id: '00000000-0000-4000-8000-000
   environment: null, execution: { context_size: 4096, parallel: 2, settings: null },
   measurements: { status: 'complete', rows: [row, { ...row, repetition: 2, tg_tps: 64 }, { ...row, concurrency: 2, tg_tps: 96 }] },
 };
+const servingRow = { input_bytes: 4096, max_output_tokens: 128, concurrency: 1, repetition: 1,
+  first_output_ms: 50, first_content_ms: 100, first_reasoning_ms: 50, e2e_ms: 200,
+  content_bytes: 6, reasoning_bytes: 6, output_bytes: 12,
+  reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null,
+  usage_status: 'missing', finish_reasons: ['not_reported'], peak_memory_bytes: null, timing_source: 'client', failed: false };
+const serving = { schema_version: 3, submission_id: payload.submission_id, app_version: null,
+  method: { id: 'openai-chat-serving', version: 1 },
+  workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'a'.repeat(64) }],
+    max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false, cache_policy: 'as_configured' },
+  runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
+  model: { status: 'unidentified', sha256: null, size_bytes: null, format: 'unknown' }, environment: null,
+  execution: { topology: 'unknown', memory_scope: 'unavailable', settings: [
+    { target: 'request', scope: [], name: 'max_tokens', value: 128, unit: 'tokens', role: null },
+    { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
+    { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
+  ] }, measurements: { status: 'complete', rows: [servingRow] } };
 
 try {
   // A deleted source module must disappear from the next distributable, while
@@ -68,7 +84,8 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizeBenchmarkTrials, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkConfiguration, validateBenchmarkReceipt, summarizeBenchmarkTrials, summarizePublicBenchmarkRows, servingMetricValues, summarizeServingPoints, SERVING_METRIC_KEYS, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validateLegacyBenchmarkConfiguration } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
     const row = payload.measurements.rows[0];
     assert.equal(validatePublicBenchmark(payload), payload);
@@ -80,6 +97,216 @@ try {
       assert.throws(() => validatePublicBenchmark({ ...python, execution: { ...python.execution, settings: { gpu_layers: 0 } } }));
     }
     assert.equal(summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
+    const serving = ${JSON.stringify(serving)};
+    const observed = serving.measurements.rows[0];
+    assert.equal(validatePublicBenchmark(serving), serving);
+    for (const name of ['llama.cpp', 'vllm', 'mlx-vlm', 'sglang', null]) {
+      for (const format of ['gguf', 'hf-safetensors', 'mlx', 'unknown']) {
+        const engineNeutral = { ...serving, runtime: { ...serving.runtime, name, variant: 'arbitrary-safe-variant' }, model: { ...serving.model, format } };
+        assert.equal(validatePublicBenchmark(engineNeutral), engineNeutral);
+      }
+    }
+    const configuration = { runtime: serving.runtime, execution: { ...serving.execution, settings: [] } };
+    assert.equal(validateBenchmarkConfiguration(configuration), configuration);
+    assert.throws(() => validateBenchmarkConfiguration({ ...configuration, model: serving.model }));
+    assert.throws(() => validateBenchmarkConfiguration({ runtime: serving.runtime }));
+    assert.throws(() => validateBenchmarkConfiguration({ ...configuration, runtime: { ...serving.runtime, process_id: 'private' } }));
+    const legacyConfiguration = { runtime: payload.runtime, execution: payload.execution };
+    assert.equal(validateLegacyBenchmarkConfiguration(legacyConfiguration, 1), legacyConfiguration);
+    assert.equal(validateLegacyBenchmarkConfiguration(legacyConfiguration, 2), legacyConfiguration);
+    const metalConfiguration = { runtime: { name: 'vllm', version: '0.30.0', backend: 'metal', build: null, variant: 'vllm-metal', plugin_version: '0.30.0' },
+      execution: { context_size: 8192, parallel: 2, settings: null } };
+    assert.equal(validateLegacyBenchmarkConfiguration(metalConfiguration, 2), metalConfiguration);
+    assert.throws(() => validateLegacyBenchmarkConfiguration(metalConfiguration, 1));
+    for (const runtime of [
+      { ...metalConfiguration.runtime, variant: undefined }, { ...metalConfiguration.runtime, plugin_version: undefined },
+      { ...metalConfiguration.runtime, backend: 'cuda' }, { ...metalConfiguration.runtime, name: 'mlx-vlm' },
+      { ...metalConfiguration.runtime, private_path: '/private' },
+    ]) assert.throws(() => validateLegacyBenchmarkConfiguration({ ...metalConfiguration, runtime }, 2));
+    assert.throws(() => validateLegacyBenchmarkConfiguration({ ...legacyConfiguration, model: payload.model }, 1));
+    assert.throws(() => validateLegacyBenchmarkConfiguration({ ...legacyConfiguration, execution: { ...legacyConfiguration.execution, unknown: true } }, 1));
+    assert.throws(() => validateLegacyBenchmarkConfiguration({ ...metalConfiguration, execution: { ...metalConfiguration.execution, settings: payload.execution.settings ?? {} } }, 2));
+    const rejectServing = mutate => {
+      const candidate = structuredClone(serving);
+      mutate(candidate);
+      assert.throws(() => validatePublicBenchmark(candidate));
+    };
+    for (const mutate of [
+      value => { value.local_path = '/private/model'; },
+      value => { value.schema_version = 4; },
+      value => { value.runtime.name = 'private/path'; },
+      value => { value.runtime.variant = 'x'.repeat(257); },
+      value => { delete value.runtime.plugin_version; },
+      value => { value.runtime = { ...payload.runtime }; },
+      value => { value.method.version = 2; },
+      value => { value.method.id = 'cold-prompt-serving'; },
+      value => { value.workload.cache_policy = 'cold'; },
+      value => { value.workload.prompt_lengths = [4096]; },
+      value => { value.workload.inputs[0].bytes = 255; },
+      value => { value.workload.inputs[0].bytes = 1048577; },
+      value => { value.workload.inputs[0].sha256 = 'A'.repeat(64); },
+      value => { value.workload.inputs[0].private = true; },
+      value => { value.workload.inputs.push({ ...value.workload.inputs[0] }); },
+      value => { value.workload.inputs.unshift({ bytes: 8192, sha256: 'b'.repeat(64) }); },
+      value => { value.workload.concurrencies = []; },
+      value => { value.workload.concurrencies = [1, 1]; },
+      value => { value.workload.concurrencies = [2, 1]; },
+      value => { value.workload.concurrencies = [0]; },
+      value => { value.workload.concurrencies = [65]; },
+      value => { value.workload.repetitions = 0; },
+      value => { value.workload.repetitions = 101; },
+      value => { value.workload.max_output_tokens = 0; },
+      value => { value.workload.max_output_tokens = 65537; },
+      value => { value.workload.corpus_version = 2; },
+      value => { value.measurements.status = 'partial'; },
+      value => { value.measurements.rows = []; },
+      value => { value.measurements.rows.push({ ...observed }); },
+      value => { value.measurements.rows[0].input_bytes = 8192; },
+      value => { value.measurements.rows[0].max_output_tokens = 64; },
+      value => { value.measurements.rows[0].concurrency = 2; },
+      value => { value.measurements.rows[0].repetition = 2; },
+      value => { value.measurements.rows[0].failed = true; },
+      value => { value.measurements.rows[0].error = 'private'; },
+      value => { value.measurements.rows[0].output_bytes = 13; },
+      value => { value.measurements.rows[0].content_bytes = Number.MAX_SAFE_INTEGER + 1; },
+      value => { value.measurements.rows[0].content_bytes = Number.MAX_SAFE_INTEGER; value.measurements.rows[0].output_bytes = Number.MAX_SAFE_INTEGER; },
+      value => { value.measurements.rows[0].e2e_ms = Infinity; },
+      value => { value.measurements.rows[0].first_output_ms = -1; },
+      value => { value.measurements.rows[0].reported_prompt_tokens = -1; },
+      value => { value.measurements.rows[0].reported_prompt_tokens = 0.5; },
+      value => { value.measurements.rows[0].reported_prompt_tokens = Number.MAX_SAFE_INTEGER + 1; },
+      value => { value.measurements.rows[0].usage_status = 'complete'; },
+      value => { value.measurements.rows[0].reported_prompt_tokens = 0; },
+      value => { Object.assign(value.measurements.rows[0], { usage_status: 'partial', reported_prompt_tokens: 0, reported_completion_tokens: 0, reported_cached_tokens: 0 }); },
+      value => { Object.assign(value.measurements.rows[0], { usage_status: 'complete', reported_prompt_tokens: 1, reported_completion_tokens: 1, reported_cached_tokens: 2 }); },
+      value => { value.measurements.rows[0].finish_reasons = []; },
+      value => { value.measurements.rows[0].finish_reasons = ['eos']; },
+      value => { value.measurements.rows[0].timing_source = 'server'; },
+      value => { value.measurements.rows[0].peak_memory_bytes = 1; },
+      value => { value.model.size_bytes = Number.MAX_SAFE_INTEGER + 1; },
+      value => { value.model.status = 'sha256'; },
+      value => { value.model.sha256 = 'a'.repeat(64); },
+      value => { value.execution.effective_args = ['--threads', '8']; },
+      value => { value.execution.settings[0].value = 127; },
+      value => { value.execution.settings[0].role = 'context.total_tokens'; },
+      value => { value.execution.settings[0].scope = ['serve']; },
+      value => { value.execution.settings[0].unit = null; },
+      value => { value.execution.settings[1].value = false; },
+      value => { value.execution.settings[2].value = 1; },
+      value => { value.execution.settings.reverse(); },
+      value => { value.execution.settings.push({ ...value.execution.settings[2] }); },
+      value => { value.execution.settings.pop(); },
+      value => { value.workload.request_usage = true; },
+      value => { value.execution.settings[0].raw = 'private'; },
+    ]) rejectServing(mutate);
+    rejectServing(value => { value.workload.inputs = Array.from({ length: 65 }, (_, index) => ({ bytes: 256 + index, sha256: 'a'.repeat(64) })); });
+    const withGrid = workload => ({ ...serving, workload, execution: { ...serving.execution,
+      settings: serving.execution.settings.map(setting => setting.name === 'max_tokens' ? { ...setting, value: workload.max_output_tokens } : setting) },
+      measurements: { status: 'complete', rows: workload.inputs.flatMap(input => workload.concurrencies.flatMap(concurrency =>
+        Array.from({ length: workload.repetitions }, (_, index) => ({ ...observed, input_bytes: input.bytes,
+          max_output_tokens: workload.max_output_tokens, concurrency, repetition: index + 1, finish_reasons: Array(concurrency).fill('not_reported') })))) } });
+    const edgeGrid = withGrid({ ...serving.workload, inputs: [{ bytes: 256, sha256: 'a'.repeat(64) }, { bytes: 1048576, sha256: 'b'.repeat(64) }],
+      max_output_tokens: 65536, concurrencies: [1, 64], repetitions: 100 });
+    assert.equal(validatePublicBenchmark(edgeGrid), edgeGrid);
+    const duplicateGrid = structuredClone(edgeGrid);
+    duplicateGrid.measurements.rows[1] = { ...duplicateGrid.measurements.rows[0] };
+    assert.throws(() => validatePublicBenchmark(duplicateGrid));
+    const reversedGrid = { ...edgeGrid, measurements: { ...edgeGrid.measurements, rows: edgeGrid.measurements.rows.toReversed() } };
+    assert.equal(validatePublicBenchmark(reversedGrid), reversedGrid);
+    const maxPoints = withGrid({ ...serving.workload, concurrencies: Array.from({ length: 64 }, (_, index) => index + 1) });
+    assert.equal(validatePublicBenchmark(maxPoints), maxPoints);
+    const tooManyPoints = withGrid({ ...maxPoints.workload, inputs: [...serving.workload.inputs, { bytes: 8192, sha256: 'b'.repeat(64) }] });
+    assert.throws(() => validatePublicBenchmark(tooManyPoints));
+    const usageRequested = structuredClone(serving);
+    usageRequested.workload.request_usage = true;
+    usageRequested.execution.settings.splice(2, 0, { target: 'request', scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null });
+    assert.equal(validatePublicBenchmark(usageRequested), usageRequested);
+    assert.throws(() => validatePublicBenchmark({ ...usageRequested, workload: serving.workload }));
+    for (const usage of [
+      { usage_status: 'complete', reported_prompt_tokens: 0, reported_completion_tokens: 0, reported_cached_tokens: 0 },
+      { usage_status: 'partial', reported_prompt_tokens: Number.MAX_SAFE_INTEGER, reported_completion_tokens: null, reported_cached_tokens: 0 },
+      { usage_status: 'partial', reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null },
+      { usage_status: 'invalid', reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null },
+    ]) {
+      const candidate = { ...serving, measurements: { ...serving.measurements, rows: [{ ...observed, ...usage }] } };
+      assert.equal(validatePublicBenchmark(candidate), candidate);
+    }
+    const emptyOutput = { ...serving, measurements: { status: 'complete', rows: [{ ...observed, content_bytes: 0, reasoning_bytes: 0, output_bytes: 0,
+      first_output_ms: null, first_content_ms: null, first_reasoning_ms: null, e2e_ms: 0 }] } };
+    assert.equal(validatePublicBenchmark(emptyOutput), emptyOutput);
+    assert.throws(() => validatePublicBenchmark({ ...emptyOutput, measurements: { status: 'complete', rows: [{ ...emptyOutput.measurements.rows[0], first_output_ms: 0 }] } }));
+    const host = { scope: 'aiolm_host', os: null, arch: null, cpu: { name: null, logical_cores: 0 },
+      installed_gpus: [], execution: { mode: 'unknown', selected_gpus: [], selection_complete: false } };
+    assert.equal(validatePublicBenchmark({ ...serving, environment: host }).environment, host);
+    const { scope, ...unscopedHost } = host;
+    assert.throws(() => validatePublicBenchmark({ ...serving, environment: unscopedHost }));
+    const source = { kind: 'huggingface', repository: 'example/model-name', revision: 'b'.repeat(40) };
+    assert.equal(validatePublicBenchmark({ ...serving, model: { ...serving.model, source, size_bytes: Number.MAX_SAFE_INTEGER } }).model.source, source);
+    for (const badSource of [{ ...source, repository: '../private' }, { ...source, revision: 'B'.repeat(40) }, { ...source, local_path: 'private' },
+      { ...source, repository: 'a/' + 'b'.repeat(129) }, { ...source, repository: 'example/model..name' }]) {
+      assert.throws(() => validatePublicBenchmark({ ...serving, model: { ...serving.model, source: badSource } }));
+    }
+    const metadata = { format: 'GGUF', name: null, architecture: null, size_label: null, quantization: null,
+      file_type: null, quantized_by: null, repository: null, base_models: [], artifact: null, source: 'gguf' };
+    assert.equal(validatePublicBenchmark({ ...serving, runtime: { ...serving.runtime, name: 'sglang' }, model: { ...serving.model, format: 'gguf', metadata } }).model.metadata, metadata);
+    assert.throws(() => validatePublicBenchmark({ ...serving, model: { ...serving.model, metadata } }));
+    const launch = { target: 'launch', scope: [], name: 'threads', value: 8, unit: 'threads', role: null };
+    const configWith = settings => ({ ...configuration, execution: { ...configuration.execution, settings } });
+    for (const value of [null, false, 0, -1, 0.5, 'safe-choice', [], [1, -1, 0.5]]) {
+      const candidate = configWith([{ ...launch, value }]);
+      assert.equal(validateBenchmarkConfiguration(candidate), candidate);
+    }
+    const boundedSettings = Array.from({ length: 128 }, (_, index) => ({ ...launch, name: 'setting-' + String(index).padStart(3, '0') }));
+    assert.equal(validateBenchmarkConfiguration(configWith(boundedSettings)).execution.settings.length, 128);
+    for (const settings of [
+      [...boundedSettings, { ...launch, name: 'z' }], [launch, launch], [{ ...launch, scope: Array(9).fill('serve') }],
+      [{ ...launch, scope: ['bad/scope'] }], [{ ...launch, name: '-bad' }], [{ ...launch, name: 'x'.repeat(65) }],
+      [{ ...launch, unit: 'secret' }], [{ ...launch, role: 'private' }], [{ ...launch, value: 'x'.repeat(129) }],
+      [{ ...launch, value: '-injected' }], [{ ...launch, value: '/private/path' }], [{ ...launch, value: 'user@host' }],
+      [{ ...launch, value: { secret: true } }], [{ ...launch, value: [true] }], [{ ...launch, value: Array(65).fill(1) }],
+      [{ ...launch, value: NaN }], [{ ...launch, value: [Infinity] }], [{ ...launch, raw_argv: ['--secret'] }],
+      [{ ...launch, target: 'request', name: 'model' }], [{ ...launch, target: 'request', name: 'temperature', value: 0, unit: null, scope: ['serve'] }],
+    ]) assert.throws(() => validateBenchmarkConfiguration(configWith(settings)));
+    const scopedSettings = [launch, { ...launch, scope: ['serve'] }, { ...launch, scope: ['serve', 'worker'] }];
+    assert.equal(validateBenchmarkConfiguration(configWith(scopedSettings)).execution.settings.length, 3);
+    assert.throws(() => validateBenchmarkConfiguration(configWith(scopedSettings.toReversed())));
+    for (const topology of ['attached', 'unknown']) assert.throws(() => validateBenchmarkConfiguration({
+      ...configuration, execution: { ...configuration.execution, topology, memory_scope: 'owned_process_tree' } }));
+    const servingBody = serializePublicationRequest({ benchmark: serving, description_md: 'Client observed' });
+    assert.equal(servingBody, JSON.stringify({ benchmark: serving, description_md: 'Client observed' }));
+    assert.deepEqual(parsePublicationSnapshot(servingBody).benchmark, serving);
+    for (const legacy of [payload, { ...payload, schema_version: 2, model: { ...payload.model, format: 'gguf' } }]) {
+      const frozen = JSON.stringify({ benchmark: legacy, description_md: '' });
+      assert.equal(serializePublicationRequest(parsePublicationSnapshot(frozen)), frozen);
+    }
+    assert.equal(SERVING_METRIC_KEYS.length, 13);
+    assert.equal(servingMetricValues(observed).output_bytes_per_second, 60);
+    assert.deepEqual(['content_bytes', 'reasoning_bytes', 'output_bytes', 'first_output_ms', 'first_content_ms', 'first_reasoning_ms', 'e2e_ms']
+      .map(key => servingMetricValues(observed)[key]), [6, 6, 12, 50, 100, 50, 200]);
+    assert.equal(servingMetricValues(observed).reported_tokens_per_second, null);
+    const point = summarizeServingPoints([10, null, 30].map(first_output_ms => ({ ...observed, first_output_ms })))[0];
+    assert.deepEqual(point.first_output_ms, { median: 20, min: 10, max: 30, samples: 2 });
+    assert.equal(point.samples, 3);
+    const clean = summarizeServingPoints([observed, { ...observed, failed: true }, { ...observed, error: 'private failure' },
+      { ...observed, input_bytes: 8192, failed: true }, { ...observed, input_bytes: 16384, error: 'private failure' }]);
+    assert.equal(clean.length, 1);
+    assert.equal(clean[0].samples, 1);
+    assert.equal(servingMetricValues({ ...observed, content_bytes: 0, reasoning_bytes: 0, output_bytes: 0 }).output_bytes_per_second, 0);
+    for (const e2e_ms of [0, 1e-320]) {
+      const extreme = { ...observed, content_bytes: 1, reasoning_bytes: 0, output_bytes: 1, first_reasoning_ms: null, e2e_ms };
+      assert.equal(servingMetricValues(extreme).output_bytes_per_second, null);
+      assert.equal(summarizeServingPoints([extreme])[0].output_bytes_per_second, null);
+      assert.equal(servingMetricValues({ ...extreme, reported_completion_tokens: 1 }).reported_tokens_per_second, null);
+      assert.equal(validatePublicBenchmark({ ...serving, measurements: { status: 'complete', rows: [extreme] } }).measurements.rows[0], extreme);
+    }
+    assert.equal(servingMetricValues({ ...observed, reported_completion_tokens: 2 }).reported_tokens_per_second, 10);
+    assert.equal(servingMetricValues({ ...observed, reported_completion_tokens: 0 }).reported_tokens_per_second, 0);
+    const sorted = summarizeServingPoints([
+      { ...observed, input_bytes: 8192 }, { ...observed, concurrency: 2 },
+      { ...observed, max_output_tokens: 256 }, observed,
+    ]);
+    assert.deepEqual(sorted.map(point => [point.input_bytes, point.concurrency, point.max_output_tokens]), [[4096, 1, 128], [4096, 1, 256], [4096, 2, 128], [8192, 1, 128]]);
+    assert.equal(summarizeServingPoints([{ ...observed, e2e_ms: Number.MAX_VALUE }, { ...observed, e2e_ms: Number.MAX_VALUE }])[0].e2e_ms.median, Number.MAX_VALUE);
     const timestamp = value => assertIsoTimestamp(value);
     for (const value of [
       '2024-02-29T23:59:59Z',
@@ -178,7 +405,9 @@ try {
     assert.equal(validateBenchmarkReceipt({ submission_id: payload.submission_id, id: 'accepted-1' }, payload.submission_id).id, 'accepted-1');
     assert.throws(() => validateBenchmarkReceipt({ submission_id: payload.submission_id, id: 'accepted-1' }, '00000000-0000-4000-8000-000000000002'));
     assert.throws(() => validateBenchmarkReceipt({ submission_id: payload.submission_id, id: 'accepted-1', url: 'invalid url' }));
-    assert(Object.isFrozen(publicBenchmarkSchema.properties));
+    assert(Object.isFrozen(publicBenchmarkSchema.oneOf));
+    assert(Object.isFrozen(publicBenchmarkSchema.$defs.legacy.properties));
+    assert(Object.isFrozen(publicBenchmarkSchema.$defs.serving.properties));
     assert(Object.isFrozen(publicationSchema.properties));
     assert.equal(typeof globalThis.__TAURI_INTERNALS__, 'undefined');
     const publication = validatePublicationRequest({ benchmark: payload, description_md: 'Hello **world**' });
@@ -308,6 +537,9 @@ try {
   });
   await browser.evaluate();
   assert.equal(browser.namespace.validatePublicBenchmark(payload), payload);
+  assert.equal(browser.namespace.validatePublicBenchmark(serving), serving);
+  assert.equal(browser.namespace.servingMetricValues(servingRow).output_bytes_per_second, 60);
+  assert.equal(browser.namespace.validateBenchmarkConfiguration({ runtime: serving.runtime, execution: serving.execution }).runtime, serving.runtime);
   assert.equal(browser.namespace.summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
   const failed = browser.namespace.summarizePublicBenchmarkRows([{ ...row, failed: true }])[0];
   assert.equal(failed.samples, 0); assert.equal(failed.tg_tps, null);
@@ -317,6 +549,9 @@ try {
   const publicSchema = JSON.parse(readFileSync(consumerRequire.resolve('@aiolm/benchmark-contracts/schema'), 'utf8'));
   assert.deepEqual(JSON.parse(JSON.stringify(browser.namespace.publicBenchmarkSchema)), publicSchema);
   const openapi = JSON.parse(readFileSync(consumerRequire.resolve('@aiolm/benchmark-contracts/openapi'), 'utf8'));
+  assert.equal(openapi.info.version, '2.0.0');
+  assert.equal(publicSchema.oneOf.length, 2);
+  assert(publicSchema.$defs.servingRuntime && publicSchema.$defs.servingExecution);
   const requestSchema = openapi.paths['/v1/benchmark-runs'].post.requestBody.content['application/json'].schema;
   assert.ok(Array.isArray(requestSchema.oneOf) && requestSchema.oneOf.some(entry => entry.$ref === './publication.schema.json'));
   assert.ok(requestSchema.oneOf.some(entry => entry.$ref === './public-benchmark.schema.json'));
@@ -332,15 +567,18 @@ try {
   assert.equal(browser.namespace.decodeRecoveryCode(browser.namespace.encodeRecoveryCode(browser.namespace.RECOVERY_FIXTURE)).version, 1);
 
   writeFileSync(join(consumer, 'consumer.ts'), `
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, validatePublicationRequest, decodeRecoveryCode, formatRuntimeVersionLabel, type RuntimeVersionLabelInput, type PublicBenchmarkSubmission, type BenchmarkSummary, type BenchmarkReceipt, type BenchmarkPublicationRequest } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkConfiguration, validateBenchmarkReceipt, summarizePublicBenchmarkRows, summarizeServingPoints, servingMetricValues, validatePublicationRequest, decodeRecoveryCode, formatRuntimeVersionLabel, type RuntimeVersionLabelInput, type PublicBenchmarkSubmission, type BenchmarkConfiguration, type ServingBenchmarkPoint, type ServingMetricKey, type BenchmarkSummary, type BenchmarkReceipt, type BenchmarkPublicationRequest } from '@aiolm/benchmark-contracts';
     const payload: PublicBenchmarkSubmission = validatePublicBenchmark({});
-    const summaries: BenchmarkSummary[] = summarizePublicBenchmarkRows(payload.measurements.rows);
+    const summaries: BenchmarkSummary[] = payload.schema_version === 3 ? [] : summarizePublicBenchmarkRows(payload.measurements.rows);
+    const servingPoints: ServingBenchmarkPoint[] = payload.schema_version === 3 ? summarizeServingPoints(payload.measurements.rows) : [];
+    const metricValues: Record<ServingMetricKey, number | null> | null = payload.schema_version === 3 ? servingMetricValues(payload.measurements.rows[0]) : null;
+    const configuration: BenchmarkConfiguration = validateBenchmarkConfiguration({});
     const receipt: BenchmarkReceipt = validateBenchmarkReceipt({}, payload.submission_id);
     const publication: BenchmarkPublicationRequest = validatePublicationRequest({ benchmark: payload, description_md: '' });
     const runtimeInput: RuntimeVersionLabelInput = { name: payload.runtime.name, version: payload.runtime.version, build: payload.runtime.build };
     const runtimeLabel: string | null = formatRuntimeVersionLabel(runtimeInput);
     const metalIdentity: PublicBenchmarkSubmission['runtime'] = { name: 'vllm', version: '0.30.0', backend: 'metal', build: null, variant: 'vllm-metal', plugin_version: '0.30.0' };
-    export { summaries, receipt, publication, runtimeLabel, metalIdentity };
+    export { summaries, servingPoints, metricValues, configuration, receipt, publication, runtimeLabel, metalIdentity };
   `);
   const program = ts.createProgram([join(consumer, 'consumer.ts')], { strict: true, noEmit: true, types: [], target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext });
   const diagnostics = ts.getPreEmitDiagnostics(program);

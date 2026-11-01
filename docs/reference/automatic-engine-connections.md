@@ -91,6 +91,8 @@ A manifest is a JSON file of at most 256 KiB. Unknown fields are rejected.
 | `probe`, `launch` | Each an absolute `program`, an `args` array and optional `env` and absolute `working_directory`. Arguments are passed as given; no shell is used, so do not add quoting. |
 | `health_path`, `health_authenticated` | The loopback health endpoint and whether it needs the API key. |
 | `model_formats` | Declared formats: `gguf`, `hf-safetensors`, `mlx` or `unknown`. A declaration does not establish that a model works. |
+| `public_engine` | Optional public identity object with all six required nullable fields: `name`, `version`, `backend`, `build`, `variant`, `plugin_version`. Labels are at most 256 characters and cannot contain path separators, `:`, `@`, or ASCII control characters. Local IDs and display names are not public identity fallbacks. |
+| `compute_ownership` | Optional `direct`, `descendant`, `attached`, or `unknown` declaration about compute, not permission to stop an upstream service. |
 | `models` | Optional explicit `{path, name}` model entries to add to the library. AioLM does not scan folders for other files. |
 | `artifacts` | Optional absolute paths of scripts, libraries and configuration the engine depends on, at most 256. Their SHA-256 is recorded at registration and checked before every use. |
 | `options` | Optional settings shown in AioLM: `key`, `target` (`launch` or `request`), `kind` and optional `flag`, `group` and `runtime_default`. |
@@ -133,6 +135,39 @@ name the server uses in `/v1/models` and requests. Report only capabilities the
 engine actually has. A base model without a chat template can load and still
 be unable to chat.
 
+The probe can also supply `public_engine`, `compute_ownership`, and the selected
+model's `model_format` (`gguf`, `hf-safetensors`, `mlx`, or `unknown`). A probe's
+identity object is authoritative as a whole, including null fields; an explicit
+`unknown` ownership overrides the manifest. Missing identity or ownership falls
+back to the manifest, then to all-null identity or unknown ownership. A missing
+selected-model format stays unknown; the manifest's supported-format inventory
+is never used as selected-model evidence. Optional metadata is omitted from
+stored legacy manifests and probes when absent.
+
+`capabilities.stream_usage_supported` is an optional boolean declaration of
+support for `stream_options.include_usage`; false and missing are distinct.
+Automatic core API verification leaves it unknown. Metadata declarations do not
+replace streaming or selected-model checks.
+Normal chat requests add `stream_options.include_usage` automatically only when
+this declaration is true. Unknown or false support leaves that optional field
+out, while an explicit user-supplied `stream_options` value takes precedence.
+The benchmark's optional usage checkbox is an explicit request independent of
+this capability declaration.
+
+
+Streaming verification and benchmarks require a blank-line-terminated
+`data: [DONE]` SSE event. EOF or an unterminated sentinel is not completion.
+LF, CRLF and CR line endings are accepted; a completed event does not require
+the server to close its socket.
+
+Direct and descendant compute are owned topology. On Unix their memory scope
+is the owned process tree; on Windows only a known direct compute root can
+report root-process memory. Descendant/helper compute on Windows, attached
+services, and unknown compute have unavailable memory attribution. An automatic
+attached proxy reports attached topology and unknown model format; its own
+memory is not inference-engine memory. Owned automatic launch helpers report
+descendant compute, not their proxy root.
+
 ### Creating a manifest for your own llama.cpp build
 
 For a `llama-server` you built yourself, the repository's helper inspects the
@@ -155,10 +190,12 @@ or the helper, remove the registration and register again.
 ### Limits
 
 A registered engine is used for chat, projects, document search, MCP tools and
-the API server to the extent its probe reports. Exact-token serving benchmarks,
-numerical verification against a CPU reference and portable runtime archives
-are not available for external engines. Their weight file size is shown as
-unknown.
+the API server to the extent its probe reports. Common API-serving benchmark
+admission does not require engine-specific tokenization or cache-reset APIs;
+the adapter catalog identifies this method as `openai-chat-serving@1`.
+Numerical verification against a CPU reference and portable runtime archives
+remain unavailable for external engines. Unknown public identity, model format,
+or compute attribution is not replaced with a built-in engine identity.
 
 If a registration is removed or does not match the computer, AioLM keeps the
 engine's saved settings and profiles but refuses to launch it; it never falls

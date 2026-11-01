@@ -66,6 +66,8 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         engine_id: engine,
         runtime_id: "fixture-1".into(),
         display_name: "Synthetic external engine".into(),
+        public_engine: None,
+        compute_ownership: None,
         platforms: vec![Platform {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
@@ -184,8 +186,12 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     assert!(!info.tools_auto);
     assert_eq!(info.tasks, ["generate"]);
     let err = Arc::new(ErrBuf::default());
-    let (child, url, key_file) =
-        server::spawn(&cfg, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file,
+        readiness,
+    } = server::spawn(&cfg, "synthetic-key", &err, &Default::default(), None).unwrap();
     assert!(key_file.is_none());
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
@@ -193,7 +199,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let client = reqwest::Client::new();
@@ -215,12 +221,89 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         server::kill(&mut state.child, Some(err.clone()));
     }
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
-    assert!(providers::adapter::require_feature(
-        &cfg,
-        providers::adapter::RuntimeFeature::ExactBenchmark
-    )
-    .unwrap_err()
-    .contains("unsupported"));
+    // Common serving admission depends on launch/chat support, not an exact
+    // tokenizer or cache-reset procedure supplied by an adapter.
+    let adapter = providers::adapter::resolve(&cfg);
+    providers::execution::validate(&cfg).unwrap();
+    let metadata = adapter.engine_info(&cfg).unwrap().serving_metadata.unwrap();
+    assert_eq!(
+        metadata.runtime,
+        providers::protocol::PublicEngine::default()
+    );
+    assert_eq!(
+        metadata.model_format,
+        providers::artifacts::ArtifactFormat::Unknown
+    );
+    assert_eq!(
+        metadata.topology,
+        providers::protocol::ServingTopology::Unknown
+    );
+    assert_eq!(
+        metadata.memory_scope,
+        providers::protocol::ServingMemoryScope::Unavailable
+    );
+    {
+        use aiolm_lib::performance_bench as bench;
+        let reference = area.path.join("model-reference.json");
+        fs::write(&reference, br#"{"model":"synthetic upstream selection"}"#).unwrap();
+        let mut selection = cfg.clone();
+        selection.active_model = reference.to_string_lossy().into_owned();
+        providers::adapter::refresh(&selection, None).await.unwrap();
+        providers::execution::validate(&selection).unwrap();
+        let request = bench::PerformanceBenchRequest {
+            run_id: "registered-common-serving".into(),
+            method: Default::default(),
+            context_profile: "novel_en".into(),
+            prompt_bytes: vec![256],
+            max_output_tokens: 128,
+            concurrencies: vec![1, 2],
+            repetitions: 1,
+            warmup: false,
+            request_usage: false,
+        };
+        let runtime = bench::RuntimeInfo::prepare(&selection, &request)
+            .await
+            .unwrap();
+        let process = Arc::new(Mutex::new(None));
+        let result = bench::run(
+            selection,
+            request,
+            Default::default(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(result.status, "complete", "{:?}", result.message);
+        assert_eq!(result.rows.len(), 2);
+        assert!(result
+            .rows
+            .iter()
+            .all(|row| row.output_bytes == 2 * u64::from(row.concurrency)
+                && row.reported_completion_tokens == Some(u64::from(row.concurrency))
+                && row.reported_cached_tokens.is_none()
+                && row.usage_status == "partial"
+                && row.peak_memory_bytes.is_none()
+                && row.finish_reasons == vec!["not_reported"; row.concurrency as usize]));
+        let recorded = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            recorded["provenance"]["runtime"]["name"],
+            serde_json::Value::Null
+        );
+        assert_eq!(recorded["provenance"]["model"]["format"], "unknown");
+        assert_eq!(recorded["provenance"]["model"]["status"], "unidentified");
+        assert_eq!(
+            recorded["provenance"]["model"]["size_bytes"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            recorded["provenance"]["model"]["sha256"],
+            serde_json::Value::Null
+        );
+        assert!(process.lock().unwrap().is_none());
+        providers::adapter::refresh(&cfg, None).await.unwrap();
+    }
     fs::write(&adapter_source, b"changed adapter source").unwrap();
     assert!(providers::execution::info(&cfg)
         .unwrap_err()

@@ -237,14 +237,12 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
 
 #[derive(Clone, Copy)]
 pub enum RuntimeFeature {
-    ExactBenchmark,
     DeepVerification,
     Portable,
 }
 pub fn require_feature(cfg: &AppConfig, feature: RuntimeFeature) -> Result<(), String> {
     let adapter = resolve(cfg);
     match (adapter.kind(), feature) {
-        (RuntimeKind::ExternalProcess, RuntimeFeature::ExactBenchmark) => Err("unsupported: this adapter provides no exact tokenizer and cold-cache benchmark procedures".into()),
         (RuntimeKind::ExternalProcess, RuntimeFeature::DeepVerification) => Err("unsupported: this adapter provides no device/reference comparison for deep verification".into()),
         (RuntimeKind::ExternalProcess, RuntimeFeature::Portable) => Err("unsupported: this external process adapter provides no portable dependency/ABI bundle".into()),
         _ => Ok(()),

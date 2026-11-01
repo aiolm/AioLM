@@ -102,7 +102,7 @@ describe('native benchmark history UI', () => {
     vi.mocked(modelArtifact).mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const api = await import('../../shared/api/index');
     vi.mocked(api.runPerformanceBench).mockImplementation(async (_config, request) => ({
-      run_id: request.run_id, rows: [], status: 'complete', args: [], runtime_version: 'synthetic-version', context_size: 4096, parallel: 1,
+      run_id: request.run_id, rows: [], status: 'complete', args: [],
     }));
     vi.mocked(repository.rememberBenchmarkResult).mockResolvedValue({ records: [], total: 0, next_offset: null });
     const selectedStore = { ...store, cfg: { ...testConfig, active_provider: 'vllm' as const, active_runtime: 'synthetic-runtime', active_model: externalSnapshot } };

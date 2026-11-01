@@ -135,7 +135,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [requestedSection, setSection] = useState(normalizeSection(initialSection));
   const sections = external
     ? (['model', 'options', 'prompt'] as const).filter(value => mode !== 'benchmark' || value !== 'prompt')
-    : (['model', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const).filter(value => mode !== 'benchmark' || !['sampling', 'reasoning'].includes(value));
+    : ['model', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const;
   // Existing deep links keep working when an external runtime has no native
   // tuning categories. Derive a valid panel during engine switches as well.
   const mappedSection = external && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(requestedSection)
@@ -633,12 +633,12 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               </div>
               <DraftTuningEditor key={editorKey} cfg={cfg} section={section} disabled={disabled} benchmark={benchmark} runtime={runtime} contextLimit={contextLimit} onChange={change} onInvalid={setFieldInvalid} />
             </div>
-            <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={editorKey} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
+            <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} benchmark={benchmark} onChange={change} /><DraftAdvancedEditor key={editorKey} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
             {/* Profile selection can save before an option tab is visited. Keep
                 provider validation active and retain field drafts across tabs. */}
-            {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools hideDefaultsReset key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
-            {!llama && !external && <div hidden={section === 'model'}><ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
-            {llama && section === 'advanced' && <ProviderOptions editor="custom" key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
+            {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions benchmark={benchmark} collapseTools hideDefaultsReset key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
+            {!llama && !external && <div hidden={section === 'model'}><ProviderOptions benchmark={benchmark} key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
+            {llama && section === 'advanced' && <ProviderOptions benchmark={benchmark} editor="custom" key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </div>
             </SettingsProfileControl>
             </div>

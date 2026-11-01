@@ -1,5 +1,5 @@
-import { validatePublicBenchmark, type BenchmarkModelMetadata, type PublicBenchmarkSubmission, type PublicGpu } from '@aiolm/benchmark-contracts';
-import type { BenchmarkContextProfile, BenchmarkGpuSnapshot, PerformanceBenchmarkResult } from '../../api/types.ts';
+import { validatePublicBenchmark, type BenchmarkModelMetadata, type LegacyPublicBenchmarkSubmission, type ServingPublicBenchmarkSubmission, type PublicBenchmarkSubmission, type PublicGpu, type ServingBenchmarkRow } from '@aiolm/benchmark-contracts';
+import type { BenchmarkModelIdentity, LegacyPerformanceBenchmarkRequest, LegacyPerformanceBenchmarkResult, PerformanceBenchmarkRequest, PerformanceBenchmarkResult, BenchmarkGpuSnapshot } from '../../api/types.ts';
 export * from '@aiolm/benchmark-contracts';
 
 // Hardware/runtime labels are structured descriptions, never paths or diagnostic output.
@@ -116,12 +116,26 @@ export function effectiveArguments(args: readonly string[]): string[] | null {
   return published;
 }
 
+type LegacyRecord = { backend: string; build: string; request: Omit<LegacyPerformanceBenchmarkRequest, 'run_id'> & { run_id?: string }; result: LegacyPerformanceBenchmarkResult };
+type ServingRecord = { request: PerformanceBenchmarkRequest; result: PerformanceBenchmarkResult };
+
+/** Source revisions describe inspected snapshots, never weight identity. */
+export function publicModelSource(identity: BenchmarkModelIdentity): ServingPublicBenchmarkSubmission['model']['source'] {
+  const repository = safeRepository(identity.repository);
+  return repository && typeof identity.revision === 'string' && /^[0-9a-f]{40}$/.test(identity.revision)
+    ? { kind: 'huggingface', repository, revision: identity.revision } : undefined;
+}
+
 /** Construct every public field explicitly. Local identifiers and diagnostics never cross this boundary. */
-export function toPublicBenchmark(record: {
-  backend: string; build: string;
-  request: { context_profile: BenchmarkContextProfile; prompt_lengths: number[]; generation_length: number; batch_sizes: number[]; repetitions: number; warmup: boolean };
-  result: PerformanceBenchmarkResult;
-}, submissionId: string): PublicBenchmarkSubmission {
+export function toPublicBenchmark(record: ServingRecord, submissionId: string): ServingPublicBenchmarkSubmission;
+export function toPublicBenchmark(record: LegacyRecord, submissionId: string): LegacyPublicBenchmarkSubmission;
+export function toPublicBenchmark(record: ServingRecord | LegacyRecord, submissionId: string): PublicBenchmarkSubmission;
+export function toPublicBenchmark(record: ServingRecord | LegacyRecord, submissionId: string): PublicBenchmarkSubmission {
+  if ('prompt_bytes' in record.request) return toServingPublicBenchmark(record as ServingRecord, submissionId);
+  return toLegacyPublicBenchmark(record as LegacyRecord, submissionId);
+}
+
+function toLegacyPublicBenchmark(record: LegacyRecord, submissionId: string): LegacyPublicBenchmarkSubmission {
   const { request, result } = record;
   if (result.status !== 'complete' || result.rows.length === 0 || result.rows.some(row => Boolean(row.error))) {
     throw new Error('Only completed benchmarks with successful measurements can be published.');
@@ -164,5 +178,60 @@ export function toPublicBenchmark(record: {
       pp_tps: row.pp_tps, tg_tps: row.tg_tps, e2e_ms: row.e2e_ms, total_tps: row.total_tps,
       peak_memory_bytes: row.peak_memory_bytes, timing_source: row.timing_source, failed: Boolean(row.error),
     })) },
-  });
+  }) as LegacyPublicBenchmarkSubmission;
+}
+
+function toServingPublicBenchmark({ request, result }: ServingRecord, submissionId: string): ServingPublicBenchmarkSubmission {
+  const p = result.provenance;
+  if (!p || p.schema_version !== 2) throw new Error('Serving benchmark provenance is unavailable.');
+  if (result.status !== 'complete' || !result.rows.length || result.rows.some(row => row.failed || Boolean(row.error))) {
+    throw new Error('Only completed benchmarks with successful measurements can be published.');
+  }
+  const w = p.workload;
+  if (request.method.id !== p.method.id || request.method.version !== p.method.version
+    || request.context_profile !== w.corpus || request.max_output_tokens !== w.max_output_tokens
+    || request.repetitions !== w.repetitions || request.warmup !== w.warmup || request.request_usage !== w.request_usage
+    || JSON.stringify(request.prompt_bytes) !== JSON.stringify(w.inputs.map(input => input.bytes))
+    || JSON.stringify(request.concurrencies) !== JSON.stringify(w.concurrencies)) {
+    throw new Error('Benchmark workload does not match its frozen provenance.');
+  }
+  const environment = p.environment;
+  const source = publicModelSource(p.model);
+  const format = p.model.format ?? 'unknown';
+  return validatePublicBenchmark({
+    schema_version: 3, submission_id: submissionId, app_version: p.app_version,
+    method: { id: p.method.id, version: p.method.version },
+    workload: {
+      corpus: w.corpus, corpus_version: w.corpus_version,
+      inputs: w.inputs.map(input => ({ bytes: input.bytes, sha256: input.sha256 })),
+      max_output_tokens: w.max_output_tokens, concurrencies: [...w.concurrencies],
+      repetitions: w.repetitions, warmup: w.warmup, request_usage: w.request_usage, cache_policy: w.cache_policy,
+    },
+    runtime: { name: p.runtime.name, version: p.runtime.version, backend: p.runtime.backend,
+      build: p.runtime.build, variant: p.runtime.variant, plugin_version: p.runtime.plugin_version },
+    model: { format, status: p.model.status, sha256: p.model.sha256, size_bytes: p.model.size_bytes,
+      ...(source ? { source } : {}),
+      ...(format === 'gguf' && p.model.metadata !== undefined ? { metadata: modelMetadata(p.model.metadata) } : {}) },
+    environment: { scope: environment.scope, os: safeLabel(environment.os), arch: safeLabel(environment.arch),
+      cpu: cpu(environment.cpu),
+      ...(environment.system_memory_bytes !== undefined ? { system_memory_bytes: environment.system_memory_bytes } : {}),
+      installed_gpus: environment.installed_gpus.map(gpu),
+      execution: { mode: environment.execution.mode, selected_gpus: environment.execution.selected_gpus.map(gpu),
+        selection_complete: environment.execution.selection_complete } },
+    execution: { topology: p.execution.topology, memory_scope: p.execution.memory_scope,
+      settings: p.execution.settings.map(setting => ({ target: setting.target, scope: [...setting.scope], name: setting.name,
+        value: Array.isArray(setting.value) ? [...setting.value] : setting.value, unit: setting.unit, role: setting.role })) },
+    measurements: { status: 'complete', rows: result.rows.map(publicServingRow) },
+  }) as ServingPublicBenchmarkSubmission;
+}
+
+export function publicServingRow(row: PerformanceBenchmarkResult['rows'][number]): ServingBenchmarkRow {
+  return {
+    input_bytes: row.input_bytes, max_output_tokens: row.max_output_tokens, concurrency: row.concurrency, repetition: row.repetition,
+    first_output_ms: row.first_output_ms, first_content_ms: row.first_content_ms, first_reasoning_ms: row.first_reasoning_ms,
+    e2e_ms: row.e2e_ms, content_bytes: row.content_bytes, reasoning_bytes: row.reasoning_bytes, output_bytes: row.output_bytes,
+    reported_prompt_tokens: row.reported_prompt_tokens, reported_completion_tokens: row.reported_completion_tokens,
+    reported_cached_tokens: row.reported_cached_tokens, usage_status: row.usage_status, finish_reasons: [...row.finish_reasons],
+    peak_memory_bytes: row.peak_memory_bytes, timing_source: row.timing_source, failed: row.failed,
+  };
 }

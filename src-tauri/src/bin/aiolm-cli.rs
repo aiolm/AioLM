@@ -1009,6 +1009,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         "",
         server::SERVER_START_TIMEOUT_SECS,
         &err,
+        plan.readiness,
     )
     .await
     {

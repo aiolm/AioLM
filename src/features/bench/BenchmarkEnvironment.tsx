@@ -80,14 +80,18 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
       <div><dt>{providerCopy[locale].engine}</dt><dd>{providerDisplayName(provider)}</dd></div>
       <div><dt>{copy.runtime}</dt><dd>{llama ? config.active_backend ? `${config.active_backend} · ${runtimeVersionLabel(runtimes, config.active_backend, config.active_build)}` : copy.unknown : <RuntimeSelectionLabel config={config} />}</dd></div>
     </dl>
+    <p className="performance-hint">{copy.profileHint}</p>
     <h4 id={`${id}-settings`} className="sr-only">{copy.settings}</h4>
     {llama ? <dl className="performance-environment-settings" aria-labelledby={`${id}-settings`}>
+      <div><dt>{copy.context}</dt><dd>{usesRuntimeDefault(config, 'ctx_size') ? copy.automatic : config.ctx_size}</dd></div>
+      <div><dt>{copy.parallel}</dt><dd>{usesRuntimeDefault(config, 'parallel') ? copy.automatic : config.parallel}</dd></div>
       <div><dt>{copy.gpuLayers}</dt><dd>{value('ngl')}</dd></div>
       <div><dt>{copy.threads}</dt><dd>{value('threads')}</dd></div>
       <div><dt>{copy.batch}</dt><dd>{value('batch_size')} / {value('ubatch_size')}</dd></div>
       <div><dt>{copy.cache}</dt><dd>{value('cache_type_k')} / {value('cache_type_v')}</dd></div>
       <div><dt>{copy.flash}</dt><dd>{value('flash_attn')}</dd></div>
     </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} mode="current" showRuntime={false} />}
+    <p className="performance-hint">{copy.hostHint}</p>
     <h4 id={`${id}-hardware`} className="sr-only">{copy.hardware}</h4>
     <dl className="performance-environment-hardware" aria-labelledby={`${id}-hardware`}>
       <div><dt>{copy.gpu}</dt><dd className="performance-environment-devices">{!llama ? copy.automaticGpu : cpuOnly ? copy.cpuOnly : <>{!ids.length && <span>{copy.automaticGpu}</span>}{devices}{draftCpu && <span>{copy.cpuOnly} · {copy.draft}</span>}</>}</dd></div>

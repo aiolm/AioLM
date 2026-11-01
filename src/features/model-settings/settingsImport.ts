@@ -2,6 +2,7 @@ import type { AppConfig } from '../../shared/api/types';
 import { ADVANCED_SAMPLING_FIELDS, MTP_FIELDS, REASONING_FIELDS, SAMPLING_FIELDS, SERVER_FIELDS, SERVER_TEXT_FIELDS } from '../tuning/tuningFields';
 import { managedServerOption, replaceServerOption, type ServerOption } from '../../shared/config/serverOptions';
 import { serverAliasesForRequest } from '../../shared/config/tuningDefaults';
+import { REQUEST_KEYS } from '../../shared/config/executionSettings';
 
 /**
  * Reading a llama-server command line back into settings.
@@ -14,7 +15,7 @@ import { serverAliasesForRequest } from '../../shared/config/tuningDefaults';
  * command is how a model ends up running with settings nobody chose.
  */
 
-export type RejectionReason = 'unknown' | 'value' | 'missing';
+export type RejectionReason = 'unknown' | 'value' | 'missing' | 'request';
 
 export interface ImportedSetting {
   flag: string;
@@ -124,7 +125,7 @@ function numeric(raw: string, target: { min: number; max: number; integer?: bool
   return target.integer ? Math.round(value) : value;
 }
 
-export function parseSettingsText(text: string, options: readonly ServerOption[], base: AppConfig): ImportedSettings {
+export function parseSettingsText(text: string, options: readonly ServerOption[], base: Pick<AppConfig, 'server_args' | 'chat_options'>, preserveRequest = false): ImportedSettings {
   const tokens = tokenizeCommand(text);
   const patch: Partial<AppConfig> = {};
   const chat: Record<string, number> = {};
@@ -149,6 +150,10 @@ export function parseSettingsText(text: string, options: readonly ServerOption[]
     if (target) {
       if (value === undefined) { rejected.push({ flag, reason: 'missing' }); continue; }
       at += 1;
+      if (preserveRequest && (target.kind === 'chat' || (REQUEST_KEYS as readonly string[]).includes(target.key))) {
+        rejected.push({ flag, reason: 'request' });
+        continue;
+      }
       if (target.kind === 'text') {
         (patch as Record<string, unknown>)[target.key] = value;
       } else {

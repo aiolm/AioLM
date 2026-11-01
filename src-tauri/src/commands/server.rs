@@ -219,8 +219,12 @@ pub(super) async fn start_on_target(
     }
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
     let engine = crate::providers::execution::probed_info(&worker_cfg).await?;
-    let (child, url, api_key_file) = match server::spawn(&worker_cfg, &api_key, err, &resolved_gpu)
-    {
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file: api_key_file,
+        readiness,
+    } = match server::spawn(&worker_cfg, &api_key, err, &resolved_gpu, None) {
         Ok(value) => value,
         Err(error) => {
             let mut server = target
@@ -284,6 +288,7 @@ pub(super) async fn start_on_target(
         &api_key,
         server::SERVER_START_TIMEOUT_SECS,
         err,
+        readiness,
     )
     .await
     {

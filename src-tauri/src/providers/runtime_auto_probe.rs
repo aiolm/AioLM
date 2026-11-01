@@ -1,6 +1,9 @@
 //! App-owned verification for discovered local HTTP servers. This module reads
 //! models and exercises the public protocol; it never starts, stops or claims
 //! ownership of the server process and never infers capabilities from a name.
+use super::sse::Framer;
+#[cfg(test)]
+use super::sse::EVENT_LIMIT;
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -11,7 +14,6 @@ use std::{
 };
 
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
-const EVENT_LIMIT: usize = 64 * 1024;
 const MODEL_LIMIT: usize = 256;
 const OUTPUT_LIMIT: usize = 4096;
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -281,26 +283,17 @@ fn completion_text(bytes: &[u8], model: &str) -> Result<String, String> {
 
 #[derive(Default)]
 struct StreamCheck {
-    pending: Vec<u8>,
-    event_data: Vec<String>,
+    framing: Framer,
     output: String,
-    total: usize,
-    skip_lf: bool,
-    started: bool,
     reported_completion_tokens: Option<u64>,
     finished: bool,
     done: bool,
 }
 
 impl StreamCheck {
-    fn event(&mut self, model: &str) -> Result<(), String> {
-        if self.event_data.is_empty() {
-            return Ok(());
-        }
-        let data = self.event_data.join("\n");
-        self.event_data.clear();
-        if self.done {
-            return Err("local stream contained data after its terminator".into());
+    fn event(&mut self, data: &str, event_type: Option<&str>, model: &str) -> Result<bool, String> {
+        if event_type == Some("error") {
+            return Err("local stream returned an SSE error event".into());
         }
         if data == "[DONE]" {
             if !self.finished || self.output.trim().is_empty() {
@@ -310,7 +303,7 @@ impl StreamCheck {
                 return Err("local stream reported no generated tokens".into());
             }
             self.done = true;
-            return Ok(());
+            return Ok(true);
         }
         let value: Value = serde_json::from_str(&data)
             .map_err(|_| "local stream contained invalid completion JSON")?;
@@ -329,7 +322,7 @@ impl StreamCheck {
             .ok_or("local stream did not contain completion choices")?;
         if choices.is_empty() {
             // An optional final usage frame is metadata, never generated text.
-            return Ok(());
+            return Ok(false);
         }
         if choices.len() != 1 || self.finished {
             return Err("local stream contained unexpected completion choices".into());
@@ -359,63 +352,21 @@ impl StreamCheck {
             }
             self.finished = true;
         }
-        Ok(())
-    }
-
-    fn line(&mut self, line: &[u8], model: &str) -> Result<(), String> {
-        let line = if self.started {
-            line
-        } else {
-            self.started = true;
-            line.strip_prefix(b"\xef\xbb\xbf").unwrap_or(line)
-        };
-        let line = std::str::from_utf8(line).map_err(|_| "local stream is not UTF-8")?;
-        if line.is_empty() {
-            return self.event(model);
-        }
-        if let Some(data) = line.strip_prefix("data:") {
-            let data = data.strip_prefix(' ').unwrap_or(data);
-            let size: usize = self.event_data.iter().map(String::len).sum();
-            if size.saturating_add(data.len()) > EVENT_LIMIT {
-                return Err("local stream event exceeds 64 KiB".into());
-            }
-            self.event_data.push(data.to_string());
-        }
-        // Other SSE fields/comments are not completion data.
-        Ok(())
+        Ok(false)
     }
 
     fn push(&mut self, chunk: &[u8], model: &str) -> Result<(), String> {
-        self.total = self.total.saturating_add(chunk.len());
-        if self.total > RESPONSE_LIMIT {
-            return Err("local verification stream exceeds 2 MiB".into());
-        }
-        for byte in chunk {
-            if self.skip_lf && *byte == b'\n' {
-                self.skip_lf = false;
-                continue;
-            }
-            self.skip_lf = false;
-            if matches!(*byte, b'\r' | b'\n') {
-                let line = std::mem::take(&mut self.pending);
-                self.line(&line, model)?;
-                self.skip_lf = *byte == b'\r';
-            } else {
-                self.pending.push(*byte);
-                if self.pending.len() > EVENT_LIMIT {
-                    return Err("local stream line exceeds 64 KiB".into());
-                }
-            }
-        }
-        Ok(())
+        // Keep semantic verification stricter than benchmark measurement, but
+        // share the exact UTF-8, event framing and resource limits.
+        let mut framing = std::mem::take(&mut self.framing);
+        let result = framing.push(chunk, RESPONSE_LIMIT, |data, kind| {
+            self.event(data, kind, model)
+        });
+        self.framing = framing;
+        result.map(|_| ())
     }
 
-    fn complete(mut self, model: &str) -> Result<String, String> {
-        if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
-            self.line(&line, model)?;
-        }
-        self.event(model)?;
+    fn complete(self) -> Result<String, String> {
         if !self.done {
             return Err("local stream was interrupted before its terminator".into());
         }
@@ -455,23 +406,17 @@ async fn stream(mut response: Response, model: &str) -> Result<String, String> {
             break;
         }
     }
-    check.complete(model)
+    check.complete()
 }
 
 fn request_body(model: &str, streaming: bool) -> Value {
-    let mut body = json!({
+    json!({
         "model": model,
         "messages": [{"role":"user", "content":"What is 2 + 3? Reply with only the digit."}],
         "temperature": 0,
         "max_tokens": 32,
         "stream": streaming
-    });
-    if streaming {
-        // The desktop chat client requests usage in this exact standard field.
-        // Verify it too, so a server that rejects it cannot pass setup first.
-        body["stream_options"] = json!({"include_usage":true});
-    }
-    body
+    })
 }
 
 /// Verify the selected, currently loaded model with two bounded inference
@@ -623,13 +568,34 @@ mod tests {
             let mut requests = Vec::new();
             for response in responses {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                requests.push(read_request(&mut socket).await);
-                socket.write_all(&response).await.unwrap();
+                let request = read_request(&mut socket).await;
+                let optional_usage = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .and_then(|end| serde_json::from_slice::<Value>(&request[end + 4..]).ok())
+                    .is_some_and(|body| body.get("stream_options").is_some());
+                requests.push(request);
+                if optional_usage {
+                    socket
+                        .write_all(&response_for_unsupported_usage())
+                        .await
+                        .unwrap();
+                } else {
+                    socket.write_all(&response).await.unwrap();
+                }
                 socket.shutdown().await.unwrap();
             }
             requests
         });
         (url, task)
+    }
+
+    fn response_for_unsupported_usage() -> Vec<u8> {
+        response(
+            "400 Bad Request",
+            "application/json",
+            "{\"error\":\"stream_options is unsupported\"}",
+        )
     }
 
     #[tokio::test]
@@ -803,13 +769,15 @@ mod tests {
             for byte in data.as_bytes() {
                 check.push(&[*byte], "모델-unknown").unwrap();
             }
-            assert_eq!(check.complete("모델-unknown").unwrap(), "5");
+            assert_eq!(check.complete().unwrap(), "5");
         }
     }
 
     #[test]
     fn stream_requires_finished_generation_then_terminator() {
         for invalid in [
+            events(MODEL).trim_end_matches('\n').to_owned(),
+            events(MODEL).strip_suffix('\n').unwrap().to_owned(),
             events(MODEL).replace("data: [DONE]\n\n", ""),
             "data: [DONE]\n\n".into(),
             format!(
@@ -822,7 +790,7 @@ mod tests {
             let mut check = StreamCheck::default();
             let result = check
                 .push(invalid.as_bytes(), MODEL)
-                .and_then(|()| check.complete(MODEL));
+                .and_then(|()| check.complete());
             assert!(result.is_err());
         }
     }
@@ -868,7 +836,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_exercises_both_real_protocol_forms_without_claiming_extra_capabilities() {
+    async fn verification_exercises_both_core_forms_when_optional_usage_is_rejected() {
         let (url, task) = server(vec![
             response("200 OK", "application/json", &model_list()),
             response(
@@ -903,11 +871,7 @@ mod tests {
                     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
                 assert_eq!(body["model"], MODEL);
                 assert_eq!(body["stream"], index == 2);
-                if index == 2 {
-                    assert_eq!(body["stream_options"], json!({"include_usage":true}));
-                } else {
-                    assert!(body.get("stream_options").is_none());
-                }
+                assert!(body.get("stream_options").is_none());
                 assert!(!body.as_object().unwrap().contains_key("tools"));
             }
         }

@@ -1,6 +1,6 @@
 //! Original, deterministic benchmark material. These are synthetic workload
 //! samples, not excerpts from copyrighted books or downloaded repositories.
-pub(super) fn text(profile: &str, min_bytes: usize) -> String {
+pub(super) fn text(profile: &str, bytes: usize) -> String {
     let seed = match profile {
         "code_python" => r#"from dataclasses import dataclass
 from collections import defaultdict
@@ -45,9 +45,11 @@ GROUP BY station ORDER BY samples DESC;
         "novel_ja" => "夜明けの港には、まだ船の音が聞こえなかった。遥は古い時計台の下で地図を広げ、昨日まで描かれていなかった細い道を指でたどった。道は森を抜けて、白い灯台のある岬へ続いていた。祖父の手紙には、潮が引く前に橋を渡るようにと書いてあった。遥は水筒を鞄に入れ、町の小さなパン屋で朝食を買った。店主は窓から空を見上げて、今日は遠くまで見えるだろうと言った。石畳を歩く足音が静かな通りに響いた。岬の向こうで何が待っているのか、彼女はまだ知らなかった。\n",
         _ => unreachable!("profile was validated before building its corpus"),
     };
-    let mut output = String::with_capacity(min_bytes + seed.len());
+    const PREFIX: &str = "Continue the following text. Do not summarize or explain.\n\n";
+    let mut output = String::with_capacity(bytes + seed.len() + 64);
+    output.push_str(PREFIX);
     let mut section = 1;
-    while output.len() < min_bytes {
+    while output.len() < bytes {
         if profile == "code_python" {
             output.push_str(&format!("\n# workload section {section:06}\n"));
         } else if profile == "code_mixed" {
@@ -57,6 +59,14 @@ GROUP BY station ORDER BY samples DESC;
         }
         output.push_str(seed);
         section += 1;
+    }
+    let mut boundary = bytes.min(output.len());
+    while !output.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    output.truncate(boundary);
+    while output.len() < bytes {
+        output.push(' ');
     }
     output
 }

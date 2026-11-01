@@ -60,6 +60,79 @@ describe('runtime inventory readiness', () => {
 });
 
 describe('runtime-specific option controls', () => {
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm', 'custom.synthetic'] as const)('preserves %s benchmark request overrides and permits an explicit clear', async provider => {
+    const effective = effectiveSchema([], [
+      schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } }),
+      schemaOption({ key: 'request-value', flag: '--request-value', group: 'other', target: 'request', kind: { type: 'number' } }),
+    ]);
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effective);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onChange = vi.fn();
+    const cfg: api.AppConfig = { ...testConfig, active_provider: provider, active_runtime: 'build', active_backend: 'cpu', active_build: 'build',
+      provider_options: { [provider]: { workers: 8, 'request-value': 'invalid-old-override' } } };
+    const view = (disabled: boolean) => <I18nProvider initialLocale="en"><ProviderOptions benchmark cfg={cfg} disabled={disabled}
+      onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>;
+    const rendered = render(view(false));
+    const request = await screen.findByLabelText(/^request-value/);
+    expect(request).toBeDisabled();
+    expect(screen.getByLabelText(/^--workers/)).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: runtimeOptionsCopy.en.useDefault }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { [provider]: { workers: 8 } } });
+    rendered.rerender(view(true));
+    expect(screen.getByRole('button', { name: runtimeOptionsCopy.en.useDefault })).toBeDisabled();
+  });
+
+  it('uses the same benchmark request policy with the catalog fallback and leaves normal editing enabled', async () => {
+    const provider = 'vllm';
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' },
+      options: [{ key: 'request-value', target: 'request', group: 'other', kind: { type: 'number' } }] }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onChange = vi.fn();
+    const cfg: api.AppConfig = { ...testConfig, active_provider: provider, active_runtime: '', provider_options: { [provider]: { 'request-value': 0 } } };
+    const view = (benchmark: boolean) => <I18nProvider initialLocale="en"><ProviderOptions benchmark={benchmark} cfg={cfg} disabled={false}
+      onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>;
+    const rendered = render(view(true));
+    await screen.findByText(/request-value/);
+    expect(screen.getByRole('textbox', { name: /^request-value/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: runtimeOptionsCopy.en.useDefault }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { [provider]: {} } });
+    rendered.rerender(view(false));
+    expect(screen.getByRole('textbox', { name: /^request-value/ })).toBeEnabled();
+  });
+
+  it.each(['build', ''])('preserves request overrides during benchmark import with runtime %s', async active_runtime => {
+    const options: api.ProviderOption[] = [
+      { key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } },
+      { key: 'request-value', flag: '--request-value', group: 'other', target: 'request', kind: { type: 'number' } },
+    ];
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vLLM', server: 'synthetic', availability: { supported: true, detail: '' }, options }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue(options);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema(options));
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const schemaImport = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({
+      plan: [{ key: 'workers', values: [4] }, { key: 'request-value', values: [1] }], managed: [], unrecognized: [],
+    });
+    const catalogImport = vi.spyOn(api, 'providerImportCommand').mockResolvedValue({ options: { workers: 4, 'request-value': 1 }, issues: [] });
+    const onChange = vi.fn();
+    const cfg: api.AppConfig = { ...testConfig, active_provider: 'vllm', active_runtime, provider_options: { vllm: { workers: 8, 'request-value': 0 } } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions benchmark cfg={cfg} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--workers 4 --request-value 1' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({
+      provider_options: { vllm: expect.objectContaining({ workers: 4, 'request-value': 0 }) },
+    }));
+    schemaImport.mockRestore();
+    catalogImport.mockRestore();
+  });
+
   it('refreshes unknown-option validation when schema and saved values change in place in an unvisited section', async () => {
     const provider = 'custom.synthetic';
     const option = (key: string) => schemaOption({ key, flag: `--${key}`, group: 'other', target: 'launch', kind: { type: 'text' } });

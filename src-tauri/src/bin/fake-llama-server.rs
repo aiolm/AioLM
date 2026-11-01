@@ -51,8 +51,8 @@ fn handle(mut stream: TcpStream) {
         }
     }
     let mut slow = false;
+    let mut body = vec![0_u8; content_length];
     if content_length > 0 {
-        let mut body = vec![0_u8; content_length];
         let _ = reader.read_exact(&mut body);
         slow = String::from_utf8_lossy(&body).contains("slow");
     }
@@ -69,6 +69,25 @@ fn handle(mut stream: TcpStream) {
             .open(record)
             .expect("synthetic HTTP request log");
         writeln!(record, "{method} {path}").expect("record synthetic request");
+    }
+    let arguments: Vec<String> = std::env::args().collect();
+    if let Some(log_path) = arguments
+        .iter()
+        .position(|arg| arg == "--benchmark-receipt")
+        .and_then(|index| arguments.get(index + 1))
+    {
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .unwrap();
+        writeln!(
+            log,
+            "{}",
+            serde_json::json!({"method":method,"path":path,
+            "body":serde_json::from_slice::<serde_json::Value>(&body).ok()})
+        )
+        .unwrap();
     }
     if matches!(path, "/health" | "/round72-origin-health")
         && authorization
@@ -101,18 +120,33 @@ fn handle(mut stream: TcpStream) {
             }
         }
         ("OPTIONS", _) => respond(&mut stream, "200 OK", "text/plain", ""),
-        ("GET", "/health" | "/round72-origin-health") => respond(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            r#"{"status":"ok"}"#,
-        ),
-        ("GET", "/v1/models") => respond(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            r#"{"data":[{"id":"fake-model","object":"model"}]}"#,
-        ),
+        ("GET", "/health" | "/round72-origin-health") => {
+            let loaded_model = arguments
+                .iter()
+                .position(|arg| arg == "--model")
+                .and_then(|index| arguments.get(index + 1));
+            let body = serde_json::json!({"status":"ok","loaded_model":loaded_model}).to_string();
+            respond(&mut stream, "200 OK", "application/json", &body);
+        }
+        ("GET", "/v1/models") => {
+            let args: Vec<String> = std::env::args().collect();
+            let model = args
+                .iter()
+                .position(|arg| arg == "--served-model-name")
+                .or_else(|| args.iter().position(|arg| arg == "--model"))
+                .or_else(|| args.iter().position(|arg| arg == "-m"))
+                .and_then(|index| args.get(index + 1))
+                .map(String::as_str)
+                .unwrap_or("fake-model");
+            // The decoy ID precedes the selected model to exercise exact
+            // launch-plan matching instead of accepting the first model.
+            let body = serde_json::json!({"data":[
+                {"id":"fake-model","object":"model"},
+                {"id":model,"object":"model"}
+            ]})
+            .to_string();
+            respond(&mut stream, "200 OK", "application/json", &body);
+        }
         ("POST", "/v1/rerank") => {
             if std::env::args().any(|arg| arg == "--fake-unverified-task-api") {
                 respond(
@@ -169,6 +203,24 @@ fn handle(mut stream: TcpStream) {
             }
         }
         ("POST", "/v1/chat/completions") => {
+            static CHAT_CALLS: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let call = CHAT_CALLS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if call > 0 && arguments.iter().any(|arg| arg == "--benchmark-second-eof") {
+                respond(&mut stream, "200 OK", "text/event-stream",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"discard this partial batch\"}}]}\n\n");
+                return;
+            }
+            if call > 0
+                && arguments
+                    .iter()
+                    .any(|arg| arg == "--benchmark-second-stall")
+            {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"discard this partial batch\"}}]}\n\n");
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                return;
+            }
             if slow {
                 let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
                 for _ in 0..20 {

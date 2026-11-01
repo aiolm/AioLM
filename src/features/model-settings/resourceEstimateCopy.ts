@@ -17,7 +17,7 @@ const en = {
    scope: 'VRAM, Runtime RAM, RAM Offload and SSD Offload are estimated values for this configuration, not measurements. RAM Offload is model/cache data placed in system memory after VRAM and excludes Runtime RAM. SSD Offload is the estimated model/cache portion read from disk for this configuration — weights explicitly placed on disk plus any overflow beyond VRAM and RAM capacity — not the installation size.',
   capacityHint: 'Capacity is the total physical memory of this computer. Memory used by other apps and running models is not subtracted, so less may be free when loading.',
   filesHint: 'Stored model files are the selected files already on disk, including all shards; they are not SSD Offload. Loading does not copy them, and context or batch changes do not change their size.',
-  benchmark: "Benchmarks use their own measurement settings, so memory use can differ between runs.",
+  benchmark: "Benchmarks preserve these launch settings. Input bytes, output limits and client concurrency can change measured memory use.",
   notes: {
     approximate: 'Calculated from GGUF metadata with estimated working buffers, not measured. Runtime versions, drivers, memory mapping and workload can change actual and peak usage.',
     automatic: 'Automatic runtime settings are estimated with the runtime\'s baseline defaults, not the most extreme placement. Set explicit values for a more specific estimate.',
@@ -53,7 +53,7 @@ export const resourceEstimateCopy: Record<Locale, Copy> = {
      scope: 'VRAM, 실행 보조 RAM, RAM 오프로드, SSD 오프로드는 이 설정의 추정치이며 실측값이 아닙니다. RAM 오프로드는 VRAM 다음으로 시스템 메모리에 두는 모델/캐시 데이터로, 실행 보조 RAM은 제외합니다. SSD 오프로드는 이 설정에서 디스크에서 읽는 모델/캐시 예상 분량 — 명시적으로 디스크에 배치한 가중치와 VRAM·RAM 용량을 초과한 분량 — 이며 설치 크기가 아닙니다.',
     capacityHint: '용량은 이 컴퓨터의 전체 물리 메모리 기준입니다. 다른 앱과 실행 중인 모델이 사용하는 메모리는 빼지 않았으므로 실행 시 여유 메모리는 더 적을 수 있습니다.',
     filesHint: '저장된 모델 파일은 분할 파일을 포함해 선택한 파일이 이미 디스크에서 차지하는 크기이며 SSD 오프로드가 아닙니다. 실행 시 복사되지 않고, 컨텍스트·배치 변경으로 크기가 바뀌지 않습니다.',
-    benchmark: "벤치마크는 별도의 측정 설정을 사용하므로 실행마다 메모리 사용량이 달라질 수 있습니다.",
+    benchmark: "벤치마크는 이 실행 설정을 유지합니다. 입력 바이트·출력 상한·클라이언트 동시 요청 수에 따라 실측 메모리 사용량은 달라질 수 있습니다.",
     notes: {
       approximate: 'GGUF 메타데이터와 작업 버퍼 추정치로 계산한 값이며 실측이 아닙니다. 런타임 버전·드라이버·메모리 매핑·작업에 따라 실제 사용량과 최대 사용량은 달라질 수 있습니다.',
       automatic: '자동으로 정해지는 런타임 설정은 극단적인 배치가 아니라 런타임 기본 동작을 기준으로 계산했습니다. 값을 직접 지정하면 더 구체적으로 추정할 수 있습니다.',
@@ -86,7 +86,7 @@ export const resourceEstimateCopy: Record<Locale, Copy> = {
      scope: 'VRAM、実行補助 RAM、RAM オフロード、SSD オフロードはこの設定の推定値で、実測値ではありません。RAM オフロードは VRAM の次にシステムメモリへ置くモデル/キャッシュデータで、実行補助 RAM は含みません。SSD オフロードはこの設定でディスクから読み出すモデル/キャッシュの推定量 — 明示的にディスク配置した重みと VRAM・RAM 容量を超えた分 — で、インストールサイズではありません。',
     capacityHint: '容量はこのコンピューターの物理メモリ合計です。他のアプリや実行中のモデルが使うメモリは差し引いていないため、読み込み時の空きはより少ない場合があります。',
     filesHint: '保存済みモデルファイルは分割ファイルを含む選択済みファイルのディスク上のサイズで、SSD オフロードではありません。読み込み時に複製されず、コンテキストやバッチの変更でもサイズは変わりません。',
-    benchmark: "ベンチマークは専用の測定設定を使うため、実行ごとにメモリ使用量が異なる場合があります。",
+    benchmark: "ベンチマークはこの起動設定を保持します。入力バイト数、出力上限、クライアント同時実行数により実測メモリ使用量は変わります。",
     notes: {
       approximate: 'GGUF メタデータと作業バッファの推定から算出した値で、実測ではありません。ランタイム、ドライバー、メモリマッピング、処理内容により実使用量とピークは異なります。',
       automatic: '自動で決まるランタイム設定は、極端な配置ではなくランタイムの既定動作を基準に推定しています。値を指定するとより具体的に推定できます。',
@@ -119,7 +119,7 @@ export const resourceEstimateCopy: Record<Locale, Copy> = {
      scope: 'VRAM、运行辅助 RAM、RAM 卸载和 SSD 卸载是此配置的估算值，并非实测。RAM 卸载是在 VRAM 之后放入系统内存的模型/缓存数据，不含运行辅助 RAM。SSD 卸载是此配置从磁盘读取的模型/缓存估算部分——显式置于磁盘的权重加上超出 VRAM 和 RAM 容量的部分——并非安装大小。',
     capacityHint: '容量为本机的物理内存总量，未扣除其他应用和正在运行的模型所用的内存，因此加载时的可用内存可能更少。',
     filesHint: '已存储的模型文件是所选文件（含所有分片）在磁盘上已占用的大小，并非 SSD 卸载。加载不会复制文件，更改上下文或批次也不会改变其大小。',
-    benchmark: "基准测试使用独立的测量设置，因此每次运行的内存用量可能不同。",
+    benchmark: "基准测试保留这些启动设置。输入字节、输出上限和客户端并发数可能改变实测内存用量。",
     notes: {
       approximate: '根据 GGUF 元数据和工作缓冲区估算得出，并非实测。运行时版本、驱动、内存映射和工作负载会影响实际及峰值用量。',
       automatic: '自动决定的运行时设置按运行时的默认行为估算，而非极端分配。指定明确的值可得到更具体的估算。',

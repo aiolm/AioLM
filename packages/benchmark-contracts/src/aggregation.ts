@@ -1,4 +1,13 @@
-import type { BenchmarkTrial, BenchmarkSummary, PublicBenchmarkRow } from './types.js';
+import type {
+  BenchmarkTrial,
+  BenchmarkSummary,
+  PublicBenchmarkRow,
+  ServingAggregationRow,
+  ServingBenchmarkPoint,
+  ServingBenchmarkRow,
+  ServingMetricKey,
+  ServingMetricStat,
+} from './types.js';
 
 const numericMetrics = ['ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'total_tps'] as const;
 const measured = (value: number | null): value is number => value !== null && Number.isFinite(value) && value >= 0;
@@ -87,4 +96,128 @@ export function summarizeBenchmarkTrials(rows: BenchmarkTrial[]): BenchmarkSumma
 /** Public submissions contain trials in order, without private local trial identifiers. */
 export function summarizePublicBenchmarkRows(rows: PublicBenchmarkRow[]): BenchmarkSummary[] {
   return summarizeBenchmarkTrials(rows.map((row, index) => ({ ...row, id: String(index), error: row.failed ? 'failed' : null })));
+}
+
+export const SERVING_METRIC_KEYS = [
+  'first_output_ms',
+  'first_content_ms',
+  'first_reasoning_ms',
+  'e2e_ms',
+  'content_bytes',
+  'reasoning_bytes',
+  'output_bytes',
+  'output_bytes_per_second',
+  'reported_prompt_tokens',
+  'reported_completion_tokens',
+  'reported_cached_tokens',
+  'reported_tokens_per_second',
+  'peak_memory_bytes',
+] as const satisfies readonly ServingMetricKey[];
+
+function servingRate(numerator: number | null, e2eMs: number): number | null {
+  if (!measured(numerator) || !measured(e2eMs) || e2eMs === 0) return null;
+  const rate = numerator * 1000 / e2eMs;
+  return Number.isFinite(rate) ? rate : null;
+}
+
+function servingValues(row: Omit<ServingBenchmarkRow, 'failed'>): Record<ServingMetricKey, number | null> {
+  const observation = (value: number | null): number | null => measured(value) ? value : null;
+  return {
+    first_output_ms: observation(row.first_output_ms),
+    first_content_ms: observation(row.first_content_ms),
+    first_reasoning_ms: observation(row.first_reasoning_ms),
+    e2e_ms: observation(row.e2e_ms),
+    content_bytes: observation(row.content_bytes),
+    reasoning_bytes: observation(row.reasoning_bytes),
+    output_bytes: observation(row.output_bytes),
+    output_bytes_per_second: servingRate(row.output_bytes, row.e2e_ms),
+    reported_prompt_tokens: observation(row.reported_prompt_tokens),
+    reported_completion_tokens: observation(row.reported_completion_tokens),
+    reported_cached_tokens: observation(row.reported_cached_tokens),
+    reported_tokens_per_second: servingRate(row.reported_completion_tokens, row.e2e_ms),
+    peak_memory_bytes: observation(row.peak_memory_bytes),
+  };
+}
+
+/** Client-observed byte rates and self-reported token rates share the batch E2E duration. */
+export function servingMetricValues(row: ServingBenchmarkRow): Record<ServingMetricKey, number | null> {
+  return servingValues(row);
+}
+
+function servingStat(values: number[]): ServingMetricStat | null {
+  if (values.length === 0) return null;
+  values.sort((a, b) => a - b);
+  const middle = Math.floor(values.length / 2);
+  // All observations are nonnegative, so this midpoint cannot overflow.
+  const median = values.length % 2 === 0
+    ? values[middle - 1] + (values[middle] - values[middle - 1]) / 2
+    : values[middle];
+  return { median, min: values[0], max: values[values.length - 1], samples: values.length };
+}
+
+/** Missing metrics stay missing; each statistic counts only its own measured observations. */
+export function summarizeServingPoints(rows: readonly ServingAggregationRow[]): ServingBenchmarkPoint[] {
+  const groups = new Map<string, {
+    input_bytes: number;
+    max_output_tokens: number;
+    concurrency: number;
+    samples: number;
+    observations: Record<ServingMetricKey, number[]>;
+  }>();
+  for (const row of rows) {
+    if (row.failed || row.error) continue;
+    const key = `${row.input_bytes}|${row.concurrency}|${row.max_output_tokens}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        input_bytes: row.input_bytes,
+        max_output_tokens: row.max_output_tokens,
+        concurrency: row.concurrency,
+        samples: 0,
+        observations: {
+          first_output_ms: [],
+          first_content_ms: [],
+          first_reasoning_ms: [],
+          e2e_ms: [],
+          content_bytes: [],
+          reasoning_bytes: [],
+          output_bytes: [],
+          output_bytes_per_second: [],
+          reported_prompt_tokens: [],
+          reported_completion_tokens: [],
+          reported_cached_tokens: [],
+          reported_tokens_per_second: [],
+          peak_memory_bytes: [],
+        },
+      };
+      groups.set(key, group);
+    }
+    group.samples += 1;
+    const values = servingValues(row);
+    for (const metric of SERVING_METRIC_KEYS) {
+      const value = values[metric];
+      if (measured(value)) group.observations[metric].push(value);
+    }
+  }
+  return [...groups.values()].map((group): ServingBenchmarkPoint => ({
+    input_bytes: group.input_bytes,
+    max_output_tokens: group.max_output_tokens,
+    concurrency: group.concurrency,
+    samples: group.samples,
+    first_output_ms: servingStat(group.observations.first_output_ms),
+    first_content_ms: servingStat(group.observations.first_content_ms),
+    first_reasoning_ms: servingStat(group.observations.first_reasoning_ms),
+    e2e_ms: servingStat(group.observations.e2e_ms),
+    content_bytes: servingStat(group.observations.content_bytes),
+    reasoning_bytes: servingStat(group.observations.reasoning_bytes),
+    output_bytes: servingStat(group.observations.output_bytes),
+    output_bytes_per_second: servingStat(group.observations.output_bytes_per_second),
+    reported_prompt_tokens: servingStat(group.observations.reported_prompt_tokens),
+    reported_completion_tokens: servingStat(group.observations.reported_completion_tokens),
+    reported_cached_tokens: servingStat(group.observations.reported_cached_tokens),
+    reported_tokens_per_second: servingStat(group.observations.reported_tokens_per_second),
+    peak_memory_bytes: servingStat(group.observations.peak_memory_bytes),
+  })).sort((a, b) => a.input_bytes - b.input_bytes
+    || a.concurrency - b.concurrency
+    || a.max_output_tokens - b.max_output_tokens);
 }

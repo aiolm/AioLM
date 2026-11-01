@@ -8,6 +8,7 @@ import { modelSettingsCopy } from './modelSettingsCopy';
 import type { DraftPatch } from './DraftTuningEditor';
 
 function rejectionText(entry: RejectedSetting, copy: (typeof modelSettingsCopy)['en']): string {
+  if (entry.reason === 'request') return `${entry.flag} — ${copy.benchmarkRequest}`;
   if (entry.reason === 'unknown') return `${entry.flag} — ${copy.pasteUnknown}`;
   if (entry.reason === 'missing') return `${entry.flag} — ${copy.pasteMissing}`;
   const range = entry.range ? ` (${entry.range.min}–${entry.range.max})` : '';
@@ -22,8 +23,8 @@ function rejectionText(entry: RejectedSetting, copy: (typeof modelSettingsCopy)[
  * applied is listed rather than dropped: a paste that silently loses half its
  * flags leaves a model running on settings nobody chose.
  */
-export default function SettingsPasteBox({ cfg, options, disabled, onChange }: {
-  cfg: AppConfig; options: readonly ServerOption[]; disabled: boolean; onChange: DraftPatch;
+export default function SettingsPasteBox({ cfg, options, disabled, benchmark = false, onChange }: {
+  cfg: AppConfig; options: readonly ServerOption[]; disabled: boolean; benchmark?: boolean; onChange: DraftPatch;
 }) {
   const { locale } = useI18n();
   const copy = modelSettingsCopy[locale];
@@ -31,7 +32,7 @@ export default function SettingsPasteBox({ cfg, options, disabled, onChange }: {
   const [result, setResult] = useState<ReturnType<typeof parseSettingsText> | null>(null);
 
   const apply = () => {
-    const parsed = parseSettingsText(text, options, cfg);
+    const parsed = parseSettingsText(text, options, cfg, benchmark);
     setResult(parsed);
     if (Object.keys(parsed.patch).length > 0) onChange(parsed.patch);
   };

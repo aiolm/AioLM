@@ -212,7 +212,7 @@ describe('model settings target application', () => {
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'chosen.gguf', ctx_size: 8192, ngl: 7 }), expect.objectContaining({ model: 'chosen.gguf', profile_id: 'profile-old', system_prompt: 'Old prompt' }));
     expect(store.cfg?.active_model).toBe('model.gguf');
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ngl: 7, ctx_size: kind === 'benchmark' ? 4096 : 8192 } });
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ngl: 7, ctx_size: 8192 } });
     expect(store.cfg?.settings_profiles?.applied).toEqual(previous);
     expect(store.updateConfig).toHaveBeenCalledOnce(); expect(store.start).not.toHaveBeenCalled();
     expect(mocks.sessionStart).not.toHaveBeenCalled(); expect(mocks.preflightLaunch).not.toHaveBeenCalled();

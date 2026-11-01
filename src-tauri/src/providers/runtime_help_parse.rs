@@ -950,6 +950,9 @@ pub fn parse_help_report(
             restart_required: Fact::default(),
             sensitive: Fact::default(),
             local_path: Fact::default(),
+            benchmark_public: Fact::default(),
+            benchmark_name: Fact::default(),
+            benchmark_role: Fact::default(),
             managed,
             raw_spans: vec![help_source(document, pending.start_line, pending.end_line)],
         });

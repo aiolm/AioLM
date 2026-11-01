@@ -43,6 +43,7 @@ export function effectiveSchema(options: ProviderOption[], extra: OptionSchemaDe
     compat_keys: options.map(option => option.key),
     help_keys: extra.map(option => option.key),
     shadowed: [],
+    benchmark_names: {},
     ...overrides,
   };
 }

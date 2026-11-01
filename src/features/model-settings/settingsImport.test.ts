@@ -44,6 +44,16 @@ describe('pasted settings', () => {
     expect(getOptionOccurrences(result.patch.server_args ?? [], jinja)).toHaveLength(1);
   });
 
+  it('imports benchmark launch settings without overwriting saved request values', () => {
+    const result = parseSettingsText('--ctx-size 32768 --parallel 4 --cache-type-k q8_0 --temp 0.7 --min-p 0.1 -n 128', SERVER_OPTIONS, base, true);
+    expect(result.patch).toEqual({ ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0' });
+    expect(result.applied.map(item => item.flag)).toEqual(['--ctx-size', '--parallel', '--cache-type-k']);
+    expect(result.rejected).toEqual([
+      { flag: '--temp', reason: 'request' }, { flag: '--min-p', reason: 'request' }, { flag: '-n', reason: 'request' },
+    ]);
+    expect(base.chat_options).toEqual(testConfig.chat_options);
+  });
+
   it('names what it could not apply instead of dropping it', () => {
     // Silently ignoring part of a pasted command is how a model ends up running
     // with settings nobody chose.

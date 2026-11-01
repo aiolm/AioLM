@@ -86,8 +86,9 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   </div>;
 }
 
-export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false, hideDefaultsReset = false, editor = 'schema' }: {
+export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, onInvalid, onChecking, section, collapseTools = false, hideDefaultsReset = false, editor = 'schema' }: {
   cfg: api.AppConfig; disabled: boolean; onChange: (patch: Partial<api.AppConfig>) => void; onInvalid: (key: string, invalid: boolean) => void;
+  benchmark?: boolean;
   onChecking?: (checking: boolean) => void;
   section?: string;
   collapseTools?: boolean;
@@ -261,7 +262,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax, effective.entry).then(result => {
         if (!current()) return;
         let next: Record<string, unknown>;
-        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); return; }
+        try {
+          const plan = benchmark ? result.plan.filter(item => effective.schema.options.find(option => option.key === item.key)?.target !== 'request') : result.plan;
+          next = applyPlan(effective.schema, values, { plan });
+        } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); return; }
         const review = maskImportReview(result, effective.schema, values, liveEntrySecrets(), effective.entry);
         setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
@@ -274,7 +278,15 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       for (const option of schema) {
         if (option.kind.type === 'json') assertJsonOptionNumbers(result.options[option.key]);
       }
-      setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
+      const imported = { ...result.options };
+      if (benchmark) {
+        for (const option of schema) {
+          if (option.target !== 'request') continue;
+          if (values[option.key] === undefined) delete imported[option.key];
+          else imported[option.key] = values[option.key];
+        }
+      }
+      setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: imported } });
     }).catch(cause => { if (current()) setError(cause instanceof JsonOptionNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : String(cause)); });
   };
   // Confirmations are runtime metadata pinned to the accepted help, saved
@@ -304,7 +316,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       <button type="button" className="app-button app-button--secondary" disabled={disabled || checking || !effective || ['stale', 'unchecked'].includes(effective.help_state)} onClick={() => {
         if (!effective) return;
         try {
-          const next = clearRuntimeOptionOverrides(effective.schema, values, effective.scope);
+          const next = clearRuntimeOptionOverrides(effective.schema, values, effective.scope, benchmark ? option => option.target === 'request' : undefined);
           onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
           setDefaultsRevision(value => value + 1); setDefaultsRestored(true); setError('');
         } catch { setError(defaultsCopy.order); }
@@ -320,13 +332,15 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} showNoMatch={hasSchemaOptions} schema={formEffective.schema} values={values} scope={formEffective.scope} disabled={disabled || !effective}
         onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
         filter={schemaFilter}
+        readOnlyForOption={benchmark ? option => option.target === 'request' : undefined}
         inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
-        hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
+        hint={option => benchmark && option.target === 'request' ? modelSettingsCopy[locale].benchmarkRequest
+          : automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
         onInvalid={onInvalid} validationDescriptions={issueDescriptions}
         confirmSyntaxFor={option => formEffective.help_keys.includes(option.key)}
         onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />
     </div>}
-    {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
+    {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} readOnly={benchmark && option.target === 'request'} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
@@ -381,7 +395,7 @@ function OptionTools({ collapsed, label, children }: { collapsed: boolean; label
     : <>{children}</>;
 }
 
-function OptionField({ option, value, disabled, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
+function OptionField({ option, value, disabled, readOnly = false, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; readOnly?: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const text = value === undefined ? '' : option.kind.type === 'json' || typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
   const [draft, setDraft] = useState(text);
@@ -390,6 +404,8 @@ function OptionField({ option, value, disabled, automaticTelemetry = false, onCh
   const saved = useRef({ text, key: option.key });
   const invalidRef = useRef(false);
   const errorId = useId();
+  const controlId = useId();
+  const selection = ['flag', 'toggle', 'choice'].includes(option.kind.type);
   useEffect(() => {
     // The initial state already contains the saved value. A late first effect
     // or a new validation listener must not replace an edit made meanwhile.
@@ -414,11 +430,15 @@ function OptionField({ option, value, disabled, automaticTelemetry = false, onCh
       invalidRef.current = false; setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
     } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
-  return <label>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small>
+  const label = <>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small></>;
+  return <div>
+    {selection ? <span>{label}</span> : <label htmlFor={controlId}>{label}</label>}
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
-    {['flag', 'toggle', 'choice'].includes(option.kind.type) ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
-      options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea className="app-textarea" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
-      : <input className="app-input" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
+    {readOnly && <small>{modelSettingsCopy[locale].benchmarkRequest}</small>}
+    {readOnly && value !== undefined && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => onChange(undefined)}>{runtimeOptionsCopy[locale].useDefault}</button>}
+    {selection ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled || readOnly} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
+      options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea id={controlId} className="app-textarea" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
+      : <input id={controlId} className="app-input" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
     {invalid && <span id={errorId} role="alert">{jsonNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : copy.invalid}</span>}
-  </label>;
+  </div>;
 }

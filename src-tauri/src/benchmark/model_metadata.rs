@@ -87,6 +87,14 @@ fn repository_component(value: &str) -> bool {
         && !value.contains("..")
 }
 
+pub(super) fn valid_repository(value: &str) -> bool {
+    value
+        .split_once('/')
+        .is_some_and(|(namespace, repository)| {
+            repository_component(namespace) && repository_component(repository)
+        })
+}
+
 /// A Hugging Face repository id, or `None` when the text is not one.
 fn repository_id(value: &str) -> Option<String> {
     let trimmed = value.trim();

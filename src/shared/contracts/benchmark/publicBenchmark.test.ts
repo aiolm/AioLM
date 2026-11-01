@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
 import { summarizePublicBenchmarkRows } from './aggregation';
-import type { PerformanceBenchmarkProvenance, PerformanceBenchmarkResult } from '../../api/types';
+import type { LegacyPerformanceBenchmarkProvenance as PerformanceBenchmarkProvenance, LegacyPerformanceBenchmarkResult as PerformanceBenchmarkResult } from '../../api/types';
 import type { BenchmarkModelMetadata } from '@aiolm/benchmark-contracts';
 
 const submissionId = '00000000-0000-4000-8000-000000000001';

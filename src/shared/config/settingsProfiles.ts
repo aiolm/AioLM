@@ -309,15 +309,14 @@ function ownedKeys(profile: SettingsProfile): readonly ExecutionKey[] {
 }
 
 /** An explicit save updates the chosen entry and captures every editable field. */
-export function saveSettingsProfile(entry: SettingsProfile, cfg: AppConfig, systemPrompt: string,
-  excludedKeys: ReadonlySet<string> = new Set(), preservePrompt = false): SettingsProfile {
+export function saveSettingsProfile(entry: SettingsProfile, cfg: AppConfig, systemPrompt: string, preservePrompt = false): SettingsProfile {
   if ((entry.provider ?? 'llama.cpp') !== providerOf(cfg)) throw new Error('This profile belongs to another runtime provider.');
   entry = { ...entry, scope: 'global', ...(entry.scope === 'model' ? { legacy: true, coverage: [...ownedKeys(entry)] } : {}) };
   delete entry.model_key;
   delete entry.source_id;
   delete entry.source_scope;
   if (providerOf(cfg) !== 'llama.cpp') return { ...entry, revision: entry.revision + 1, settings: profileSettingsSnapshot(cfg), ...(!preservePrompt ? { system_prompt: systemPrompt } : {}) };
-  const fields: ExecutionKey[] = MODEL_PROFILE_KEYS.filter(key => key !== 'runtime_defaults' && !excludedKeys.has(key));
+  const fields: ExecutionKey[] = MODEL_PROFILE_KEYS.filter(key => key !== 'runtime_defaults');
   const snapshot = profileSettingsSnapshot(cfg);
   const settings = structuredClone(entry.settings);
   for (const key of fields) {
@@ -328,13 +327,8 @@ export function saveSettingsProfile(entry: SettingsProfile, cfg: AppConfig, syst
     ...(snapshot.runtime_defaults ?? []).filter(key => fields.includes(key as ExecutionKey))])].sort();
   const saved: SettingsProfile = { ...entry, revision: entry.revision + 1, settings,
     ...(!preservePrompt ? { system_prompt: systemPrompt } : {}) };
-  if (entry.scope === 'global' || excludedKeys.size) {
-    saved.legacy = true;
-    saved.coverage = [...new Set([...ownedKeys(entry), ...fields, 'runtime_defaults'])];
-  } else {
-    delete saved.legacy;
-    delete saved.coverage;
-  }
+  saved.legacy = true;
+  saved.coverage = [...new Set([...ownedKeys(entry), ...fields, 'runtime_defaults'])];
   delete saved.source_id;
   delete saved.source_scope;
   return saved;

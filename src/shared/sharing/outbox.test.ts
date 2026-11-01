@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../api/http.ts";
-import type { PublicBenchmarkSubmission } from "../contracts/benchmark/publicBenchmark.ts";
+import type { LegacyPublicBenchmarkSubmission, PublicBenchmarkSubmission } from "../contracts/benchmark/publicBenchmark.ts";
 import { createBenchmarkOutbox, type BenchmarkLocalSource, type BenchmarkOutboxStore, type MeasurementActivity, type QueuedBenchmark, type SelectedEntryTransport } from "./outbox.ts";
 import { createIndexedDbOutbox } from "./indexedDbOutbox.ts";
 
-const payload = (): PublicBenchmarkSubmission => ({
+const payload = (): LegacyPublicBenchmarkSubmission => ({
   schema_version: 1, submission_id: "00000000-0000-4000-8000-000000000001", app_version: "0.1.9", method: null,
   workload: { corpus: "novel_ko", corpus_version: null, corpus_sha256: null, prompt_lengths: [1024], generation_length: 128, batch_sizes: [2], repetitions: 1, warmup: true },
   model: { status: "unidentified", sha256: null, size_bytes: null },
@@ -47,7 +47,7 @@ const firstId = "00000000-0000-4000-8000-000000000001";
 const secondId = "00000000-0000-4000-8000-000000000002";
 const destination = "https://example.test/v1/benchmark-runs";
 
-const benchmarkFor = (id = firstId): PublicBenchmarkSubmission => ({ ...payload(), submission_id: id });
+const benchmarkFor = (id = firstId): LegacyPublicBenchmarkSubmission => ({ ...payload(), submission_id: id });
 
 /** A bare row as earlier app versions persisted it in IndexedDB: no frozen wrapper bytes. */
 function legacyRow(f: Fixture, id = firstId, extra: Partial<QueuedBenchmark> = {}): QueuedBenchmark {
@@ -71,9 +71,9 @@ describe("reviewed benchmark outbox", () => {
     await f.queue.enqueuePublication({ benchmark: payload(), description_md: "" });
     input.execution.parallel = 4;
     await expect(f.queue.enqueuePublication({ benchmark: input, description_md: "" })).rejects.toThrow("different reviewed payload");
-    expect(f.rows.get(firstId)?.payload.execution.parallel).toBe(2);
+    expect((f.rows.get(firstId)?.payload as LegacyPublicBenchmarkSubmission).execution.parallel).toBe(2);
     expect(f.rows.size).toBe(1);
-    await expect(f.queue.enqueuePublication({ benchmark: { ...payload(), local_path: "private" } as PublicBenchmarkSubmission, description_md: "" }))
+    await expect(f.queue.enqueuePublication({ benchmark: { ...payload(), local_path: "private" } as unknown as PublicBenchmarkSubmission, description_md: "" }))
       .rejects.toThrow("Invalid public benchmark");
   });
 

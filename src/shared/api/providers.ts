@@ -1,6 +1,7 @@
 import { invoke } from './transport.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 import type { CommandSyntax } from './runtimeHelp.ts';
+import type { ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
 
 import { PROVIDERS, isExternalProvider, type ProviderId } from './providerIdentity.ts';
 export { PROVIDERS, isProviderId, isExternalProvider } from './providerIdentity.ts';
@@ -64,6 +65,13 @@ export interface EngineInfo {
   runtime_variant?: string; speech_model_type?: string | null;
   tasks?: string[];
   chat_supported?: boolean;
+  stream_usage_supported?: boolean;
+  serving_metadata?: {
+    runtime: ServingRuntimeIdentity;
+    model_format: ModelArtifact['format'];
+    topology: ServingExecution['topology'];
+    memory_scope: ServingExecution['memory_scope'];
+  };
   request_option_keys?: string[];
   request_fields: Record<string, unknown>; request_lora?: string;
   embedding_model?: string | null; embedding_namespace?: string | null; tools_auto?: boolean; tool_parser?: boolean;

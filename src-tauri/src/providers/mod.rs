@@ -48,6 +48,7 @@ pub mod runtime_options;
 pub mod runtime_ordered;
 pub mod runtime_positional;
 pub mod runtime_schema;
+pub(crate) mod sse;
 pub use resolve_python_runtime as selected_python_runtime;
 
 /// The serving implementation behind a runtime. The wire spelling is stable

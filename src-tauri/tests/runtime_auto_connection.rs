@@ -126,11 +126,14 @@ async fn respond(
     json_calls: Arc<AtomicUsize>,
     stream_calls: Arc<AtomicUsize>,
     leaked_key: Arc<AtomicBool>,
+    benchmark_mode: Arc<AtomicUsize>,
+    benchmark_calls: Arc<AtomicUsize>,
+    stalled: Arc<tokio::sync::Notify>,
 ) {
     let Some((line, body, head)) = request(&mut socket).await else {
         return;
     };
-    if head.contains(APP_KEY) {
+    if head.contains(APP_KEY) || head.contains("bench-") {
         leaked_key.store(true, Ordering::Release);
     }
     let path = line.split_whitespace().nth(1).unwrap_or("");
@@ -144,6 +147,28 @@ async fn respond(
         (200, "application/json", "{\"status\":\"ok\"}".into())
     } else if path == "/v1/chat/completions" {
         let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        if value.get("stream_options").is_some() {
+            let body = "{\"error\":\"optional stream_options unsupported\"}";
+            let response = format!("HTTP/1.1 400 Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+            let _ = socket.write_all(response.as_bytes()).await;
+            return;
+        }
+        let measured = value
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| {
+                text.starts_with("Continue the following text. Do not summarize or explain.\n\n")
+            });
+        if measured
+            && benchmark_mode.load(Ordering::Acquire) == 2
+            && benchmark_calls.fetch_add(1, Ordering::AcqRel) > 0
+        {
+            let _ = socket.write_all(b"HTTP/1.1 200 Test\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"discard in-flight output\"}}]}\n\n").await;
+            stalled.notify_one();
+            let mut byte = [0];
+            let _ = tokio::time::timeout(Duration::from_secs(15), socket.read(&mut byte)).await;
+            return;
+        }
         if value["model"] != MODEL {
             (
                 400,
@@ -152,6 +177,13 @@ async fn respond(
             )
         } else if value["stream"] == true {
             stream_calls.fetch_add(1, Ordering::AcqRel);
+            if measured {
+                let body =
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"5\"}}]}\n\ndata: [DONE]\n\n";
+                let response = format!("HTTP/1.1 200 Test\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                let _ = socket.write_all(response.as_bytes()).await;
+                return;
+            }
             let content = json!({"model":MODEL,"choices":[{"index":0,"delta":{"role":"assistant","content":"5"},"finish_reason":null}]});
             let finish = json!({"model":MODEL,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}});
             (
@@ -182,14 +214,31 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
     let json_calls = Arc::new(AtomicUsize::new(0));
     let stream_calls = Arc::new(AtomicUsize::new(0));
     let leaked_key = Arc::new(AtomicBool::new(false));
+    let benchmark_mode = Arc::new(AtomicUsize::new(0));
+    let benchmark_calls = Arc::new(AtomicUsize::new(0));
+    let stalled = Arc::new(tokio::sync::Notify::new());
+    let benchmark_control = (
+        benchmark_mode.clone(),
+        benchmark_calls.clone(),
+        stalled.clone(),
+    );
     let counters = (json_calls.clone(), stream_calls.clone(), leaked_key.clone());
     let serving = tokio::spawn(async move {
+        let mut handlers = tokio::task::JoinSet::new();
         loop {
             let Ok((socket, _)) = upstream.accept().await else {
                 break;
             };
             let counters = counters.clone();
-            tokio::spawn(respond(socket, counters.0, counters.1, counters.2));
+            handlers.spawn(respond(
+                socket,
+                counters.0,
+                counters.1,
+                counters.2,
+                benchmark_control.0.clone(),
+                benchmark_control.1.clone(),
+                benchmark_control.2.clone(),
+            ));
         }
     });
     let discovery = cli(&home.path, &["runtime", "discover"]).await;
@@ -226,7 +275,12 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
     cli(&home.path, &["runtime", "probe", engine, runtime]).await;
     let cfg: AppConfig = config::load_result().unwrap();
     let errors = Arc::new(ErrBuf::default());
-    let (child, url, _) = server::spawn(&cfg, APP_KEY, &errors, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&cfg, APP_KEY, &errors, &Default::default(), None).unwrap();
     let state = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = state.lock().unwrap();
@@ -234,7 +288,7 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
         state.child = Some(child);
     }
     let result = async {
-        server::wait_ready(state.clone(), &url, APP_KEY, 15, &errors).await?;
+        server::wait_ready(state.clone(), &url, APP_KEY, 15, &errors, readiness).await?;
         let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(15)).build().unwrap();
         let response = client.post(format!("{url}/chat/completions")).bearer_auth(APP_KEY)
             .json(&json!({"model":MODEL,"messages":[{"role":"user","content":"Synthetic connection check"}],"stream":true}))
@@ -274,6 +328,125 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
             .is_success(),
         "stopping the app-owned proxy must not stop the independently running service"
     );
+    {
+        use aiolm_lib::performance_bench as bench;
+        let request = bench::PerformanceBenchRequest {
+            run_id: "attached-serving".into(),
+            method: Default::default(),
+            context_profile: "novel_ja".into(),
+            prompt_bytes: vec![256],
+            max_output_tokens: 128,
+            concurrencies: vec![1, 2],
+            repetitions: 1,
+            warmup: false,
+            request_usage: false,
+        };
+        benchmark_mode.store(1, Ordering::Release);
+        let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
+        let process = Arc::new(Mutex::new(None));
+        let complete = bench::run(
+            cfg.clone(),
+            request.clone(),
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(complete.status, "complete", "{:?}", complete.message);
+        assert_eq!(complete.rows.len(), 2);
+        assert!(complete
+            .rows
+            .iter()
+            .all(|row| row.output_bytes == u64::from(row.concurrency)
+                && row.usage_status == "missing"
+                && row.peak_memory_bytes.is_none()
+                && row.finish_reasons == vec!["not_reported"; row.concurrency as usize]));
+        let recorded = serde_json::to_value(&complete).unwrap();
+        assert_eq!(recorded["provenance"]["execution"]["topology"], "attached");
+        assert_eq!(
+            recorded["provenance"]["execution"]["memory_scope"],
+            "unavailable"
+        );
+        assert_eq!(recorded["provenance"]["runtime"]["name"], Value::Null);
+        assert_eq!(recorded["provenance"]["model"]["size_bytes"], Value::Null);
+        let explicit = bench::PerformanceBenchRequest {
+            run_id: "attached-optional-usage".into(),
+            request_usage: true,
+            concurrencies: vec![1],
+            ..request.clone()
+        };
+        let runtime = bench::RuntimeInfo::prepare(&cfg, &explicit).await.unwrap();
+        let rejected = bench::run(
+            cfg.clone(),
+            explicit,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(
+            rejected.status, "failed",
+            "optional-field refusal must not trigger a retry"
+        );
+        assert!(rejected.rows.is_empty());
+
+        benchmark_mode.store(2, Ordering::Release);
+        benchmark_calls.store(0, Ordering::Release);
+        let request = bench::PerformanceBenchRequest {
+            run_id: "attached-cancel".into(),
+            concurrencies: vec![1],
+            repetitions: 2,
+            ..request
+        };
+        let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trigger = cancel.clone();
+        let canceller = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(15), stalled.notified())
+                .await
+                .unwrap();
+            trigger.store(true, Ordering::Release);
+        });
+        let cancelled = bench::run(
+            cfg.clone(),
+            request,
+            Default::default(),
+            cancel,
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        canceller.await.unwrap();
+        assert_eq!(cancelled.status, "cancelled", "{:?}", cancelled.message);
+        assert_eq!(cancelled.rows.len(), 1);
+        assert!(process.lock().unwrap().is_none());
+        assert!(client
+            .get(format!("http://127.0.0.1:{upstream_port}/health"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+        assert_eq!(
+            client
+                .post(format!(
+                    "http://127.0.0.1:{upstream_port}/v1/chat/completions"
+                ))
+                .json(&json!({"model":MODEL,"messages":[{"role":"user","content":"still alive"}]}))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()["choices"][0]["message"]["content"],
+            "5"
+        );
+    }
     cli(&home.path, &["runtime", "remove", engine, runtime]).await;
     assert_eq!(fs::read(&user_file).unwrap(), b"existing user data");
     let saved = config::load_result().unwrap();

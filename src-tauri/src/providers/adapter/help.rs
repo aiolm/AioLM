@@ -6,7 +6,10 @@ use super::super::{
     runtime_help::{Encoding, HelpCommand, MAX_STREAM_BYTES},
     runtime_help_store,
     runtime_metadata::{MetadataOption, OptionMetadata, Provenance, METADATA_VERSION},
-    runtime_options::{ManagedBinding, OptionDefinition},
+    runtime_options::{
+        Arity, BenchmarkRole, ManagedBinding, OptionDefinition, Spelling, Target, ValueKind,
+        ValueStyle,
+    },
     runtime_positional::CommandEntry,
     runtime_schema::{
         self, adapter_source, binding_for, from_external, from_spec, unicode_environment,
@@ -245,12 +248,21 @@ pub(crate) struct Compat {
 
 pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
     let key = &selected.key;
-    // Built-in lists name app-owned flags without saying which binding each
-    // one carries; Discovery marks them managed without guessing.
+    // Dedicated tuning remains adapter-owned; lifecycle bindings additionally
+    // carry the private identity that benchmark metadata cannot unlock.
     let mut managed_flags: BTreeMap<String, ManagedBinding> =
         options::app_managed_flags(key.provider)
             .iter()
-            .map(|flag| ((*flag).to_owned(), ManagedBinding::Discovery))
+            .map(|flag| {
+                (
+                    (*flag).to_owned(),
+                    if key.provider == ProviderId::Llama {
+                        native_binding(flag)
+                    } else {
+                        ManagedBinding::Discovery
+                    },
+                )
+            })
             .collect();
     let mut explicit_scopes = BTreeMap::new();
     let mut metadata = builtin_metadata(key.provider).map(|metadata| (metadata, true));
@@ -299,7 +311,7 @@ pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
                 .filter_map(|option| from_external(option, &source))
                 .collect()
         }
-        ProviderId::Llama => Vec::new(),
+        ProviderId::Llama => native_catalog(),
         _ => {
             let runtime = selected.python_runtime()?;
             let source = adapter_source(&key.engine, "catalog-v1");
@@ -318,27 +330,254 @@ pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
     })
 }
 
+/// Portable safety belongs to each adapter catalog, never to the runner.
 pub(crate) fn builtin_metadata(provider: ProviderId) -> Option<OptionMetadata> {
-    match provider {
-        // llama.cpp (source 14310190) common/arg.cpp defines `-hft, --hf-token
-        // TOKEN` as the Hugging Face access token, also read from HF_TOKEN.
-        // Benchmark logs already redact the same flag.
-        ProviderId::Llama => Some(OptionMetadata {
-            version: METADATA_VERSION,
-            engine_id: ProviderId::Llama,
-            adapter: Provenance {
-                id: "llama.cpp".into(),
-                revision: "aiolm-builtin-1".into(),
-            },
-            options: vec![MetadataOption {
-                flag: Some("--hf-token".into()),
-                sensitive: Some(true),
-                ..Default::default()
-            }],
-            constraints: Vec::new(),
-        }),
-        _ => None,
+    use BenchmarkRole::*;
+    let (id, declarations): (&str, Vec<(&str, Option<&str>, Option<BenchmarkRole>)>) =
+        match provider {
+            ProviderId::Llama => (
+                "llama.cpp",
+                vec![
+                    ("--ctx-size", Some("tokens"), Some(ContextTotalTokens)),
+                    ("--parallel", Some("count"), Some(ConcurrencyCapacity)),
+                    ("--n-gpu-layers", Some("layers"), None),
+                    ("--threads", Some("threads"), None),
+                    ("--threads-batch", Some("threads"), None),
+                    ("--batch-size", Some("tokens"), None),
+                    ("--ubatch-size", Some("tokens"), None),
+                    ("--flash-attn", None, None),
+                    ("--cache-type-k", None, None),
+                    ("--cache-type-v", None, None),
+                    ("--split-mode", None, None),
+                    ("--tensor-split", Some("ratio"), None),
+                ],
+            ),
+            ProviderId::Vllm => (
+                "vllm",
+                vec![
+                    (
+                        "--max-model-len",
+                        Some("tokens"),
+                        Some(ContextPerSequenceTokens),
+                    ),
+                    ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
+                    ("--dtype", None, None),
+                    ("--quantization", None, None),
+                    ("--kv-cache-dtype", None, None),
+                    ("--gpu-memory-utilization", Some("ratio"), None),
+                    ("--tensor-parallel-size", Some("count"), None),
+                    ("--pipeline-parallel-size", Some("count"), None),
+                    ("--max-num-batched-tokens", Some("tokens"), None),
+                    ("--enable-prefix-caching", None, None),
+                    ("--enable-chunked-prefill", None, None),
+                    ("--enforce-eager", None, None),
+                ],
+            ),
+            ProviderId::MlxVlm => (
+                "mlx-vlm",
+                vec![
+                    (
+                        "--max-kv-size",
+                        Some("tokens"),
+                        Some(ContextPerRequestKvTokens),
+                    ),
+                    ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
+                    ("--kv-bits", Some("bits"), None),
+                    ("--kv-quant-scheme", None, None),
+                    ("--kv-group-size", Some("count"), None),
+                    ("--quantized-kv-start", Some("tokens"), None),
+                    ("--prefill-step-size", Some("tokens"), None),
+                    ("--enable-thinking", None, None),
+                    ("--thinking-budget", Some("tokens"), None),
+                ],
+            ),
+            _ => return None,
+        };
+    let mut entries: Vec<_> = declarations
+        .into_iter()
+        .map(|(flag, unit, role)| MetadataOption {
+            flag: Some(flag.into()),
+            benchmark_public: Some(true),
+            benchmark_role: role,
+            unit: unit.map(str::to_owned),
+            repeatable: Some(false),
+            ..Default::default()
+        })
+        .collect();
+    if provider == ProviderId::Llama {
+        entries.push(MetadataOption {
+            flag: Some("--hf-token".into()),
+            sensitive: Some(true),
+            ..Default::default()
+        });
     }
+    Some(OptionMetadata {
+        version: METADATA_VERSION,
+        engine_id: provider,
+        adapter: Provenance {
+            id: id.into(),
+            revision: "aiolm-builtin-2".into(),
+        },
+        options: entries,
+        constraints: Vec::new(),
+    })
+}
+
+fn native_binding(flag: &str) -> ManagedBinding {
+    if super::NATIVE_MODEL_SOURCE_FLAGS.contains(&flag) {
+        return ManagedBinding::Model;
+    }
+    match flag {
+        "--model" | "-m" | "--mmproj" | "-mm" | "--mmproj-url" | "-mmu" | "--mmproj-auto"
+        | "--no-mmproj" | "--no-mmproj-auto" | "--lora" | "--lora-scaled"
+        | "--spec-draft-model" | "-md" | "--model-draft" => ManagedBinding::Model,
+        "--host" => ManagedBinding::Host,
+        "--port" | "-p" => ManagedBinding::Port,
+        "--api-key" | "--api-key-file" | "--no-api-key" => ManagedBinding::Authentication,
+        _ => ManagedBinding::Discovery,
+    }
+}
+
+/// Seed dedicated native controls from the same catalogs their editors use.
+/// No reset/app/runtime default is promoted into an observed launch setting.
+fn native_catalog() -> Vec<OptionDefinition> {
+    use runtime_schema::{blank, documented};
+    let source = adapter_source("llama.cpp", "catalog-v1");
+    let tuning: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../src/shared/config/tuningDefaultsCatalog.json"
+    ))
+    .expect("checked-in native tuning catalog");
+    let server: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../src/shared/config/serverOptionsCatalog.json"
+    ))
+    .expect("checked-in native server catalog");
+    let controls = [
+        ("ctx_size", "--ctx-size", ValueKind::Integer),
+        ("parallel", "--parallel", ValueKind::Integer),
+        ("ngl", "--n-gpu-layers", ValueKind::Integer),
+        ("threads", "--threads", ValueKind::Integer),
+        ("threads_batch", "--threads-batch", ValueKind::Integer),
+        ("batch_size", "--batch-size", ValueKind::Integer),
+        ("ubatch_size", "--ubatch-size", ValueKind::Integer),
+        ("flash_attn", "--flash-attn", ValueKind::Text),
+        ("cache_type_k", "--cache-type-k", ValueKind::Text),
+        ("cache_type_v", "--cache-type-v", ValueKind::Text),
+        ("split_mode", "--split-mode", ValueKind::Text),
+        ("tensor_split", "--tensor-split", ValueKind::Json),
+        ("hf_token", "--hf-token", ValueKind::Text),
+        ("model", "--model", ValueKind::Text),
+        ("host", "--host", ValueKind::Text),
+        ("port", "--port", ValueKind::Integer),
+        ("api_key", "--api-key", ValueKind::Text),
+        ("api_key_file", "--api-key-file", ValueKind::Text),
+        ("mmproj", "--mmproj", ValueKind::Text),
+        ("lora", "--lora", ValueKind::Text),
+        ("spec_draft_model", "--spec-draft-model", ValueKind::Text),
+    ];
+    let mut definitions: Vec<_> = controls
+        .into_iter()
+        .map(|(key, flag, kind)| {
+            let mut option = blank(key, "native", Target::Launch);
+            let row = server["options"].as_array().and_then(|rows| {
+                rows.iter().find(|row| {
+                    row["signature"].as_str().is_some_and(|signature| {
+                        signature
+                            .split(|c: char| c == ',' || c.is_whitespace())
+                            .any(|word| word == flag)
+                    })
+                })
+            });
+            let mut aliases = vec![flag.to_owned()];
+            if let Some(args) = tuning
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["key"].as_str() == Some(key)))
+                .and_then(|row| row["args"].as_array())
+            {
+                aliases.extend(
+                    args.iter()
+                        .filter_map(|value| value.as_str().map(str::to_owned)),
+                );
+            }
+            if let Some(signature) = row.and_then(|row| row["signature"].as_str()) {
+                aliases.extend(
+                    signature
+                        .split(|c: char| c == ',' || c.is_whitespace())
+                        .filter(|word| word.starts_with('-'))
+                        .map(str::to_owned),
+                );
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            aliases.retain(|flag| seen.insert(flag.clone()));
+            option.spellings = aliases
+                .into_iter()
+                .map(|flag| Spelling {
+                    flag,
+                    style: ValueStyle::Separate,
+                    polarity: None,
+                })
+                .collect();
+            option.kind = documented(kind, &source);
+            option.arity = documented(
+                Arity {
+                    min: 1,
+                    max: Some(1),
+                },
+                &source,
+            );
+            option.repeatable = documented(false, &source);
+            // Capture annotations never change the existing launch ownership.
+            option.managed = options::app_managed_flags(ProviderId::Llama)
+                .contains(&flag)
+                .then(|| native_binding(flag));
+            option.help = row
+                .and_then(|row| row["description"].as_str())
+                .unwrap_or("")
+                .into();
+            option
+        })
+        .collect();
+    // Keep every existing dedicated tuning row represented, including those
+    // with no public-safety annotation. Unknown types remain unknown.
+    for row in tuning.as_array().expect("native tuning rows") {
+        let key = row["key"].as_str().expect("native tuning key");
+        if definitions.iter().any(|option| option.key == key) {
+            continue;
+        }
+        let mut option = blank(key, "native", Target::Launch);
+        let is_switch = row["switch"].as_bool() == Some(true);
+        option.spellings = row["args"]
+            .as_array()
+            .expect("native tuning aliases")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(|flag| Spelling {
+                flag: flag.into(),
+                style: ValueStyle::Separate,
+                polarity: is_switch.then_some(!flag.starts_with("--no-")),
+            })
+            .collect();
+        option.arity = documented(
+            if is_switch {
+                Arity {
+                    min: 0,
+                    max: Some(0),
+                }
+            } else {
+                Arity {
+                    min: 1,
+                    max: Some(1),
+                }
+            },
+            &source,
+        );
+        if is_switch {
+            option.kind = documented(ValueKind::Boolean, &source);
+        }
+        option.repeatable = documented(false, &source);
+        option.managed = Some(ManagedBinding::Discovery);
+        definitions.push(option);
+    }
+    definitions
 }
 
 pub(crate) fn stored_option_facts(
@@ -373,9 +612,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provided_python_help_and_catalog_contracts_survive_adapter_selection() {
-        // Command/schema equivalence only; these engines are not executed
-        // or declared Windows-native supported by this test.
+    fn python_catalog_capture_preserves_context_units_and_roles_for_each_installation() {
         for provider in [ProviderId::Vllm, ProviderId::MlxVlm] {
             for kind in [InstallationKind::Managed, InstallationKind::External] {
                 let root =
@@ -399,49 +636,32 @@ mod tests {
                     active_runtime: runtime.id.clone(),
                     ..Default::default()
                 };
-                let target = help_target(&cfg, &selected, None).unwrap();
-                let mut expected: Vec<String> = if kind == InstallationKind::Managed {
-                    vec!["-I".into()]
-                } else {
-                    vec![]
-                };
-                let expected_scope = match provider {
-                    ProviderId::Vllm => {
-                        expected.extend(
-                            ["-m", "vllm.entrypoints.cli.main", "serve", "--help=all"]
-                                .map(String::from),
-                        );
-                        vec!["serve".to_owned()]
-                    }
-                    _ => {
-                        expected.extend(["-m", "mlx_vlm.server", "--help"].map(String::from));
-                        vec![]
-                    }
-                };
-                assert_eq!(target.program, python);
-                assert_eq!(target.request.args, expected);
-                assert_eq!(target.request.scope, expected_scope);
-                assert!(target.fixed);
-                assert_eq!(target.request.encoding, None);
-                assert_eq!(target.request.locale, None);
-                let command = help_command(&cfg, &selected, &target.request).unwrap();
-                assert_eq!(command.program, PathBuf::from(&python));
-                assert_eq!(command.args, expected);
-                assert_eq!(command.scope, expected_scope);
-                assert_eq!(
-                    command.environment,
-                    unicode_environment(super::super::super::python_env::engine_environment())
-                        .unwrap()
-                );
-                assert_eq!(command.runtime_version, "synthetic-1");
-                let legacy = super::super::super::launch::option_schema(&runtime);
-                let expected_options: Vec<_> = legacy
-                    .iter()
-                    .map(|spec| from_spec(spec, &adapter_source(provider.as_str(), "catalog-v1")))
-                    .collect();
                 let effective =
                     runtime_schema::effective_for(&root, &cfg, &selected, false).unwrap();
-                assert_eq!(effective.schema.options, expected_options);
+                let (flag, name, unit, role) = if provider == ProviderId::Vllm {
+                    (
+                        "--max-model-len",
+                        "max-model-len",
+                        "tokens",
+                        "context.per_sequence_tokens",
+                    )
+                } else {
+                    (
+                        "--max-kv-size",
+                        "max-kv-size",
+                        "tokens",
+                        "context.per_request_kv_tokens",
+                    )
+                };
+                let argv = [python.clone(), flag.into(), "8192".into()];
+                let captured =
+                    runtime_schema::capture_benchmark_settings(&effective, &argv, &argv, 3)
+                        .unwrap();
+                assert_eq!(captured.settings.len(), 1);
+                assert_eq!(captured.settings[0].name, name);
+                assert_eq!(captured.settings[0].value, serde_json::json!(8192));
+                assert_eq!(captured.settings[0].unit.as_deref(), Some(unit));
+                assert_eq!(captured.settings[0].role.as_deref(), Some(role));
                 assert_eq!(effective.schema.binding.engine, provider.as_str());
                 assert_eq!(effective.schema.binding.runtime, runtime.id);
             }
@@ -478,13 +698,79 @@ mod tests {
         assert_eq!(command.timeout_ms, 60_000);
         assert_eq!(command.output_limit, MAX_STREAM_BYTES);
         let facts = option_descriptor(&selected).unwrap();
-        assert!(facts.options.is_empty());
+        assert!(facts.options.iter().any(|option| option.key == "ctx_size"));
         assert!(facts.entry.is_none());
         let (metadata, shipped) = facts.metadata.unwrap();
         assert!(shipped);
         assert_eq!(metadata.engine_id, ProviderId::Llama);
-        assert_eq!(metadata.options.len(), 1);
-        assert_eq!(metadata.options[0].flag.as_deref(), Some("--hf-token"));
-        assert_eq!(metadata.options[0].sensitive, Some(true));
+        let token = metadata
+            .options
+            .iter()
+            .find(|entry| entry.flag.as_deref() == Some("--hf-token"))
+            .unwrap();
+        assert_eq!(token.sensitive, Some(true));
+        let root =
+            std::env::temp_dir().join(format!("aiolm-native-capture-{}", uuid::Uuid::new_v4()));
+        let effective = runtime_schema::effective_for(&root, &cfg, &selected, false).unwrap();
+        let argv = [
+            "server",
+            "-c",
+            "8192",
+            "-t",
+            "4",
+            "--threads",
+            "8",
+            "--parallel",
+            "2",
+            "--tensor-split",
+            "0.6,0.4",
+            "--hf-token",
+            "private",
+        ];
+        let raw = argv.map(str::to_owned);
+        let mut sanitized = raw.clone();
+        sanitized[6] = "[REDACTED]".into();
+        sanitized[12] = "[REDACTED]".into();
+        let captured =
+            runtime_schema::capture_benchmark_settings(&effective, &raw, &sanitized, 3).unwrap();
+        let value = |name: &str| {
+            &captured
+                .settings
+                .iter()
+                .find(|setting| setting.name == name)
+                .unwrap()
+                .value
+        };
+        assert_eq!(value("ctx-size"), &serde_json::json!(8192));
+        assert_eq!(value("parallel"), &serde_json::json!(2));
+        assert_eq!(value("threads"), &serde_json::Value::Null);
+        assert_eq!(value("tensor-split"), &serde_json::json!([0.6, 0.4]));
+        assert!(!captured
+            .settings
+            .iter()
+            .any(|setting| setting.name == "hf-token"));
+        let threads = effective
+            .schema
+            .options
+            .iter()
+            .find(|option| option.key == "threads")
+            .unwrap();
+        assert!(
+            threads.managed.is_some(),
+            "capture must not unlock dedicated controls"
+        );
+        assert!(effective
+            .schema
+            .resolve(
+                &effective.scope,
+                &std::collections::BTreeMap::from([(
+                    "threads".into(),
+                    super::super::super::runtime_options::Override {
+                        spelling: None,
+                        occurrences: vec![vec![serde_json::json!(16)]],
+                    }
+                )])
+            )
+            .is_err());
     }
 }

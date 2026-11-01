@@ -352,16 +352,16 @@ describe('profile editor persistence', () => {
 });
 
 describe('profile editor scope', () => {
-  it('preserves controlled settings and the original prompt when a benchmark updates a profile', () => {
+  it('saves edited benchmark launch settings and preserves the original profile prompt', () => {
     const profile = captureProfile({ ...testConfig, ctx_size: 16384, temperature: 0.2, threads: 8,
       chat_options: { stop: ['original stop'] }, runtime_defaults: ['temperature', 'threads'] }, 'Reusable', 'global', 'Original prompt');
     const hook = editor([profile], true);
     const selected = hook.result.current.prepareApply(profile).config;
-    hook.rerender({ draft: { ...selected, threads: 4, runtime_defaults: [] } });
+    hook.rerender({ draft: { ...selected, ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', threads: 4, runtime_defaults: [] } });
     const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
 
     expect(updated).toMatchObject({ id: profile.id, scope: 'global', revision: 2, system_prompt: 'Original prompt',
-      settings: { ctx_size: 16384, temperature: 0.2, chat_options: { stop: ['original stop'] }, threads: 4, runtime_defaults: ['temperature'] } });
+      settings: { ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 0.2, chat_options: { stop: ['original stop'] }, threads: 4, runtime_defaults: [] } });
     expect(profile.settings.threads).toBe(8);
     expect(updated.coverage).toContain('ngl');
     expect(hook.result.current.systemPrompt).toBe('Current prompt');
@@ -394,20 +394,16 @@ describe('profile editor scope', () => {
     expect(updated).not.toHaveProperty('model_key');
   });
 
-  it('creates a partial benchmark profile that leaves request and measurement settings untouched on reuse', () => {
-    const hook = editor([], true, { ...testConfig, ctx_size: 32768, temperature: 0.1, threads: 4, runtime_defaults: ['temperature', 'threads'] });
+  it('creates a reusable benchmark profile with the selected launch settings and preserved request values', () => {
+    const hook = editor([], true, { ...testConfig, ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 0.1, threads: 4, runtime_defaults: ['temperature', 'threads'] });
     const prepared = hook.result.current.prepareSaveAs('Benchmark tuning', 'global');
     const created = prepared.edit.library.entries.find(profile => profile.id === prepared.edit.application.profile_id)!;
 
-    expect(created).toMatchObject({ scope: 'global', legacy: true, settings: { threads: 4, runtime_defaults: ['threads'] } });
-    for (const field of ['ctx_size', 'temperature', 'chat_options', 'parallel']) {
-      expect(created.settings).not.toHaveProperty(field);
-      expect(created.coverage).not.toContain(field);
-    }
-    expect(created).not.toHaveProperty('system_prompt');
-    const restored = applySettingsProfile({ ...testConfig, ctx_size: 8192, temperature: 0.6, chat_options: { stop: ['keep'] } }, created);
-    expect(restored).toMatchObject({ ctx_size: 8192, temperature: 0.6, chat_options: { stop: ['keep'] }, threads: 4 });
-    expect(restored.runtime_defaults).toEqual(['threads']);
+    expect(created).toMatchObject({ scope: 'global', settings: { ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 0.1, threads: 4, runtime_defaults: ['temperature', 'threads'] } });
+    expect(created.coverage).toEqual(expect.arrayContaining(['ctx_size', 'parallel', 'temperature', 'chat_options']));
+    const restored = applySettingsProfile({ ...testConfig, ctx_size: 8192, temperature: 0.6 }, created);
+    expect(restored).toMatchObject({ ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 0.1, threads: 4 });
+    expect(restored.runtime_defaults).toEqual(['temperature', 'threads']);
   });
 
   it('preserves legacy coverage on benchmark selection and captures editable runtime fields on save', () => {
@@ -422,7 +418,7 @@ describe('profile editor scope', () => {
 
     expect(updated).toMatchObject({ id: profile.id, scope: profile.scope, revision: 2, settings: { threads: 7, runtime_defaults: [] } });
     expect(updated.coverage).not.toContain('active_backend');
-    expect(updated.coverage).not.toContain('temperature');
+    expect(updated.coverage).toContain('temperature');
     expect(updated).not.toHaveProperty('system_prompt');
   });
 });

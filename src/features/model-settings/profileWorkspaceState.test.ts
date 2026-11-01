@@ -11,7 +11,7 @@ describe('profile workspace selection', () => {
     const library = { ...emptyProfileLibrary(), entries: [source, copy] };
     const selected = profileForChoice(library, { ...source, revision: 0, settings: { temperature: 0.2 } });
     expect(selected).toBe(source);
-    expect(applyProfile(testConfig, selected, false).temperature).toBe(1.1);
+    expect(applyProfile(testConfig, selected).temperature).toBe(1.1);
     expect(selected.system_prompt).toBe('Latest prompt');
     expect(library.entries).toEqual([source, copy]);
     expect(profileForChoice(library, copy)).toBe(copy);
@@ -37,7 +37,7 @@ describe('profile workspace selection', () => {
     const library = setDefaultSettingsProfile({ ...emptyProfileLibrary(), entries: [source, chosen] }, chosen.id);
     const selected = profileForChoice(library, defaultSettingsProfileEntry(library));
     expect(selected.id).toBe(chosen.id);
-    expect(applyProfile(testConfig, selected, false).temperature).toBe(0.7);
+    expect(applyProfile(testConfig, selected).temperature).toBe(0.7);
     expect(library.entries).toHaveLength(2);
     expect(source.settings.temperature).toBe(0.2);
   });
@@ -58,7 +58,7 @@ describe('profile workspace selection', () => {
     const profile = captureProfile(testConfig, 'Model settings', 'model', 'Prompt');
     const library = { ...emptyProfileLibrary(), entries: [profile] };
     expect(profileForChoice(library, profile)).toBe(profile);
-    expect(applyProfile({ ...testConfig, active_model: 'other.gguf' }, profile, false)).toMatchObject({ active_model: 'other.gguf', temperature: testConfig.temperature });
+    expect(applyProfile({ ...testConfig, active_model: 'other.gguf' }, profile)).toMatchObject({ active_model: 'other.gguf', temperature: testConfig.temperature });
     expect(() => profileForChoice(emptyProfileLibrary(), profile)).toThrow('no longer available');
   });
 
@@ -68,7 +68,7 @@ describe('profile workspace selection', () => {
       legacy: true, coverage: ['ngl', 'ctx_size', 'threads', 'flash_attn'], settings: { ngl: 99, ctx_size: 8192, threads: 0, flash_attn: 'auto', active_backend: 'uncovered-runtime' } };
     const before = structuredClone(profile);
     const library = { ...emptyProfileLibrary(), entries: [profile] };
-    const applied = applyProfile(cfg, profileForChoice(library, profile), false);
+    const applied = applyProfile(cfg, profileForChoice(library, profile));
     expect(applied).toMatchObject({ ngl: 99, ctx_size: 8192, threads: 0, flash_attn: 'auto', active_backend: cfg.active_backend,
       temperature: 0.3, mmproj: cfg.mmproj, chat_options: { stop: ['keep'] } });
     expect(profile).toEqual(before);

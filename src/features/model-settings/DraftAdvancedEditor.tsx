@@ -24,7 +24,6 @@ const EXCLUDED = new Set(['--help', '--version', '--cache-list', '--completion-b
  * search field above the list is how the rest are reached.
  */
 const VISIBLE_LIMIT = 40;
-const BENCHMARK_FLAGS = /(?:parallel|ctx|context|timeout|sleep|cache|sampl|temp|top-p|top-k|seed|predict|reasoning-effort)/;
 
 type Occurrence = { flag: string; values: string[] };
 type Help = (typeof advancedSettingsHelp)['en'];
@@ -100,11 +99,11 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   // Translating a description and scanning it for documented values is the
   // expensive part, and it depends on the runtime's option set, not on typing.
   const catalogue = useMemo(() => options
-    .filter(option => !managedServerOption(option) && !EXCLUDED.has(option.id) && (!benchmark || !BENCHMARK_FLAGS.test(option.id)))
+    .filter(option => !managedServerOption(option) && !EXCLUDED.has(option.id))
     .map(option => {
       const description = advancedOptionDescription(option, locale, t);
       return { option, description, choices: serverOptionChoices(option), defaultInfo: serverDefaultInfo(option, options, verified, locale), inheritedInfo: serverDefaultInfo(option, options, verified, locale, { selected: true }), haystack: { ...option, description: `${option.description} ${description}` } };
-    }), [options, verified, locale, benchmark, t]);
+    }), [options, verified, locale, t]);
 
   // Searching stays off the keystroke's critical path; the field itself never waits.
   const search = useDeferredValue(query);
@@ -141,12 +140,15 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
       try { const server_args = serverArgsFromText(raw, options); onChange({ server_args }); markInvalid('server_args', false); setErrors(previous => ({ ...previous, server_args: '' })); }
       catch (cause) { markInvalid('server_args', true); setErrors(previous => ({ ...previous, server_args: String(cause) })); }
     }} /><p id={`${id}-args-help`} className="app-section-hint">{help.args}</p></div>
-    {!benchmark && <div><label htmlFor={`${id}-chat`}>{copy.rawChat}</label>
-    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
+    <div><label htmlFor={`${id}-chat`}>{copy.rawChat}</label>
+    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled || benchmark} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
       const raw = event.target.value; setChat(raw);
       try { const chat_options = parseChatOptions(raw); onChange({ chat_options }); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); }
       catch (cause) { markInvalid('chat_options', true); setErrors(previous => ({ ...previous, chat_options: String(cause) })); }
-    }} /><p id={`${id}-chat-help`} className="app-section-hint">{help.chat}</p></div>}</> : <>
+    }} /><p id={`${id}-chat-help`} className="app-section-hint">{benchmark ? copy.benchmarkRequest : help.chat}</p>
+    {benchmark && Object.keys(cfg.chat_options).length > 0 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => {
+      setChat(null); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); onChange({ chat_options: {} });
+    }}>{copy.reset}</button>}</div></> : <>
     <div><h3>{copy.options}</h3><p className="app-section-hint">{help.options}</p></div>
     <div><input className="app-input" type="search" aria-label={copy.optionSearch} aria-describedby={`${id}-search-help`} placeholder={copy.optionSearch} value={query} onChange={event => setQuery(event.target.value)} />
       <p id={`${id}-search-help`} className="app-section-hint">{help.search}</p></div>

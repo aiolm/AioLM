@@ -338,8 +338,13 @@ impl Lease {
         body: &mut serde_json::Value,
     ) -> Result<(), ApiError> {
         if let Some(engine) = &self.engine {
-            crate::providers::protocol::adapt_request(engine, endpoint, body)
-                .map_err(|error| ApiError::new(400, error.code, error.message))?;
+            crate::providers::protocol::adapt_request(
+                engine,
+                endpoint,
+                body,
+                crate::providers::protocol::RequestDefaultsPolicy::Apply,
+            )
+            .map_err(|error| ApiError::new(400, error.code, error.message))?;
         } else if endpoint.starts_with("audio/") {
             return Err(ApiError::new(
                 400,

@@ -88,7 +88,7 @@ export interface BenchmarkExecutionSettings {
   tensor_split: number[] | null;
 }
 
-export interface PublicBenchmarkSubmission {
+export interface LegacyPublicBenchmarkSubmission {
   schema_version: 1 | 2;
   submission_id: string;
   app_version: string | null;
@@ -147,6 +147,115 @@ export interface PublicBenchmarkSubmission {
   };
   measurements: { status: BenchmarkRunStatus; rows: PublicBenchmarkRow[] };
 }
+
+/** Public identity is independent of local provider, connection and process IDs. */
+export interface ServingRuntimeIdentity {
+  name: string | null;
+  version: string | null;
+  backend: string | null;
+  build: string | null;
+  variant: string | null;
+  plugin_version: string | null;
+}
+
+export interface ServingWorkload {
+  corpus: BenchmarkCorpus;
+  corpus_version: 1;
+  inputs: Array<{ bytes: number; sha256: string }>;
+  max_output_tokens: number;
+  concurrencies: number[];
+  repetitions: number;
+  warmup: boolean;
+  request_usage: boolean;
+  cache_policy: 'as_configured';
+}
+
+export interface RecordedSetting {
+  target: 'launch' | 'request';
+  scope: string[];
+  name: string;
+  value: boolean | number | string | number[] | null;
+  unit: 'tokens' | 'bytes' | 'MiB' | 'GiB' | 'threads' | 'layers' | 'count' | 'ratio' | 'bits' | 'percent' | null;
+  role: 'context.total_tokens' | 'context.per_sequence_tokens' | 'context.per_request_kv_tokens' | 'concurrency.capacity' | null;
+}
+
+export interface ServingExecution {
+  topology: 'owned' | 'attached' | 'unknown';
+  memory_scope: 'owned_process_tree' | 'owned_root_process' | 'unavailable';
+  settings: RecordedSetting[];
+}
+
+export interface BenchmarkConfiguration {
+  runtime: ServingRuntimeIdentity;
+  execution: ServingExecution;
+}
+
+export interface ServingBenchmarkModelIdentity extends BenchmarkModelIdentity {
+  format: 'gguf' | 'hf-safetensors' | 'mlx' | 'unknown';
+  /** Provenance only: revision does not establish a weight hash or unmodified weights. */
+  source?: { kind: 'huggingface'; repository: string; revision: string };
+}
+
+export interface ServingBenchmarkRow {
+  input_bytes: number;
+  max_output_tokens: number;
+  concurrency: number;
+  repetition: number;
+  first_output_ms: number | null;
+  first_content_ms: number | null;
+  first_reasoning_ms: number | null;
+  e2e_ms: number;
+  content_bytes: number;
+  reasoning_bytes: number;
+  output_bytes: number;
+  reported_prompt_tokens: number | null;
+  reported_completion_tokens: number | null;
+  reported_cached_tokens: number | null;
+  usage_status: 'complete' | 'partial' | 'missing' | 'invalid';
+  /** One last-observed reason per request, in launch-slot order. */
+  finish_reasons: Array<'stop' | 'length' | 'content_filter' | 'tool_calls' | 'other' | 'not_reported'>;
+  peak_memory_bytes: number | null;
+  timing_source: 'client';
+  failed: false;
+}
+
+export type ServingAggregationRow = Omit<ServingBenchmarkRow, 'failed'> & {
+  failed?: boolean;
+  error?: string | null;
+};
+
+export type ServingMetricKey =
+  | 'first_output_ms' | 'first_content_ms' | 'first_reasoning_ms' | 'e2e_ms'
+  | 'content_bytes' | 'reasoning_bytes' | 'output_bytes' | 'output_bytes_per_second'
+  | 'reported_prompt_tokens' | 'reported_completion_tokens' | 'reported_cached_tokens'
+  | 'reported_tokens_per_second' | 'peak_memory_bytes';
+
+export interface ServingMetricStat {
+  median: number;
+  min: number;
+  max: number;
+  samples: number;
+}
+
+export type ServingBenchmarkPoint = {
+  input_bytes: number;
+  max_output_tokens: number;
+  concurrency: number;
+  samples: number;
+} & Record<ServingMetricKey, ServingMetricStat | null>;
+
+export interface ServingPublicBenchmarkSubmission extends BenchmarkConfiguration {
+  schema_version: 3;
+  submission_id: string;
+  app_version: string | null;
+  method: { id: 'openai-chat-serving'; version: 1 };
+  workload: ServingWorkload;
+  model: ServingBenchmarkModelIdentity;
+  environment: (NonNullable<LegacyPublicBenchmarkSubmission['environment']> & { scope: 'aiolm_host' }) | null;
+  measurements: { status: 'complete'; rows: ServingBenchmarkRow[] };
+}
+
+export type PublicBenchmarkSubmission = LegacyPublicBenchmarkSubmission | ServingPublicBenchmarkSubmission;
 
 /** A website-issued acknowledgement; the website owns the resulting benchmark record. */
 export interface BenchmarkReceipt {

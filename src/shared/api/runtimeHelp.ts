@@ -1,5 +1,6 @@
 import { invoke } from './transport.ts';
 import type { AppConfig } from './types.ts';
+import type { RecordedSetting } from '@aiolm/benchmark-contracts';
 
 export type HelpEncoding = 'auto' | 'utf8' | 'utf16_le' | 'utf16_be' | 'utf16le' | 'utf16be' | 'cp949' | 'cp932' | 'windows-1252';
 
@@ -77,6 +78,9 @@ export interface OptionSchemaDefinition {
   restart_required: OptionSchemaFact<boolean>;
   sensitive: OptionSchemaFact<boolean>;
   local_path: OptionSchemaFact<boolean>;
+  benchmark_public?: OptionSchemaFact<boolean>;
+  benchmark_name?: OptionSchemaFact<string>;
+  benchmark_role?: OptionSchemaFact<NonNullable<RecordedSetting['role']>>;
   managed?: 'model' | 'host' | 'port' | 'authentication' | 'discovery' | 'entry_point' | 'reserved' | null;
   raw_spans: unknown[];
 }
@@ -279,6 +283,7 @@ export interface EffectiveSchema {
   compat_keys: string[];
   help_keys: string[];
   shadowed: string[];
+  benchmark_names: Record<string, string>;
   /** Catalog/manifest facts that differ from the accepted help they shadow. */
   conflicts?: FactConflict[];
   /** The engine's explicit option metadata, when it has any. */

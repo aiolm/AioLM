@@ -2,6 +2,7 @@ import type { StreamDelta } from "./sse.ts";
 import type { JsonObject } from "../config/tuningValidation.ts";
 import type { ExecutionSettings, SessionExecutionSettings } from '../config/executionSettings';
 import type { SettingsProfileLibrary } from '../config/settingsProfiles';
+import type { ServingBenchmarkRow, ServingWorkload, ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
 
 export interface AppConfig {
   active_provider?: import('./providers').ProviderId;
@@ -352,8 +353,8 @@ export interface RuntimeCapabilities {
 
 export type BenchmarkContextProfile = "code_python" | "code_mixed" | "novel_ko" | "novel_en" | "novel_ja";
 
-/** A workload for an isolated local llama-server. It does not change saved tuning. */
-export interface PerformanceBenchmarkRequest {
+/** Read-only workload shape retained for historical cold-prompt measurements. */
+export interface LegacyPerformanceBenchmarkRequest {
   run_id: string;
   prompt_lengths: number[];
   generation_length: number;
@@ -363,8 +364,8 @@ export interface PerformanceBenchmarkRequest {
   warmup: boolean;
 }
 
-/** One trial. Rates are observed at the client, using server-reported token counts. */
-export interface PerformanceBenchmarkRow {
+/** Read-only token measurements from the retired cold-prompt runner. */
+export interface LegacyPerformanceBenchmarkRow {
   id: string;
   prompt_tokens: number;
   generation_length: number;
@@ -387,14 +388,14 @@ export interface PerformanceBenchmarkRow {
   error?: string | null;
 }
 
-export interface PerformanceBenchmarkResult {
+export interface LegacyPerformanceBenchmarkResult {
   provider?: import('./providers').ProviderId;
   model_format?: import('./providers').ModelArtifact['format'];
   runtime_accelerator?: string;
   runtime_variant?: string;
   runtime_plugin_version?: string;
   run_id: string;
-  rows: PerformanceBenchmarkRow[];
+  rows: LegacyPerformanceBenchmarkRow[];
   status: "complete" | "partial" | "cancelled" | "failed";
   message?: string | null;
   /** Effective server arguments with credentials removed. */
@@ -403,7 +404,7 @@ export interface PerformanceBenchmarkResult {
   context_size: number;
   parallel: number;
   /** Absent on older records; unknown provenance must not be reconstructed later. */
-  provenance?: PerformanceBenchmarkProvenance;
+  provenance?: LegacyPerformanceBenchmarkProvenance;
 }
 
 export interface BenchmarkGpuSnapshot {
@@ -420,11 +421,12 @@ export interface BenchmarkModelIdentity {
   size_bytes: number | null;
   format?: 'gguf' | 'hf-safetensors' | 'mlx' | 'unknown';
   revision?: string;
+  repository?: string;
   local_fingerprint?: string;
   metadata?: import('@aiolm/benchmark-contracts').BenchmarkModelMetadata | null;
 }
 
-export interface PerformanceBenchmarkProvenance {
+export interface LegacyPerformanceBenchmarkProvenance {
   schema_version: 1;
   app_version: string;
   method: { id: 'cold-prompt-serving'; version: 1 };
@@ -455,6 +457,47 @@ export interface PerformanceBenchmarkProvenance {
     };
     detection: string;
   };
+}
+
+/** The common API workload; launch tuning is preserved rather than overridden. */
+export interface PerformanceBenchmarkRequest {
+  run_id: string;
+  method: { id: 'openai-chat-serving'; version: 1 };
+  context_profile: BenchmarkContextProfile;
+  prompt_bytes: number[];
+  max_output_tokens: number;
+  concurrencies: number[];
+  repetitions: number;
+  warmup: boolean;
+  request_usage: boolean;
+}
+
+export interface PerformanceBenchmarkRow extends ServingBenchmarkRow {
+  id: string;
+  error?: string | null;
+}
+
+export interface PerformanceBenchmarkProvenance {
+  schema_version: 2;
+  app_version: string;
+  method: { id: 'openai-chat-serving'; version: 1 };
+  workload: ServingWorkload;
+  runtime: ServingRuntimeIdentity;
+  model: BenchmarkModelIdentity;
+  environment: LegacyPerformanceBenchmarkProvenance['environment'] & { scope: 'aiolm_host' };
+  execution: ServingExecution;
+  /** Private display label frozen at launch, never a public model identity. */
+  recorded_model_label: string;
+}
+
+export interface PerformanceBenchmarkResult {
+  run_id: string;
+  rows: PerformanceBenchmarkRow[];
+  status: 'complete' | 'partial' | 'cancelled' | 'failed';
+  message?: string | null;
+  /** Private sanitized program/argv, never used to reconstruct public settings. */
+  args: string[];
+  provenance?: PerformanceBenchmarkProvenance;
 }
 
 export interface PerformanceBenchmarkProgress {

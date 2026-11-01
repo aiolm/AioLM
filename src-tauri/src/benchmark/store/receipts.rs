@@ -527,7 +527,6 @@ mod tests {
     use super::super::tests as fixtures;
     use super::super::{encoded, import, list, record_digest, Entry, RunJournal};
     use super::*;
-    use crate::performance_bench;
 
     fn receipt(index: usize) -> UploadReceipt {
         UploadReceipt {
@@ -541,15 +540,10 @@ mod tests {
     }
 
     fn native(root: &Path, id: &str, created: u64, status: &'static str) -> PathBuf {
-        let initial = fixtures::record(id, created);
-        let request = serde_json::from_value(initial["request"].clone()).unwrap();
+        let initial = fixtures::serving_record(id, created);
         let journal = RunJournal::begin(root, initial).unwrap();
-        let mut result = performance_bench::failed(
-            &request,
-            &crate::config::AppConfig::default(),
-            "pending".into(),
-        );
-        result.rows.push(fixtures::row());
+        let mut result = fixtures::serving_result(id);
+        result.rows.push(fixtures::serving_row());
         journal.checkpoint(&result).unwrap();
         if status != "interrupted" {
             result.status = status;

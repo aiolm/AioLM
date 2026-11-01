@@ -5,7 +5,8 @@ import { MODEL_PROFILE_KEYS, profileSettingsSnapshot, settingsSnapshot, type Set
 import { RUNTIME_DEFAULT_KEYS } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { testConfig } from '../../testing/appStore';
-import { BENCHMARK_CONTROLLED_KEYS, resetProfileOptions, resetProfileSettings } from './profileResetState';
+import { resetProfileOptions, resetProfileSettings } from './profileResetState';
+import { REQUEST_KEYS } from '../../shared/config/executionSettings';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 const manualSettings = {
@@ -81,21 +82,32 @@ describe('full profile defaults', () => {
     expect(profileSettingsSnapshot(reset)).toEqual(profileSettingsSnapshot(inherited));
   });
 
-  it.each([false, true])('preserves benchmark workload settings with inherited markers set to %s', inherited => {
+  it.each([false, true])('preserves request values while resetting benchmark launch settings with inherited markers set to %s', inherited => {
     const cfg = customConfig();
-    const controlledDefaults = RUNTIME_DEFAULT_KEYS.filter(key => BENCHMARK_CONTROLLED_KEYS.has(key));
-    cfg.runtime_defaults = inherited ? [...controlledDefaults, 'threads'] : ['threads'];
+    const requestDefaults = RUNTIME_DEFAULT_KEYS.filter(key => (REQUEST_KEYS as readonly string[]).includes(key));
+    cfg.runtime_defaults = inherited ? [...requestDefaults, 'threads'] : ['threads'];
     const original = structuredClone(cfg);
     const reset = resetProfileSettings(cfg, true);
 
-    for (const key of MODEL_PROFILE_KEYS) {
-      if (BENCHMARK_CONTROLLED_KEYS.has(key)) expect(reset[key], key).toEqual(cfg[key]);
-    }
-    for (const key of controlledDefaults) expect(reset.runtime_defaults?.includes(key), key).toBe(inherited);
-    expect(reset.runtime_defaults).toEqual(RUNTIME_DEFAULT_KEYS.filter(key => inherited || !BENCHMARK_CONTROLLED_KEYS.has(key)).sort());
+    for (const key of REQUEST_KEYS) expect(reset[key], key).toEqual(cfg[key]);
+    for (const key of requestDefaults) expect(reset.runtime_defaults?.includes(key), key).toBe(inherited);
+    expect(reset.runtime_defaults).toEqual(RUNTIME_DEFAULT_KEYS.filter(key => inherited || !(REQUEST_KEYS as readonly string[]).includes(key)).sort());
     expect(reset).toMatchObject({ active_model: cfg.active_model, active_backend: cfg.active_backend, active_build: cfg.active_build, mmproj: '',
-      spec_draft_model: '', server_args: [], lora_adapters: [], threads: tuningResetValues().threads });
+      spec_draft_model: '', server_args: [], lora_adapters: [], threads: tuningResetValues().threads,
+      ctx_size: tuningResetValues().ctx_size, parallel: tuningResetValues().parallel, cache_type_k: tuningResetValues().cache_type_k });
     expect(cfg).toEqual(original);
+  });
+
+  it.each(['custom.synthetic', 'vllm', 'mlx-vlm', 'llama.cpp'] as const)('preserves request-target overrides and other scopes during %s benchmark option reset', provider => {
+    const view = effectiveSchema([], [
+      schemaOption({ key: 'launch', flag: '--launch', group: 'other', target: 'launch', kind: { type: 'integer' } }),
+      schemaOption({ key: 'request', flag: '--request', group: 'other', target: 'request', kind: { type: 'number' } }),
+    ]);
+    const cfg = { ...customConfig(), active_provider: provider, active_runtime: 'synthetic',
+      provider_options: { [provider]: { launch: 8, request: 0, unknown: false }, other: { request: 7 } } };
+    const reset = resetProfileOptions(cfg, true, view);
+    expect(reset.provider_options).toEqual({ [provider]: { request: 0, unknown: false }, other: { request: 7 } });
+    expect(cfg.provider_options[provider]).toEqual({ launch: 8, request: 0, unknown: false });
   });
 
   it('leaves saved profiles, sessions, and application settings untouched', () => {

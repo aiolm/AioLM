@@ -71,13 +71,18 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     });
     let request = performance_bench::PerformanceBenchRequest {
         run_id: "smoke-cancel".into(),
-        prompt_lengths: vec![512],
-        generation_length: 8,
-        batch_sizes: vec![2],
+        method: Default::default(),
+        prompt_bytes: vec![4096],
+        max_output_tokens: 8,
+        concurrencies: vec![1, 2],
         repetitions: 1,
         context_profile: "code_python".into(),
         warmup: true,
+        request_usage: false,
     };
+    let runtime = performance_bench::RuntimeInfo::prepare(&cfg, &request)
+        .await
+        .unwrap();
     let active_pid = Arc::new(Mutex::new(None));
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(90),
@@ -88,7 +93,7 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
             cancel,
             active_pid.clone(),
             progress,
-            performance_bench::RuntimeInfo::new("unknown", false),
+            runtime,
         ),
     )
     .await
@@ -108,9 +113,8 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     );
     let completed = &result.rows[0];
     assert!(completed.error.is_none(), "{:?}", completed.error);
-    assert_eq!(completed.prompt_tokens, 512);
-    assert_eq!(completed.completion_tokens, 8);
-    assert_eq!(completed.cached_tokens, 0);
+    assert_eq!(completed.input_bytes, 4096);
+    assert_eq!(completed.timing_source, "client");
     println!(
         "[smoke] cancelled benchmark retained {} rows",
         result.rows.len()
@@ -194,7 +198,12 @@ fn smoke_real_server_and_chat() {
             .expect("application launch configuration validation");
         assert_eq!(resolved_gpu.main_gpu_index, Some(0));
     }
-    let (child, url, api_key_file) = match server::spawn(&cfg, api_key, &ring, &resolved_gpu) {
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file: api_key_file,
+        readiness,
+    } = match server::spawn(&cfg, api_key, &ring, &resolved_gpu, None) {
         Ok(v) => v,
         Err(e) => panic!("spawn failed: {e}\nstderr: {}", ring.tail()),
     };
@@ -235,8 +244,9 @@ fn smoke_real_server_and_chat() {
         .enable_all()
         .build()
         .unwrap();
-    let ready =
-        rt.block_on(async { server::wait_ready(shared.clone(), &url, api_key, 600, &ring).await });
+    let ready = rt.block_on(async {
+        server::wait_ready(shared.clone(), &url, api_key, 600, &ring, readiness).await
+    });
     server::cleanup_api_key_file(api_key_file.as_deref());
     if let Err(e) = ready {
         panic!("wait_ready failed: {e}");

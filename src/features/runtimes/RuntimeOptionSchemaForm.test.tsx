@@ -50,6 +50,40 @@ beforeEach(() => {
 });
 
 describe('generic runtime option renderer', () => {
+  it('locks request values and spellings but allows explicit clearing unless globally busy', () => {
+    const current = schema([
+      textOption('launch'),
+      textOption('request', { target: 'request', spellings: [{ flag: '--request' }, { flag: '--request-alias' }] }),
+    ]);
+    const values = { launch: 'keep', request: 'old-invalid-value' };
+    const onChange = vi.fn();
+    const view = (disabled: boolean) => <I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={current}
+      values={values} scope={[]} disabled={disabled} onChange={onChange} readOnlyForOption={option => option.target === 'request'} /></I18nProvider>;
+    const rendered = render(view(false));
+    expect(screen.getByRole('textbox', { name: /^--request/ })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: '--request Spelling' })).toBeDisabled();
+    expect(screen.getByLabelText(/^--launch/)).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: runtimeOptionsCopy.en.useDefault }));
+    expect(onChange).toHaveBeenLastCalledWith({ launch: 'keep' });
+    rendered.rerender(view(true));
+    expect(screen.getByRole('button', { name: runtimeOptionsCopy.en.useDefault })).toBeDisabled();
+  });
+
+  it('preserves read-only request values when importing launch options', async () => {
+    const current = schema([textOption('launch'), textOption('request', { target: 'request' })]);
+    vi.mocked(runtimeHelp.runtimeHelpImport).mockResolvedValueOnce({
+      plan: [{ key: 'request', values: ['incoming'] }, { key: 'launch', values: ['next'] }], managed: [], unrecognized: [],
+    });
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{ request: 'saved' }} scope={[]}
+      onChange={onChange} readOnlyForOption={option => option.target === 'request'} /></I18nProvider>);
+    fireEvent.click(screen.getByText(runtimeOptionsCopy.en.importTitle));
+    fireEvent.change(screen.getByLabelText(runtimeOptionsCopy.en.importLabel), { target: { value: '--request incoming --launch next' } });
+    fireEvent.click(screen.getByRole('button', { name: runtimeOptionsCopy.en.split }));
+    fireEvent.click(await screen.findByRole('button', { name: runtimeOptionsCopy.en.apply }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ request: 'saved', launch: 'next' }));
+  });
+
   it('renders flags with labels, help and runtime defaults without guessing', async () => {
     const current = schema([textOption('threads'), textOption('label')]);
     const onChange = vi.fn();

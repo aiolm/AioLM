@@ -5,8 +5,7 @@ export const runtimeAdapterCopy = {
     path: "등록 파일 경로 (manifest)", file: '파일 선택', register: '검사 후 등록',
     refreshError: "등록했지만 목록을 새로고침하지 못했습니다. 다시 등록하기 전에 목록을 새로고침하세요.",
     locked: '다른 작업을 마치고, 실행 중인 모델이 있으면 중지한 뒤 등록해 주세요.',
-    capabilities: "지원 기능은 선택한 모델마다 확인합니다. 이 어댑터에서는 런타임 묶음 내보내기와 정확한 토큰 수 기준 벤치마크를 사용할 수 없습니다.",
-    benchmark: "이 런타임 어댑터는 정확한 토큰 수를 지정하거나 모델 캐시를 비운 상태의 벤치마크를 지원하지 않습니다. 기존 이력과 내보내기는 계속 사용할 수 있습니다.",
+    capabilities: "AioLM은 추론 엔진이 아닌 GUI 어댑터이며, 지원 기능은 선택한 모델마다 확인합니다. 텍스트 스트리밍을 지원하는 연결된 엔진은 같은 API 벤치마크와 이력·내보내기·공유·관리를 사용합니다. 시간·출력 bytes는 클라이언트 관측값이며 토큰·캐시는 엔진 보고가 없으면 미확인입니다. 이 어댑터의 런타임 묶음 내보내기는 지원하지 않습니다.",
   },
   en: {
     title: 'Register external engine',
@@ -14,8 +13,7 @@ export const runtimeAdapterCopy = {
     path: "Registration file path (manifest)", file: 'Choose file', register: 'Probe & register',
     refreshError: "Registered, but the list could not be refreshed. Refresh the list before registering again.",
     locked: 'Finish any other task and unload any running models before registering.',
-    capabilities: "Supported features are checked for each selected model. Portable bundles and exact token-count benchmarks are unavailable with this adapter.",
-    benchmark: "This runtime adapter does not support benchmarks with exact token counts or a cleared model cache. Saved history and exports remain available.",
+    capabilities: "AioLM is a GUI adapter, not an inference engine; supported features are checked for each selected model. Connected text-streaming engines use the same API benchmark, history, exports, sharing and management. Timing and output bytes are client-observed; tokens and cache remain unknown unless reported by the engine. Portable runtime bundles remain unavailable with this adapter.",
   },
   ja: {
     title: '外部エンジンの登録',
@@ -23,8 +21,7 @@ export const runtimeAdapterCopy = {
     path: "登録ファイルのパス（manifest）", file: 'ファイルを選択', register: '検査して登録',
     refreshError: "登録しましたが一覧を更新できませんでした。再登録する前に一覧を更新してください。",
     locked: '他の作業を終え、実行中のモデルがあれば停止してから登録してください。',
-    capabilities: "対応機能は選択したモデルごとに確認します。このアダプターではランタイムの一括書き出しと正確なトークン数でのベンチマークは利用できません。",
-    benchmark: "このランタイムのアダプターは、正確なトークン数の指定やモデルキャッシュを空にした状態でのベンチマークに対応していません。既存の履歴と書き出しは引き続き利用できます。",
+    capabilities: "AioLM は推論エンジンではなく GUI アダプターで、対応機能は選択したモデルごとに確認します。接続済みのテキストストリーミングエンジンは同じ API ベンチマーク、履歴、書き出し、共有・管理を利用できます。時間と出力 bytes はクライアント観測値で、トークン・キャッシュはエンジンの報告がなければ不明です。このアダプターではランタイムの一括書き出しは利用できません。",
   },
   zh: {
     title: '注册外部引擎',
@@ -32,7 +29,6 @@ export const runtimeAdapterCopy = {
     path: "注册文件路径（manifest）", file: '选择文件', register: '检查并注册',
     refreshError: "已注册，但无法刷新列表。再次注册前请先刷新列表。",
     locked: '请先完成其他任务；如有正在运行的模型，请停止后再注册。',
-    capabilities: "按所选模型检查支持的功能。此适配器不支持运行时打包导出及精确词元数基准测试。",
-    benchmark: "此运行时适配器不支持指定精确词元数或清空模型缓存后的基准测试。仍可查看历史记录和导出。",
+    capabilities: "AioLM 是 GUI 适配器而非推理引擎，按所选模型检查支持的功能。已连接且支持文本流式输出的引擎使用相同的 API 基准测试、历史记录、导出及共享管理。时间和输出 bytes 为客户端观测值；引擎未报告的词元和缓存数据保持未知。此适配器仍不支持运行时打包导出。",
   },
 };

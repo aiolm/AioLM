@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { effectiveArguments, toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
-import type { PerformanceBenchmarkResult } from '../../api/types';
+import type { LegacyPerformanceBenchmarkResult as PerformanceBenchmarkResult } from '../../api/types';
 
 const submissionId = '00000000-0000-4000-8000-000000000057';
 function measured(args: string[]) {

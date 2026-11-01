@@ -1,10 +1,16 @@
 export type {
   BenchmarkCorpus, BenchmarkRunStatus, BenchmarkMetricRow, BenchmarkTrial, BenchmarkSummary,
   PublicBenchmarkRow, PublicGpu, BenchmarkModelIdentity, BenchmarkModelMetadata, BenchmarkExecutionSettings,
-  PublicBenchmarkSubmission, BenchmarkReceipt,
+  PublicBenchmarkSubmission, LegacyPublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkReceipt,
+  ServingRuntimeIdentity, ServingWorkload, RecordedSetting, ServingExecution, BenchmarkConfiguration,
+  ServingBenchmarkModelIdentity, ServingBenchmarkRow, ServingAggregationRow, ServingMetricKey,
+  ServingMetricStat, ServingBenchmarkPoint,
 } from './types.js';
-export { validatePublicBenchmark, validateBenchmarkReceipt } from './validate.js';
-export { summarizeBenchmarkTrials, summarizePublicBenchmarkRows } from './aggregation.js';
+export { validatePublicBenchmark, validateBenchmarkReceipt, validateBenchmarkConfiguration, validateLegacyBenchmarkConfiguration } from './validate.js';
+export {
+  summarizeBenchmarkTrials, summarizePublicBenchmarkRows,
+  SERVING_METRIC_KEYS, servingMetricValues, summarizeServingPoints,
+} from './aggregation.js';
 export { publicBenchmarkSchema, benchmarkReceiptSchema, publicationSchema } from './schema.js';
 export {
   DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS,

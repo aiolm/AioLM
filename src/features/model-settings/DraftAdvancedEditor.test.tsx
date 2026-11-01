@@ -9,6 +9,7 @@ import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 import { advancedSettingsHelp } from './advancedSettingsHelp';
 import { serverOptionDescription } from '../../shared/i18n/serverOptionDescriptions';
 import type { AppConfig } from '../../shared/api/types';
+import { modelSettingsCopy } from './modelSettingsCopy';
 
 const options = [
   describeServerOption('--repeat-penalty N', 'Penalize repeated tokens.')!,
@@ -211,11 +212,19 @@ describe('advanced settings explanations', () => {
     expect(onInvalid).toHaveBeenLastCalledWith('server_args', true);
   });
 
-  it('keeps request JSON hidden in benchmark settings', () => {
-    mount('en', true);
+  it('preserves benchmark request JSON while allowing an explicit clear of old overrides', () => {
+    const onChange = vi.fn();
+    const cfg = { ...testConfig, server_args: [], chat_options: { max_tokens: -2 } };
+    const view = (disabled: boolean) => <I18nProvider initialLocale="en"><DraftAdvancedEditor cfg={cfg} options={options}
+      disabled={disabled} benchmark onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>;
+    const rendered = render(view(false));
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
-    expect(document.querySelectorAll('textarea')).toHaveLength(1);
-    expect(screen.queryByText(advancedSettingsHelp.en.chat)).not.toBeInTheDocument();
-    expect(screen.getByText(advancedSettingsHelp.en.args)).toBeVisible();
+    expect(screen.getByLabelText(modelSettingsCopy.en.rawArgs)).toBeEnabled();
+    expect(screen.getByLabelText(modelSettingsCopy.en.rawChat)).toBeDisabled();
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: modelSettingsCopy.en.reset }));
+    expect(onChange).toHaveBeenLastCalledWith({ chat_options: {} });
+    rendered.rerender(view(true));
+    expect(screen.getByRole('button', { name: modelSettingsCopy.en.reset })).toBeDisabled();
   });
 });

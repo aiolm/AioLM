@@ -2,644 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiolm:benchmark:public:1",
   "title": "AioLM public benchmark submission",
-  "description": "A reviewed public snapshot. Null means unknown. Local paths, raw arguments, diagnostics and persistent hardware identifiers are excluded. Model status sha256 requires a hash; unidentified and multipart require null.",
-  "type": "object",
-  "properties": {
-    "schema_version": {
-      "type": "integer",
-      "enum": [
-        1,
-        2
-      ]
+  "description": "A reviewed public snapshot. Null means unknown. Local paths, raw arguments, diagnostics and persistent hardware identifiers are excluded. Model status sha256 requires a hash; unidentified and multipart require null. Schema 3 uses engine-neutral, client-observed UTF-8 output with optional reported token counts; schema 1/2 snapshots remain legacy measurements.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/legacy"
     },
-    "submission_id": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-    },
-    "app_version": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "maxLength": 256,
-      "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-    },
-    "method": {
-      "type": [
-        "object",
-        "null"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "const": "cold-prompt-serving"
-        },
-        "version": {
-          "type": "integer",
-          "enum": [
-            1,
-            2
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "version"
-      ],
-      "additionalProperties": false
-    },
-    "workload": {
-      "type": "object",
-      "properties": {
-        "corpus": {
-          "type": "string",
-          "enum": [
-            "code_python",
-            "code_mixed",
-            "novel_ko",
-            "novel_en",
-            "novel_ja"
-          ]
-        },
-        "corpus_version": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        },
-        "corpus_sha256": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "prompt_lengths": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "minItems": 1,
-          "maxItems": 64
-        },
-        "generation_length": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "batch_sizes": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "minItems": 0,
-          "maxItems": 64
-        },
-        "repetitions": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "warmup": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "corpus",
-        "corpus_version",
-        "corpus_sha256",
-        "prompt_lengths",
-        "generation_length",
-        "batch_sizes",
-        "repetitions",
-        "warmup"
-      ],
-      "additionalProperties": false
-    },
-    "model": {
-      "type": "object",
-      "properties": {
-        "status": {
-          "type": "string",
-          "enum": [
-            "sha256",
-            "unidentified",
-            "multipart"
-          ]
-        },
-        "sha256": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "size_bytes": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        },
-        "metadata": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "description": "Optional declared GGUF fields and file-matched Hugging Face download origin. Null or absent means unavailable. Publisher is the repository namespace, not quantized_by. Weight encoding does not imply identical tensors or quality. Local paths are excluded.",
-          "properties": {
-            "format": {
-              "type": "string",
-              "const": "GGUF"
-            },
-            "name": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "architecture": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "size_label": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "quantization": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "file_type": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": 0,
-              "maximum": 65535
-            },
-            "quantized_by": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "repository": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 257,
-              "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-            },
-            "base_models": {
-              "type": "array",
-              "maxItems": 8,
-              "items": {
-                "type": "string",
-                "maxLength": 257,
-                "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-              }
-            },
-            "artifact": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 512,
-              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._ -]{0,127}/)*[A-Za-z0-9][A-Za-z0-9._ -]*\\.[gG][gG][uU][fF]$"
-            },
-            "source": {
-              "type": "string",
-              "enum": [
-                "gguf",
-                "huggingface",
-                "gguf+huggingface"
-              ]
-            }
-          },
-          "required": [
-            "format",
-            "name",
-            "architecture",
-            "size_label",
-            "quantization",
-            "file_type",
-            "quantized_by",
-            "repository",
-            "base_models",
-            "artifact",
-            "source"
-          ],
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "if": {
-                "type": "object",
-                "required": [
-                  "artifact"
-                ],
-                "properties": {
-                  "artifact": {
-                    "type": "string"
-                  }
-                }
-              },
-              "then": {
-                "properties": {
-                  "repository": {
-                    "type": "string"
-                  },
-                  "source": {
-                    "enum": [
-                      "huggingface",
-                      "gguf+huggingface"
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        },
-        "format": {
-          "type": "string",
-          "enum": [
-            "gguf",
-            "hf-safetensors",
-            "mlx",
-            "unknown"
-          ]
-        }
-      },
-      "required": [
-        "status",
-        "sha256",
-        "size_bytes"
-      ],
-      "additionalProperties": false,
-      "if": {
-        "properties": {
-          "status": {
-            "const": "sha256"
-          }
-        },
-        "required": [
-          "status"
-        ]
-      },
-      "then": {
-        "properties": {
-          "sha256": {
-            "type": "string"
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "sha256": {
-            "type": "null"
-          }
-        }
-      }
-    },
-    "runtime": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "enum": [
-            "llama.cpp",
-            "vllm",
-            "mlx-vlm"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        },
-        "backend": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        },
-        "build": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        },
-        "variant": {
-          "type": "string",
-          "const": "vllm-metal"
-        },
-        "plugin_version": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        }
-      },
-      "required": [
-        "name",
-        "version",
-        "backend",
-        "build"
-      ],
-      "additionalProperties": false
-    },
-    "environment": {
-      "type": [
-        "object",
-        "null"
-      ],
-      "properties": {
-        "os": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        },
-        "arch": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 256,
-          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-        },
-        "cpu": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "logical_cores": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "physical_cores": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": 1,
-              "description": "Physical cores, separate from the logical_cores thread count. Absent or null when the measuring machine did not report one; never derived from the thread count."
-            }
-          },
-          "required": [
-            "name",
-            "logical_cores"
-          ],
-          "additionalProperties": false
-        },
-        "system_memory_bytes": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "installed_gpus": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/gpu"
-          },
-          "minItems": 0,
-          "maxItems": 256
-        },
-        "execution": {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "enum": [
-                "cpu",
-                "selected",
-                "automatic",
-                "unknown"
-              ]
-            },
-            "selected_gpus": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/gpu"
-              },
-              "minItems": 0,
-              "maxItems": 256
-            },
-            "selection_complete": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "mode",
-            "selected_gpus",
-            "selection_complete"
-          ],
-          "additionalProperties": false
-        }
-      },
-      "required": [
-        "os",
-        "arch",
-        "cpu",
-        "installed_gpus",
-        "execution"
-      ],
-      "additionalProperties": false
-    },
-    "execution": {
-      "type": "object",
-      "properties": {
-        "context_size": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "parallel": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "settings": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "properties": {
-            "gpu_layers": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": -1
-            },
-            "threads": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": -1
-            },
-            "threads_batch": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": -1
-            },
-            "flash_attention": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "cache_type_k": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "cache_type_v": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "split_mode": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "maxLength": 256,
-              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-            },
-            "tensor_split": {
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "type": "number",
-                "minimum": 0
-              },
-              "minItems": 0,
-              "maxItems": 256
-            }
-          },
-          "required": [
-            "gpu_layers",
-            "threads",
-            "threads_batch",
-            "flash_attention",
-            "cache_type_k",
-            "cache_type_v",
-            "split_mode",
-            "tensor_split"
-          ],
-          "additionalProperties": false
-        },
-        "effective_args": {
-          "description": "llama-server options the measured run was started with, in order, as separate tokens. Options carrying a path, address or credential are removed with their values; the pattern rejects any remaining token that could hold one.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string",
-            "maxLength": 128,
-            "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
-          },
-          "minItems": 0,
-          "maxItems": 256
-        }
-      },
-      "required": [
-        "context_size",
-        "parallel",
-        "settings"
-      ],
-      "additionalProperties": false
-    },
-    "measurements": {
-      "type": "object",
-      "properties": {
-        "status": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "partial",
-            "cancelled",
-            "failed"
-          ]
-        },
-        "rows": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/row"
-          },
-          "minItems": 0,
-          "maxItems": 10000
-        }
-      },
-      "required": [
-        "status",
-        "rows"
-      ],
-      "additionalProperties": false
+    {
+      "$ref": "#/$defs/serving"
     }
-  },
-  "required": [
-    "schema_version",
-    "submission_id",
-    "app_version",
-    "method",
-    "workload",
-    "model",
-    "runtime",
-    "environment",
-    "execution",
-    "measurements"
   ],
-  "additionalProperties": false,
   "$defs": {
     "gpu": {
       "type": "object",
@@ -790,96 +161,1489 @@
         "failed"
       ],
       "additionalProperties": false
-    }
-  },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "schema_version": {
-            "const": 1
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "runtime": {
-            "properties": {
-              "name": {
-                "const": "llama.cpp"
-              }
-            }
-          },
-          "model": {
-            "not": {
-              "required": [
-                "format"
+    },
+    "legacy": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "submission_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+        },
+        "app_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "method": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "const": "cold-prompt-serving"
+            },
+            "version": {
+              "type": "integer",
+              "enum": [
+                1,
+                2
               ]
             }
           },
-          "method": {
-            "properties": {
-              "version": {
-                "const": 1
-              }
+          "required": [
+            "id",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "workload": {
+          "type": "object",
+          "properties": {
+            "corpus": {
+              "type": "string",
+              "enum": [
+                "code_python",
+                "code_mixed",
+                "novel_ko",
+                "novel_en",
+                "novel_ja"
+              ]
+            },
+            "corpus_version": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "corpus_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "prompt_lengths": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "generation_length": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "batch_sizes": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "repetitions": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "warmup": {
+              "type": "boolean"
             }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "schema_version": {
-            "const": 2
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "model": {
+          },
+          "required": [
+            "corpus",
+            "corpus_version",
+            "corpus_sha256",
+            "prompt_lengths",
+            "generation_length",
+            "batch_sizes",
+            "repetitions",
+            "warmup"
+          ],
+          "additionalProperties": false
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "sha256",
+                "unidentified",
+                "multipart"
+              ]
+            },
+            "sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "size_bytes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "metadata": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Optional declared GGUF fields and file-matched Hugging Face download origin. Null or absent means unavailable. Publisher is the repository namespace, not quantized_by. Weight encoding does not imply identical tensors or quality. Local paths are excluded.",
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "const": "GGUF"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "architecture": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "size_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "quantization": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "file_type": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "quantized_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 257,
+                  "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "base_models": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 257,
+                    "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  }
+                },
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 512,
+                  "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._ -]{0,127}/)*[A-Za-z0-9][A-Za-z0-9._ -]*\\.[gG][gG][uU][fF]$"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "gguf",
+                    "huggingface",
+                    "gguf+huggingface"
+                  ]
+                }
+              },
+              "required": [
+                "format",
+                "name",
+                "architecture",
+                "size_label",
+                "quantization",
+                "file_type",
+                "quantized_by",
+                "repository",
+                "base_models",
+                "artifact",
+                "source"
+              ],
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "type": "object",
+                    "required": [
+                      "artifact"
+                    ],
+                    "properties": {
+                      "artifact": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "repository": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "enum": [
+                          "huggingface",
+                          "gguf+huggingface"
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "gguf",
+                "hf-safetensors",
+                "mlx",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "sha256",
+            "size_bytes"
+          ],
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "status": {
+                "const": "sha256"
+              }
+            },
             "required": [
-              "format"
+              "status"
             ]
           },
-          "method": {
+          "then": {
             "properties": {
-              "version": {
-                "const": 2
+              "sha256": {
+                "type": "string"
               }
             }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "runtime": {
-            "properties": {
-              "name": {
-                "enum": [
-                  "vllm",
-                  "mlx-vlm"
-                ]
-              }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "schema_version": {
-            "const": 2
           },
-          "execution": {
+          "else": {
             "properties": {
-              "settings": {
+              "sha256": {
                 "type": "null"
               }
             }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "enum": [
+                "llama.cpp",
+                "vllm",
+                "mlx-vlm"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "backend": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "build": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "variant": {
+              "type": "string",
+              "const": "vllm-metal"
+            },
+            "plugin_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            }
           },
-          "model": {
+          "required": [
+            "name",
+            "version",
+            "backend",
+            "build"
+          ],
+          "additionalProperties": false
+        },
+        "environment": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "os": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "arch": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "cpu": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "logical_cores": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "physical_cores": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1,
+                  "description": "Physical cores, separate from the logical_cores thread count. Absent or null when the measuring machine did not report one; never derived from the thread count."
+                }
+              },
+              "required": [
+                "name",
+                "logical_cores"
+              ],
+              "additionalProperties": false
+            },
+            "system_memory_bytes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "installed_gpus": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/gpu"
+              },
+              "minItems": 0,
+              "maxItems": 256
+            },
+            "execution": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "cpu",
+                    "selected",
+                    "automatic",
+                    "unknown"
+                  ]
+                },
+                "selected_gpus": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/gpu"
+                  },
+                  "minItems": 0,
+                  "maxItems": 256
+                },
+                "selection_complete": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mode",
+                "selected_gpus",
+                "selection_complete"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "os",
+            "arch",
+            "cpu",
+            "installed_gpus",
+            "execution"
+          ],
+          "additionalProperties": false
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "context_size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parallel": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "settings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "gpu_layers": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": -1
+                },
+                "threads": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": -1
+                },
+                "threads_batch": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": -1
+                },
+                "flash_attention": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "cache_type_k": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "cache_type_v": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "split_mode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 256,
+                  "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+                },
+                "tensor_split": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "minItems": 0,
+                  "maxItems": 256
+                }
+              },
+              "required": [
+                "gpu_layers",
+                "threads",
+                "threads_batch",
+                "flash_attention",
+                "cache_type_k",
+                "cache_type_v",
+                "split_mode",
+                "tensor_split"
+              ],
+              "additionalProperties": false
+            },
+            "effective_args": {
+              "description": "llama-server options the measured run was started with, in order, as separate tokens. Options carrying a path, address or credential are removed with their values; the pattern rejects any remaining token that could hold one.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+              },
+              "minItems": 0,
+              "maxItems": 256
+            }
+          },
+          "required": [
+            "context_size",
+            "parallel",
+            "settings"
+          ],
+          "additionalProperties": false
+        },
+        "measurements": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "partial",
+                "cancelled",
+                "failed"
+              ]
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/row"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "status",
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "submission_id",
+        "app_version",
+        "method",
+        "workload",
+        "model",
+        "runtime",
+        "environment",
+        "execution",
+        "measurements"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "const": "llama.cpp"
+                  }
+                }
+              },
+              "model": {
+                "not": {
+                  "required": [
+                    "format"
+                  ]
+                }
+              },
+              "method": {
+                "properties": {
+                  "version": {
+                    "const": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": {
+                "required": [
+                  "format"
+                ]
+              },
+              "method": {
+                "properties": {
+                  "version": {
+                    "const": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "enum": [
+                      "vllm",
+                      "mlx-vlm"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "schema_version": {
+                "const": 2
+              },
+              "execution": {
+                "properties": {
+                  "settings": {
+                    "type": "null"
+                  }
+                }
+              },
+              "model": {
+                "properties": {
+                  "metadata": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "const": "vllm"
+                  }
+                },
+                "not": {
+                  "required": [
+                    "variant"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": {
+                "properties": {
+                  "format": {
+                    "const": "hf-safetensors"
+                  }
+                }
+              },
+              "runtime": {
+                "properties": {
+                  "backend": {
+                    "not": {
+                      "const": "metal"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "const": "mlx-vlm"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": {
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "hf-safetensors",
+                      "mlx"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": 2
+              },
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "const": "llama.cpp"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "model": {
+                "properties": {
+                  "format": {
+                    "const": "gguf"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runtime": {
+                "required": [
+                  "variant"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "schema_version": {
+                "const": 2
+              },
+              "runtime": {
+                "properties": {
+                  "name": {
+                    "const": "vllm"
+                  },
+                  "backend": {
+                    "const": "metal"
+                  }
+                },
+                "required": [
+                  "plugin_version"
+                ]
+              },
+              "model": {
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "hf-safetensors",
+                      "mlx",
+                      "gguf"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "runtime": {
+                "not": {
+                  "required": [
+                    "plugin_version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "servingRuntime": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "backend": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "build": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "variant": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "plugin_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "backend",
+        "build",
+        "variant",
+        "plugin_version"
+      ],
+      "additionalProperties": false
+    },
+    "recordedSetting": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "enum": [
+            "launch",
+            "request"
+          ]
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+            "maxLength": 64
+          },
+          "maxItems": 8
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^(?!-)[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 64
+            }
+          ]
+        },
+        "unit": {
+          "enum": [
+            "tokens",
+            "bytes",
+            "MiB",
+            "GiB",
+            "threads",
+            "layers",
+            "count",
+            "ratio",
+            "bits",
+            "percent",
+            null
+          ]
+        },
+        "role": {
+          "enum": [
+            "context.total_tokens",
+            "context.per_sequence_tokens",
+            "context.per_request_kv_tokens",
+            "concurrency.capacity",
+            null
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "scope",
+        "name",
+        "value",
+        "unit",
+        "role"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "const": "request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "maxItems": 0
+              },
+              "role": {
+                "type": "null"
+              }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "name": {
+                    "const": "temperature"
+                  },
+                  "value": {
+                    "const": 0
+                  },
+                  "unit": {
+                    "const": null
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "name": {
+                    "const": "max_tokens"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
+                  },
+                  "unit": {
+                    "const": "tokens"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "name": {
+                    "const": "stream"
+                  },
+                  "value": {
+                    "const": true
+                  },
+                  "unit": {
+                    "const": null
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "name": {
+                    "const": "stream_options.include_usage"
+                  },
+                  "value": {
+                    "const": true
+                  },
+                  "unit": {
+                    "const": null
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "servingExecution": {
+      "type": "object",
+      "properties": {
+        "topology": {
+          "enum": [
+            "owned",
+            "attached",
+            "unknown"
+          ]
+        },
+        "memory_scope": {
+          "enum": [
+            "owned_process_tree",
+            "owned_root_process",
+            "unavailable"
+          ]
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/recordedSetting"
+          },
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "topology",
+        "memory_scope",
+        "settings"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "topology": {
+                "enum": [
+                  "attached",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "memory_scope": {
+                "const": "unavailable"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "servingWorkload": {
+      "type": "object",
+      "properties": {
+        "corpus": {
+          "type": "string",
+          "enum": [
+            "code_python",
+            "code_mixed",
+            "novel_ko",
+            "novel_en",
+            "novel_ja"
+          ]
+        },
+        "corpus_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "bytes": {
+                "type": "integer",
+                "minimum": 256,
+                "maximum": 1048576
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "bytes",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "concurrencies": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "warmup": {
+          "type": "boolean"
+        },
+        "request_usage": {
+          "type": "boolean"
+        },
+        "cache_policy": {
+          "const": "as_configured"
+        }
+      },
+      "required": [
+        "corpus",
+        "corpus_version",
+        "inputs",
+        "max_output_tokens",
+        "concurrencies",
+        "repetitions",
+        "warmup",
+        "request_usage",
+        "cache_policy"
+      ],
+      "additionalProperties": false
+    },
+    "servingModel": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "sha256",
+            "unidentified",
+            "multipart"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Optional declared GGUF fields and file-matched Hugging Face download origin. Null or absent means unavailable. Publisher is the repository namespace, not quantized_by. Weight encoding does not imply identical tensors or quality. Local paths are excluded.",
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "GGUF"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "architecture": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "size_label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "quantization": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "file_type": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "quantized_by": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "repository": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 257,
+              "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "base_models": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 257,
+                "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "artifact": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 512,
+              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._ -]{0,127}/)*[A-Za-z0-9][A-Za-z0-9._ -]*\\.[gG][gG][uU][fF]$"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "gguf",
+                "huggingface",
+                "gguf+huggingface"
+              ]
+            }
+          },
+          "required": [
+            "format",
+            "name",
+            "architecture",
+            "size_label",
+            "quantization",
+            "file_type",
+            "quantized_by",
+            "repository",
+            "base_models",
+            "artifact",
+            "source"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "type": "object",
+                "required": [
+                  "artifact"
+                ],
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "repository": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "huggingface",
+                      "gguf+huggingface"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "gguf",
+            "hf-safetensors",
+            "mlx",
+            "unknown"
+          ]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "huggingface"
+            },
+            "repository": {
+              "type": "string",
+              "maxLength": 257,
+              "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          },
+          "required": [
+            "kind",
+            "repository",
+            "revision"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "status",
+        "sha256",
+        "size_bytes",
+        "format"
+      ],
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "status": {
+            "const": "sha256"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "sha256": {
+            "type": "null"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "enum": [
+                  "hf-safetensors",
+                  "mlx",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "then": {
             "properties": {
               "metadata": {
                 "type": "null"
@@ -887,152 +1651,352 @@
             }
           }
         }
-      }
+      ]
     },
-    {
-      "if": {
-        "properties": {
-          "runtime": {
-            "properties": {
-              "name": {
-                "const": "vllm"
-              }
+    "servingEnvironment": {
+      "type": ["object", "null"],
+      "properties": {
+        "os": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "arch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "cpu": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
             },
-            "not": {
-              "required": [
-                "variant"
+            "logical_cores": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "physical_cores": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "description": "Physical cores, separate from the logical_cores thread count. Absent or null when the measuring machine did not report one; never derived from the thread count."
+            }
+          },
+          "required": [
+            "name",
+            "logical_cores"
+          ],
+          "additionalProperties": false
+        },
+        "system_memory_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "installed_gpus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gpu"
+          },
+          "minItems": 0,
+          "maxItems": 256
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "cpu",
+                "selected",
+                "automatic",
+                "unknown"
               ]
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "model": {
-            "properties": {
-              "format": {
-                "const": "hf-safetensors"
-              }
-            }
-          },
-          "runtime": {
-            "properties": {
-              "backend": {
-                "not": {
-                  "const": "metal"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "runtime": {
-            "properties": {
-              "name": {
-                "const": "mlx-vlm"
-              }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "model": {
-            "properties": {
-              "format": {
-                "enum": [
-                  "hf-safetensors",
-                  "mlx"
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "schema_version": {
-            "const": 2
-          },
-          "runtime": {
-            "properties": {
-              "name": {
-                "const": "llama.cpp"
-              }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "model": {
-            "properties": {
-              "format": {
-                "const": "gguf"
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "runtime": {
-            "required": [
-              "variant"
-            ]
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "schema_version": {
-            "const": 2
-          },
-          "runtime": {
-            "properties": {
-              "name": {
-                "const": "vllm"
+            },
+            "selected_gpus": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/gpu"
               },
-              "backend": {
-                "const": "metal"
-              }
+              "minItems": 0,
+              "maxItems": 256
             },
-            "required": [
-              "plugin_version"
-            ]
-          },
-          "model": {
-            "properties": {
-              "format": {
-                "enum": [
-                  "hf-safetensors",
-                  "mlx",
-                  "gguf"
-                ]
-              }
+            "selection_complete": {
+              "type": "boolean"
             }
-          }
+          },
+          "required": [
+            "mode",
+            "selected_gpus",
+            "selection_complete"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "const": "aiolm_host"
         }
       },
-      "else": {
-        "properties": {
-          "runtime": {
-            "not": {
-              "required": [
-                "plugin_version"
-              ]
-            }
-          }
+      "required": [
+        "os",
+        "arch",
+        "cpu",
+        "installed_gpus",
+        "execution",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "servingRow": {
+      "type": "object",
+      "properties": {
+        "input_bytes": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 1048576
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "repetition": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "first_output_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "first_content_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "first_reasoning_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "e2e_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "content_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reasoning_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reported_prompt_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reported_completion_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reported_cached_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "usage_status": {
+          "enum": [
+            "complete",
+            "partial",
+            "missing",
+            "invalid"
+          ]
+        },
+        "finish_reasons": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stop",
+              "length",
+              "content_filter",
+              "tool_calls",
+              "other",
+              "not_reported"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "peak_memory_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "timing_source": {
+          "const": "client"
+        },
+        "failed": {
+          "const": false
         }
-      }
+      },
+      "required": [
+        "input_bytes",
+        "max_output_tokens",
+        "concurrency",
+        "repetition",
+        "first_output_ms",
+        "first_content_ms",
+        "first_reasoning_ms",
+        "e2e_ms",
+        "content_bytes",
+        "reasoning_bytes",
+        "output_bytes",
+        "reported_prompt_tokens",
+        "reported_completion_tokens",
+        "reported_cached_tokens",
+        "usage_status",
+        "finish_reasons",
+        "peak_memory_bytes",
+        "timing_source",
+        "failed"
+      ],
+      "additionalProperties": false
+    },
+    "serving": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 3
+        },
+        "submission_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+        },
+        "app_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+        },
+        "method": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "const": "openai-chat-serving"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "workload": {
+          "$ref": "#/$defs/servingWorkload"
+        },
+        "model": {
+          "$ref": "#/$defs/servingModel"
+        },
+        "runtime": {
+          "$ref": "#/$defs/servingRuntime"
+        },
+        "environment": {
+          "$ref": "#/$defs/servingEnvironment"
+        },
+        "execution": {
+          "$ref": "#/$defs/servingExecution"
+        },
+        "measurements": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "const": "complete"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/servingRow"
+              },
+              "minItems": 1,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "status",
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "submission_id",
+        "app_version",
+        "method",
+        "workload",
+        "model",
+        "runtime",
+        "environment",
+        "execution",
+        "measurements"
+      ],
+      "additionalProperties": false
     }
-  ]
+  }
 }

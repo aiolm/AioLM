@@ -3,7 +3,7 @@
 use super::{
     artifacts::Modalities,
     launch::{EngineCommand, Readiness},
-    protocol::EngineInfo,
+    protocol::{ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
     ProviderId,
 };
 use crate::config::AppConfig;
@@ -81,6 +81,10 @@ pub struct RuntimeManifest {
     pub engine_id: ProviderId,
     pub runtime_id: String,
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_engine: Option<PublicEngine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_ownership: Option<ComputeOwnership>,
     pub platforms: Vec<Platform>,
     /// Both direct engines and out-of-process bridges expose canonical HTTP.
     /// A bridge can translate its engine's own wire format behind this boundary.
@@ -169,6 +173,8 @@ pub struct Capabilities {
     pub chat: bool,
     #[serde(default)]
     pub tools: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_usage_supported: Option<bool>,
 }
 
 /// The probe must resolve the exact selected model, rather than promote the
@@ -181,6 +187,12 @@ pub struct ProbeResult {
     pub runtime_id: String,
     pub version: String,
     pub accelerator: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_engine: Option<PublicEngine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_ownership: Option<ComputeOwnership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_format: Option<super::artifacts::ArtifactFormat>,
     pub model: String,
     pub model_supported: bool,
     pub served_model: String,
@@ -435,6 +447,9 @@ fn validate_process(process: &ProcessSpec) -> Result<(), String> {
     Ok(())
 }
 pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
+    if let Some(identity) = &m.public_engine {
+        identity.validate()?;
+    }
     if let Some(resources) = &m.launch_resources {
         resources.validate()?;
         if m.launch
@@ -962,6 +977,9 @@ fn validate_probe_result(
     manifest: &RuntimeManifest,
     model: Option<&str>,
 ) -> Result<(), String> {
+    if let Some(identity) = &probe.public_engine {
+        identity.validate()?;
+    }
     if probe.schema_version != VERSION
         || probe.engine_id != manifest.engine_id
         || probe.runtime_id != manifest.runtime_id
@@ -1295,8 +1313,28 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
 pub fn catalog() -> Vec<Value> {
     let inventory = registrations();
     let mut seen = std::collections::BTreeSet::new();
-    inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":"unsupported","deep_verification":"unsupported","portable":"unsupported"}})).collect()
+    inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":"openai-chat-serving@1","deep_verification":"unsupported","portable":"unsupported"}})).collect()
 }
+/// Probe identity (including explicit nulls) and ownership (including unknown)
+/// are authoritative. Supported formats never identify the selected weights.
+pub fn serving_metadata(manifest: &RuntimeManifest, probe: &ProbeResult) -> ServingMetadata {
+    ServingMetadata::from_observations(
+        probe
+            .public_engine
+            .as_ref()
+            .or(manifest.public_engine.as_ref())
+            .cloned()
+            .unwrap_or_default(),
+        probe
+            .model_format
+            .unwrap_or(super::artifacts::ArtifactFormat::Unknown),
+        probe
+            .compute_ownership
+            .or(manifest.compute_ownership)
+            .unwrap_or(ComputeOwnership::Unknown),
+    )
+}
+
 pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     let r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
     check_files(&r)?;
@@ -1345,6 +1383,8 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         runtime_id: p.runtime_id.clone(),
         runtime_variant: "external-process".into(),
         speech_model_type: None,
+        serving_metadata: Some(serving_metadata(&r.manifest, &p)),
+        stream_usage_supported: p.capabilities.stream_usage_supported,
         upstream_model: upstream.clone(),
         modalities: p.capabilities.modalities,
         tasks: p.capabilities.tasks,
@@ -2024,6 +2064,8 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         engine_id: entry.engine_id,
         runtime_id: entry.runtime_id.clone(),
         display_name: entry.runtime_id.clone(),
+        public_engine: None,
+        compute_ownership: None,
         platforms: Vec::new(),
         protocol: "openai-v1".into(),
         probe: process.clone(),
@@ -2105,6 +2147,8 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         engine_id: draft.engine_id,
         runtime_id: draft.runtime_id.clone(),
         display_name: draft.display_name.clone(),
+        public_engine: None,
+        compute_ownership: None,
         // Registration happens on, and declares, this machine only.
         platforms: vec![Platform {
             os: std::env::consts::OS.into(),
@@ -2230,6 +2274,115 @@ mod tests {
         let probe = root.join("probe");
         let server = root.join("server");
         serde_json::from_value(serde_json::json!({"schema_version":1,"adapter_version":1,"engine_id":"custom.example","runtime_id":"build-1","display_name":"Example engine","protocol":"openai-v1","platforms":[{"os":"linux","arch":"x86_64"}],"probe":{"program":probe,"args":["{model}","{options_json}"]},"launch":{"program":server,"args":["--model","{model}","--port","{port}","--alias","{model_alias}"],"env":{"ENGINE_KEY":"{api_key}"}},"model_formats":["unknown"],"health_path":"/health","options":[{"key":"workers","flag":"--workers","target":"launch","kind":{"type":"integer","min":1,"max":8}},{"key":"temperature","target":"request","kind":{"type":"number","min":0,"max":2}}]})).unwrap()
+    }
+
+    fn metadata_probe() -> ProbeResult {
+        serde_json::from_value(serde_json::json!({
+            "schema_version":1,"engine_id":"custom.example","runtime_id":"build-1",
+            "version":"machine-local display version","accelerator":"unverified",
+            "model":"selected","model_supported":true,"served_model":"private-model",
+            "capabilities":{"tasks":["generate"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true}
+        })).unwrap()
+    }
+
+    #[test]
+    fn serving_observations_preserve_authoritative_nulls_unknowns_and_selected_format() {
+        use super::super::{
+            artifacts::ArtifactFormat,
+            protocol::{ServingMemoryScope, ServingTopology},
+        };
+        let mut manifest = example();
+        manifest.public_engine = Some(PublicEngine {
+            name: Some("sglang".into()),
+            version: Some("1.2".into()),
+            ..PublicEngine::default()
+        });
+        manifest.compute_ownership = Some(ComputeOwnership::Direct);
+        manifest.model_formats = vec!["gguf".into(), "mlx".into()];
+        let mut probe = metadata_probe();
+        let inherited = serving_metadata(&manifest, &probe);
+        assert_eq!(inherited.runtime, manifest.public_engine.clone().unwrap());
+        assert_eq!(inherited.topology, ServingTopology::Owned);
+        // A supported-format inventory never establishes selected-model format.
+        assert_eq!(
+            serving_metadata(&manifest, &probe).model_format,
+            ArtifactFormat::Unknown
+        );
+
+        probe.public_engine = Some(PublicEngine::default());
+        probe.compute_ownership = Some(ComputeOwnership::Unknown);
+        probe.model_format = Some(ArtifactFormat::Unknown);
+        let unknown = serving_metadata(&manifest, &probe);
+        assert_eq!(unknown.runtime, PublicEngine::default());
+        assert_eq!(unknown.topology, ServingTopology::Unknown);
+        assert_eq!(unknown.memory_scope, ServingMemoryScope::Unavailable);
+        assert_eq!(unknown.model_format, ArtifactFormat::Unknown);
+        probe.model_format = Some(ArtifactFormat::Mlx);
+        assert_eq!(
+            serving_metadata(&manifest, &probe).model_format,
+            ArtifactFormat::Mlx
+        );
+
+        probe.public_engine = None;
+        manifest.public_engine = None;
+        let private = serving_metadata(&manifest, &probe);
+        assert_eq!(private.runtime, PublicEngine::default());
+        let json = serde_json::to_string(&private).unwrap();
+        for secret in [
+            "custom.example",
+            "build-1",
+            "private-model",
+            "machine-local",
+            "unverified",
+        ] {
+            assert!(!json.contains(secret));
+        }
+    }
+
+    #[test]
+    fn manifests_and_probes_reject_unsafe_or_non_strict_public_observations() {
+        let identity = serde_json::to_value(PublicEngine::default()).unwrap();
+        for malformed in [
+            serde_json::json!({"name":null}),
+            serde_json::json!({"name":null,"version":null,"backend":null,"build":null,"variant":null,"plugin_version":null,"extra":null}),
+        ] {
+            let mut manifest = serde_json::to_value(example()).unwrap();
+            manifest["public_engine"] = malformed.clone();
+            assert!(serde_json::from_value::<RuntimeManifest>(manifest).is_err());
+            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
+            probe["public_engine"] = malformed;
+            assert!(serde_json::from_value::<ProbeResult>(probe).is_err());
+        }
+        for invalid in [
+            "",
+            "/private/engine",
+            "host:port",
+            "user@host",
+            "back\\slash",
+            "line\nbreak",
+            "\u{7f}",
+        ] {
+            let mut malformed = identity.clone();
+            malformed["version"] = Value::String(invalid.into());
+            assert!(serde_json::from_value::<PublicEngine>(malformed).is_err());
+            let mut manifest = example();
+            manifest.public_engine = Some(PublicEngine {
+                version: Some(invalid.into()),
+                ..PublicEngine::default()
+            });
+            assert!(validate_manifest(&manifest).is_err());
+            let mut probe = metadata_probe();
+            probe.public_engine = manifest.public_engine.clone();
+            assert!(validate_probe_result(&probe, &example(), Some("selected")).is_err());
+        }
+        for (key, value) in [("compute_ownership", "proxy"), ("model_format", "weights")] {
+            let mut manifest = serde_json::to_value(example()).unwrap();
+            manifest[key] = value.into();
+            assert!(serde_json::from_value::<RuntimeManifest>(manifest).is_err());
+            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
+            probe[key] = value.into();
+            assert!(serde_json::from_value::<ProbeResult>(probe).is_err());
+        }
     }
     #[test]
     fn manifest_artifacts_allow_256_paths_within_both_serialized_budgets() {
@@ -2847,7 +3000,7 @@ mod tests {
             serde_json::json!({"id":record.manifest.engine_id,
                 "engine":record.manifest.display_name,"server":"openai-v1",
                 "availability":availability,"options":options,"managed_version":null,
-                "kind":"external-process","capabilities":{"benchmark":"unsupported",
+                "kind":"external-process","capabilities":{"benchmark":"openai-chat-serving@1",
                     "deep_verification":"unsupported","portable":"unsupported"}})
         }
 

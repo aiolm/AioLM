@@ -39,15 +39,17 @@ export function buildChatRequestBody(
     }
     const selectedLora = engine.provider === 'vllm' && typeof sampling.provider_options?.request_lora === 'string' ? sampling.provider_options.request_lora : undefined;
     return { ...fields, model: selectedLora || (sampling.provider_options === undefined ? engine.request_lora : undefined) || engine.upstream_model,
-      messages, stream: true, stream_options: { include_usage: true },
+      messages, stream: true,
+      ...(fields.stream_options === undefined && engine.stream_usage_supported === true
+        ? { stream_options: { include_usage: true } } : {}),
       ...(sampling.tools?.length ? { tools: sampling.tools } : {}) };
   }
   const options = mapChatOptionAliases(sampling.options ?? {});
-  const streamOptions = asJsonObject(options.stream_options) ?? {};
   const body: ChatRequestBody = {
     ...options,
     timings_per_token: options.timings_per_token ?? true,
-    stream_options: { ...streamOptions, include_usage: streamOptions.include_usage ?? true },
+    ...(options.stream_options === undefined && sampling.engine?.stream_usage_supported === true
+      ? { stream_options: { include_usage: true } } : {}),
     model,
     messages,
     stream: true,

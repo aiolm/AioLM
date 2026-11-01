@@ -4,7 +4,9 @@
 
 [Documentation](docs/README.md) — installation, usage guides and reference. The documentation describes the current source; a published release may not include the latest changes yet.
 
-AioLM (All-in-One LM) is a desktop app for Windows, macOS and Linux that finds, runs and compares local language models. It manages llama.cpp runtimes, vLLM on Linux or Apple Silicon macOS (via vllm-metal), and MLX on Apple Silicon macOS, and can connect other local engines that serve an OpenAI-compatible API. See [inference runtimes](docs/reference/inference-runtimes.md) for platform and model-format details.
+AioLM (All-in-One LM) is a desktop GUI adapter for Windows, macOS and Linux, not an inference engine. It finds, runs and compares local language models through llama.cpp, vLLM on Linux or Apple Silicon macOS (via vllm-metal), MLX on Apple Silicon macOS, and other connected engines serving an OpenAI-compatible API. See [inference runtimes](docs/reference/inference-runtimes.md) for platform and model-format details.
+
+All connected text-streaming engines use the same API benchmark (`openai-chat-serving@1`), history, exports, sharing and management. Timing and output bytes are client-observed; token and cache counters are engine-reported and may remain unknown. Inputs are UTF-8 bytes, not tokens; the output-token request cap is not a forced output length. Launch profiles are preserved and cache is measured as configured, not guaranteed cold. Defaults are 4096/16384 input bytes, output cap 128, concurrency 1/2/4, one repetition, warmup enabled and optional usage requests disabled. See [benchmarks](docs/reference/benchmarks.md).
 
 ## Features
 

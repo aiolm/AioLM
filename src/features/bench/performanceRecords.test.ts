@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { PerformanceBenchmarkRow } from '../../shared/api/types.ts';
+import type { LegacyPerformanceBenchmarkRow as PerformanceBenchmarkRow } from '../../shared/api/types.ts';
 import { benchmarkReport } from './benchmarkReport';
 import { performanceMarkdown } from './performanceMarkdown';
 import {
   PERFORMANCE_HISTORY_KEY, performanceCsv, readPerformanceHistory, savePerformanceRecord,
-  summarizePerformanceRows, type PerformanceBenchmarkRecord,
+  summarizePerformanceRows, type LegacyPerformanceBenchmarkRecord as PerformanceBenchmarkRecord,
 } from './performanceRecords.ts';
 
 function row(overrides: Partial<PerformanceBenchmarkRow> = {}): PerformanceBenchmarkRow {
@@ -139,7 +139,6 @@ describe('performance history and export', () => {
     expect(performanceMarkdown(cancelled, 'en')).toBe('');
     expect(csv).not.toMatch(/C:|private|models\/|cannot load|--ctx-size|run_id|effective_args|sha256|perf-1/);
     for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(lines[0].split(',').length);
-    expect(lines[0].split(',')).toHaveLength(18);
     expect(csv).not.toContain('undefined');
     expect(csv).not.toContain('NaN');
   });
@@ -160,8 +159,8 @@ describe('performance history and export', () => {
     expect(benchmarkReport([cancelled, empty]).rows).toHaveLength(1);
     expect(performanceCsv([cancelled, empty])).not.toContain('16384');
     const markdown = performanceMarkdown(cancelled, 'en');
-    expect(markdown).toContain('| 1,024 / 128 |');
-    expect(markdown).not.toContain('16,384');
+    expect(markdown).toContain('1024');
+    expect(markdown).not.toContain('16384');
     expect(markdown).toContain('N/A'); // Genuine missing RAM is still represented honestly.
     expect(cancelled.result.rows).toHaveLength(2);
   });
@@ -184,13 +183,16 @@ describe('performance history and export', () => {
     const report = benchmarkReport([saved]);
     expect(report.rows).toHaveLength(3);
     const [single, batch, failure] = report.rows;
-    expect(single.slice(4, 12)).toEqual([1024, 128, 1, 2, 100, 10, 10240, 100]);
-    expect(single[12]).toBeCloseTo(Math.sqrt(800));
-    expect(single[14]).toBe(1.37);
-    expect(single[16]).toBe(2);
-    expect(batch[13]).toBe(1.8);
-    expect(failure.slice(8, 17)).toEqual(Array(9).fill(null));
-    expect(failure[17]).toBe('Failed');
+    const value = (values: typeof single, key: string) => values[report.columns.findIndex(column => column.key === key)];
+    expect(value(single, 'legacy.prompt_tokens')).toBe(1024);
+    expect(value(single, 'samples')).toBe(2);
+    expect(value(single, 'legacy.tg_tps')).toBe(100);
+    expect(value(single, 'legacy.tg_stddev')).toBeCloseTo(Math.sqrt(800));
+    expect(value(single, 'legacy.e2e_seconds')).toBe(1.37);
+    expect(value(single, 'legacy.peak_memory_gib')).toBe(2);
+    expect(value(batch, 'legacy.speedup')).toBe(1.8);
+    for (const key of ['legacy.ttft_ms', 'legacy.tpot_ms', 'legacy.pp_tps', 'legacy.tg_tps', 'legacy.e2e_seconds', 'legacy.peak_memory_gib']) expect(value(failure, key)).toBeNull();
+    expect(value(failure, 'status')).toBe('Failed');
     expect(performanceCsv([saved]).trim().split('\r\n')).toHaveLength(4);
   });
 

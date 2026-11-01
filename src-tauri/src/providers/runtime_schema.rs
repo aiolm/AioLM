@@ -120,6 +120,8 @@ pub enum HelpState {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct EffectiveSchema {
     pub schema: OptionSchema,
+    /// Canonical public names, excluding every member of an identity collision.
+    pub benchmark_names: BTreeMap<String, String>,
     /// Subcommand scope the accepted help describes.
     pub scope: Vec<String>,
     pub help_state: HelpState,
@@ -604,7 +606,7 @@ pub(crate) fn adapter_source(engine: &str, revision: &str) -> Source {
     }
 }
 
-fn documented<T>(value: T, source: &Source) -> Fact<T> {
+pub(crate) fn documented<T>(value: T, source: &Source) -> Fact<T> {
     Fact {
         value: Some(value),
         certainty: Certainty::Documented,
@@ -612,7 +614,7 @@ fn documented<T>(value: T, source: &Source) -> Fact<T> {
     }
 }
 
-fn blank(key: &str, group: &str, target: Target) -> OptionDefinition {
+pub(crate) fn blank(key: &str, group: &str, target: Target) -> OptionDefinition {
     OptionDefinition {
         key: key.into(),
         scope: Vec::new(),
@@ -632,6 +634,9 @@ fn blank(key: &str, group: &str, target: Target) -> OptionDefinition {
         restart_required: Fact::default(),
         sensitive: Fact::default(),
         local_path: Fact::default(),
+        benchmark_public: Fact::default(),
+        benchmark_name: Fact::default(),
+        benchmark_role: Fact::default(),
         managed: None,
         raw_spans: Vec::new(),
     }
@@ -1138,6 +1143,221 @@ fn current_identity(
     }
 }
 
+/// Privacy is a final merge invariant, not a user-overridable annotation.
+fn lock_private_benchmark_options(schema: &mut OptionSchema) {
+    let source = adapter_source("aiolm", "benchmark-privacy-v1");
+    for option in &mut schema.options {
+        if private_benchmark_option(option) {
+            option.benchmark_public = documented(false, &source);
+        }
+    }
+}
+
+fn private_benchmark_option(option: &OptionDefinition) -> bool {
+    option.sensitive.value == Some(true)
+        || option.local_path.value == Some(true)
+        || matches!(
+            option.managed,
+            Some(
+                ManagedBinding::Model
+                    | ManagedBinding::Host
+                    | ManagedBinding::Port
+                    | ManagedBinding::Authentication
+                    | ManagedBinding::EntryPoint
+                    | ManagedBinding::Reserved
+            )
+        )
+}
+
+/// Exclude all keys in a collision rather than choosing a local-key winner.
+pub fn benchmark_names(schema: &OptionSchema) -> BTreeMap<String, String> {
+    use super::runtime_options::{benchmark_identifier, public_setting_name};
+    let mut identities: BTreeMap<(&str, &[String], &str), Vec<&str>> = BTreeMap::new();
+    for option in &schema.options {
+        if private_benchmark_option(option)
+            || option.benchmark_public.supported() != Some(&true)
+            || option.scope.len() > 8
+            || !option.scope.iter().all(|s| benchmark_identifier(s))
+        {
+            continue;
+        }
+        if let Some(name) = public_setting_name(option) {
+            identities
+                .entry((
+                    if option.target == Target::Launch {
+                        "launch"
+                    } else {
+                        "request"
+                    },
+                    &option.scope,
+                    name,
+                ))
+                .or_default()
+                .push(&option.key);
+        }
+    }
+    identities
+        .into_iter()
+        .filter(|(_, keys)| keys.len() == 1)
+        .map(|((_, _, name), keys)| (keys[0].to_owned(), name.to_owned()))
+        .collect()
+}
+
+#[derive(Debug)]
+pub(crate) struct CapturedBenchmarkSettings {
+    pub settings: Vec<crate::benchmark::provenance::RecordedSetting>,
+    pub omitted: bool,
+}
+
+fn public_capture_value(option: &OptionDefinition, values: &[Value]) -> Option<Value> {
+    let safe_scalar = |value: &Value| match (option.kind.supported(), value) {
+        (Some(ValueKind::Boolean), Value::Bool(_)) => true,
+        (Some(ValueKind::Integer | ValueKind::Number), Value::Number(n)) => {
+            n.as_f64().is_some_and(f64::is_finite)
+        }
+        (Some(ValueKind::Text), Value::String(text)) => {
+            !text.is_empty()
+                && text.chars().count() <= 128
+                && !text.starts_with('-')
+                && !text.chars().any(|c| c.is_control() || "\\/:@".contains(c))
+        }
+        _ => false,
+    };
+    if values.len() == 1 {
+        let value = &values[0];
+        if safe_scalar(value) {
+            return Some(value.clone());
+        }
+        if matches!(option.kind.supported(), Some(ValueKind::Json))
+            && value.as_array().is_some_and(|items| {
+                items.len() <= 64 && items.iter().all(|v| v.as_f64().is_some_and(f64::is_finite))
+            })
+        {
+            return Some(value.clone());
+        }
+    }
+    if values.len() > 1
+        && values.len() <= 64
+        && matches!(
+            option.kind.supported(),
+            Some(ValueKind::Integer | ValueKind::Number)
+        )
+        && values
+            .iter()
+            .all(|value| value.as_f64().is_some_and(f64::is_finite))
+    {
+        return Some(Value::Array(values.to_vec()));
+    }
+    None
+}
+
+/// Recognize raw identities only; conversion consumes the already masked copy.
+/// `request_slots` reserves the authoritative common request entries first.
+pub(crate) fn capture_benchmark_settings(
+    effective: &EffectiveSchema,
+    raw: &[String],
+    sanitized: &[String],
+    request_slots: usize,
+) -> Result<CapturedBenchmarkSettings, String> {
+    use super::runtime_ordered::{capture_plan_for_entry, CapturedValue};
+    let occurrences = capture_plan_for_entry(
+        &effective.schema,
+        &effective.scope,
+        effective.entry.as_ref(),
+        raw,
+        sanitized,
+    )?;
+    let mut grouped: BTreeMap<&str, Vec<&super::runtime_ordered::CapturedOccurrence>> =
+        BTreeMap::new();
+    let mut omitted = false;
+    for occurrence in &occurrences {
+        if effective.benchmark_names.contains_key(&occurrence.key) {
+            grouped.entry(&occurrence.key).or_default().push(occurrence);
+        } else {
+            omitted = true;
+        }
+    }
+    let mut settings = Vec::with_capacity(grouped.len().min(128));
+    for (key, occurrences) in grouped {
+        let Some(option) = effective
+            .schema
+            .options
+            .iter()
+            .find(|option| option.key == key)
+        else {
+            continue;
+        };
+        if private_benchmark_option(option)
+            || option.benchmark_public.supported() != Some(&true)
+            || option.target != Target::Launch
+        {
+            omitted = true;
+            continue;
+        }
+        let last = occurrences.last().expect("group has an occurrence");
+        let value = if occurrences.len() > 1 && option.repeatable.supported() == Some(&true) {
+            let mut numbers = Vec::new();
+            let mut known = true;
+            for occurrence in &occurrences {
+                match &occurrence.state {
+                    CapturedValue::Known(values)
+                        if values
+                            .iter()
+                            .all(|v| v.as_f64().is_some_and(f64::is_finite)) =>
+                    {
+                        numbers.extend(values.iter().cloned())
+                    }
+                    _ => {
+                        known = false;
+                        break;
+                    }
+                }
+            }
+            if known && !numbers.is_empty() && numbers.len() <= 64 {
+                Value::Array(numbers)
+            } else {
+                Value::Null
+            }
+        } else if occurrences.len() > 1 && option.repeatable.supported().is_none() {
+            Value::Null
+        } else {
+            match &last.state {
+                CapturedValue::Known(values) => {
+                    public_capture_value(option, values).unwrap_or(Value::Null)
+                }
+                CapturedValue::Redacted | CapturedValue::Invalid => Value::Null,
+            }
+        };
+        let unit = option
+            .unit
+            .supported()
+            .filter(|unit| {
+                [
+                    "tokens", "bytes", "MiB", "GiB", "threads", "layers", "count", "ratio", "bits",
+                    "percent",
+                ]
+                .contains(&unit.as_str())
+            })
+            .cloned();
+        settings.push(crate::benchmark::provenance::RecordedSetting {
+            target: "launch".into(),
+            scope: option.scope.clone(),
+            name: effective.benchmark_names[key].clone(),
+            value,
+            unit,
+            role: option
+                .benchmark_role
+                .supported()
+                .map(|role| role.as_str().to_owned()),
+        });
+    }
+    settings.sort_by(|a, b| (&a.target, &a.scope, &a.name).cmp(&(&b.target, &b.scope, &b.name)));
+    let available = 128usize.saturating_sub(request_slots);
+    omitted |= settings.len() > available;
+    settings.truncate(available);
+    Ok(CapturedBenchmarkSettings { settings, omitted })
+}
+
 /// The one schema the settings UI renders and launch resolves for `cfg`.
 /// `verify` recomputes the accepted help identity (hashing the executable and
 /// artifacts); views that only display may skip it.
@@ -1341,9 +1561,12 @@ fn build_effective(
                 .collect();
         }
     }
+    lock_private_benchmark_options(&mut schema);
+    let benchmark_names = benchmark_names(&schema);
     schema.validate()?;
     Ok(EffectiveSchema {
         schema,
+        benchmark_names,
         scope,
         help_state,
         help_detail,
@@ -2570,6 +2793,166 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn benchmark_projection_locks_private_bindings_and_excludes_all_name_collisions() {
+        let source = adapter_source("synthetic.adapter", "r1");
+        let mut options = Vec::new();
+        for (key, flag) in [
+            ("alpha", "--alpha"),
+            ("beta", "--beta"),
+            ("safe", "--safe"),
+            ("secret", "--secret"),
+            ("path", "--path"),
+            ("model", "--model"),
+            ("host", "--host"),
+            ("port", "--port"),
+            ("auth", "--auth"),
+            ("entry", "--entry"),
+        ] {
+            let mut option = blank(key, "test", Target::Launch);
+            option.spellings.push(Spelling {
+                flag: flag.into(),
+                style: ValueStyle::Separate,
+                polarity: None,
+            });
+            option.kind = documented(ValueKind::Integer, &source);
+            option.arity = documented(
+                Arity {
+                    min: 1,
+                    max: Some(1),
+                },
+                &source,
+            );
+            option.repeatable = documented(false, &source);
+            option.benchmark_public = documented(true, &source);
+            if ["alpha", "beta"].contains(&key) {
+                option.benchmark_name = documented("collision".into(), &source);
+            }
+            match key {
+                "secret" => option.sensitive = documented(true, &source),
+                "path" => option.local_path = documented(true, &source),
+                "model" => option.managed = Some(ManagedBinding::Model),
+                "host" => option.managed = Some(ManagedBinding::Host),
+                "port" => option.managed = Some(ManagedBinding::Port),
+                "auth" => option.managed = Some(ManagedBinding::Authentication),
+                "entry" => option.managed = Some(ManagedBinding::EntryPoint),
+                _ => {}
+            }
+            options.push(option);
+        }
+        let mut schema = OptionSchema {
+            schema_version: SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: "custom.example".into(),
+                runtime: "build-1".into(),
+                fingerprint: "a".repeat(64),
+            },
+            options,
+            constraints: vec![],
+            raw_help: vec![],
+            end_of_options: Fact::default(),
+        };
+        lock_private_benchmark_options(&mut schema);
+        assert_eq!(
+            benchmark_names(&schema),
+            BTreeMap::from([("safe".into(), "safe".into())])
+        );
+        for option in &schema.options[3..] {
+            assert_eq!(
+                option.benchmark_public.supported(),
+                Some(&false),
+                "{}",
+                option.key
+            );
+        }
+        // Neither a scoped twin nor a distinct target is a collision.
+        schema.options[1].scope = vec!["serve".into()];
+        assert!(benchmark_names(&schema).contains_key("alpha"));
+        assert!(benchmark_names(&schema).contains_key("beta"));
+    }
+
+    #[test]
+    fn benchmark_capture_reserves_request_slots_and_never_invents_omitted_defaults() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-benchmark-capture-{}", uuid::Uuid::new_v4()));
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "synthetic".into(),
+            ..Default::default()
+        };
+        let effective = effective(&root, &cfg, false).unwrap();
+        let empty = capture_benchmark_settings(&effective, &[], &[], 3).unwrap();
+        assert!(empty.settings.is_empty());
+        let raw = [
+            "server",
+            "--threads",
+            "4",
+            "--ctx-size",
+            "8192",
+            "--parallel",
+            "2",
+        ]
+        .map(str::to_owned);
+        let captured = capture_benchmark_settings(&effective, &raw, &raw, 127).unwrap();
+        assert!(captured.omitted);
+        assert_eq!(captured.settings.len(), 1);
+        assert_eq!(captured.settings[0].name, "ctx-size");
+        let mut sanitized = raw.clone();
+        sanitized[1] = "[REDACTED]".into();
+        let captured = capture_benchmark_settings(&effective, &raw, &sanitized, 3).unwrap();
+        assert_eq!(
+            captured
+                .settings
+                .iter()
+                .find(|s| s.name == "threads")
+                .unwrap()
+                .value,
+            Value::Null
+        );
+        let mut collision = effective.clone();
+        let source = adapter_source("synthetic.adapter", "r1");
+        for option in &mut collision.schema.options {
+            if ["threads", "parallel"].contains(&option.key.as_str()) {
+                option.benchmark_name = documented("shared".into(), &source);
+            }
+        }
+        collision.benchmark_names = benchmark_names(&collision.schema);
+        let captured = capture_benchmark_settings(&collision, &raw, &raw, 3).unwrap();
+        assert!(captured.omitted);
+        assert_eq!(captured.settings.len(), 1);
+        assert_eq!(captured.settings[0].name, "ctx-size");
+    }
+
+    #[test]
+    fn benchmark_values_only_publish_typed_safe_scalars_and_numeric_json_arrays() {
+        let source = adapter_source("synthetic.adapter", "r1");
+        let mut option = blank("private-key", "test", Target::Launch);
+        option.kind = documented(ValueKind::Text, &source);
+        for text in [
+            "--injected",
+            "/local/path",
+            "host:1234",
+            "name@example",
+            "a\\b",
+        ] {
+            assert_eq!(public_capture_value(&option, &[json!(text)]), None);
+        }
+        assert_eq!(
+            public_capture_value(&option, &[json!("fp8")]),
+            Some(json!("fp8"))
+        );
+        option.kind = documented(ValueKind::Integer, &source);
+        assert_eq!(public_capture_value(&option, &[json!(-1)]), Some(json!(-1)));
+        option.kind = documented(ValueKind::Json, &source);
+        assert_eq!(
+            public_capture_value(&option, &[json!([0.6, 0.4])]),
+            Some(json!([0.6, 0.4]))
+        );
+        for value in [json!({"private":"value"}), json!(["text"]), json!(4)] {
+            assert_eq!(public_capture_value(&option, &[value]), None);
+        }
+    }
+
     #[tokio::test]
     async fn entrypoint_help_resume_preserves_the_checked_registration_without_running_a_probe() {
         use registry::{
@@ -3790,6 +4173,8 @@ mod tests {
             engine_id: super::ProviderId::parse(engine).unwrap(),
             runtime_id: runtime.into(),
             display_name: "Synthetic static-prefix engine".into(),
+            public_engine: None,
+            compute_ownership: None,
             platforms: vec![registry::Platform {
                 os: "windows".into(),
                 arch: "x86_64".into(),
@@ -4240,6 +4625,7 @@ mod tests {
                     raw_help: vec![],
                     end_of_options: Fact::default(),
                 },
+                benchmark_names: BTreeMap::new(),
                 scope: vec![],
                 help_state: HelpState::Current,
                 help_detail: String::new(),

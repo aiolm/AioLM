@@ -6,7 +6,6 @@ import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { ensureProfileAssignments } from '../../shared/config/profileAssignments';
 import { executionChanges, executionConfig, settingsForSession } from '../../shared/config/executionSettings';
 import { sessionConfig } from '../../shared/runtime/sessionUtils';
-import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /** The request-level settings one chat send runs with, read from the profile
  * applied to its target. */
@@ -66,8 +65,7 @@ export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult
     if (!entry) throw new Error('This profile is no longer available.');
     const savedRevision = latest.entries.find(profile => profile.id === entry.id)?.revision ?? 0;
     const benchmark = edit.saveMode === 'benchmark';
-    const saved = saveSettingsProfile(entry, profileApplicationConfig(application), application.system_prompt,
-      benchmark ? BENCHMARK_CONTROLLED_KEYS : undefined, benchmark);
+    const saved = saveSettingsProfile(entry, profileApplicationConfig(application), application.system_prompt, benchmark);
     saved.revision = Math.max(entry.revision, savedRevision + 1);
     next.entries = next.entries.map(profile => profile.id === saved.id ? saved : profile);
     application = { ...application, profile_name: saved.name, profile_revision: saved.revision };

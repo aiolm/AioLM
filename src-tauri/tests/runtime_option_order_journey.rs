@@ -80,6 +80,8 @@ fn manifest(
         engine_id: engine,
         runtime_id: "build-1".into(),
         display_name: "Synthetic order engine".into(),
+        public_engine: None,
+        compute_ownership: None,
         platforms: vec![Platform {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
@@ -181,14 +183,19 @@ async fn spawned_argv(cfg: &AppConfig, argv_file: &Path) -> Vec<String> {
     let _ = fs::remove_file(argv_file);
     let info = providers::execution::info(cfg).unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) = server::spawn(cfg, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(cfg, "synthetic-key", &err, &Default::default(), None).unwrap();
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap();
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let argv = serde_json::from_slice(&fs::read(argv_file).unwrap()).unwrap();

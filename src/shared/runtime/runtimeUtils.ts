@@ -1,5 +1,5 @@
 import { formatRuntimeVersionLabel } from "@aiolm/benchmark-contracts";
-import type { PerformanceBenchmarkResult } from '../api/types.ts';
+import type { LegacyPerformanceBenchmarkResult } from '../api/types.ts';
 
 export type CapabilityState = "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
 
@@ -48,7 +48,7 @@ export function formatRecordedRuntimeVersion(version: string | null | undefined,
 }
 
 /** Historical Python results keep their measured core/plugin identity. */
-export function formatBenchmarkRuntimeVersion(result: Pick<PerformanceBenchmarkResult, 'provider' | 'runtime_version' | 'runtime_variant' | 'runtime_plugin_version'>, build: string, unavailable: string): string {
+export function formatBenchmarkRuntimeVersion(result: Pick<LegacyPerformanceBenchmarkResult, 'provider' | 'runtime_version' | 'runtime_variant' | 'runtime_plugin_version'>, build: string, unavailable: string): string {
   if (!result.provider || result.provider === 'llama.cpp') return formatRecordedRuntimeVersion(result.runtime_version, build, unavailable);
   return formatRuntimeVersionLabel({ name: result.provider, version: result.runtime_version,
     variant: result.runtime_variant, plugin_version: result.runtime_plugin_version }) ?? unavailable;

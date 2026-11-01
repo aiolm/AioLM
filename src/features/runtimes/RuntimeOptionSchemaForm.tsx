@@ -190,6 +190,8 @@ export interface SchemaOptionFieldProps {
   option: OptionSchemaDefinition;
   stored: unknown;
   disabled: boolean;
+  /** Preserve a saved value while still allowing an explicit clear. */
+  readOnly?: boolean;
   applicable?: boolean;
   /** Label for "no saved value" (e.g. an automatic capability default). */
   inheritLabel?: string;
@@ -207,7 +209,7 @@ export interface SchemaOptionFieldProps {
 }
 
 /** One schema option: the same editor for catalog, manifest and help options. */
-export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, applicable = true, inheritLabel, hint, validationDescription, onStore, onInvalid, rowSpellings, onRowSpelling, onConfirmSyntax }: SchemaOptionFieldProps) {
+export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, readOnly = false, applicable = true, inheritLabel, hint, validationDescription, onStore, onInvalid, rowSpellings, onRowSpelling, onConfirmSyntax }: SchemaOptionFieldProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const id = useId();
@@ -225,7 +227,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const current = readStored(stored);
   const arity = supported(option.arity);
   const repeatable = supported(option.repeatable) === true;
-  const locked = disabled || !applicable || !!option.managed;
+  const locked = disabled || readOnly || !applicable || !!option.managed;
   const spellings = option.spellings.filter(spelling => spelling.polarity === undefined || spelling.polarity === null);
   const invalidCells = useRef(new Set<string>());
   const report = (cell: string, invalid: boolean) => {
@@ -260,6 +262,10 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const help = (
     <>
       {hint && <small>{hint}</small>}
+      {readOnly && !option.managed && stored !== undefined && (
+        <button type="button" className="app-button app-button--secondary" disabled={disabled}
+          onClick={() => onStore(undefined)}>{copy.useDefault}</button>
+      )}
       {option.help && <p id={helpId} className="app-section-hint">{option.help}</p>}
       {!applicable && <p className="app-section-hint">{copy.notApplicable}</p>}
       {onConfirmSyntax && syntaxUnknown && <ConfirmSyntax option={option} name={name} disabled={disabled} copy={copy} onConfirm={onConfirmSyntax} />}
@@ -320,7 +326,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
         {explicitEmpty ? (
           <span className="schema-option__value">
             <span>{copy.emptySet}</span>
-            <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>
+            {!readOnly && <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>}
           </span>
         ) : (
           <SingleValue option={option} value={value} label={name} disabled={locked} copy={copy} describedBy={describedBy} validationDescription={validationDescription}
@@ -381,7 +387,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
         <button type="button" className="app-button app-button--secondary" disabled={locked}
           onClick={() => store([...rows, emptyRow()])}>{copy.addOccurrence}</button>
       )}
-      {rows.length > 0 && (
+      {!readOnly && rows.length > 0 && (
         <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>
       )}
       {aliasSelect}
@@ -617,6 +623,7 @@ export interface RuntimeOptionSchemaFormProps {
   /** Embedded hosts can provide their own message when a category has no options. */
   showNoMatch?: boolean;
   filter?: (option: OptionSchemaDefinition) => boolean;
+  readOnlyForOption?: (option: OptionSchemaDefinition) => boolean;
   inheritLabel?: (option: OptionSchemaDefinition) => string | undefined;
   hint?: (option: OptionSchemaDefinition) => string | undefined;
   onInvalid?: (key: string, invalid: boolean) => void;
@@ -631,7 +638,7 @@ export interface RuntimeOptionSchemaFormProps {
 interface ImportRequestOwner { schema: OptionSchema; scopeKey: string; text: string }
 
 /** Generic runtime-scoped option renderer, validator and argv preview. */
-export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, inheritLabel, hint, onInvalid, validationDescriptions, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
+export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, readOnlyForOption, inheritLabel, hint, onInvalid, validationDescriptions, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const formId = useId();
@@ -723,7 +730,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
 
   const fields = (showAll ? visible : visible.slice(0, limit)).map((option, index) => (
     <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
-      <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} applicable={isApplicable(option, scope)}
+      <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} readOnly={readOnlyForOption?.(option)} applicable={isApplicable(option, scope)}
         inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} validationDescription={issueDescriptions.get(option.key)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
         rowSpellings={rowSpellings.get(option.key)}
         onRowSpelling={order.ok ? (row, flag) => onChange(setOccurrenceSpelling(schema, values, option.key, row, flag)) : undefined}
@@ -784,7 +791,11 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
             <button type="button" className="app-button app-button--secondary" disabled={disabled}
               onClick={() => {
                 if (!acceptedImport || !ownsImport(acceptedImport.request)) return;
-                try { onChange(applyPlan(schema, values, acceptedImport.result)); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof JsonOptionNumberError ? copy.jsonNumberRange : cause instanceof Error ? cause.message : String(cause) }); }
+                const plan = readOnlyForOption ? acceptedImport.result.plan.filter(item => {
+                  const option = schema.options.find(option => option.key === item.key);
+                  return !option || !readOnlyForOption(option);
+                }) : acceptedImport.result.plan;
+                try { onChange(applyPlan(schema, values, { plan })); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof JsonOptionNumberError ? copy.jsonNumberRange : cause instanceof Error ? cause.message : String(cause) }); }
               }}>{copy.apply}</button>
           )}
         </div>

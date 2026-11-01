@@ -172,6 +172,29 @@ pub struct RuntimeDefault {
     pub literal: Value,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BenchmarkRole {
+    #[serde(rename = "context.total_tokens")]
+    ContextTotalTokens,
+    #[serde(rename = "context.per_sequence_tokens")]
+    ContextPerSequenceTokens,
+    #[serde(rename = "context.per_request_kv_tokens")]
+    ContextPerRequestKvTokens,
+    #[serde(rename = "concurrency.capacity")]
+    ConcurrencyCapacity,
+}
+
+impl BenchmarkRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ContextTotalTokens => "context.total_tokens",
+            Self::ContextPerSequenceTokens => "context.per_sequence_tokens",
+            Self::ContextPerRequestKvTokens => "context.per_request_kv_tokens",
+            Self::ConcurrencyCapacity => "concurrency.capacity",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptionDefinition {
@@ -212,6 +235,12 @@ pub struct OptionDefinition {
     pub sensitive: Fact<bool>,
     #[serde(default)]
     pub local_path: Fact<bool>,
+    #[serde(default)]
+    pub benchmark_public: Fact<bool>,
+    #[serde(default)]
+    pub benchmark_name: Fact<String>,
+    #[serde(default)]
+    pub benchmark_role: Fact<BenchmarkRole>,
     #[serde(default)]
     pub managed: Option<ManagedBinding>,
     #[serde(default)]
@@ -506,6 +535,17 @@ impl OptionSchema {
             sources.fact(&option.restart_required)?;
             sources.fact(&option.sensitive)?;
             sources.fact(&option.local_path)?;
+            sources.fact(&option.benchmark_public)?;
+            sources.fact(&option.benchmark_name)?;
+            sources.fact(&option.benchmark_role)?;
+            if option
+                .benchmark_name
+                .value
+                .as_ref()
+                .is_some_and(|name| !benchmark_identifier(name))
+            {
+                return Err(format!("{}: invalid benchmark setting name", option.key));
+            }
             for span in &option.raw_spans {
                 sources.source(span)?;
             }
@@ -846,6 +886,41 @@ impl<'a> ValidatedSchema<'a> {
     }
 }
 
+/// Wire identifiers deliberately exclude local keys, paths and flag prefixes.
+pub fn benchmark_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// One canonical spelling shared by capture and destination profile matching.
+pub fn public_setting_name(option: &OptionDefinition) -> Option<&str> {
+    if let Some(name) = option
+        .benchmark_name
+        .supported()
+        .filter(|name| benchmark_identifier(name))
+    {
+        return Some(name);
+    }
+    if option.target == Target::Request {
+        return option
+            .request_field
+            .supported()
+            .filter(|name| benchmark_identifier(name))
+            .map(String::as_str);
+    }
+    option
+        .spellings
+        .iter()
+        .filter(|s| s.polarity != Some(false))
+        .filter_map(|s| s.flag.strip_prefix("--"))
+        .filter(|name| !name.starts_with("no-") && benchmark_identifier(name))
+        .min()
+}
+
 impl OptionDefinition {
     pub(crate) fn scalar(&self, value: &Value) -> Result<String, String> {
         let valid = match self.kind.supported() {
@@ -1036,6 +1111,36 @@ mod tests {
             raw_help: vec![],
             end_of_options: Fact::default(),
         }
+    }
+
+    #[test]
+    fn public_setting_names_use_supported_metadata_then_ascii_positive_long_aliases() {
+        let mut option = option("machine-local-key", ValueKind::Integer, 1, Some(1));
+        option.spellings = ["-t", "--zeta", "--alpha", "--no-beta"]
+            .into_iter()
+            .map(|flag| Spelling {
+                flag: flag.into(),
+                style: ValueStyle::Separate,
+                polarity: None,
+            })
+            .collect();
+        assert_eq!(public_setting_name(&option), Some("alpha"));
+        option.benchmark_name = Fact {
+            value: Some("unconfirmed".into()),
+            ..Default::default()
+        };
+        assert_eq!(public_setting_name(&option), Some("alpha"));
+        option.benchmark_name = known("declared.name".into());
+        assert_eq!(public_setting_name(&option), Some("declared.name"));
+        option.benchmark_name = Fact::default();
+        option.spellings.truncate(1);
+        assert_eq!(public_setting_name(&option), None);
+        option.target = Target::Request;
+        option.request_field = known("stream_options.include_usage".into());
+        assert_eq!(
+            public_setting_name(&option),
+            Some("stream_options.include_usage")
+        );
     }
 
     fn selected(rows: &[(&str, Vec<Vec<Value>>)]) -> Overrides {

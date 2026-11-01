@@ -11,12 +11,15 @@ import { useModelSettings, type ModelSettingsContext } from "../model-settings/M
 import { testConfig } from '../../testing/appStore';
 import { materializeProfileApplication, MODEL_PROFILE_KEYS, profileSettingsSnapshot, profileTargetKey, type SettingsProfile } from '../../shared/config/settingsProfiles';
 
+import { effectiveSchema } from '../../testing/effectiveSchema';
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => ({
   deviceProfile: vi.fn(), onPerformanceBenchmarkProgress: vi.fn(), runPerformanceBench: vi.fn(), benchCancel: vi.fn(),
   sessionList: vi.fn(async () => []), normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []), sessionStop: vi.fn(async () => undefined),
   sessionSummaryList: vi.fn(async () => []),
+  isNativeRuntimeAvailable: () => false,
+  providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn(async () => effectiveSchema([])),
 }));
 
 const cfg = { active_model: "C:/models/test.gguf", active_backend: "cpu", active_build: "b1", iters: 3, runtime_defaults: [] } as unknown as api.AppConfig;
@@ -26,10 +29,39 @@ const unlisten = vi.fn();
 const mocked = vi.mocked(api);
 
 function row(overrides: Partial<api.PerformanceBenchmarkRow> = {}): api.PerformanceBenchmarkRow {
-  return { id: "single-4096-1", prompt_tokens: 4096, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0, ttft_ms: 100, tpot_ms: 10, pp_tps: 40960, tg_tps: 100, e2e_ms: 1380, total_tps: 92.8, peak_memory_bytes: null, timing_source: "client", ...overrides };
+  return { id: "single-4096-1", input_bytes: 4096, max_output_tokens: 128, concurrency: 1, repetition: 1,
+    first_output_ms: 50, first_content_ms: 100, first_reasoning_ms: 50, e2e_ms: 200,
+    content_bytes: 6, reasoning_bytes: 6, output_bytes: 12, reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null,
+    usage_status: 'missing', finish_reasons: ['not_reported'], peak_memory_bytes: null, timing_source: 'client', failed: false, ...overrides };
 }
 function result(runId: string, rows: api.PerformanceBenchmarkRow[] = [], status: api.PerformanceBenchmarkResult["status"] = "complete"): api.PerformanceBenchmarkResult {
-  return { run_id: runId, rows, status, args: ["-m", cfg.active_model], runtime_version: "llama-test", context_size: 32768, parallel: 4 };
+  const request = mocked.runPerformanceBench.mock.calls.find(([, request]) => request.run_id === runId)?.[1]
+    ?? { run_id: runId, method: { id: 'openai-chat-serving', version: 1 }, context_profile: 'code_python', prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false } satisfies api.PerformanceBenchmarkRequest;
+  const measurements = status === 'complete' ? request.prompt_bytes.flatMap(bytes => request.concurrencies.flatMap(concurrency =>
+    Array.from({ length: request.repetitions }, (_, i) => rows.find(row => row.input_bytes === bytes && row.concurrency === concurrency && row.repetition === i + 1)
+      ?? row({ id: `${bytes}/${concurrency}/${i + 1}`, input_bytes: bytes, concurrency, repetition: i + 1, max_output_tokens: request.max_output_tokens, finish_reasons: Array.from({ length: concurrency }, () => 'not_reported') })))) : rows;
+  return { run_id: runId, rows: measurements, status, args: ["-m", cfg.active_model], provenance: {
+    schema_version: 2, app_version: '0.3.5', method: request.method, recorded_model_label: 'test.gguf',
+    workload: { corpus: request.context_profile, corpus_version: 1, inputs: request.prompt_bytes.map(bytes => ({ bytes, sha256: 'a'.repeat(64) })),
+      max_output_tokens: request.max_output_tokens, concurrencies: request.concurrencies, repetitions: request.repetitions, warmup: request.warmup, request_usage: request.request_usage, cache_policy: 'as_configured' },
+    runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
+    model: { format: 'unknown', status: 'unidentified', sha256: null, size_bytes: null },
+    environment: { scope: 'aiolm_host', os: 'test', arch: 'arm64', cpu: { name: 'Synthetic CPU', logical_cores: 8 }, installed_gpus: [],
+      execution: { mode: 'unknown', selected_gpus: [], devices: [], selection_complete: false }, detection: 'fixture' },
+    execution: { topology: 'attached', memory_scope: 'unavailable', settings: [
+      { target: 'request', scope: [], name: 'max_tokens', value: request.max_output_tokens, unit: 'tokens', role: null },
+      { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
+      ...(request.request_usage ? [{ target: 'request' as const, scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null }] : []),
+      { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
+    ] },
+  } };
+}
+function legacyRow(overrides: Partial<api.LegacyPerformanceBenchmarkRow> = {}): api.LegacyPerformanceBenchmarkRow {
+  return { id: 'legacy', prompt_tokens: 4096, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0,
+    ttft_ms: 100, tpot_ms: 10, pp_tps: 40960, tg_tps: 100, e2e_ms: 1380, total_tps: 92.8, peak_memory_bytes: null, timing_source: 'client', ...overrides };
+}
+function legacyResult(runId: string, rows = [legacyRow()]): api.LegacyPerformanceBenchmarkResult {
+  return { run_id: runId, rows, status: 'complete', args: [], runtime_version: 'llama-test', context_size: 32768, parallel: 4 };
 }
 function renderPanel(selectedStore = store) {
   return render(<I18nProvider initialLocale="en"><BenchPanel store={selectedStore} /></I18nProvider>);
@@ -62,17 +94,17 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Performance benchmark workflow", () => {
 
-  it('lets a narrow result table reveal its hidden phase columns with the keyboard', async () => {
+  it('lets a narrow serving result table reveal observed metrics with the keyboard', async () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
-    const table = (await screen.findByRole('table', { name: 'Single requests' })).parentElement!;
+    const table = (await screen.findByRole('table', { name: 'API serving results' })).parentElement!;
     Object.defineProperties(table, { clientWidth: { configurable: true, value: 320 }, scrollWidth: { configurable: true, value: 960 } });
     fireEvent(window, new Event('resize'));
     table.focus();
     fireEvent.keyDown(table, { key: 'ArrowRight' });
     expect(table.scrollLeft).toBeGreaterThan(0);
-    expect(within(table).getAllByText('100.0')).toHaveLength(2);
-    expect(within(table).getByText('40960.0')).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: /First observed reasoning/ })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: /Observed output/ })).toBeVisible();
     fireEvent.keyDown(table, { key: 'End' });
     expect(table.scrollLeft).toBe(640);
     fireEvent.keyDown(table, { key: 'Home' });
@@ -82,8 +114,8 @@ describe("Performance benchmark workflow", () => {
   const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null };
 
   it('confirms deletion, selects a remaining result and clears the last result from storage and the screen', async () => {
-    const request: api.PerformanceBenchmarkRequest = { run_id: 'older', context_profile: 'novel_en', prompt_lengths: [4096], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true };
-    const older: PerformanceBenchmarkRecord = { schemaVersion: 1, id: 'older', createdAt: 1, model: 'models/older.gguf', backend: 'cpu', build: 'b1', request, result: result('older', [row()]) };
+    const request: api.LegacyPerformanceBenchmarkRequest = { run_id: 'older', context_profile: 'novel_en', prompt_lengths: [4096], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true };
+    const older: PerformanceBenchmarkRecord = { schemaVersion: 1, id: 'older', createdAt: 1, model: 'models/older.gguf', backend: 'cpu', build: 'b1', request, result: legacyResult('older') };
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([older]));
     const { unmount } = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
@@ -192,12 +224,12 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole('button', { name: "Model settings" }));
     const reopened = vi.mocked(settings.open).mock.calls[1][0];
     expect(reopened.application).toMatchObject({ profile_id: original.profile.id, profile_revision: 2, system_prompt: 'Updated saved prompt' });
-    expect(reopened.config).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
+    expect(reopened.config).toMatchObject({ ngl: 12, ctx_size: 32768, temperature: 1.2 });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
-    expect(runConfig).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
+    expect(runConfig).toMatchObject({ ngl: 12, ctx_size: 32768, temperature: 1.2 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: revised.id, profile_revision: 2 });
     expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual({ ...revised, provider: 'llama.cpp' });
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -216,7 +248,7 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
-    expect(runConfig).toMatchObject({ active_model: original.config.active_model, ngl: 16, ctx_size: 8192, temperature: 0.2 });
+    expect(runConfig).toMatchObject({ active_model: original.config.active_model, ngl: 16, ctx_size: 16384, temperature: 0.7 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: 'profile-fallback' });
     expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(['profile-fallback']);
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -275,21 +307,20 @@ describe("Performance benchmark workflow", () => {
     expect(mocked.sessionStop).not.toHaveBeenCalled();
   });
 
-  it("starts every workload with automatic preparation and allows single-request-only measurements", async () => {
-    renderPanel();
-    expect(screen.getByRole("checkbox", { name: "4K" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "16K" })).toBeChecked();
-    expect(screen.getByRole("spinbutton", { name: "Output tokens" })).toHaveValue(128);
-    expect(screen.getByRole("spinbutton", { name: "Repetitions" })).toHaveValue(1);
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm', 'custom.streaming'] as const)('runs %s through the common request with explicit warmup and optional usage controls', async provider => {
+    const selectedStore = { ...store, cfg: { ...cfg, active_provider: provider, active_runtime: 'synthetic-runtime' } };
+    renderPanel(selectedStore);
     fireEvent.click(screen.getByRole("checkbox", { name: "2×" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "4×" }));
-    expect(screen.queryByRole("switch", { name: "Warm up before measuring" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Warm up before measuring" }));
+    fireEvent.click(screen.getByText('Advanced request options'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Request optional token usage' }));
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
-    expect(mocked.runPerformanceBench.mock.calls[0][0]).toMatchObject(cfg);
-    expect(mocked.runPerformanceBench.mock.calls[0][1]).toMatchObject({ prompt_lengths: [4096, 16384], generation_length: 128, batch_sizes: [], repetitions: 1, context_profile: "code_python", warmup: true });
+    expect(mocked.runPerformanceBench.mock.calls[0][0]).toMatchObject({ active_provider: provider, active_runtime: 'synthetic-runtime' });
+    expect(mocked.runPerformanceBench.mock.calls[0][1]).toMatchObject({ method: { id: 'openai-chat-serving', version: 1 }, prompt_bytes: [4096, 16384], max_output_tokens: 128, concurrencies: [1], repetitions: 1, context_profile: "code_python", warmup: false, request_usage: true });
     await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
-    expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0].result.status).toBe("complete");
+    expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0]).toMatchObject({ schemaVersion: 2, result: { status: 'complete' } });
   });
 
   it('uses the shared dropdown for input content and applies its selected workload', async () => {
@@ -305,18 +336,18 @@ describe("Performance benchmark workflow", () => {
 
   it("prevents invalid workloads and requires the loaded model to unload", async () => {
     const { rerender } = renderPanel();
-    const generation = screen.getByRole("spinbutton", { name: "Output tokens" });
-    fireEvent.change(generation, { target: { value: "4097" } });
+    const generation = screen.getByRole("spinbutton", { name: "Maximum output token request" });
+    fireEvent.change(generation, { target: { value: "65537" } });
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
     expect(generation).toHaveAttribute("aria-invalid", "true");
     fireEvent.change(generation, { target: { value: "128" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Repetitions" }), { target: { value: "0" } });
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
     fireEvent.change(screen.getByRole("spinbutton", { name: "Repetitions" }), { target: { value: "1" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: "4K" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "16K" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "4,096" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "16,384" }));
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "4K" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "4,096" }));
     rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, status: { state: "running" } }} /></I18nProvider>);
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Unload model" }));
@@ -334,13 +365,13 @@ describe("Performance benchmark workflow", () => {
     expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
     await act(async () => { ready(unlisten); });
     const request = mocked.runPerformanceBench.mock.calls[0][1];
-    act(() => emit({ run_id: "another-run", phase: "single", completed: 1, total: 6, row: row({ tg_tps: 999 }) }));
+    act(() => emit({ run_id: "another-run", phase: "single", completed: 1, total: 6, row: row({ first_output_ms: 999 }) }));
     expect(screen.queryByText("999.0")).not.toBeInTheDocument();
     act(() => {
       emit({ run_id: request.run_id, phase: "single", completed: 1, total: 6, row: row() });
       emit({ run_id: request.run_id, phase: "single", completed: 1, total: 6, row: row() });
     });
-    const table = screen.getByRole("table", { name: "Single requests" });
+    const table = screen.getByRole("table", { name: "API serving results" });
     expect(within(table).getAllByRole("row")).toHaveLength(2);
     expect(Number(screen.getByRole("progressbar").getAttribute("value"))).toBeCloseTo(100 / 6);
     await act(async () => finish(result(request.run_id, [row()])));
@@ -360,11 +391,11 @@ describe("Performance benchmark workflow", () => {
     act(() => emit({ run_id: request.run_id, phase: "single", completed: 1, total: 6, row: row() }));
     rerender(page(false));
     expect(mocked.runPerformanceBench).toHaveBeenCalledOnce();
-    expect(screen.getByRole("table", { name: "Single requests" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "API serving results" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel benchmark" }));
     await waitFor(() => expect(mocked.benchCancel).toHaveBeenCalledOnce());
     expect(screen.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
-    const interrupted = row({ id: 'cancelled-batch', concurrency: 2, completion_tokens: 4, error: 'connection closed', tg_tps: null });
+    const interrupted = row({ id: 'cancelled-batch', concurrency: 2, output_bytes: 4, error: 'connection closed' });
     act(() => emit({ run_id: request.run_id, phase: 'batch', completed: 2, total: 6, row: interrupted }));
     expect(screen.queryByRole('table', { name: 'Concurrent requests' })).not.toBeInTheDocument();
     await act(async () => finish(result(request.run_id, [row(), interrupted], "cancelled")));
@@ -383,7 +414,7 @@ describe("Performance benchmark workflow", () => {
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const request = mocked.runPerformanceBench.mock.calls[0][1];
     fireEvent.click(screen.getByRole('button', { name: 'Cancel benchmark' }));
-    await act(async () => finish(result(request.run_id, [row({ completion_tokens: 0, error: 'benchmark cancelled' })], 'cancelled')));
+    await act(async () => finish(result(request.run_id, [], 'cancelled')));
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Export result' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy Markdown' })).not.toBeInTheDocument();
@@ -393,13 +424,37 @@ describe("Performance benchmark workflow", () => {
     expect(getTaskSnapshot().find(task => task.id === 'performance-benchmark-active')?.state).toBe('cancelled');
   });
 
+  it('keeps recorded model, source and runtime identity after the selected model changes', async () => {
+    mocked.runPerformanceBench.mockImplementationOnce(async (_config, request) => {
+      const measured = result(request.run_id, [row()]);
+      measured.provenance!.recorded_model_label = 'Frozen model label';
+      measured.provenance!.runtime = { name: 'sglang', version: 'recorded-version', backend: null, build: 'recorded-build', variant: null, plugin_version: null };
+      measured.provenance!.model = { format: 'hf-safetensors', status: 'unidentified', sha256: null, size_bytes: null, repository: 'example/recorded-model', revision: 'a'.repeat(40) };
+      return measured;
+    });
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await screen.findByRole('button', { name: 'Export result' });
+    rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...cfg, active_model: 'models/replaced.gguf', active_build: 'replacement-build' } }} /></I18nProvider>);
+    expect(screen.getByText('Frozen model label')).toBeVisible();
+    const configuration = screen.getByText('Run configuration').closest('details')!;
+    expect(configuration).toHaveTextContent('recorded-version');
+    expect(configuration).toHaveTextContent('recorded-build');
+    expect(configuration).toHaveTextContent('example/recorded-model');
+    expect(configuration).toHaveTextContent('a'.repeat(40));
+    expect(configuration).not.toHaveTextContent('replacement-build');
+    expect(configuration).not.toHaveTextContent('models/replaced.gguf');
+    expect(configuration).toHaveTextContent('unavailable');
+    expect(screen.getByRole('button', { name: 'Export result' })).toBeEnabled();
+  });
+
   it("keeps successful measurements exportable when history storage is unavailable", async () => {
     renderPanel();
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await screen.findByText("The result could not be saved to history. It remains on this screen and can be exported to a file.");
     expect(screen.getByRole("button", { name: "Export result" })).toBeEnabled();
-    expect(screen.getByRole("table", { name: "Single requests" })).toBeInTheDocument();
+    expect(screen.getAllByRole("table", { name: "API serving results" }).length).toBeGreaterThan(0);
     expect(getTaskSnapshot().find((task) => task.id === "performance-benchmark-active")?.state).toBe("completed");
   });
 
@@ -411,7 +466,7 @@ describe("Performance benchmark workflow", () => {
     await screen.findByText('The result could not be saved to history. It remains on this screen and can be exported to a file.');
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(original);
     expect(screen.getByRole('button', { name: 'Export result' })).toBeEnabled();
-    expect(screen.getByRole('table', { name: 'Single requests' }).querySelector('.performance-metric-primary')).toHaveTextContent('100.0');
+    expect(within(screen.getByRole('table', { name: 'API serving results' })).getAllByText('60.0').length).toBeGreaterThan(0);
   });
 
   it("offers one file export and no redundant history selector for the only current result", async () => {
@@ -485,8 +540,8 @@ describe("Performance benchmark workflow", () => {
   });
 
   it("loads saved results, shows matching speedups, and copies Markdown tables", async () => {
-    const request: api.PerformanceBenchmarkRequest = { run_id: "saved", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 1, context_profile: "novel_ko", warmup: true };
-    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "saved", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: result("saved", [row(), row({ id: "batch", concurrency: 2, completion_tokens: 256, tg_tps: 180 })]) };
+    const request: api.LegacyPerformanceBenchmarkRequest = { run_id: "saved", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 1, context_profile: "novel_ko", warmup: true };
+    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "saved", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: legacyResult("saved", [legacyRow(), legacyRow({ id: "batch", concurrency: 2, completion_tokens: 256, tg_tps: 180 })]) };
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([saved]));
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -500,8 +555,6 @@ describe("Performance benchmark workflow", () => {
     expect(within(screen.getByRole("table", { name: "Single requests" })).getByText("N/A")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Copy Markdown" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    expect(writeText.mock.calls[0][0]).toContain('Single requests');
-    expect(writeText.mock.calls[0][0]).toContain('Concurrent requests');
     expect(writeText.mock.calls[0][0]).toContain('|');
     expect(writeText.mock.calls[0][0]).not.toContain('run_id,created_at,model');
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
@@ -511,7 +564,7 @@ describe("Performance benchmark workflow", () => {
     const saved = (id: string): PerformanceBenchmarkRecord => ({
       schemaVersion: 1, id, createdAt: 1, model: `models/${id}.gguf`, backend: 'cpu', build: 'b1',
       request: { run_id: id, prompt_lengths: [4096], generation_length: 128, batch_sizes: [], repetitions: 1, context_profile: 'novel_ko', warmup: true },
-      result: result(id, [row()]),
+      result: legacyResult(id),
     });
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([saved('first'), saved('second')]));
     let resolve!: () => void;
@@ -557,8 +610,8 @@ describe("Performance benchmark workflow", () => {
   });
 
   it("separates a failed current run from saved success and exports every history record", async () => {
-    const request: api.PerformanceBenchmarkRequest = { run_id: "previous", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 2, context_profile: "code_python", warmup: true };
-    const previous: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "previous", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: result("previous", [row()]) };
+    const request: api.LegacyPerformanceBenchmarkRequest = { run_id: "previous", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 2, context_profile: "code_python", warmup: true };
+    const previous: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "previous", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: legacyResult("previous") };
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([previous]));
     mocked.runPerformanceBench.mockRejectedValue(new Error("Current benchmark failed to start"));
     renderPanel();

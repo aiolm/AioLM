@@ -247,7 +247,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       if (!profile.saveMode) {
         const selected = profile.library.entries.find(entry => entry.id === profile.application.profile_id);
         if (!selected) throw new Error('This profile is no longer available.');
-        draft = applyProfile(draft, selected, target.kind === 'benchmark');
+        draft = applyProfile(draft, selected);
         application = materializeProfileApplication(draft, selected.system_prompt ?? profile.application.system_prompt, selected);
         profile = { ...profile, application };
       }
@@ -259,7 +259,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         })) : current;
         const entry = saved.settings_profiles?.entries.find(item => item.id === profile.application.profile_id);
         if (!entry) throw new Error('This profile is no longer available.');
-        draft = applyProfile(draft, entry, target.kind === 'benchmark');
+        draft = applyProfile(draft, entry);
         application = materializeProfileApplication(draft, entry.system_prompt ?? '', entry);
         const result = { config: executionConfig(saved, executionSettings(draft)), application };
         if (libraryChanged) {

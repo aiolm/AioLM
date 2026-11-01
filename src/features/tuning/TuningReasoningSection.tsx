@@ -16,6 +16,7 @@ interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   cfg: AppConfig;
   disabled: boolean;
+  requestReadOnly?: boolean;
   numericDrafts: Partial<Record<NumericKey, string>>;
   onNumericChange: (key: NumericKey, value: string) => void;
   onNumericCommit: (field: NumericField, value: string) => void;
@@ -33,7 +34,7 @@ function optionsWithCurrentValue(current: string, options: { value: string; labe
 }
 
 export default function TuningReasoningSection({
-  t, cfg, disabled, numericDrafts, onNumericChange, onNumericCommit,
+  t, cfg, disabled, requestReadOnly = false, numericDrafts, onNumericChange, onNumericCommit,
   updateServerText, updateReasoningEffort, reasoningBudgetMessageValue,
   onReasoningBudgetMessageChange, onReasoningBudgetMessageCommit,
 }: Props) {
@@ -131,7 +132,7 @@ export default function TuningReasoningSection({
               { value: "max", label: "max" },
             ])}
             onChange={(val) => updateReasoningEffort(val)}
-            disabled={disabled}
+            disabled={disabled || requestReadOnly}
             className="w-full"
           /><span id={`${id}-reasoning-effort-hint`} className="text-xs text-muted">{help.reasoningEffort}</span></>}</TuningDefaultField>
         </div>

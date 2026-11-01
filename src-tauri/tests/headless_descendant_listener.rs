@@ -2276,7 +2276,8 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     for _ in 0..3 {
         fs::remove_file(record("launcher-1")).unwrap();
         let ring = Arc::new(aiolm_lib::ErrBuf::default());
-        let (child, _, _) = aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default()).unwrap();
+        let aiolm_lib::server::SpawnedServer { child, .. } =
+            aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default(), None).unwrap();
         let mut owned = Some(child);
         let tree = Tree::wait(&record("launcher-1"), Some(&image));
         let deadline = Instant::now() + START_BOUND;
@@ -2303,7 +2304,8 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     // is released.
     fs::remove_file(record("launcher-1")).unwrap();
     let ring = Arc::new(aiolm_lib::ErrBuf::default());
-    let (child, _, _) = aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default()).unwrap();
+    let aiolm_lib::server::SpawnedServer { child, .. } =
+        aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default(), None).unwrap();
     let mut owned = Some(child);
     let tree = Tree::wait(&record("launcher-1"), Some(&image));
     let deadline = Instant::now() + START_BOUND;

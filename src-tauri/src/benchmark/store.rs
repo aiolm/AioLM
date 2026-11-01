@@ -63,22 +63,10 @@ fn encoded(entry: &Entry) -> Result<Vec<u8>, String> {
 }
 
 fn metadata(result: &PerformanceBenchResult) -> Value {
-    // Serialize metadata without walking/cloning accumulated rows each trial.
-    // Engine identity comes from the run, so the accelerator a Python runtime
-    // reported replaces the start event's placeholder.
     let mut value = json!({
         "run_id": result.run_id, "status": result.status, "message": result.message,
-        "args": result.args, "runtime_version": result.runtime_version,
-        "context_size": result.context_size, "parallel": result.parallel,
-        "provider": result.provider, "model_format": result.model_format,
-        "runtime_accelerator": result.runtime_accelerator,
+        "args": result.args,
     });
-    if let Some(variant) = &result.runtime_variant {
-        value["runtime_variant"] = json!(variant);
-    }
-    if let Some(version) = &result.runtime_plugin_version {
-        value["runtime_plugin_version"] = json!(version);
-    }
     if let Some(provenance) = &result.provenance {
         value["provenance"] = json!(provenance);
     }
@@ -131,6 +119,160 @@ fn valid_row(row: &Value) -> bool {
             .is_none_or(|value| value.is_null() || value.is_string())
 }
 
+// Read-only legacy request contract. Never used to launch a new benchmark.
+#[derive(Debug, Deserialize)]
+struct LegacyRequest {
+    run_id: String,
+    prompt_lengths: Vec<u32>,
+    generation_length: u32,
+    #[serde(default)]
+    batch_sizes: Vec<u32>,
+    repetitions: u32,
+    context_profile: String,
+    warmup: bool,
+}
+
+impl LegacyRequest {
+    fn validate(&self) -> Result<(), String> {
+        if self.run_id.is_empty() || self.run_id.len() > 128 {
+            return Err("benchmark run_id must contain 1 to 128 bytes".into());
+        }
+        if self.prompt_lengths.is_empty()
+            || self.prompt_lengths.len() > 16
+            || self
+                .prompt_lengths
+                .iter()
+                .any(|n| !(1..=200_000).contains(n))
+        {
+            return Err("select 1 to 16 prompt lengths between 1 and 200000 tokens".into());
+        }
+        if !(1..=4096).contains(&self.generation_length) || !(1..=10).contains(&self.repetitions) {
+            return Err("generation length must be 1 to 4096 and repetitions 1 to 10".into());
+        }
+        if self.batch_sizes.len() > 3 || self.batch_sizes.iter().any(|n| ![2, 4, 8].contains(n)) {
+            return Err("batch sizes must be selected from 2, 4 and 8".into());
+        }
+        if ![
+            "code_python",
+            "code_mixed",
+            "novel_ko",
+            "novel_en",
+            "novel_ja",
+        ]
+        .contains(&self.context_profile.as_str())
+        {
+            return Err("unknown benchmark context profile".into());
+        }
+        let _ = self.warmup;
+        Ok(())
+    }
+}
+
+fn valid_serving_row(value: &Value) -> bool {
+    crate::performance_bench::PerformanceBenchRow::deserialize(value)
+        .is_ok_and(|row| row.validate())
+}
+
+fn validate_serving_record(record: &Value) -> Result<(), String> {
+    let id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("benchmark record is missing its id")?;
+    if id.is_empty()
+        || id.len() > 128
+        || !record
+            .get("createdAt")
+            .and_then(Value::as_u64)
+            .is_some_and(|n| n <= 8_640_000_000_000_000)
+        || !record.get("model").is_some_and(Value::is_string)
+    {
+        return Err("invalid benchmark record envelope".into());
+    }
+    let raw_request = record
+        .get("request")
+        .ok_or("benchmark request is missing")?;
+    let mut request =
+        PerformanceBenchRequest::deserialize(raw_request).map_err(|e| e.to_string())?;
+    crate::performance_bench::validate_request(&mut request)?;
+    let rows = record
+        .pointer("/result/rows")
+        .and_then(Value::as_array)
+        .ok_or("benchmark rows are missing")?;
+    if id != request.run_id
+        || record.pointer("/result/run_id").and_then(Value::as_str) != Some(id)
+        || rows.len() > 10000
+        || !rows.iter().all(valid_serving_row)
+        || !record
+            .pointer("/result/args")
+            .and_then(Value::as_array)
+            .is_some_and(|args| args.iter().all(Value::is_string))
+        || record
+            .pointer("/result/message")
+            .is_some_and(|v| !v.is_null() && !v.is_string())
+        || !record
+            .pointer("/result/status")
+            .and_then(Value::as_str)
+            .is_some_and(|s| ["complete", "partial", "failed", "cancelled"].contains(&s))
+    {
+        return Err("benchmark record and request do not match".into());
+    }
+    let mut points = HashSet::new();
+    for row in rows {
+        let input = row["input_bytes"].as_u64().unwrap() as u32;
+        let concurrency = row["concurrency"].as_u64().unwrap() as u32;
+        let cap = row["max_output_tokens"].as_u64().unwrap() as u32;
+        let repetition = row["repetition"].as_u64().unwrap() as u32;
+        if !request.prompt_bytes.contains(&input)
+            || !request.concurrencies.contains(&concurrency)
+            || cap != request.max_output_tokens
+            || repetition > request.repetitions
+            || !points.insert((input, concurrency, cap, repetition))
+        {
+            return Err("serving trial is outside the requested grid or duplicated".into());
+        }
+    }
+    if let Some(value) = record.pointer("/result/provenance") {
+        let provenance = super::provenance::ServingBenchmarkProvenance::deserialize(value)
+            .map_err(|e| format!("invalid benchmark provenance: {e}"))?;
+        provenance.validate(&request.context_profile)?;
+        let workload = &provenance.workload;
+        if workload
+            .inputs
+            .iter()
+            .map(|input| input.bytes)
+            .collect::<Vec<_>>()
+            != request.prompt_bytes
+            || workload.concurrencies != request.concurrencies
+            || workload.max_output_tokens != request.max_output_tokens
+            || workload.repetitions != request.repetitions
+            || workload.warmup != request.warmup
+            || workload.request_usage != request.request_usage
+        {
+            return Err("serving provenance does not match the requested workload".into());
+        }
+        if provenance.execution.memory_scope
+            == crate::providers::protocol::ServingMemoryScope::Unavailable
+            && rows.iter().any(|row| !row["peak_memory_bytes"].is_null())
+        {
+            return Err("serving memory measurement has no owned scope".into());
+        }
+    } else if !rows.is_empty() {
+        return Err("serving measurements require frozen provenance".into());
+    }
+    if record.pointer("/result/status").and_then(Value::as_str) == Some("complete")
+        && points.len()
+            != request.prompt_bytes.len()
+                * request.concurrencies.len()
+                * request.repetitions as usize
+    {
+        return Err("complete serving benchmark is missing requested trials".into());
+    }
+    if serde_json::to_vec(record).map_err(|e| e.to_string())?.len() > MAX_RECORD_BYTES {
+        return Err("benchmark record exceeds the storage size limit".into());
+    }
+    Ok(())
+}
+
 fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut paths = files_unsorted(root)?;
     paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
@@ -165,6 +307,9 @@ fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn validate_record(record: &Value) -> Result<(), String> {
+    if record.get("schemaVersion").and_then(Value::as_u64) == Some(2) {
+        return validate_serving_record(record);
+    }
     let id = record
         .get("id")
         .and_then(Value::as_str)
@@ -182,13 +327,13 @@ fn validate_record(record: &Value) -> Result<(), String> {
     {
         return Err("invalid benchmark record envelope".into());
     }
-    let mut request = PerformanceBenchRequest::deserialize(
+    let request = LegacyRequest::deserialize(
         record
             .get("request")
             .ok_or("benchmark request is missing")?,
     )
     .map_err(|error| error.to_string())?;
-    crate::performance_bench::validate_request(&mut request)?;
+    request.validate()?;
     if let Some(value) = record.pointer("/result/provenance") {
         let provenance = super::provenance::BenchmarkProvenance::deserialize(value)
             .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
@@ -524,7 +669,16 @@ fn replay_run(path: &Path) -> Result<ReplayedRun, String> {
             }
             Entry::Trial { row } => {
                 finished = false;
-                if !valid_row(&row) {
+                let serving = record
+                    .as_ref()
+                    .and_then(|r| r.get("schemaVersion"))
+                    .and_then(Value::as_u64)
+                    == Some(2);
+                if !(if serving {
+                    valid_serving_row(&row)
+                } else {
+                    valid_row(&row)
+                }) {
                     return Err("benchmark journal contains an invalid trial".into());
                 }
                 let rows = record
@@ -901,25 +1055,66 @@ mod tests {
             "request": { "run_id": id, "prompt_lengths": [16], "generation_length": 8, "batch_sizes": [], "repetitions": 1, "context_profile": "novel_en", "warmup": false },
             "result": { "run_id": id, "rows": [], "status": "complete", "message": null, "args": [], "runtime_version": "synthetic", "context_size": 256, "parallel": 1 } })
     }
-    pub(super) fn row() -> PerformanceBenchRow {
-        PerformanceBenchRow {
-            id: "synthetic-trial".into(),
-            prompt_tokens: 16,
-            generation_length: 8,
-            concurrency: 1,
-            repetition: 1,
-            completion_tokens: 8,
-            cached_tokens: 0,
-            ttft_ms: Some(1.0),
-            tpot_ms: Some(1.0),
-            pp_tps: Some(100.0),
-            tg_tps: Some(10.0),
-            e2e_ms: 8.0,
-            total_tps: Some(1.0),
-            peak_memory_bytes: None,
-            timing_source: "client",
-            error: None,
-        }
+    pub(super) fn row() -> Value {
+        json!({"id":"synthetic-trial", "prompt_tokens":16, "generation_length":8,
+            "concurrency":1,"repetition":1,"completion_tokens":8,"cached_tokens":0,
+            "ttft_ms":1.0,"tpot_ms":1.0,"pp_tps":100.0,"tg_tps":10.0,
+            "e2e_ms":8.0,"total_tps":1.0,"peak_memory_bytes":null,
+            "timing_source":"client","error":null})
+    }
+
+    pub(super) fn serving_row() -> PerformanceBenchRow {
+        serde_json::from_value(json!({"id":"synthetic-trial", "input_bytes":256,
+            "max_output_tokens":128,"concurrency":1,"repetition":1,
+            "first_output_ms":1.0,"first_content_ms":1.0,"first_reasoning_ms":null,
+            "e2e_ms":8.0,"content_bytes":2,"reasoning_bytes":0,"output_bytes":2,
+            "reported_prompt_tokens":null,"reported_completion_tokens":null,"reported_cached_tokens":null,
+            "usage_status":"missing","finish_reasons":["not_reported"],"peak_memory_bytes":null,
+            "timing_source":"client","failed":false,"error":null})).unwrap()
+    }
+
+    pub(super) fn serving_result(id: &str) -> PerformanceBenchResult {
+        let cfg = crate::config::AppConfig::default();
+        let request = PerformanceBenchRequest {
+            run_id: id.into(),
+            method: Default::default(),
+            context_profile: "novel_en".into(),
+            prompt_bytes: vec![256],
+            max_output_tokens: 128,
+            concurrencies: vec![1],
+            repetitions: 1,
+            warmup: false,
+            request_usage: false,
+        };
+        let (workload, _) = crate::performance_bench::prepare_inputs(&request);
+        let model = serde_json::from_value(
+            json!({"status":"unidentified","sha256":null,"size_bytes":null}),
+        )
+        .unwrap();
+        let profile = serde_json::from_value(json!({
+            "schema_version":1, "fingerprint":"synthetic",
+            "os":"synthetic", "arch":"synthetic", "cpu":{"name":"synthetic","logical_cores":1},
+            "gpus":[], "detection":"synthetic"
+        }))
+        .unwrap();
+        let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
+        result.provenance = Some(super::super::provenance::capture_serving(
+            &cfg,
+            profile,
+            model,
+            workload,
+            None,
+            "Synthetic model".into(),
+        ));
+        result
+    }
+
+    pub(super) fn serving_record(id: &str, created: u64) -> Value {
+        json!({"schemaVersion":2,"id":id,"createdAt":created,"model":"synthetic.model",
+            "request":{"run_id":id,"method":{"id":"openai-chat-serving","version":1},
+                "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":128,
+                "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":false},
+            "result":serving_result(id)})
     }
     #[test]
     fn import_validates_a_later_duplicate_before_creating_the_store() {
@@ -1002,10 +1197,9 @@ mod tests {
         let mut malformed = valid.clone();
         // A floating point JSON Number must not silently become a typed u32.
         malformed["request"]["generation_length"] = json!(8.0);
-        let expected =
-            serde_json::from_value::<PerformanceBenchRequest>(malformed["request"].clone())
-                .unwrap_err()
-                .to_string();
+        let expected = serde_json::from_value::<LegacyRequest>(malformed["request"].clone())
+            .unwrap_err()
+            .to_string();
         let mut malformed_provenance = valid.clone();
         malformed_provenance["result"]["provenance"] = json!({});
         let expected_provenance = format!(
@@ -1289,17 +1483,12 @@ mod tests {
     #[test]
     fn active_run_stays_out_of_history_and_finalization_does_not_duplicate_rows() {
         let root = root();
-        let initial = record("durable", 10);
-        let request = serde_json::from_value(initial["request"].clone()).unwrap();
+        let initial = serving_record("durable", 10);
         let journal = RunJournal::begin(&root, initial).unwrap();
-        let mut result = crate::performance_bench::failed(
-            &request,
-            &crate::config::AppConfig::default(),
-            "pending".into(),
-        );
+        let mut result = serving_result("durable");
         result.args = vec!["--threads".into(), "8".into()];
         journal.checkpoint(&result).unwrap();
-        result.rows.push(row());
+        result.rows.push(serving_row());
         journal.checkpoint(&result).unwrap();
         assert_eq!(list(&root, 0, 20).unwrap().total, 0);
         let recovered = replay(&journal.path).unwrap();
@@ -1319,72 +1508,39 @@ mod tests {
             1
         );
         assert_eq!(reopened.records[0]["result"]["status"], "complete");
-        assert!(reopened.records[0]["result"].get("provenance").is_none());
+        assert_eq!(
+            reopened.records[0]["result"]["provenance"]["schema_version"],
+            2
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn a_python_engine_run_keeps_the_identity_its_runtime_reported() {
-        let root = root();
-        let mut initial = record("engine-identity", 10);
-        initial["backend"] = json!("metal");
-        initial["build"] = json!("0.7.6");
-        let request = serde_json::from_value(initial["request"].clone()).unwrap();
-        let cfg = crate::config::AppConfig {
-            active_provider: "mlx-vlm".into(),
-            ..Default::default()
-        };
-        initial["result"] = json!(crate::performance_bench::failed(
-            &request,
-            &cfg,
-            "pending".into()
-        ));
-        let journal = RunJournal::begin(&root, initial).unwrap();
-        let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
-        result.runtime_accelerator = Some("metal".into());
-        result.runtime_version = "0.7.6".into();
-        result.rows.push(row());
-        result.status = "complete";
-        result.message = None;
-        journal.checkpoint(&result).unwrap();
-        journal.finish(&result).unwrap();
-        drop(journal);
-        let stored = list(&root, 0, 20).unwrap().records.remove(0);
-        assert_eq!(stored["backend"], "metal");
-        assert_eq!(stored["result"]["provider"], "mlx-vlm");
-        assert_eq!(stored["result"]["runtime_accelerator"], "metal");
-        assert_eq!(stored["result"]["runtime_version"], "0.7.6");
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn metal_plugin_identity_and_formats_survive_interrupted_and_finished_history() {
+    fn serving_identity_and_formats_survive_interrupted_and_finished_history() {
         use crate::providers::artifacts::ArtifactFormat;
         let root = root();
         for (index, format) in [
             ArtifactFormat::HfSafetensors,
             ArtifactFormat::Mlx,
             ArtifactFormat::Gguf,
+            ArtifactFormat::Unknown,
         ]
         .into_iter()
         .enumerate()
         {
-            let id = format!("metal-history-{index}");
-            let mut initial = record(&id, 10 + index as u64);
-            initial["backend"] = json!("metal");
-            initial["build"] = json!("0.30.0");
-            let request = serde_json::from_value(initial["request"].clone()).unwrap();
-            let cfg = crate::config::AppConfig {
-                active_provider: "vllm".into(),
-                ..Default::default()
-            };
-            let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
-            initial["result"] = json!(&result);
+            let id = format!("serving-history-{index}");
+            let initial = serving_record(&id, 10 + index as u64);
             let journal = RunJournal::begin(&root, initial).unwrap();
-            result.runtime_accelerator = Some("metal".into());
-            result.runtime_variant = Some("vllm-metal".into());
-            result.runtime_version = "0.30.0".into();
-            result.runtime_plugin_version = Some("0.30.1".into());
-            result.model_format = format;
-            result.rows.push(row());
+            let mut result = serving_result(&id);
+            let provenance = result.provenance.as_mut().unwrap();
+            provenance.runtime.name = Some("fourth-engine".into());
+            provenance.runtime.version = Some("0.30.0".into());
+            provenance.runtime.variant = Some("metal-variant".into());
+            provenance.runtime.plugin_version = Some("0.30.1".into());
+            provenance.runtime.backend = Some("metal".into());
+            provenance.model.format = Some(format);
+            let mut row = serving_row();
+            row.e2e_ms = 52.591_499_999_999_996;
+            result.rows.push(row);
             journal.checkpoint(&result).unwrap();
             if index != 0 {
                 result.status = "complete";
@@ -1398,12 +1554,17 @@ mod tests {
                 .into_iter()
                 .find(|value| value["id"] == id)
                 .unwrap();
-            assert_eq!(stored["result"]["runtime_version"], "0.30.0");
-            assert_eq!(stored["result"]["runtime_variant"], "vllm-metal");
-            assert_eq!(stored["result"]["runtime_plugin_version"], "0.30.1");
-            assert_eq!(stored["result"]["runtime_accelerator"], "metal");
-            assert_eq!(stored["result"]["model_format"], json!(format));
-            assert_eq!(stored["result"]["provider"], "vllm");
+            let recorded = &stored["result"]["provenance"];
+            assert_eq!(recorded["runtime"]["name"], "fourth-engine");
+            assert_eq!(recorded["runtime"]["version"], "0.30.0");
+            assert_eq!(recorded["runtime"]["variant"], "metal-variant");
+            assert_eq!(recorded["runtime"]["plugin_version"], "0.30.1");
+            assert_eq!(recorded["model"]["format"], json!(format));
+            assert_eq!(recorded["workload"]["inputs"][0]["bytes"], 256);
+            assert_eq!(
+                stored["result"]["rows"][0]["e2e_ms"].as_f64(),
+                Some(52.591_499_999_999_996)
+            );
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -1431,18 +1592,13 @@ mod tests {
     #[test]
     fn write_failures_are_reported_without_losing_prior_measurements() {
         let root = root();
-        let initial = record("failed-write", 10);
-        let request = serde_json::from_value(initial["request"].clone()).unwrap();
+        let initial = serving_record("failed-write", 10);
         let journal = RunJournal::begin(&root, initial).unwrap();
-        let mut result = crate::performance_bench::failed(
-            &request,
-            &crate::config::AppConfig::default(),
-            "pending".into(),
-        );
-        result.rows.push(row());
+        let mut result = serving_result("failed-write");
+        result.rows.push(serving_row());
         journal.checkpoint(&result).unwrap();
         journal.writer.lock().unwrap().file = File::open(&journal.path).unwrap();
-        let mut second = row();
+        let mut second = serving_row();
         second.id = "second-trial".into();
         result.rows.push(second);
         assert!(journal.checkpoint(&result).is_err());
@@ -1468,5 +1624,41 @@ mod tests {
         assert_eq!(history.warnings.len(), 1);
         assert!(corrupt.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod serving_validation_tests {
+    use super::*;
+
+    #[test]
+    fn local_two_rejects_invalid_usage_empty_channel_timings_and_non_grid_trials() {
+        let mut complete = tests::serving_record("validated-serving", 1);
+        complete["result"]["rows"] = json!([tests::serving_row()]);
+        complete["result"]["status"] = json!("complete");
+        complete["result"]["message"] = Value::Null;
+        validate_record(&complete).unwrap();
+        for mutation in [
+            ("reported_prompt_tokens", json!(9_007_199_254_740_992u64)),
+            ("usage_status", json!("complete")),
+            ("first_reasoning_ms", json!(0.0)),
+            ("output_bytes", json!(3)),
+            ("max_output_tokens", json!(64)),
+            ("peak_memory_bytes", json!(1)),
+            ("finish_reasons", json!([])),
+            ("failed", json!(true)),
+        ] {
+            let mut invalid = complete.clone();
+            invalid["result"]["rows"][0][mutation.0] = mutation.1;
+            assert!(validate_record(&invalid).is_err(), "{}", mutation.0);
+        }
+        let mut duplicate = complete.clone();
+        duplicate["result"]["rows"] = json!([tests::serving_row(), tests::serving_row()]);
+        assert!(validate_record(&duplicate).is_err());
+        let mut incomplete = complete;
+        incomplete["result"]["rows"] = json!([]);
+        assert!(validate_record(&incomplete).is_err());
+        incomplete["result"]["status"] = json!("failed");
+        validate_record(&incomplete).unwrap();
     }
 }

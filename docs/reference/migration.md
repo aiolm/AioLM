@@ -54,6 +54,28 @@ Upgrades keep your existing settings:
 - Conversations that earlier releases kept in browser storage move into the `conversations` folder the first time the chat opens. A conversation already in the data folder is never overwritten, and the browser copies are removed only after every conversation has been found in the data folder. If the move is interrupted, it is tried again at the next start.
 - Benchmark results from earlier versions are imported the first time benchmark history opens; see [Local history](benchmark-sharing.md#local-history).
 
+### 0.3.5 benchmark records
+
+New measurements use one `openai-chat-serving@1` workload for every connected
+streaming text-chat engine. They write local journal schema2 and publish
+schema3 with exact UTF-8 input bytes/hashes, client-observed text/reasoning
+timings and nullable reported token/cache counts. Engine launch settings are
+preserved; the workload no longer forces context, parallel capacity or cold
+caches. Optional usage and warmup are explicit conditions.
+
+Existing local schema1 journals and frozen schema1/2 publication bytes remain
+unchanged, including IDs, hashes and receipts. Their original token/PP/TG/TTFT/
+TPOT units stay in Legacy views/columns; they are not converted to byte results.
+Profile imports now choose and confirm a checked destination schema and retain
+existing user-edited imports for the same source/destination. No model paths,
+GPU IDs, installations or connections are restored from public settings.
+
+Back up before downgrading: older releases may not understand local schema2
+journals or newly declared adapter metadata. Do not rewrite journals or frozen
+publication requests to make an older release accept them.
+
+Journal replay preserves recorded floating-point timings exactly across restarts.
+
 ## Going back to an older release
 
 An older AioLM release refuses to open a configuration written by a newer one instead of overwriting it. To go back:

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Workbook } from 'exceljs';
 import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport';
-import { modelArtifact, type ModelArtifact } from '../../shared/api/providers';
+import { modelArtifact } from '../../shared/api/providers';
 import { exportBenchmarkResults } from './benchmarkExport';
 import { loadAllBenchmarkHistory } from './benchmarkRepository';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from './performanceRecords';
 
 vi.mock('../../shared/api/transport', () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn(() => true) }));
 vi.mock('../../shared/api/providers', async original => ({ ...await original<typeof import('../../shared/api/providers')>(), modelArtifact: vi.fn() }));
@@ -20,71 +20,50 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(
 
 describe('benchmark CSV delivery', () => {
   const snapshot = `/synthetic/external/snapshots/${'a'.repeat(40)}`;
-  const artifact = (path: string, name: string): ModelArtifact => ({
-    path, name, format: 'mlx', role: 'model', size_bytes: 10, file_count: 3, architectures: [],
-    modalities: { text: true, image: false, audio: false, video: false }, missing: [],
-    incomplete: false, ownership: 'external', notes: [],
-  });
+  const serving: ServingPerformanceBenchmarkRecord = {
+    schemaVersion: 2, id: 'serving', createdAt: record.createdAt, model: snapshot,
+    request: { run_id: 'serving', method: { id: 'openai-chat-serving', version: 1 }, context_profile: 'novel_en',
+      prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false },
+    result: { run_id: 'serving', rows: [], status: 'failed', args: ['--secret', 'PRIVATE'],
+      provenance: {
+        schema_version: 2, app_version: '0.3.5', method: { id: 'openai-chat-serving', version: 1 },
+        recorded_model_label: 'Frozen-model', runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
+        model: { format: 'unknown', status: 'unidentified', sha256: null, size_bytes: null },
+        workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'b'.repeat(64) }],
+          max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false, cache_policy: 'as_configured' },
+        environment: { scope: 'aiolm_host', os: 'test', arch: 'test', cpu: { name: 'CPU', logical_cores: 1 },
+          installed_gpus: [], execution: { mode: 'unknown', selected_gpus: [], devices: [], selection_complete: false }, detection: 'test' },
+        execution: { topology: 'attached', memory_scope: 'unavailable', settings: [] },
+      } },
+  };
 
-  it.each(['csv', 'xlsx'] as const)('uses an external snapshot display name in the %s report and save suggestion without changing the saved identity', async format => {
-    const saved = { ...record, model: snapshot };
-    const original = JSON.stringify(saved);
-    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, 'converted-instruct-4bit'));
+  it.each(['csv', 'xlsx'] as const)('uses the frozen label in %s even when the original model was replaced or deleted', async format => {
+    vi.mocked(modelArtifact).mockRejectedValue(new Error('Model no longer exists'));
     vi.mocked(invoke).mockResolvedValue(true);
-    expect(await exportBenchmarkResults([saved], 'selected', format)).toBe('saved');
-    const [command, args] = vi.mocked(invoke).mock.calls[0];
-    expect(command).toBe(`benchmark_export_${format}`);
-    expect(args?.fileName).toBe(`aiolm-benchmark_converted-instruct-4bit_2025-04-05_06-07-08.${format}`);
-    if (format === 'csv') {
-      expect(args?.contents).toContain('"converted-instruct-4bit"');
-      expect(args?.contents).not.toContain('a'.repeat(40));
-      expect(args?.contents).not.toContain('/synthetic/');
-    } else {
-      const workbook = new Workbook();
-      await workbook.xlsx.load(new Uint8Array(args?.contents as number[]).buffer);
-      expect(workbook.getWorksheet('Results')!.getCell('A2').value).toBe('converted-instruct-4bit');
+    for (const model of [snapshot, '/synthetic/replaced/model.gguf']) {
+      const saved = { ...serving, model };
+      const original = JSON.stringify(saved);
+      expect(await exportBenchmarkResults([saved], 'selected', format)).toBe('saved');
+      const [command, args] = vi.mocked(invoke).mock.calls.at(-1)!;
+      expect(command).toBe(`benchmark_export_${format}`);
+      expect(args?.fileName).toBe(`aiolm-benchmark_Frozen-model_2025-04-05_06-07-08.${format}`);
+      if (format === 'csv') {
+        expect(args?.contents).toContain('"Frozen-model"');
+        expect(args?.contents).not.toMatch(/synthetic|PRIVATE|--secret/);
+      } else {
+        const workbook = new Workbook();
+        await workbook.xlsx.load(new Uint8Array(args?.contents as number[]).buffer);
+        expect(workbook.getWorksheet('Results')!.getCell('A2').value).toBe('Frozen-model');
+      }
+      expect(JSON.stringify(saved)).toBe(original);
     }
-    expect(modelArtifact).toHaveBeenCalledExactlyOnceWith(snapshot);
-    expect(JSON.stringify(saved)).toBe(original);
+    expect(modelArtifact).not.toHaveBeenCalled();
   });
 
-  it('deduplicates external model reads while keeping every full-history result in its original order', async () => {
-    const second = `/synthetic/external/snapshots/${'b'.repeat(40)}`;
-    const records = [{ ...record, model: snapshot }, { ...record, model: second }, { ...record, model: snapshot }, record];
-    const original = JSON.stringify(records);
-    vi.mocked(modelArtifact).mockImplementation(async path => artifact(path, path === snapshot ? 'first-model' : 'second-model'));
+  it.each(['csv', 'xlsx'] as const)('keeps frozen formula-like labels inert in %s', async format => {
+    const hostile = { ...serving, result: { ...serving.result, provenance: { ...serving.result.provenance!, recorded_model_label: '=SUM("1",2)' } } };
     vi.mocked(invoke).mockResolvedValue(true);
-    await exportBenchmarkResults(records, 'all', 'csv');
-    const contents = vi.mocked(invoke).mock.calls[0][1]!.contents as string;
-    expect(contents.trim().split('\r\n').slice(1).map(line => line.split(',')[0])).toEqual([
-      '"first-model"', '"second-model"', '"first-model"', '"예제.gguf"',
-    ]);
-    expect(modelArtifact).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(records)).toBe(original);
-  });
-
-  it('keeps export available with the original label when snapshot metadata cannot be read', async () => {
-    vi.mocked(modelArtifact).mockRejectedValue(new Error('Synthetic unreadable model metadata'));
-    vi.mocked(invoke).mockResolvedValue(true);
-    expect(await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', 'csv')).toBe('saved');
-    expect(vi.mocked(invoke).mock.calls[0][1]!.contents).toContain(`"${'a'.repeat(40)}"`);
-    expect(modelArtifact).toHaveBeenCalledExactlyOnceWith(snapshot);
-  });
-
-  it('applies existing path privacy and portable filename rules to declared snapshot names', async () => {
-    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, 'C:\\synthetic\\private\\Readable-model'));
-    vi.mocked(invoke).mockResolvedValue(true);
-    await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', 'csv');
-    const args = vi.mocked(invoke).mock.calls[0][1]!;
-    expect(args.fileName).toBe('aiolm-benchmark_Readable-model_2025-04-05_06-07-08.csv');
-    expect(args.contents).toContain('"Readable-model"');
-    expect(JSON.stringify(args)).not.toMatch(/synthetic|private|C:/);
-  });
-
-  it.each(['csv', 'xlsx'] as const)('keeps declared formula-like model names inert in %s', async format => {
-    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, '=SUM("1",2)'));
-    vi.mocked(invoke).mockResolvedValue(true);
-    await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', format);
+    await exportBenchmarkResults([hostile], 'selected', format);
     const args = vi.mocked(invoke).mock.calls[0][1]!;
     if (format === 'csv') expect(args.contents).toContain('"\'=SUM(""1"",2)"');
     else {
@@ -109,7 +88,6 @@ describe('benchmark CSV delivery', () => {
     expect(sheet.getCell('A1').value).toBe('모델');
     expect(sheet.getCell('A2').value).toBe('예제.gguf');
     expect(sheet.getColumn(1).width).toBe(42);
-    expect(sheet.columnCount).toBe(18);
     expect(sheet.getCell('A2').alignment.wrapText).toBe(true);
     expect(JSON.stringify(sheet.getSheetValues())).not.toMatch(/models\/|Synthetic failure|run_id/);
   });

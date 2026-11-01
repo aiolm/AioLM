@@ -22,4 +22,26 @@ describe('loaded chat capabilities', () => {
       expect(body.chat_supported).toBeUndefined();
     }
   });
+
+  it('keeps core streaming compatible when optional usage support is undeclared or false', () => {
+    for (const stream_usage_supported of [undefined, false]) {
+      const body = buildChatRequestBody('public-model', [{ role: 'user', content: 'hello' }],
+        { ...sampling, engine: { ...engine, stream_usage_supported } });
+      expect(body.stream).toBe(true);
+      expect(body).not.toHaveProperty('stream_options');
+    }
+  });
+
+  it('requests usage only for declared support and preserves explicit stream options', () => {
+    const supported = { ...engine, stream_usage_supported: true };
+    expect(buildChatRequestBody('public-model', [], { ...sampling, engine: supported }).stream_options)
+      .toEqual({ include_usage: true });
+    for (const stream_usage_supported of [undefined, false, true]) {
+      const explicit = { include_usage: false, include_obfuscation: false };
+      const body = buildChatRequestBody('public-model', [], {
+        ...sampling, engine: { ...engine, stream_usage_supported, request_fields: { stream_options: explicit } },
+      });
+      expect(body.stream_options).toEqual(explicit);
+    }
+  });
 });

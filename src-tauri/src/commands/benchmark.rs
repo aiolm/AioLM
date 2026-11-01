@@ -1,7 +1,6 @@
 //! Benchmark execution, progress events and cancellation IPC.
-use crate::{benchmark, config, performance_bench, runtime, state::AppState};
+use crate::{benchmark, config, performance_bench, state::AppState};
 use serde_json::{json, Value};
-use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, State};
@@ -111,7 +110,7 @@ pub(crate) fn bench_cancel(state: State<'_, AppState>) {
     }
 }
 
-/// Run a cold-prompt workload on a private server without touching the
+/// Run the common chat workload on a private launch without touching the
 /// application's selected server state or saving the temporary configuration.
 #[tauri::command]
 pub(crate) async fn run_performance_bench(
@@ -132,10 +131,6 @@ pub(crate) async fn run_performance_bench(
     let validation = performance_bench::validate_request(&mut request).and_then(|()| {
         cfg.normalize();
         cfg.validate()?;
-        crate::providers::adapter::require_feature(
-            &cfg,
-            crate::providers::adapter::RuntimeFeature::ExactBenchmark,
-        )?;
         if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
             return Err("wait for the runtime operation to finish before benchmarking".into());
         }
@@ -164,8 +159,7 @@ pub(crate) async fn run_performance_bench(
     if let Err(error) = validation {
         return Ok(performance_bench::failed(&request, &cfg, error));
     }
-    // Preflight refreshes Python runtime evidence once, before the history
-    // header freezes the measured version and accelerator.
+    // General adapter preflight is shared with ordinary model serving.
     crate::benchmark::sharing::permits::note_measurement_start();
     state.bench_cancel.store(false, Ordering::Release);
     let cancel = state.bench_cancel.clone();
@@ -175,36 +169,24 @@ pub(crate) async fn run_performance_bench(
             run_id: request.run_id.clone(),
             phase: "loading",
             completed: 0,
-            total: request.prompt_lengths.len()
-                * (1 + request.batch_sizes.len())
+            total: request.prompt_bytes.len()
+                * request.concurrencies.len()
                 * request.repetitions as usize,
             row: None,
             message: None,
         },
     );
     let launch = super::launch::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await;
-    // A Python engine's identity is what its own runtime probe reported, never
-    // the legacy llama.cpp backend/build fields that may still sit in cfg.
-    let provider = crate::providers::provider_of(&cfg);
-    let engine_probe = if provider.is_python() {
-        // A rejected preflight still gets a durable failure record. An
-        // unreadable runtime is unidentified, rather than legacy llama fields.
-        crate::providers::selected_python_runtime(&cfg)
-            .ok()
-            .and_then(|runtime| runtime.probe)
-    } else {
-        None
-    };
-    let (backend, build) = match &engine_probe {
-        Some(probe) => (probe.accelerator.clone(), probe.version.clone()),
-        None if provider.is_python() => (
-            String::new(),
-            performance_bench::UNKNOWN_RUNTIME_VERSION.into(),
-        ),
-        None => (cfg.active_backend.clone(), cfg.active_build.clone()),
-    };
     let root = benchmark::data_root()?;
-    let initial = performance_bench::failed(&request, &cfg, "benchmark has not completed".into());
+    let prepared = match &launch {
+        Ok(_) => performance_bench::RuntimeInfo::prepare(&cfg, &request).await,
+        Err(error) => Err(error.clone()),
+    };
+    let mut initial =
+        performance_bench::failed(&request, &cfg, "benchmark has not completed".into());
+    if let Ok(runtime) = &prepared {
+        initial.provenance = Some(runtime.provenance.clone());
+    }
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -212,15 +194,16 @@ pub(crate) async fn run_performance_bench(
     let journal = Arc::new(benchmark::store::RunJournal::begin(
         &root,
         json!({
-            "schemaVersion": 1, "id": request.run_id, "createdAt": created,
-            "model": cfg.active_model, "backend": backend, "build": build,
+            "schemaVersion": 2, "id": request.run_id, "createdAt": created,
+            "model": cfg.active_model,
             "request": request, "result": initial,
         }),
     )?);
-    let gpu = match launch {
-        Ok(gpu) => gpu,
-        Err(error) => {
-            let mut result = performance_bench::failed(&request, &cfg, error);
+    let (gpu, mut runtime) = match (launch, prepared) {
+        (Ok(gpu), Ok(runtime)) => (gpu, runtime),
+        (Err(error), _) | (_, Err(error)) => {
+            let mut result = initial;
+            result.message = Some(error);
             if cancel.load(Ordering::Acquire) {
                 result.status = "cancelled";
             }
@@ -229,59 +212,8 @@ pub(crate) async fn run_performance_bench(
             return Ok(result);
         }
     };
-    let capability =
-        if provider == crate::providers::ProviderId::Llama && !cfg.active_backend.is_empty() {
-            runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, &cancel)
-                .await
-                .ok()
-        } else {
-            None
-        };
-    // The probe keeps the whole `--version` output, which is a banner plus
-    // compiler lines. A benchmark records the version it was measured on, so
-    // take the one line that states it and leave the diagnostics behind.
-    let version = match &engine_probe {
-        Some(probe) if !probe.version.is_empty() => probe.version.clone(),
-        Some(_) => performance_bench::UNKNOWN_RUNTIME_VERSION.into(),
-        None => capability
-            .as_ref()
-            .and_then(|value| runtime::version_label(&value.version))
-            .unwrap_or_else(|| performance_bench::UNKNOWN_RUNTIME_VERSION.to_string()),
-    };
-    let cache_ram_supported = capability.as_ref().is_some_and(|value| {
-        value
-            .flags
-            .iter()
-            .any(|flag| flag == "--cache-ram" || flag == "-cram")
-    });
-    // Reading the identity cache and the model header both touch the disk, so
-    // they happen off the async runtime and before the first trial is set up;
-    // no tensor is read, nothing is hashed and no request leaves the machine.
-    let model_path = PathBuf::from(&cfg.active_model);
-    let model_root = root.clone();
-    let model = tokio::task::spawn_blocking(move || {
-        let mut identity = benchmark::identity::cached(&model_root, &model_path);
-        identity.metadata = benchmark::model_metadata::collect(&model_root, &model_path);
-        identity
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    let mut provenance = benchmark::provenance::capture(
-        &cfg,
-        &gpu,
-        crate::hardware::detect(),
-        model,
-        &request.context_profile,
-        performance_bench::corpus_identity(&request.context_profile),
-    );
-    if let Some(capability) = &capability {
-        benchmark::provenance::describe_runtime_selection(
-            &mut provenance.environment,
-            &cfg,
-            &capability.devices,
-        );
-    }
     let trial_journal = journal.clone();
+    runtime.checkpoint = Some(Arc::new(move |result| trial_journal.checkpoint(result)));
     let progress: performance_bench::Progress = Arc::new(move |progress| {
         let _ = app.emit("performance-bench-progress", progress);
     });
@@ -292,12 +224,7 @@ pub(crate) async fn run_performance_bench(
         cancel,
         state.bench_process.clone(),
         progress,
-        performance_bench::RuntimeInfo {
-            version,
-            cache_ram_supported,
-            provenance: Some(provenance),
-            checkpoint: Some(Arc::new(move |result| trial_journal.checkpoint(result))),
-        },
+        runtime,
     )
     .await;
     state.bench_cancel.store(false, Ordering::Release);

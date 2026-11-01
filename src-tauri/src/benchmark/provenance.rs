@@ -2,7 +2,6 @@
 use super::identity::ModelIdentity;
 use crate::{
     config::AppConfig,
-    gpu::ResolvedGpu,
     hardware::{DeviceProfile, GpuDevice},
 };
 use serde::{Deserialize, Serialize};
@@ -71,49 +70,6 @@ pub(crate) struct ExecutionConfig {
     pub cache_type_v: Option<String>,
     pub split_mode: Option<String>,
     pub tensor_split: Option<Vec<f32>>,
-}
-
-impl ExecutionConfig {
-    pub(crate) fn from_args(args: &[String]) -> Self {
-        let value = |aliases: &[&str]| -> Option<String> {
-            let mut found = None;
-            for (index, arg) in args.iter().enumerate() {
-                let (name, inline) = arg
-                    .split_once('=')
-                    .map(|(name, value)| (name, Some(value)))
-                    .unwrap_or((arg.as_str(), None));
-                if aliases.contains(&name) {
-                    found = inline
-                        .map(str::to_owned)
-                        .or_else(|| args.get(index + 1).cloned());
-                }
-            }
-            found
-        };
-        Self {
-            gpu_layers: value(&["--n-gpu-layers", "--gpu-layers", "-ngl"])
-                .and_then(|value| value.parse().ok()),
-            threads: value(&["--threads", "-t"]).and_then(|value| value.parse().ok()),
-            threads_batch: value(&["--threads-batch", "-tb"]).and_then(|value| value.parse().ok()),
-            flash_attention: value(&["--flash-attn", "-fa"]),
-            cache_type_k: value(&["--cache-type-k", "-ctk"]),
-            cache_type_v: value(&["--cache-type-v", "-ctv"]),
-            split_mode: value(&["--split-mode", "-sm"]),
-            tensor_split: value(&["--tensor-split", "-ts"])
-                .and_then(|value| {
-                    value
-                        .split(',')
-                        .map(str::parse::<f32>)
-                        .collect::<Result<Vec<_>, _>>()
-                        .ok()
-                })
-                .filter(|values| {
-                    values
-                        .iter()
-                        .all(|value| value.is_finite() && *value >= 0.0)
-                }),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -217,159 +173,344 @@ impl BenchmarkProvenance {
     }
 }
 
-pub(crate) fn capture(
+/// New runs freeze the common HTTP workload independently of engine tokenizers.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ServingInput {
+    pub bytes: u32,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ServingWorkload {
+    pub corpus: String,
+    pub corpus_version: u32,
+    pub inputs: Vec<ServingInput>,
+    pub max_output_tokens: u32,
+    pub concurrencies: Vec<u32>,
+    pub repetitions: u32,
+    pub warmup: bool,
+    pub request_usage: bool,
+    pub cache_policy: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordedSetting {
+    pub target: String,
+    pub scope: Vec<String>,
+    pub name: String,
+    pub value: serde_json::Value,
+    pub unit: Option<String>,
+    pub role: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ServingExecution {
+    pub topology: crate::providers::protocol::ServingTopology,
+    pub memory_scope: crate::providers::protocol::ServingMemoryScope,
+    pub settings: Vec<RecordedSetting>,
+}
+
+/// Host resources are observations of AioLM's host, not upstream allocation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct ServingEnvironment {
+    pub scope: String,
+    #[serde(flatten)]
+    pub host: Environment,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct ServingBenchmarkProvenance {
+    pub schema_version: u32,
+    pub app_version: String,
+    pub method: Method,
+    pub workload: ServingWorkload,
+    pub runtime: crate::providers::protocol::PublicEngine,
+    pub model: ModelIdentity,
+    pub environment: ServingEnvironment,
+    pub execution: ServingExecution,
+    /// Private display label, frozen before launch; never a public identity.
+    pub recorded_model_label: String,
+}
+
+pub(crate) fn capture_serving(
     cfg: &AppConfig,
-    gpu: &ResolvedGpu,
     profile: DeviceProfile,
-    model: ModelIdentity,
-    corpus_profile: &str,
-    corpus_hash: String,
-) -> BenchmarkProvenance {
-    let python = crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama;
-    // Custom CLI overrides can change placement after structured configuration.
-    // Do not certify GPU usage in that case, or equate runtime indexes with OS IDs.
-    let overrides = cfg.server_args.iter().any(|arg| {
-        matches!(
-            arg.split('=').next().unwrap_or(arg),
-            "--device"
-                | "-dev"
-                | "--n-gpu-layers"
-                | "-ngl"
-                | "--gpu-layers"
-                | "--main-gpu"
-                | "-mg"
-                | "--spec-draft-device"
-                | "--spec-draft-model"
-                | "--mmproj"
-                | "-mm"
-        )
-    });
-    let auxiliary_model =
-        !cfg.mmproj.trim().is_empty() || crate::tuning_defaults::speculative_enabled(cfg);
-    let cpu_only = !python
-        && !overrides
-        && (cfg.active_backend == "cpu"
-            || (cfg.ngl == 0
-                && !auxiliary_model
-                && !cfg.runtime_defaults.iter().any(|value| value == "ngl")));
-    let devices = gpu
-        .device_flag
-        .as_deref()
-        .map(|value| value.split(',').map(str::to_owned).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let selected_gpus: Vec<BenchmarkGpu> = if python || cpu_only || overrides {
-        vec![]
-    } else {
-        cfg.gpu
-            .gpu_ids
-            .iter()
-            .filter_map(|id| profile.gpus.iter().find(|gpu| gpu.stable_id == *id))
-            .map(BenchmarkGpu::from)
-            .collect()
+    mut model: ModelIdentity,
+    workload: ServingWorkload,
+    metadata: Option<&crate::providers::protocol::ServingMetadata>,
+    recorded_model_label: String,
+) -> ServingBenchmarkProvenance {
+    use crate::providers::{
+        artifacts::ArtifactFormat,
+        protocol::{ServingMemoryScope, ServingTopology},
     };
-    let selection_complete = !python
-        && (cpu_only
-            || (!overrides
-                && !auxiliary_model
-                && !devices.is_empty()
-                && selected_gpus.len() == devices.len()));
-    let mode = if python {
-        "automatic"
-    } else if overrides {
-        "unknown"
-    } else if cpu_only {
-        "cpu"
-    } else if !devices.is_empty() {
-        "selected"
+    let format = if model
+        .format
+        .is_none_or(|format| format == ArtifactFormat::Unknown)
+    {
+        ArtifactFormat::Unknown
     } else {
-        "automatic"
+        metadata.map_or(ArtifactFormat::Unknown, |value| value.model_format)
     };
-    BenchmarkProvenance {
-        schema_version: 1,
+    // A reference file is not evidence of a weights artifact or its size/hash.
+    if format == ArtifactFormat::Unknown {
+        model.status = "unidentified".into();
+        model.sha256 = None;
+        model.size_bytes = None;
+        model.metadata = None;
+        model.local_fingerprint = None;
+        model.revision = None;
+        model.repository = None;
+    } else if format != ArtifactFormat::Gguf {
+        model.metadata = None;
+    }
+    model.format = Some(format);
+    let selected_gpus: Vec<_> = cfg
+        .gpu
+        .gpu_ids
+        .iter()
+        .filter_map(|id| profile.gpus.iter().find(|gpu| gpu.stable_id == *id))
+        .map(BenchmarkGpu::from)
+        .collect();
+    let selection_complete =
+        !cfg.gpu.gpu_ids.is_empty() && selected_gpus.len() == cfg.gpu.gpu_ids.len();
+    let settings = common_request_settings(workload.max_output_tokens, workload.request_usage);
+    ServingBenchmarkProvenance {
+        schema_version: 2,
         app_version: env!("CARGO_PKG_VERSION").into(),
         method: Method {
-            id: "cold-prompt-serving".into(),
+            id: "openai-chat-serving".into(),
             version: 1,
         },
-        corpus: Corpus {
-            profile: corpus_profile.into(),
-            version: 1,
-            sha256: corpus_hash,
-        },
+        workload,
+        runtime: metadata
+            .map(|value| value.runtime.clone())
+            .unwrap_or_default(),
         model,
-        execution_config: ExecutionConfig::default(),
-        environment: Environment {
-            os: profile.os,
-            arch: profile.arch,
-            cpu: profile.cpu,
-            system_memory_bytes: crate::hardware_memory::system_memory_bytes(),
-            installed_gpus: profile.gpus.iter().map(BenchmarkGpu::from).collect(),
-            execution: Execution {
-                mode: mode.into(),
-                selected_gpus,
-                devices: if python || cpu_only || overrides {
-                    vec![]
-                } else {
-                    devices
+        environment: ServingEnvironment {
+            scope: "aiolm_host".into(),
+            host: Environment {
+                os: profile.os,
+                arch: profile.arch,
+                cpu: profile.cpu,
+                system_memory_bytes: crate::hardware_memory::system_memory_bytes(),
+                installed_gpus: profile.gpus.iter().map(BenchmarkGpu::from).collect(),
+                execution: Execution {
+                    mode: if selection_complete {
+                        "selected"
+                    } else {
+                        "unknown"
+                    }
+                    .into(),
+                    selected_gpus,
+                    devices: vec![],
+                    selection_complete,
                 },
-                selection_complete,
+                detection: profile.detection,
             },
-            detection: profile.detection,
         },
+        execution: ServingExecution {
+            topology: metadata.map_or(ServingTopology::Unknown, |value| value.topology),
+            memory_scope: metadata
+                .map_or(ServingMemoryScope::Unavailable, |value| value.memory_scope),
+            settings,
+        },
+        recorded_model_label,
     }
 }
 
-/// Runtime indices identify the configured device, not an OS enumeration index.
-/// Publish its public specifications only if the fresh runtime name/capacity
-/// matches OS adapters whose public properties all agree. Physical identity and
-/// utilization are deliberately not claimed, including for identical cards.
-pub(crate) fn describe_runtime_selection(
-    environment: &mut Environment,
-    cfg: &AppConfig,
-    runtime_lines: &[String],
-) {
-    if environment.execution.selection_complete
-        || environment.execution.mode != "selected"
-        || !cfg.mmproj.trim().is_empty()
-        || crate::tuning_defaults::speculative_enabled(cfg)
-        || cfg.gpu.gpu_ids.is_empty()
-        || !cfg
-            .gpu
-            .gpu_ids
-            .iter()
-            .all(|id| id.starts_with(&format!("runtime:{}:", cfg.active_backend)))
-    {
-        return;
+pub(crate) fn common_request_settings(cap: u32, request_usage: bool) -> Vec<RecordedSetting> {
+    use serde_json::json;
+    let mut entries = vec![
+        ("max_tokens", json!(cap), Some("tokens".to_owned())),
+        ("stream", json!(true), None),
+    ];
+    if request_usage {
+        entries.push(("stream_options.include_usage", json!(true), None));
     }
-    let devices: Option<Vec<BenchmarkGpu>> = environment
-        .execution
-        .devices
-        .iter()
-        .map(|device| {
-            let prefix = format!("{device}:");
-            let mut descriptions = runtime_lines
-                .iter()
-                .filter_map(|line| line.trim().strip_prefix(&prefix));
-            let description = descriptions.next()?.trim();
-            if descriptions.next().is_some() {
-                return None;
-            }
-            let (name, memory) = description.rsplit_once(" (")?;
-            let vram = memory.split_once(" MiB")?.0.parse::<u64>().ok()?;
-            let mut candidates = environment
-                .installed_gpus
-                .iter()
-                .filter(|gpu| gpu.name == name && gpu.vram_mb == Some(vram));
-            let candidate = candidates.next()?;
-            if !candidates.all(|other| other == candidate) {
-                return None;
-            }
-            Some(candidate.clone())
+    entries.push(("temperature", json!(0), None));
+    entries
+        .into_iter()
+        .map(|(name, value, unit)| RecordedSetting {
+            target: "request".into(),
+            scope: vec![],
+            name: name.into(),
+            value,
+            unit,
+            role: None,
         })
-        .collect();
-    if let Some(devices) = devices.filter(|devices| !devices.is_empty()) {
-        environment.execution.selected_gpus = devices;
-        environment.execution.selection_complete = true;
+        .collect()
+}
+
+impl ServingWorkload {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let ordered = |values: &[u32]| values.windows(2).all(|pair| pair[0] < pair[1]);
+        if ![
+            "code_python",
+            "code_mixed",
+            "novel_ko",
+            "novel_en",
+            "novel_ja",
+        ]
+        .contains(&self.corpus.as_str())
+            || self.corpus_version != 1
+            || self.cache_policy != "as_configured"
+            || self.inputs.is_empty()
+            || self.inputs.len() > 64
+            || self.concurrencies.is_empty()
+            || self.concurrencies.len() > 64
+            || self.inputs.len() * self.concurrencies.len() > 64
+            || !(1..=65536).contains(&self.max_output_tokens)
+            || !(1..=100).contains(&self.repetitions)
+            || !ordered(&self.concurrencies)
+            || self
+                .concurrencies
+                .iter()
+                .any(|value| !(1..=64).contains(value))
+            || self
+                .inputs
+                .windows(2)
+                .any(|pair| pair[0].bytes >= pair[1].bytes)
+            || self.inputs.iter().any(|input| {
+                !(256..=1048576).contains(&input.bytes)
+                    || input.sha256.len() != 64
+                    || !input
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        {
+            return Err("invalid serving workload".into());
+        }
+        Ok(())
+    }
+}
+
+impl ServingBenchmarkProvenance {
+    pub(crate) fn validate(&self, profile: &str) -> Result<(), String> {
+        use crate::providers::{
+            artifacts::ArtifactFormat,
+            protocol::{ServingMemoryScope, ServingTopology},
+        };
+        self.workload.validate()?;
+        self.runtime.validate()?;
+        let model = &self.model;
+        let model_valid = match model.status.as_str() {
+            "sha256" => model.sha256.as_ref().is_some_and(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            }),
+            "unidentified" | "multipart" => model.sha256.is_none(),
+            _ => false,
+        };
+        if self.schema_version != 2
+            || self.method.id != "openai-chat-serving"
+            || self.method.version != 1
+            || self.workload.corpus != profile
+            || self.environment.scope != "aiolm_host"
+            || !model_valid
+            || model.format.is_none()
+            || model
+                .size_bytes
+                .is_some_and(|size| size > 9_007_199_254_740_991)
+            || (model.format != Some(ArtifactFormat::Gguf) && model.metadata.is_some())
+            || model
+                .metadata
+                .as_ref()
+                .is_some_and(|value| !value.is_valid())
+            || (matches!(
+                model.format,
+                Some(ArtifactFormat::HfSafetensors | ArtifactFormat::Mlx)
+            ) && (model.status != "unidentified" || model.sha256.is_some()))
+            || model.repository.as_deref().is_some_and(|repository| {
+                !super::model_metadata::valid_repository(repository)
+                    || !model
+                        .revision
+                        .as_deref()
+                        .is_some_and(super::identity::valid_source_revision)
+            })
+            || self.execution.settings.len() > 128
+            || (self.execution.topology != ServingTopology::Owned
+                && self.execution.memory_scope != ServingMemoryScope::Unavailable)
+        {
+            return Err("invalid serving provenance".into());
+        }
+        let identifier = |text: &str| {
+            !text.is_empty()
+                && text.len() <= 64
+                && text.as_bytes()[0].is_ascii_alphanumeric()
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        };
+        for setting in &self.execution.settings {
+            let safe_value = match &setting.value {
+                serde_json::Value::Null | serde_json::Value::Bool(_) => true,
+                serde_json::Value::Number(value) => value.as_f64().is_some_and(f64::is_finite),
+                serde_json::Value::String(value) => {
+                    value.chars().count() <= 128
+                        && !value.is_empty()
+                        && !value.starts_with('-')
+                        && !value.chars().any(|c| c.is_control() || "\\/:@".contains(c))
+                }
+                serde_json::Value::Array(values) => {
+                    values.len() <= 64
+                        && values
+                            .iter()
+                            .all(|value| value.as_f64().is_some_and(f64::is_finite))
+                }
+                _ => false,
+            };
+            if !["launch", "request"].contains(&setting.target.as_str())
+                || setting.scope.len() > 8
+                || !setting.scope.iter().all(|value| identifier(value))
+                || !identifier(&setting.name)
+                || !safe_value
+                || setting.unit.as_deref().is_some_and(|value| {
+                    ![
+                        "tokens", "bytes", "MiB", "GiB", "threads", "layers", "count", "ratio",
+                        "bits", "percent",
+                    ]
+                    .contains(&value)
+                })
+                || setting.role.as_deref().is_some_and(|value| {
+                    ![
+                        "context.total_tokens",
+                        "context.per_sequence_tokens",
+                        "context.per_request_kv_tokens",
+                        "concurrency.capacity",
+                    ]
+                    .contains(&value)
+                })
+            {
+                return Err("invalid recorded serving setting".into());
+            }
+        }
+        if self.execution.settings.windows(2).any(|pair| {
+            (&pair[0].target, &pair[0].scope, &pair[0].name)
+                >= (&pair[1].target, &pair[1].scope, &pair[1].name)
+        }) {
+            return Err("serving settings must have unique sorted identities".into());
+        }
+        let requests: Vec<_> = self
+            .execution
+            .settings
+            .iter()
+            .filter(|setting| setting.target == "request")
+            .cloned()
+            .collect();
+        if requests
+            != common_request_settings(self.workload.max_output_tokens, self.workload.request_usage)
+        {
+            return Err("serving settings do not describe the common request".into());
+        }
+        Ok(())
     }
 }
 
@@ -400,129 +541,45 @@ mod tests {
             fingerprint: "private-fingerprint".into(),
         }
     }
-    fn capture_for(cfg: &AppConfig, resolved: &ResolvedGpu) -> BenchmarkProvenance {
-        capture(
-            cfg,
-            resolved,
-            profile(),
-            ModelIdentity {
-                status: "unidentified".into(),
-                sha256: None,
-                size_bytes: None,
-                format: None,
-                revision: None,
-                local_fingerprint: None,
-                metadata: None,
+    fn legacy_fixture() -> BenchmarkProvenance {
+        let profile = profile();
+        BenchmarkProvenance {
+            schema_version: 1,
+            app_version: "legacy-app".into(),
+            method: Method {
+                id: "cold-prompt-serving".into(),
+                version: 1,
             },
-            "novel_en",
-            "synthetic".into(),
-        )
-    }
-    #[test]
-    fn cpu_and_automatic_runs_never_assume_the_first_installed_gpu_is_used() {
-        let mut cfg = AppConfig {
-            active_backend: "cpu".into(),
-            ..Default::default()
-        };
-        let cpu = capture_for(&cfg, &ResolvedGpu::default());
-        assert_eq!(cpu.environment.execution.mode, "cpu");
-        assert!(cpu.environment.execution.selected_gpus.is_empty());
-        cfg.active_backend = "vulkan".into();
-        cfg.ngl = 99;
-        let automatic = capture_for(&cfg, &ResolvedGpu::default());
-        assert_eq!(automatic.environment.execution.mode, "automatic");
-        assert!(!automatic.environment.execution.selection_complete);
-        assert!(automatic.environment.execution.selected_gpus.is_empty());
-        let encoded = serde_json::to_string(&automatic).unwrap();
-        assert!(!encoded.contains("private-id"));
-        assert!(!encoded.contains("private-fingerprint"));
-    }
-    #[test]
-    fn runtime_index_selection_does_not_guess_an_os_adapter() {
-        let mut cfg = AppConfig {
-            active_backend: "vulkan".into(),
-            ngl: 99,
-            ..Default::default()
-        };
-        cfg.gpu.gpu_ids = vec!["runtime:vulkan:Vulkan0".into()];
-        let selected = capture_for(
-            &cfg,
-            &ResolvedGpu {
-                device_flag: Some("Vulkan0".into()),
-                ..Default::default()
+            corpus: Corpus {
+                profile: "novel_en".into(),
+                version: 1,
+                sha256: "a".repeat(64),
             },
-        );
-        assert_eq!(selected.environment.execution.mode, "selected");
-        assert!(selected.environment.execution.selected_gpus.is_empty());
-        assert!(!selected.environment.execution.selection_complete);
-    }
-
-    #[test]
-    fn runtime_selection_reports_specs_only_when_all_matching_adapters_agree() {
-        let mut cfg = AppConfig {
-            active_backend: "vulkan".into(),
-            ngl: 99,
-            ..Default::default()
-        };
-        cfg.gpu.gpu_ids = vec![
-            "runtime:vulkan:Vulkan0".into(),
-            "runtime:vulkan:Vulkan1".into(),
-        ];
-        let resolved = ResolvedGpu {
-            device_flag: Some("Vulkan0,Vulkan1".into()),
-            ..Default::default()
-        };
-        let mut env = capture_for(&cfg, &resolved).environment;
-        let adapter = env.installed_gpus[0].clone();
-        env.installed_gpus.push(adapter.clone());
-        let lines = vec![
-            "Vulkan0: Unused GPU (1024 MiB, 900 MiB free)".into(),
-            "Vulkan1: Unused GPU (1024 MiB, 800 MiB free)".into(),
-        ];
-        describe_runtime_selection(&mut env, &cfg, &lines);
-        assert!(env.execution.selection_complete);
-        assert_eq!(env.execution.selected_gpus, vec![adapter.clone(), adapter]);
-
-        let mut ambiguous = capture_for(&cfg, &resolved).environment;
-        let mut other = ambiguous.installed_gpus[0].clone();
-        other.driver = Some("different-driver".into());
-        ambiguous.installed_gpus.push(other);
-        describe_runtime_selection(&mut ambiguous, &cfg, &lines);
-        assert!(!ambiguous.execution.selection_complete);
-        assert!(ambiguous.execution.selected_gpus.is_empty());
-
-        let mut missing = capture_for(&cfg, &resolved).environment;
-        describe_runtime_selection(&mut missing, &cfg, &lines[..1]);
-        assert!(!missing.execution.selection_complete);
-    }
-
-    #[test]
-    fn effective_options_follow_last_launch_argument_and_keep_defaults_unknown() {
-        let parsed = ExecutionConfig::from_args(&[
-            "--threads".into(),
-            "8".into(),
-            "-t=12".into(),
-            "--tensor-split".into(),
-            "1,2".into(),
-        ]);
-        assert_eq!(parsed.threads, Some(12));
-        assert_eq!(parsed.tensor_split, Some(vec![1.0, 2.0]));
-        assert!(parsed.gpu_layers.is_none());
-        assert!(parsed.cache_type_k.is_none());
-        let automatic = ExecutionConfig::from_args(&[
-            "-ngl".into(),
-            "-1".into(),
-            "-t=-1".into(),
-            "-tb=-1".into(),
-        ]);
-        assert_eq!(automatic.gpu_layers, Some(-1));
-        assert_eq!(automatic.threads, Some(-1));
-        assert_eq!(automatic.threads_batch, Some(-1));
+            model: serde_json::from_value(json!({
+                "status":"unidentified","sha256":null,"size_bytes":null
+            }))
+            .unwrap(),
+            execution_config: ExecutionConfig::default(),
+            environment: Environment {
+                os: profile.os,
+                arch: profile.arch,
+                cpu: profile.cpu,
+                system_memory_bytes: None,
+                installed_gpus: vec![],
+                execution: Execution {
+                    mode: "automatic".into(),
+                    selected_gpus: vec![],
+                    devices: vec![],
+                    selection_complete: false,
+                },
+                detection: profile.detection,
+            },
+        }
     }
 
     #[test]
     fn model_metadata_rides_along_and_records_written_without_it_stay_valid() {
-        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        let mut provenance = legacy_fixture();
         provenance.corpus.sha256 = "a".repeat(64);
         provenance.model.metadata = Some(super::super::model_metadata::BenchmarkModelMetadata {
             format: "GGUF".into(),
@@ -540,27 +597,6 @@ mod tests {
         assert!(provenance.validate("novel_en").is_ok());
 
         let encoded = serde_json::to_value(&provenance).unwrap();
-        let metadata = encoded
-            .pointer("/model/metadata")
-            .expect("metadata travels");
-        let mut keys: Vec<&String> = metadata.as_object().unwrap().keys().collect();
-        keys.sort();
-        assert_eq!(
-            keys,
-            vec![
-                "architecture",
-                "artifact",
-                "base_models",
-                "file_type",
-                "format",
-                "name",
-                "quantization",
-                "quantized_by",
-                "repository",
-                "size_label",
-                "source",
-            ]
-        );
 
         // A record written before metadata existed carries none and is still a
         // valid record; the field is optional, not newly required.
@@ -586,7 +622,7 @@ mod tests {
 
     #[test]
     fn a_described_shard_still_refuses_to_claim_the_whole_model_digest() {
-        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        let mut provenance = legacy_fixture();
         provenance.corpus.sha256 = "a".repeat(64);
         provenance.model = ModelIdentity {
             status: "multipart".into(),
@@ -594,6 +630,7 @@ mod tests {
             size_bytes: None,
             format: None,
             revision: None,
+            repository: None,
             local_fingerprint: None,
             metadata: Some(super::super::model_metadata::BenchmarkModelMetadata {
                 format: "GGUF".into(),
@@ -618,21 +655,8 @@ mod tests {
     #[test]
     fn a_snapshot_identity_cannot_claim_a_digest_or_a_malformed_fingerprint() {
         use crate::providers::artifacts::ArtifactFormat;
-        let cfg = AppConfig {
-            active_provider: "mlx-vlm".into(),
-            ..Default::default()
-        };
-        let mut provenance = capture_for(
-            &cfg,
-            &ResolvedGpu {
-                device_flag: Some("stale-llama-device".into()),
-                ..Default::default()
-            },
-        );
+        let mut provenance = legacy_fixture();
         provenance.corpus.sha256 = "a".repeat(64);
-        assert_eq!(provenance.environment.execution.mode, "automatic");
-        assert!(provenance.environment.execution.selected_gpus.is_empty());
-        assert!(provenance.environment.execution.devices.is_empty());
         provenance.model.format = Some(ArtifactFormat::Mlx);
         provenance.model.size_bytes = Some(4096);
         provenance.model.revision = Some("0123456789abcdef0123456789abcdef01234567".into());
@@ -653,7 +677,7 @@ mod tests {
 
     #[test]
     fn physical_cores_travel_with_the_thread_count_and_stay_optional() {
-        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        let mut provenance = legacy_fixture();
         provenance.corpus.sha256 = "a".repeat(64);
         assert_eq!(provenance.environment.cpu.physical_cores, Some(4));
         assert_eq!(provenance.environment.cpu.logical_cores, 8);
@@ -691,7 +715,7 @@ mod tests {
 
     #[test]
     fn provenance_validation_rejects_unknown_versions_and_inconsistent_identity() {
-        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        let mut provenance = legacy_fixture();
         provenance.corpus.sha256 = "a".repeat(64);
         assert!(provenance.validate("novel_en").is_ok());
         assert!(provenance.validate("code_python").is_err());

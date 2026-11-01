@@ -1,6 +1,7 @@
 // src-tauri/src/server.rs
 use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
 use crate::process_output::{OutputBuffer, Retain};
+use crate::providers::launch::Readiness;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -959,13 +960,26 @@ pub fn cleanup_api_key_file(path: Option<&Path>) {
     }
 }
 
+/// A successfully launched process and the readiness contract from its plan.
+pub struct SpawnedServer {
+    pub child: Child,
+    pub url: String,
+    pub key_file: Option<PathBuf>,
+    pub readiness: Readiness,
+}
+
 /// Spawn the server and drain both output pipes into independent bounded tails.
+///
+/// The optional observer receives the actual program and final, unredacted
+/// arguments only after the child, launch resources and both readers are owned.
+/// Callers must mask private values before recording or publishing a snapshot.
 pub fn spawn(
     cfg: &AppConfig,
     api_key: &str,
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
-) -> Result<(Child, String, Option<PathBuf>), String> {
+    capture: Option<&mut dyn FnMut(&Path, &[String])>,
+) -> Result<SpawnedServer, String> {
     let adapter = crate::providers::adapter::resolve(cfg);
     let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
     let bin = plan.program.to_string_lossy().into_owned();
@@ -1027,11 +1041,15 @@ pub fn spawn(
         OutputReader::attach(stdout, ring.clone())
             .map_err(|error| format!("failed to start server stdout reader: {error}"))?,
     );
-    Ok((
+    if let Some(capture) = capture {
+        capture(Path::new(&bin), &args);
+    }
+    Ok(SpawnedServer {
         child,
-        format!("http://127.0.0.1:{}/v1", cfg.port),
-        api_key_file,
-    ))
+        url: format!("http://127.0.0.1:{}/v1", cfg.port),
+        key_file: api_key_file,
+        readiness: plan.readiness,
+    })
 }
 
 fn auth_header(api_key: &str) -> String {
@@ -1221,13 +1239,14 @@ pub(crate) fn port_from_url(url: &str) -> Option<u16> {
         .or_else(|| (url == "http://127.0.0.1:80/v1").then_some(80))
 }
 
-/// Poll both /health and /v1/models until the child is usable or timeout expires.
+/// Poll the launch plan's health endpoint and /v1/models until usable or timed out.
 pub async fn wait_ready(
     shared: Arc<Mutex<ServerState>>,
     url: &str,
     api_key: &str,
     timeout_s: u64,
     err: &Arc<ErrBuf>,
+    readiness: Readiness,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -1241,27 +1260,14 @@ pub async fn wait_ready(
             }
             format!("failed to create readiness client: {e}")
         })?;
-    let mut health = url.replace("/v1", "/health");
-    let mut health_authenticated = true;
+    let health = format!("{}{}", url.trim_end_matches("/v1"), readiness.health_path);
     let models = format!("{url}/models");
     let engine = shared
         .lock()
         .map_err(|_| "server state lock was poisoned")?
         .engine
         .clone();
-    if let Some(info) = engine.as_ref().filter(|info| info.provider.is_custom()) {
-        let manifest = match crate::providers::registry::manifest(info.provider, &info.runtime_id) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                if let Ok(mut state) = shared.lock() {
-                    kill(&mut state.child, None);
-                }
-                return Err(error);
-            }
-        };
-        health_authenticated = manifest.health_authenticated;
-        health = format!("{}{}", url.trim_end_matches("/v1"), manifest.health_path);
-    }
+    let health_authenticated = readiness.health_authenticated;
     let port = match port_from_url(url) {
         Some(port) => port,
         None => {
@@ -1340,7 +1346,7 @@ pub async fn wait_ready(
                                         || value
                                             .get("loaded_model")
                                             .and_then(serde_json::Value::as_str)
-                                            == Some(info.upstream_model.as_str());
+                                            == Some(readiness.expected_model.as_str());
                                 let embeddings_ready =
                                     info.embedding_model.as_ref().is_none_or(|model| {
                                         value
@@ -1371,14 +1377,11 @@ pub async fn wait_ready(
                         .as_ref()
                         .and_then(|value| value.get("data"))
                         .and_then(serde_json::Value::as_array)
-                        .and_then(|items| match engine.as_ref() {
-                            Some(info) if info.provider != crate::providers::ProviderId::Llama => {
-                                items.iter().find(|item| {
-                                    item.get("id").and_then(serde_json::Value::as_str)
-                                        == Some(info.upstream_model.as_str())
-                                })
-                            }
-                            _ => items.first(),
+                        .and_then(|items| {
+                            items.iter().find(|item| {
+                                item.get("id").and_then(serde_json::Value::as_str)
+                                    == Some(readiness.expected_model.as_str())
+                            })
                         })
                         .and_then(|item| item.get("id"))
                         .and_then(serde_json::Value::as_str)
@@ -1390,7 +1393,7 @@ pub async fn wait_ready(
                                 .filter(|info| {
                                     info.provider == crate::providers::ProviderId::MlxVlm
                                 })
-                                .map(|info| info.upstream_model.clone())
+                                .map(|_| readiness.expected_model.clone())
                         });
                     if let Some(model_id) = model_id {
                         let (pid, owner) = shared
@@ -1826,7 +1829,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn readiness_rejects_a_different_process_owning_the_http_listener() {
-        use std::io::{Read as _, Write as _};
+        use std::io::{BufRead as _, Write as _};
         use std::net::TcpListener;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1845,11 +1848,26 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-                        let mut request = [0_u8; 1024];
-                        let _ = stream.read(&mut request);
-                        let body = r#"{"data":[{"id":"dummy-model"}]}"#;
+                        let mut reader = std::io::BufReader::new(&mut stream);
+                        let mut request = String::new();
+                        let mut authenticated = false;
+                        let _ = reader.read_line(&mut request);
+                        loop {
+                            let mut header = String::new();
+                            if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                                break;
+                            }
+                            authenticated |=
+                                header.to_ascii_lowercase().starts_with("authorization:");
+                        }
+                        drop(reader);
+                        let accepted = (request.starts_with("GET /launch-health ")
+                            && !authenticated)
+                            || (request.starts_with("GET /v1/models ") && authenticated);
+                        let status = if accepted { "200 OK" } else { "404 Not Found" };
+                        let body = r#"{"data":[{"id":"wrong-model"},{"id":"dummy-model"}]}"#;
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
                         );
                         let _ = stream.write_all(response.as_bytes());
@@ -1882,7 +1900,18 @@ mod tests {
             // The fixture must finish two HTTP round trips and the native
             // listener-owner lookup before the deadline, even when parallel
             // tests saturate a hosted runner. Keep the child alive beyond it.
-            .block_on(wait_ready(shared.clone(), &url, "token", 5, &err));
+            .block_on(wait_ready(
+                shared.clone(),
+                &url,
+                "token",
+                5,
+                &err,
+                Readiness {
+                    health_path: "/launch-health".into(),
+                    health_authenticated: false,
+                    expected_model: "dummy-model".into(),
+                },
+            ));
 
         stop.store(true, Ordering::Release);
         server_thread.join().expect("join dummy HTTP server");
@@ -2344,6 +2373,11 @@ mod tests {
             "token",
             1,
             &err,
+            Readiness {
+                health_path: "/health".into(),
+                health_authenticated: true,
+                expected_model: "model.gguf".into(),
+            },
         ));
         let error = result.expect_err("an unresponsive server must time out");
         assert!(error.contains("server start timed out after 1s"));
@@ -2382,6 +2416,11 @@ mod tests {
                     "token",
                     SERVER_START_TIMEOUT_SECS,
                     &err,
+                    Readiness {
+                        health_path: "/health".into(),
+                        health_authenticated: true,
+                        expected_model: "model.gguf".into(),
+                    },
                 ),
             )
             .await

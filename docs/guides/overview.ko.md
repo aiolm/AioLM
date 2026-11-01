@@ -4,7 +4,9 @@
 
 [문서 목차](../README.md) — 설치, 사용 안내, 참고 문서, 보안·개인정보 정책을 모았습니다. 문서는 현재 소스를 기준으로 하므로 게시된 릴리스에는 최신 변경이 아직 포함되지 않았을 수 있습니다.
 
-AioLM(All-in-One LM) — Tauri v2 UI에서 모델, 런타임, 채팅, 벤치마크를 관리하는 Windows/macOS/Linux 데스크톱 앱입니다. llama.cpp, Linux 및 Apple Silicon macOS(vllm-metal)의 vLLM, Apple Silicon macOS의 MLX를 선택할 수 있습니다. 호환성과 제한 사항은 [추론 런타임](../reference/inference-runtimes.md)을 참고하세요.
+AioLM(All-in-One LM)은 추론 엔진이 아니라 모델·런타임·채팅·벤치마크를 관리하는 Windows/macOS/Linux용 데스크톱 GUI 어댑터입니다. llama.cpp, Linux 및 Apple Silicon macOS(vllm-metal)의 vLLM, Apple Silicon macOS의 MLX와 다른 연결된 OpenAI 호환 엔진을 사용할 수 있습니다. 호환성과 제한 사항은 [추론 런타임](../reference/inference-runtimes.md)을 참고하세요.
+
+연결된 모든 텍스트 스트리밍 엔진은 같은 API 벤치마크(`openai-chat-serving@1`)와 이력·내보내기·공유·관리를 사용합니다. 시간과 출력 bytes는 클라이언트 관측값이며 토큰·캐시 카운터는 엔진 자체 보고값으로, 없으면 미확인입니다. 입력 UTF-8 bytes는 토큰 수가 아니며 최대 출력 token 요청은 강제 생성 길이가 아닙니다. 실행 프로필은 보존하고 캐시는 설정된 상태로 측정하므로 cold-cache를 보장하지 않습니다. 기본값은 입력 4096/16384 bytes, 출력 상한 128 tokens, 동시성 1/2/4, 반복 1회, 워밍업 켜짐, 선택적 usage 요청 꺼짐입니다. [벤치마크 안내](../reference/benchmarks.md)를 참고하세요.
 
 모델 로드와 API 서버 실행은 독립적입니다. 모델을 로드하면 앱 내부 채팅에서
 사용할 수 있고, 외부 앱에서 연결하려면 사이드바의 **API 서버**에서 서버를

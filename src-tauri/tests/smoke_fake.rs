@@ -91,13 +91,58 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
 
     let ring = Arc::new(ErrBuf::default());
     let api_key = "fake-smoke-token";
-    let (child, url, api_key_file) = server::spawn(
+    let mut observed_command = None;
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file: api_key_file,
+        readiness,
+    } = server::spawn(
         &cfg,
         api_key,
         &ring,
         &aiolm_lib::gpu::ResolvedGpu::default(),
+        Some(&mut |program, args| {
+            assert!(observed_command.is_none(), "capture must run exactly once");
+            observed_command = Some((program.to_owned(), args.to_vec()));
+        }),
     )
     .unwrap_or_else(|e| panic!("spawn failed: {e}\nstderr: {}", ring.tail()));
+    let (program, captured_args) = observed_command.expect("successful spawn must be captured");
+    assert_eq!(
+        program,
+        std::path::PathBuf::from(server::server_bin(&cfg).unwrap())
+    );
+    let key_path = api_key_file
+        .as_ref()
+        .expect("native launch owns a key file");
+    assert!(
+        key_path.is_file(),
+        "capture follows launch resource creation"
+    );
+    assert!(
+        captured_args
+            .windows(2)
+            .any(|pair| { pair[0] == "--api-key-file" && pair[1] == key_path.to_string_lossy() }),
+        "capture must include the final app-owned credential binding"
+    );
+    let invalid = AppConfig {
+        active_build: "missing-runtime".into(),
+        ..cfg.clone()
+    };
+    let mut failed_capture = false;
+    assert!(server::spawn(
+        &invalid,
+        api_key,
+        &ring,
+        &Default::default(),
+        Some(&mut |_, _| failed_capture = true),
+    )
+    .is_err());
+    assert!(
+        !failed_capture,
+        "a failed launch must not publish a command snapshot"
+    );
     let shared = Arc::new(Mutex::new(server::ServerState::default()));
     shared.lock().expect("server state lock").attach_starting(
         child,
@@ -116,8 +161,9 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         .enable_all()
         .build()
         .unwrap();
-    let ready =
-        rt.block_on(async { server::wait_ready(shared.clone(), &url, api_key, 20, &ring).await });
+    let ready = rt.block_on(async {
+        server::wait_ready(shared.clone(), &url, api_key, 20, &ring, readiness).await
+    });
     server::cleanup_api_key_file(api_key_file.as_deref());
     if let Err(e) = ready {
         panic!("wait_ready failed against fake server: {e}");
@@ -167,11 +213,17 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
             ..cfg.clone()
         };
         drop(reservation);
-        let (child, case_url, key_file) = server::spawn(
+        let server::SpawnedServer {
+            child,
+            url: case_url,
+            key_file,
+            readiness,
+        } = server::spawn(
             &case,
             api_key,
             &ring,
             &aiolm_lib::gpu::ResolvedGpu::default(),
+            None,
         )
         .unwrap();
         let state = Arc::new(Mutex::new(server::ServerState::default()));
@@ -193,6 +245,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
             api_key,
             20,
             &ring,
+            readiness,
         ));
         if let Some(message) = expected_error {
             assert!(outcome.unwrap_err().contains(message), "{flag}");
@@ -234,11 +287,17 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         server_args: vec!["--fake-startup-failure".into()],
         ..cfg
     };
-    let (child, url, key_file) = server::spawn(
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file,
+        readiness,
+    } = server::spawn(
         &failing_cfg,
         api_key,
         &ring,
         &aiolm_lib::gpu::ResolvedGpu::default(),
+        None,
     )
     .expect("spawn failing engine fixture");
     shared.lock().unwrap().attach_starting(
@@ -253,7 +312,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         .block_on(async {
             tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                server::wait_ready(shared.clone(), &url, api_key, 20, &ring),
+                server::wait_ready(shared.clone(), &url, api_key, 20, &ring, readiness),
             )
             .await
         })
@@ -281,6 +340,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
     assert!(key_file.as_ref().is_none_or(|path| !path.exists()));
 
     assert_loaded_binding_survives_served_id(_dir.path());
+    rt.block_on(assert_common_serving_benchmarks(_dir.path()));
 }
 
 // Keep the launched filesystem bindings after readiness reports a served model ID.
@@ -396,7 +456,12 @@ fn observe_loaded_binding(root: &std::path::Path) -> Result<BindingObservation, 
     let ring = Arc::new(ErrBuf::default());
     let key = "synthetic-binding-token";
     drop(reservation);
-    let (child, url, key_file) = server::spawn(&loaded, key, &ring, &Default::default())?;
+    let server::SpawnedServer {
+        child,
+        url,
+        key_file,
+        readiness,
+    } = server::spawn(&loaded, key, &ring, &Default::default(), None)?;
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -455,7 +520,7 @@ fn observe_loaded_binding(root: &std::path::Path) -> Result<BindingObservation, 
     let ready = rt.block_on(async {
         tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            server::wait_ready(shared.clone(), &url, key, 20, &ring),
+            server::wait_ready(shared.clone(), &url, key, 20, &ring, readiness),
         )
         .await
         .map_err(|_| "fixture readiness exceeded its existing allowance".to_owned())?
@@ -539,13 +604,13 @@ fn assert_loaded_binding_survives_served_id(root: &std::path::Path) {
         .expect("actual fake-server readiness, ownership and task confirmation");
     assert_eq!(observed.before_model, observed.loaded_path);
     assert_eq!(
-        observed.after_model, "fake-model",
-        "real wait_ready assignment must be traversed"
+        observed.after_model, observed.loaded_path,
+        "readiness must select the launch plan model, not the first advertised model"
     );
     assert_eq!(observed.status["state"], "running");
     assert_eq!(
-        observed.status["model"], "fake-model",
-        "served ID wire contract remains unchanged"
+        observed.status["model"], observed.loaded_path,
+        "status must publish the model confirmed from the launch plan"
     );
     assert_eq!(
         observed.status["engine"]["upstream_model"],
@@ -577,4 +642,292 @@ fn assert_loaded_binding_survives_served_id(root: &std::path::Path) {
     );
     assert_eq!(observed.stopped_memory.projector_mb, 0);
     assert_eq!(observed.stopped_memory.adapters_mb, 0);
+}
+
+async fn assert_common_serving_benchmarks(root: &std::path::Path) {
+    use aiolm_lib::{performance_bench as bench, providers};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let model = root.join("serving-fixture.gguf");
+    fs::write(&model, b"GGUF\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0").unwrap();
+    let receipt = root.join("serving-requests.jsonl");
+    let cfg = AppConfig {
+        active_model: model.to_string_lossy().into_owned(),
+        active_backend: "cpu".into(),
+        active_build: "local_fake".into(),
+        ctx_size: 8192,
+        parallel: 3,
+        ngl: 0,
+        server_args: vec![
+            "--benchmark-receipt".into(),
+            receipt.to_string_lossy().into_owned(),
+        ],
+        ..Default::default()
+    };
+    let request = bench::PerformanceBenchRequest {
+        run_id: "native-serving".into(),
+        method: Default::default(),
+        context_profile: "novel_ko".into(),
+        prompt_bytes: vec![256, 4096],
+        max_output_tokens: 128,
+        concurrencies: vec![1, 2],
+        repetitions: 1,
+        warmup: true,
+        request_usage: false,
+    };
+    let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
+    let process = Arc::new(Mutex::new(None));
+    let complete = bench::run(
+        cfg.clone(),
+        request.clone(),
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
+    assert_eq!(complete.status, "complete", "{:?}", complete.message);
+    assert_eq!(complete.rows.len(), 4);
+    assert!(complete
+        .rows
+        .iter()
+        .all(|r| r.content_bytes == 2 * u64::from(r.concurrency)
+            && r.reported_completion_tokens.is_none()
+            && r.usage_status == "missing"
+            && r.finish_reasons == vec!["not_reported"; r.concurrency as usize]));
+    assert!(process.lock().unwrap().is_none());
+    assert!(complete
+        .args
+        .windows(2)
+        .any(|args| args == ["--ctx-size", "8192"]));
+    assert!(complete
+        .args
+        .windows(2)
+        .any(|args| args == ["--parallel", "3"]));
+    assert!(complete
+        .args
+        .windows(2)
+        .any(|args| args == ["--api-key-file", "[redacted]"]));
+    let frozen = serde_json::to_value(&complete).unwrap();
+    let settings = frozen
+        .pointer("/provenance/execution/settings")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let context = settings
+        .iter()
+        .find(|setting| setting["target"] == "launch" && setting["name"] == "ctx-size")
+        .unwrap();
+    assert_eq!(context["value"], 8192);
+    assert_eq!(context["unit"], "tokens");
+    assert_eq!(context["role"], "context.total_tokens");
+    let capacity = settings
+        .iter()
+        .find(|setting| setting["target"] == "launch" && setting["name"] == "parallel")
+        .unwrap();
+    assert_eq!(capacity["value"], 3);
+    assert_eq!(capacity["role"], "concurrency.capacity");
+    assert!(!settings.iter().any(|setting| [
+        "model",
+        "host",
+        "port",
+        "api-key-file",
+        "benchmark-receipt"
+    ]
+    .contains(&setting["name"].as_str().unwrap())));
+    let calls: Vec<serde_json::Value> = fs::read_to_string(&receipt)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(!calls
+        .iter()
+        .any(|call| ["/props", "/tokenize", "/slots"].contains(&call["path"].as_str().unwrap())));
+    let chats: Vec<_> = calls
+        .iter()
+        .filter(|call| call["path"] == "/v1/chat/completions")
+        .collect();
+    assert_eq!(
+        chats.len(),
+        12,
+        "one concurrency-matched warmup and measurement per point"
+    );
+    for call in chats {
+        let body = call["body"].as_object().unwrap();
+        assert_eq!(body.len(), 5, "no saved defaults or vendor-only fields");
+        assert_eq!(body["temperature"], 0);
+        assert_eq!(body["max_tokens"], 128);
+        assert_eq!(body["stream"], true);
+        let text = body["messages"][0]["content"].as_str().unwrap();
+        assert!([256, 4096].contains(&text.len()));
+        assert!(text.starts_with("Continue the following text. Do not summarize or explain.\n\n"));
+    }
+
+    // An EOF in the next trial preserves only the first, fully completed batch.
+    let failure_cfg = AppConfig {
+        server_args: vec!["--benchmark-second-eof".into()],
+        ..cfg.clone()
+    };
+    let short = bench::PerformanceBenchRequest {
+        run_id: "partial-serving".into(),
+        prompt_bytes: vec![256],
+        concurrencies: vec![1],
+        repetitions: 2,
+        warmup: false,
+        ..request.clone()
+    };
+    let runtime = bench::RuntimeInfo::prepare(&failure_cfg, &short)
+        .await
+        .unwrap();
+    let partial = bench::run(
+        failure_cfg,
+        short.clone(),
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
+    assert_eq!(partial.status, "partial", "{:?}", partial.message);
+    assert_eq!(partial.rows.len(), 1);
+    assert_eq!(partial.rows[0].repetition, 1);
+    assert!(partial.message.as_deref().unwrap().contains("repetition 2"));
+
+    // Cancel after the second request reaches the actual child, not at a phase event.
+    let cancel_receipt = root.join("cancel-serving-requests.jsonl");
+    let cancel_cfg = AppConfig {
+        server_args: vec![
+            "--benchmark-second-stall".into(),
+            "--benchmark-receipt".into(),
+            cancel_receipt.to_string_lossy().into_owned(),
+        ],
+        ..cfg
+    };
+    let runtime = bench::RuntimeInfo::prepare(&cancel_cfg, &short)
+        .await
+        .unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let trigger = cancel.clone();
+    let canceller = tokio::spawn(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                let calls = fs::read_to_string(&cancel_receipt).unwrap_or_default();
+                if calls
+                    .lines()
+                    .filter(|line| line.contains("/v1/chat/completions"))
+                    .count()
+                    >= 2
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("second measured request reached the child");
+        trigger.store(true, Ordering::Release);
+    });
+    let cancelled = bench::run(
+        cancel_cfg,
+        short,
+        Default::default(),
+        cancel,
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
+    canceller.await.unwrap();
+    assert_eq!(cancelled.status, "cancelled", "{:?}", cancelled.message);
+    assert_eq!(cancelled.rows.len(), 1);
+    assert!(process.lock().unwrap().is_none());
+
+    // A synthetic interpreter exercises the real built-in Python launch command.
+    // This fixture asserts adapter plumbing, never installed-engine inference.
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+        use providers::python_env::{InstallationKind, ProbeRecord, PythonRuntimeManifest};
+        let provider = if cfg!(target_os = "macos") {
+            providers::ProviderId::MlxVlm
+        } else {
+            providers::ProviderId::Vllm
+        };
+        let snapshot = root.join("serving-python-model");
+        fs::create_dir(&snapshot).unwrap();
+        fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"qwen2","architectures":["Qwen2ForCausalLM"]}"#,
+        )
+        .unwrap();
+        fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        fs::write(
+            snapshot.join("tokenizer_config.json"),
+            br#"{"chat_template":"{{ messages }}"}"#,
+        )
+        .unwrap();
+        fs::write(snapshot.join("model.safetensors"), b"synthetic weights").unwrap();
+        let directory = providers::python_env::providers_root()
+            .join(provider.as_str())
+            .join("serving-fixture");
+        fs::create_dir_all(&directory).unwrap();
+        let manifest = PythonRuntimeManifest {
+            format: 1,
+            provider,
+            id: "serving-fixture".into(),
+            kind: InstallationKind::External,
+            python: env!("CARGO_BIN_EXE_fake-llama-server").into(),
+            requested_version: None,
+            probe: Some(ProbeRecord {
+                version: "synthetic".into(),
+                accelerator: "cpu".into(),
+                architectures: vec!["Qwen2ForCausalLM".into()],
+                generation_architectures: vec!["Qwen2ForCausalLM".into()],
+                model_types: vec!["qwen2".into()],
+                package_scan: 1,
+                ..Default::default()
+            }),
+        };
+        fs::write(
+            directory.join("aiolm-provider-runtime.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let python_cfg = AppConfig {
+            active_provider: provider.as_str().into(),
+            active_runtime: manifest.id,
+            active_model: snapshot.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let python_request = bench::PerformanceBenchRequest {
+            run_id: "python-serving".into(),
+            prompt_bytes: vec![256],
+            concurrencies: vec![1, 2],
+            repetitions: 1,
+            warmup: false,
+            ..request
+        };
+        let runtime = bench::RuntimeInfo::prepare(&python_cfg, &python_request)
+            .await
+            .unwrap();
+        let result = bench::run(
+            python_cfg,
+            python_request,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(result.status, "complete", "{:?}", result.message);
+        assert_eq!(result.rows.len(), 2);
+        assert!(
+            result
+                .rows
+                .iter()
+                .all(|r| r.usage_status == "missing"
+                    && r.output_bytes == u64::from(r.concurrency) * 2)
+        );
+        assert!(process.lock().unwrap().is_none());
+    }
 }

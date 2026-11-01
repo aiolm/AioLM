@@ -308,14 +308,19 @@ async fn fixed_entry_options_and_adapter_reservations_stay_app_owned() {
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let info = providers::execution::info(&cfg).unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) = server::spawn(&cfg, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&cfg, "synthetic-key", &err, &Default::default(), None).unwrap();
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap();
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let argv: Vec<String> =

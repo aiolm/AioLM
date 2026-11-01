@@ -4,7 +4,9 @@
 
 [ドキュメント一覧](../README.md) — インストール、使い方、リファレンス、セキュリティとプライバシーのポリシー。ドキュメントは現在のソースに基づくため、公開済みリリースには最新の変更がまだ含まれていない場合があります。
 
-AioLM（All-in-One LM）— Tauri v2 UI でモデル、ランタイム、チャット、ベンチマークを管理する Windows/macOS/Linux デスクトップアプリです。llama.cpp、Linux および Apple Silicon macOS（vllm-metal）の vLLM、Apple Silicon macOS の MLX を選択できます。互換性と制限事項は [推論ランタイム](../reference/inference-runtimes.md) を参照してください。
+AioLM（All-in-One LM）は推論エンジンではなく、モデル・ランタイム・チャット・ベンチマークを管理する Windows/macOS/Linux 用デスクトップ GUI アダプターです。llama.cpp、Linux および Apple Silicon macOS（vllm-metal）の vLLM、Apple Silicon macOS の MLX、その他の接続済み OpenAI 互換エンジンを利用できます。互換性と制限事項は [推論ランタイム](../reference/inference-runtimes.md) を参照してください。
+
+接続済みのすべてのテキストストリーミングエンジンで、同じ API ベンチマーク（`openai-chat-serving@1`）、履歴、書き出し、共有・管理を利用できます。時間と出力 bytes はクライアント観測値で、トークン・キャッシュのカウンターはエンジンの自己報告値です。報告がなければ不明のままです。入力 UTF-8 bytes はトークン数ではなく、最大出力 token の要求は生成長の強制ではありません。起動プロファイルを保持し、キャッシュは設定された状態で測定するため、cold-cache を保証しません。既定値は入力 4096/16384 bytes、出力上限 128 tokens、同時実行数 1/2/4、反復 1 回、ウォームアップ有効、任意の usage 要求は無効です。[ベンチマークガイド](../reference/benchmarks.md) を参照してください。
 
 モデルのロードと API サーバーの起動は独立しています。モデルをロードすると
 アプリ内チャットで利用でき、外部アプリから接続する場合はサイドバーの

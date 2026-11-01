@@ -103,17 +103,17 @@ describe('profile editor persistence', () => {
     expect(current).toEqual(before);
   });
 
-  it('keeps benchmark-controlled values and prompt while saving final editable fields to a legacy profile', () => {
+  it('saves benchmark launch values and explicit request clears while preserving the profile prompt', () => {
     const { current, edit } = fixture();
     current.settings_profiles.entries[0] = { ...current.settings_profiles.entries[0], legacy: true, coverage: ['temperature', 'threads'],
       settings: { temperature: 0.2, threads: 4, runtime_defaults: ['temperature'] } };
     edit.library = structuredClone(current.settings_profiles);
     edit.saveMode = 'benchmark';
     edit.application = { ...edit.application, system_prompt: 'Workload prompt', settings: { ...edit.application.settings,
-      temperature: 1.5, threads: 7, ngl: 12, runtime_defaults: [] } };
+      ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 1.5, chat_options: {}, threads: 7, ngl: 12, runtime_defaults: [] } };
     const next = mergeProfileEditor(current, edit);
     expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'shared', revision: 2, system_prompt: 'Original prompt',
-      settings: { temperature: 0.2, threads: 7, ngl: 12, runtime_defaults: ['temperature'] } });
+      settings: { ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 1.5, chat_options: {}, threads: 7, ngl: 12, runtime_defaults: [] } });
     expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).toContain('ngl');
     expect(next.applied).toEqual(current.settings_profiles.applied);
   });

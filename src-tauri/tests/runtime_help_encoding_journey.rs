@@ -318,14 +318,19 @@ async fn code_page_help_needs_an_explicit_encoding_and_keeps_its_locale() {
     );
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) = server::spawn(&cfg, "", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&cfg, "", &err, &Default::default(), None).unwrap();
     let state = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut shared = state.lock().unwrap();
         shared.child = Some(child);
         shared.engine = Some(providers::execution::info(&cfg).unwrap());
     }
-    let ready = server::wait_ready(state.clone(), &url, "", 5, &err).await;
+    let ready = server::wait_ready(state.clone(), &url, "", 5, &err, readiness).await;
     server::kill(&mut state.lock().unwrap().child, Some(err.clone()));
     ready.unwrap();
     let argv: Vec<String> =

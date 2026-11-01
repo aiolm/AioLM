@@ -77,6 +77,8 @@ fn manifest(
         engine_id: engine,
         runtime_id: "build-1".into(),
         display_name: "Synthetic help engine".into(),
+        public_engine: None,
+        compute_ownership: None,
         platforms: vec![Platform {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
@@ -493,15 +495,19 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     // The real process receives exactly those arguments.
     let info = providers::execution::info(&loaded).unwrap();
     let err = Arc::new(ErrBuf::default());
-    let (child, url, _) =
-        server::spawn(&loaded, "synthetic-key", &err, &Default::default()).unwrap();
+    let server::SpawnedServer {
+        child,
+        url,
+        readiness,
+        ..
+    } = server::spawn(&loaded, "synthetic-key", &err, &Default::default(), None).unwrap();
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     {
         let mut state = shared.lock().unwrap();
         state.child = Some(child);
         state.engine = Some(info);
     }
-    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err)
+    server::wait_ready(shared.clone(), &url, "synthetic-key", 5, &err, readiness)
         .await
         .unwrap();
     let argv: Vec<String> = serde_json::from_slice(&fs::read(&argv_file).unwrap()).unwrap();

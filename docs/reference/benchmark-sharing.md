@@ -23,35 +23,56 @@ Excel, CSV and Markdown exports contain a readable results report without local
 paths. See [Benchmarks](benchmarks.md) for measurement details, exports and
 deletion.
 
+## Versioned public contracts
+
+`@aiolm/benchmark-contracts` 0.9.0 accepts legacy schema1/2 snapshots unchanged
+and schema3 `openai-chat-serving@1` snapshots through the same `/v1` API.
+Schema3 identifies inputs by exact UTF-8 byte count and SHA-256, not token
+length. Its runtime identity has six nullable fields and permits any safe
+engine name, including an unknown name. Model format is independent of engine.
+
+Serving measurements preserve observed content and reasoning bytes separately.
+First-output timings and end-to-end batch time are client observations; optional
+engine-reported token/cache counters remain unknown when absent. Output B/s and
+reported tok/s are derived from end-to-end time, not decode timing. Zero duration
+or a non-finite derived rate produces an unavailable rate. Repeated measurements
+use per-metric median/min/max/sample count; missing observations are not zero.
+
+Schema3 settings are bounded, typed public facts with explicit target, scope,
+unit and semantic role. Host snapshots are marked `aiolm_host`; attached or
+unknown compute cannot attribute proxy RAM to the inference engine. HF repository
+and revision identify provenance, not a weight digest or proof of unmodified
+weights. Frozen legacy payloads, IDs, hashes and receipts are never upgraded in
+place.
+
 ## What a shared result contains
 
 A shared result contains numeric measurements, the workload and corpus
 identity, model identity and format (plus declared metadata for GGUF models),
-the inference engine and its version, selected execution settings, the launch options used for the measurement and a
-hardware snapshot (including the CPU's thread count and, when the operating
-system reports it, its physical core count).
+the recorded engine identity, typed execution settings and an AioLM-host
+hardware snapshot (including logical and, when known, physical CPU cores).
 
-It never contains local file names or paths, error messages, machine
-fingerprints, persistent device identifiers or local record IDs. Launch options
-that name your machine, such as model, projector, draft and LoRA files, host and
-port, aliases, prompt text and anything that looks like a credential, are
-removed together with their values. Unknown values stay empty rather than being
-filled in from your current machine.
+Schema3 contains no local filenames or paths, raw launch arguments, error
+messages, machine fingerprints, persistent device identifiers or local
+provider/connection IDs. Adapter annotations must explicitly opt safe settings
+into publication; masking runs before typed capture. Model/host/port/auth and
+other private lifecycle bindings remain private even if metadata tries to
+declare them public. Unknown observations are not filled from the current
+machine or runtime defaults.
 
-The engine is llama.cpp, vLLM or MLX, and its version is the one the engine
-itself reports: the version line of the llama.cpp runtime, for example
-`0.3.0-dev (build 10638, commit bf9421646)`, or the installed vLLM or MLX package
-version. vLLM on Apple Silicon (Metal) also records its Metal plugin version
-separately. Compiler and build-host details are not included. A runtime that
-reports no version publishes none.
+Any connected text-streaming engine can publish through the same path. Public
+name, version, backend, build, variant and plugin version are independent nullable
+observations, never reconstructed from process names or local IDs. Missing
+identity, model format, settings or token/cache counters does not prevent sharing
+a complete successful workload. Legacy snapshots retain their original fields.
 
 When you compare results, keep these limits in mind:
 
 - A selected GPU records how the run was configured, not proof that every layer
   ran there. CPU mode, explicit selection and automatic placement stay distinct.
-- Compare speedups only between runs with the same prompt size, output size and
-  timing method. Cached prompts and failed or missing samples cannot establish a
-  speedup.
+- Compare only matching methods, exact input bytes/hashes, output caps, corpus,
+  concurrency, warmup and usage-request conditions. Byte rates and legacy token
+  rates have different units. As-configured cache is not a cold-cache guarantee.
 - For GGUF models, declared metadata states what the file says about itself; it
   does not prove identical tensors or quality. A complete SHA-256 distinguishes exact files when
   available; multipart models have no single digest.
