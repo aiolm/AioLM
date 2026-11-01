@@ -736,21 +736,17 @@ jobs:
           name: AioLM ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ needs.prepare.outputs.target_sha }}
           body: |
-            ## Automatic external inference-engine connections
+            ## What's changed
 
-            - Find a running local server or select its installation folder, choose a model, and connect.
-              The same process and OpenAI-compatible v1 contract applies regardless of engine name or implementation language.
-              AioLM saves the connection only after actual model-identity, chat-response and complete streaming checks.
-            - Attach existing servers through an app-owned local proxy. Disconnecting leaves the original server running;
-              cancelling a response closes that request and allows another request on the same connection.
-            - Keep advanced explicit registration and provider-authored setup files, with verified resources, literal arguments
-              and Unicode paths. The obsolete provided-adapter menu has been removed.
-            - Existing llama.cpp, vLLM and MLX workflows remain available on their supported operating systems and hardware.
-              External engine names are not a bundled-engine list or a claim of universal device/model compatibility.
+            - Hugging Face model search is engine-neutral: it lists models in all formats and opens on Trending by default.
+              Downloads remain limited to GGUF files and complete safetensors repositories.
+            - Loaded model controls are integrated into one place. The standalone diagnostics, sessions and deep verify
+              screens have been removed.
+            - Fixed navigation and help when moving repeatedly between engines.
+            - Ownership sharing has a leaner interface, and llama-bench is optional.
+            - User documentation has been simplified.
 
-            These text/streaming checks do not certify images, audio, video, tools or response quality. Dedicated external
-            engine/device validation, SmolVLM F09, overall Linux acceptance and the original v0.3.1-to-v0.3.2 update
-            installation/UI checks remain open. Published v0.3.2 assets and the original validation materials are preserved.
+            Search listings do not imply that every model, format or media type runs on every engine or device.
 
             ## Packages and verification
 
@@ -762,7 +758,7 @@ jobs:
             install.sh, which verifies the DMG's SHA-256.
             DEB registers the launcher and icon automatically. For AppImage desktop integration,
             use register-linux-desktop.py from this release after verifying its checksum.
-            Installation guide: https://aiolm.vercel.app/en/guides/install
+            Installation guide: https://github.com/aiolm/AioLM/blob/v0.3.4/docs/guides/install.md
           draft: false
           prerelease: false
           make_latest: true
