@@ -4,12 +4,10 @@ import { useLayoutEffect, useRef } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as api from '../../shared/api';
 import { testConfig } from '../../testing/appStore';
-import type { AppStore } from '../../shared/state/store';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import { publishInstalledRuntimes, resetInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import ExternalRuntimeRegistration from './ExternalRuntimeRegistration';
 import ProviderEnvironments from './ProviderEnvironments';
-import { useDeepVerification } from './useDeepVerification';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -21,8 +19,6 @@ vi.mock('../../shared/api', async importOriginal => ({
   pickRuntimeAdapter: vi.fn(),
   rtCancel: vi.fn(),
   rtList: vi.fn(async () => []),
-  verifyModelDeeply: vi.fn(),
-  verifyCancel: vi.fn(async () => undefined),
 }));
 
 const synthetic = (version: string): api.RuntimeInstance => ({
@@ -86,48 +82,5 @@ describe('runtime labels follow the current inventory (U2)', () => {
     expect(seen.length).toBeGreaterThan(0);
     for (const text of seen) expect(text).not.toContain('0.3.0-dev');
     expect(seen.at(-1)).toContain('0.3.1');
-  });
-});
-
-describe('deep verification results belong to what was verified (U2)', () => {
-  function verifyHarness(initial: api.AppConfig) {
-    const holder = { cfg: initial };
-    const store = { get cfg() { return holder.cfg; }, getConfig: () => holder.cfg } as unknown as AppStore;
-    return { holder, store };
-  }
-
-  it('drops a result once the selected runtime changes', async () => {
-    const llamaConfig = { ...testConfig, active_provider: 'llama.cpp' as const, active_backend: 'cuda', active_build: 'b10638', active_model: 'models/synthetic.gguf' };
-    const { holder, store } = verifyHarness(llamaConfig);
-    vi.mocked(api.verifyModelDeeply).mockResolvedValue({ verdict: 'pass', detail: 'synthetic match', suite_version: 1, recorded_at: '' });
-    function Harness() {
-      const deep = useDeepVerification(store, 'en');
-      return <><button type="button" onClick={deep.start}>verify</button><p data-testid="record">{deep.record?.detail ?? 'none'}</p></>;
-    }
-    const rendered = render(<Harness />);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'verify' })); });
-    expect(screen.getByTestId('record')).toHaveTextContent('synthetic match');
-    holder.cfg = { ...llamaConfig, active_build: 'b10700' };
-    rendered.rerender(<Harness />);
-    expect(screen.getByTestId('record')).toHaveTextContent('none');
-  });
-
-  it('drops a result when its runtime is registered again', async () => {
-    const config = { ...customConfig, active_model: 'models/synthetic.gguf' };
-    const { store } = verifyHarness(config);
-    vi.mocked(api.verifyModelDeeply).mockResolvedValue({ verdict: 'unsupported', detail: 'synthetic-1.0 result', suite_version: 1, recorded_at: '' });
-    vi.mocked(api.runtimeAdapterRegister).mockResolvedValue({ engine_id: 'custom.synthetic', runtime_id: 'syn-1', display_name: 'Synthetic engine' });
-    function Harness() {
-      const deep = useDeepVerification(store, 'en');
-      return <><ExternalRuntimeRegistration locked={false} onRegistered={vi.fn()} onBusyChange={vi.fn()} />
-        <button type="button" onClick={deep.start}>verify</button><p data-testid="record">{deep.record?.detail ?? 'none'}</p></>;
-    }
-    render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'verify' })); });
-    expect(screen.getByTestId('record')).toHaveTextContent('synthetic-1.0 result');
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'synthetic/runtime.json' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
-    await waitFor(() => expect(api.runtimeAdapterRegister).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.getByTestId('record')).toHaveTextContent('none'));
   });
 });

@@ -1,5 +1,4 @@
 import StatusBadge from "../../shared/ui/StatusBadge";
-import DeepVerificationControls, { type DeepVerificationState } from './DeepVerificationControls';
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { countRuntimeDeviceEntries, formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
@@ -12,15 +11,11 @@ interface Props {
   locale?: Locale;
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   capabilities: api.RuntimeCapabilities | null;
-  runtimeBusy?: boolean;
-  serverRunning: boolean;
   /** The build the shown capabilities describe. Probing belongs to its build row. */
   probeTarget: { backend: string; build: string } | null;
-  /** The opt-in deep check of this runtime against the selected model. */
-  deepVerify?: DeepVerificationState;
 }
 
-export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities, runtimeBusy = false, serverRunning, probeTarget, deepVerify }: Props) {
+export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities, probeTarget }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   const targetVersion = useRuntimeVersionLabel(probeTarget?.backend ?? "", probeTarget?.build ?? "");
@@ -34,7 +29,6 @@ export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities
           <p className="app-section-hint">{t("ui.probeHint")}</p>
         </div>
       </div>
-      {deepVerify && <DeepVerificationControls t={t} state={deepVerify} runtimeBusy={runtimeBusy} serverRunning={serverRunning} />}
       <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">

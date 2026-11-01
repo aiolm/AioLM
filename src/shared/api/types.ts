@@ -335,20 +335,6 @@ export interface LatestInfo {
   digest?: string;
 }
 
-/** One stored answer to "does this runtime compute correctly on these GPUs?" */
-export interface VerificationRecord {
-  verdict: "pass" | "fail" | "unsupported";
-  method?: 'mlx-host-device-kld' | 'vllm-topk-partition-kld';
-  coverage?: 'full' | 'partial';
-  median_kld?: number;
-  median_kld_lower_bound?: number;
-  top_k?: number;
-  ratio?: number;
-  detail: string;
-  suite_version: number;
-  recorded_at: string;
-}
-
 export interface RuntimeCapabilities {
   backend: string;
   build: string;

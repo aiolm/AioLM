@@ -20,18 +20,14 @@ import RuntimeBackendList from "./RuntimeBackendList";
 import PullRequestProvenance from "./RuntimePullRequestProvenance";
 import RuntimeRemovalNotice from "./RuntimeRemovalNotice";
 import { runtimeReferences } from "./runtimeReferences";
-import { useDeepVerification } from "./useDeepVerification";
 import ProviderEnvironments from './ProviderEnvironments';
 import AdapterCatalogList from './AdapterCatalogList';
 import EntrypointRegistration from './EntrypointRegistration';
 import AutomaticRuntimeConnection from './AutomaticRuntimeConnection';
 import { providerCatalog, providerRuntimes } from '../../shared/api/index';
 import { isExternalProvider, providerDisplayName, type ProviderDescription, type RuntimeInstance } from '../../shared/api/providers';
-import { providerOf } from '../../shared/api/providers';
-import DeepVerificationControls from './DeepVerificationControls';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ProviderId } from '../../shared/api/providers';
-import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 import { notifyRuntimeInventoryChanged, useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 
@@ -78,8 +74,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
-  const deepVerify = useDeepVerification(store, locale);
-  const busy = rt.runtimeBusy || rt.probeBusy || providerBusy || adapterBusy || deepVerify.busy;
+  const busy = rt.runtimeBusy || rt.probeBusy || providerBusy || adapterBusy;
   const operationBusy = busy || rt.prReviewBusy || rt.uninstallBusy || rt.cancelBusy;
   useEffect(() => { onBusyChange?.(operationBusy); }, [operationBusy, onBusyChange]);
   const inventoryRevision = useRuntimeInventoryRevision();
@@ -238,11 +233,6 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
 
           <div className="runtimes-main">
           {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} />}
-          {selected === providerOf(store.cfg ?? {}) && <section className="app-card mb-4">
-            <h2 className="app-section-title">{t('ui.deepVerify')}</h2>
-            <p><RuntimeSelectionLabel config={store.cfg} /></p>
-            <DeepVerificationControls t={t} state={deepVerify} provider={selected} runtimeBusy={rt.runtimeBusy || providerBusy || adapterBusy} serverRunning={rt.serverRunning} />
-          </section>}
           {llama && <>
           <PanelFeedback>
             {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
@@ -275,8 +265,6 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
                 locale={locale}
                 t={t}
                 capabilities={rt.capabilities}
-                runtimeBusy={rt.runtimeBusy}
-                serverRunning={rt.serverRunning}
                 probeTarget={rt.probeTarget}
               />
               <RuntimePullRequestCard

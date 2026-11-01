@@ -14,17 +14,17 @@ describe('runtime status explanations', () => {
     const capabilities: RuntimeCapabilities = { backend: 'rocm', build: 'synthetic-build', executable: 'synthetic-server',
       state: 'available', version: '', flags: [], devices, diagnostics: [] };
     render(<I18nProvider initialLocale="en"><RuntimeCapabilitiesCard t={(key, vars) => translate('en', key, vars)}
-      capabilities={capabilities} serverRunning={false} probeTarget={null} /></I18nProvider>);
+      capabilities={capabilities} probeTarget={null} /></I18nProvider>);
     expect(screen.getByText(`${count} visible`)).toBeVisible();
     expect(screen.getByTitle(devices.join(' · '))).toBeVisible();
     expect(capabilities.devices).toEqual(devices);
   });
 
-  it('translates a failed executable check without removing its diagnostic or enabling a locked probe', () => {
+  it('translates a failed executable check without removing its diagnostic or adding a probe action to the card', () => {
     const capabilities: RuntimeCapabilities = { backend: 'cpu', build: 'synthetic-build', executable: 'synthetic-server',
       state: 'failed preflight', version: '', flags: [], devices: [], diagnostics: ['Synthetic binary fingerprint changed'] };
     const { container } = render(<I18nProvider initialLocale="ko"><RuntimeCapabilitiesCard locale="ko" t={(key, vars) => translate('ko', key, vars)}
-      capabilities={capabilities} serverRunning probeTarget={{ backend: 'cpu', build: 'synthetic-build' }} /></I18nProvider>);
+      capabilities={capabilities} probeTarget={{ backend: 'cpu', build: 'synthetic-build' }} /></I18nProvider>);
     expect(screen.getByText('실행 파일 점검 실패')).toBeVisible();
     expect(screen.queryByRole('button', { name: '다시 점검' })).not.toBeInTheDocument();
     const diagnostic = container.querySelector('details')!;

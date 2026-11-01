@@ -801,7 +801,6 @@ describe('neutral inference engine inventory', () => {
     expect(screen.getByText(/Start with automatic discovery/)).toBeVisible();
     expect(screen.queryByRole('combobox', { name: 'Inference engine' })).not.toBeInTheDocument();
     expect(screen.queryByText('Backend to build')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Deep verification' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Register an executable or entry point' })).not.toBeInTheDocument();
     expect(mocked.rtList).not.toHaveBeenCalled();
     expect(mocked.rtLatest).not.toHaveBeenCalled();
@@ -922,7 +921,7 @@ describe('neutral inference engine inventory', () => {
     expect(screen.getByRole('searchbox', { name: "Search engines" })).toHaveValue('synth');
   });
 
-  it('keeps llama.cpp installs, PR builds, portable bundles, hardware and deep verification inside its adapter, and Python adapters inside theirs', async () => {
+  it('keeps llama.cpp installs, PR builds, portable bundles and hardware inside its adapter, and Python adapters inside theirs', async () => {
     render(panel());
     fireEvent.click(await screen.findByRole('button', { name: 'llama.cpp' }));
     expect(await screen.findByRole('button', { name: 'Remove: CUDA (NVIDIA) b10638' })).toBeVisible();
@@ -930,13 +929,11 @@ describe('neutral inference engine inventory', () => {
     expect(screen.getByLabelText('Backend to build')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Import runtime ZIP' })).toBeInTheDocument();
     expect(screen.getAllByText(/Test GPU/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: 'Deep verification' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
     fireEvent.click(screen.getByRole('button', { name: 'vLLM' }));
     expect(await screen.findByRole('button', { name: 'Install isolated environment' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Import Python runtime bundle' })).toBeVisible();
     expect(screen.queryByLabelText('Backend to build')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Deep verification' })).not.toBeInTheDocument();
   });
 
   it('opens automatic connection first and keeps explicit manual values across back, inventory updates and busy help discovery', async () => {

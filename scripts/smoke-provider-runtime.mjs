@@ -1441,11 +1441,10 @@ export function sanitizeResultForFile(result) {
        }
      }
 
-     // 17. Benchmark and deep verification need the shared Rust API and a
-     // cold-cache procedure. This CLI harness records the exact follow-up and
-     // leaves the verdict unrun rather than estimating.
-     setCheck(checks, "benchmark", "unrun", "run the desktop PerformanceBench cold-cache flow against this server for PP/TG, worker RSS and CSV/XLSX export; see provider-native-acceptance.md", {});
-     setCheck(checks, "deep_verification", "unrun", "run DeepVerificationControls for this engine/runtime/model/options; vLLM reports a partial top-k KL bound, mlx-vlm a full-vocabulary KL; quantized weights without a CPU reference stay unsupported", {});
+     // 17. Benchmarking needs the desktop cold-cache flow; numerical reference
+     // comparison is developer-only. Record both as unrun, never an estimate.
+     setCheck(checks, "benchmark", "unrun", "run the desktop PerformanceBench cold-cache flow against this server for PP/TG, worker RSS and CSV/XLSX export; see docs/reference/benchmarks.md", {});
+     setCheck(checks, "deep_verification", "unrun", "developer-only native verify_model_deeply/verify_cancel for this engine/runtime/model/options; no desktop verification screen; see docs/reference/inference-runtimes.md#benchmarks-and-verification for scope and limits", {});
 
      // 18. Stop: reclaim the app-owned server process. serverRunning tracks
      // whether the process is still running: true only while state is

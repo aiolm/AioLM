@@ -489,9 +489,8 @@ impl HelpService {
     /// Cancel every in-flight discovery without removing owner slots. Slots
     /// stay so each `finish` still reports `cancelled` (not `superseded`) and
     /// `failed` still frees its own owner; other owners are never touched
-    /// beyond their own flag. This is the shared stop path the
-    /// `runtime_help_cancel_all` IPC wires to; runtime lifecycle flags stay
-    /// with the caller and are not changed here.
+    /// beyond their own flag. App shutdown uses this stop path; runtime
+    /// lifecycle flags stay with the caller and are not changed here.
     pub fn cancel_all(&self) -> Result<usize, String> {
         let state = self
             .0

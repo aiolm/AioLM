@@ -6,7 +6,7 @@
 //! fresh model probe before reporting Ready.
 use crate::providers::{
     runtime_help::{HelpCommand, HelpReport, HelpService},
-    runtime_help_parse::{AppliedOverlay, SchemaDiff},
+    runtime_help_parse::SchemaDiff,
     runtime_help_store::{self, HelpSnapshot, RuntimeDescriptor},
     runtime_metadata,
     runtime_options::{OptionIssue, OptionSchema, ResolvedOptions},
@@ -220,27 +220,16 @@ pub(crate) async fn runtime_help_cached(
     .map_err(|e| e.to_string())?
 }
 
-/// Cancel one in-flight discovery by ticket. Other owners are unaffected.
-#[tauri::command]
-pub(crate) async fn runtime_help_cancel(ticket_id: String) -> Result<bool, String> {
-    service().cancel(&ticket_id)
-}
-
 /// Cancel the in-flight discovery for one settings owner. Other owners keep running.
 #[tauri::command]
 pub(crate) async fn runtime_help_cancel_owner(owner: String) -> Result<bool, String> {
     service().cancel_owner(&owner)
 }
 
-/// Shared stop path for long help runs. Only help discoveries are cancelled;
-/// runtime installs, builds and probes keep their own cancellation flag.
-#[tauri::command]
-pub(crate) async fn runtime_help_cancel_all() -> Result<usize, String> {
-    cancel_all_discoveries()
-}
-
-/// Cancels every in-flight help discovery. Their owned children are reaped by
-/// the capture loop; app shutdown additionally terminates transient trees.
+/// App-shutdown stop path: cancels every in-flight help discovery. Only help
+/// discoveries are cancelled; runtime installs, builds and probes keep their own
+/// cancellation flag. Owned children are reaped by the capture loop, and app
+/// shutdown additionally terminates transient trees.
 pub(crate) fn cancel_all_discoveries() -> Result<usize, String> {
     service().cancel_all()
 }
@@ -254,16 +243,6 @@ pub(crate) fn runtime_help_resolve(
     stored: Map<String, Value>,
 ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
     runtime_help_store::resolve_stored(&schema, &scope, &stored)
-}
-
-/// Apply explicit adapter metadata over parsed help. Conflicts are reported
-/// for review; help observations win rather than being silently overwritten.
-#[tauri::command]
-pub(crate) fn runtime_help_apply_overlay(
-    base: OptionSchema,
-    overlay: OptionSchema,
-) -> Result<AppliedOverlay, String> {
-    crate::providers::runtime_help_parse::apply_overlay(base, overlay)
 }
 
 /// Compare two schemas and note retained saved keys.
