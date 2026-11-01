@@ -2,7 +2,7 @@ import type { PerformanceBenchmarkRequest, PerformanceBenchmarkResult, Performan
 import { normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkReport } from './benchmarkReport';
-import type { BenchmarkReceipt } from '../../shared/sharing/benchmarkClient.ts';
+import type { BenchmarkReceipt } from '@aiolm/benchmark-contracts';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
 
 export const PERFORMANCE_HISTORY_KEY = 'aiolm-performance-history.v1';

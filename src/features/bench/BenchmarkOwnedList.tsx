@@ -29,7 +29,13 @@ function itemLabel(template: string, createdAtMs: number): string {
   return template.replace('{date}', new Date(createdAtMs).toLocaleString());
 }
 
-/** Stored management access, including prepared bindings and restored backups. */
+/**
+ * Stored management access, including prepared bindings and restored backups.
+ *
+ * Each result appears once with its manage, backup-file, and backup-code
+ * actions. The keep-private backup warning is shown once above the list, and
+ * the restore import stays reachable even when the list is empty.
+ */
 export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean; copy: Copy; revision?: number }) {
   const [items, setItems] = useState<OwnedEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -165,6 +171,9 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
     <details className="app-card app-card--flush performance-card performance-details" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary>{copy.ownedListTitle}{items.length > 0 ? ` · ${items.length}${cursor ? '+' : ''}` : ''}</summary>
       <p>{copy.ownedListHint}</p>
+      {/* The keep-private warning sits outside the restore disclosure so it stays
+          visible wherever the per-row backup save/copy actions are visible. */}
+      <p>{copy.backupHint}</p>
       {items.length > 0 && (
         <ul className="performance-owned-list">
           {items.map((entry) => (
@@ -174,6 +183,8 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
               </span>
               <span className="performance-owned-actions">
                 <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="open" onClick={() => void manage(entry.submission_id)}>{opening === entry.submission_id ? copy.managementOpening : copy.openManagement}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="download" onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="copy" onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
               </span>
             </li>
           ))}
@@ -195,23 +206,9 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       {notice && <FeedbackBanner tone="success" className="performance-notice">{notice}</FeedbackBanner>}
       <details className="performance-backup" open>
         <summary>{copy.backupTitle}</summary>
-        <p>{copy.backupHint}</p>
         <div className="performance-actions">
           <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || importing || loading || working !== null} data-icon="upload" onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
         </div>
-        {items.length > 0 && (
-          <ul className="performance-owned-list">
-            {items.map((entry) => (
-              <li key={entry.submission_id}>
-                <span>{itemLabel(copy.ownedItemTitle, entry.created_at_ms)}</span>
-                <span className="performance-owned-actions">
-                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="download" onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
-                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="copy" onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
       </details>
     </details>
   );

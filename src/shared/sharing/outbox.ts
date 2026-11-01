@@ -5,10 +5,9 @@ import {
   normalizePublicationInput,
   serializePublicationRequest,
   type BenchmarkPublicationRequest,
+  type BenchmarkReceipt,
   type PublicBenchmarkSubmission,
 } from "@aiolm/benchmark-contracts";
-import { validatePublicBenchmark } from "@aiolm/benchmark-contracts";
-import type { BenchmarkReceipt, BenchmarkUploadClient } from "./benchmarkClient.ts";
 
 export interface BenchmarkLocalSource { runId: string }
 
@@ -227,7 +226,7 @@ export function createBenchmarkOutbox(options: {
     return acknowledged;
   };
 
-  /** Shared claim/send/settle pipeline for flush and selected dispatch. */
+  /** Claim/send/settle pipeline for selected dispatch. */
   const claimForDestination = async (id: string, destination: string, signal?: AbortSignal): Promise<{ entry: QueuedBenchmark; token: string } | undefined> => {
     const token = uuid();
     const claimed = await store.mutate(id, (entry) => {
@@ -318,25 +317,6 @@ export function createBenchmarkOutbox(options: {
   };
 
   return {
-    async enqueue(value: PublicBenchmarkSubmission, source?: BenchmarkLocalSource): Promise<QueuedBenchmark> {
-      const payload = validatePublicBenchmark(JSON.parse(JSON.stringify(validatePublicBenchmark(value))));
-      if (source && (typeof source.runId !== "string" || !source.runId || new TextEncoder().encode(source.runId).length > 128)) throw new Error("Invalid local benchmark source.");
-      const localSource = source ? { runId: source.runId } : undefined;
-      const result = await store.mutate(payload.submission_id, (current) => {
-        if (current) {
-          if (canonicalJson(current.payload) !== canonicalJson(payload)) throw new Error("This submission ID already belongs to a different reviewed payload.");
-          if (localSource && current.source && current.source.runId !== localSource.runId) throw new Error("This submission ID already belongs to a different local benchmark.");
-          if (localSource && !current.source) return {
-            ...current, source: localSource,
-            ...(current.state === "sent" && current.receipt && current.localAcknowledgedAt === undefined ? { localReconcileAt: 0 } : {}),
-          };
-          return current;
-        }
-        return { id: payload.submission_id, payload, state: "pending", createdAt: now(), attempts: 0, nextAttemptAt: 0,
-          ...(localSource ? { source: localSource, localCachePolicy: "acknowledged-v1" as const } : {}) };
-      });
-      return result!;
-    },
     /** Explicit publication with frozen exact bytes; legacy attempted rows are never auto-wrapped. */
     async enqueuePublication(request: BenchmarkPublicationRequest, options: PublicationEnqueueOptions = {}): Promise<QueuedBenchmark> {
       const normalized = normalizePublicationInput(request);
@@ -410,15 +390,8 @@ export function createBenchmarkOutbox(options: {
       if (typeof id !== "string" || !id) throw new Error("Invalid submission lookup.");
       return store.get(id);
     },
-    list: (page?: OutboxPage) => store.list(page),
     reconcileAccepted,
     pruneAcknowledged,
-    async remove(id: string): Promise<void> {
-      await store.mutate(id, (entry) => {
-        if (entry?.state === "sending" && (entry.leaseUntil ?? 0) > now()) throw new Error("Cancel the active upload before removing this submission.");
-        return undefined;
-      });
-    },
     async retry(id: string): Promise<void> {
       await store.mutate(id, (entry) => {
         if (!entry || entry.state !== "rejected") return entry;
@@ -427,7 +400,7 @@ export function createBenchmarkOutbox(options: {
         return { ...entry, state: "pending", nextAttemptAt: 0, error: undefined };
       });
     },
-    /** Dispatch one exact selected entry; never selects another row like flush(maxItems=1) could. */
+    /** Dispatch one exact selected entry; never selects another row. */
     async dispatchSelected(id: string, transport: SelectedEntryTransport, signal?: AbortSignal): Promise<number> {
       if (typeof id !== "string" || !id) throw new Error("Invalid selected submission.");
       if (measurement.isActive() || signal?.aborted) return 0;
@@ -446,37 +419,6 @@ export function createBenchmarkOutbox(options: {
         await settleFailure(id, claim.token, claim.entry.attempts, error, transport.destination);
         return 0;
       }
-    },
-    async flush(client: BenchmarkUploadClient, signal?: AbortSignal, maxItems = 10): Promise<number> {
-      if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > 100) throw new RangeError("Invalid dispatch batch size.");
-      if (measurement.isActive() || signal?.aborted) return 0;
-      await reconcile(maxItems);
-      let sent = 0;
-      let attempted = 0;
-      if (await store.cooldown(client.destination) > now()) { await pruneAcknowledged(maxItems); return 0; }
-      const entries = (await Promise.all([
-        store.list({ state: "pending", dueBefore: now(), limit: maxItems }),
-        store.list({ state: "sending", dueBefore: now(), limit: maxItems }),
-      ])).flat().sort((a, b) => a.nextAttemptAt - b.nextAttemptAt || a.createdAt - b.createdAt);
-      for (const candidate of entries) {
-        if (attempted >= maxItems || measurement.isActive() || signal?.aborted) break;
-        if (await store.cooldown(client.destination) > now()) break;
-        // Wrapper publications carry exact bytes plus descriptions and dispatch only
-        // through the selected native path; the legacy client must not drop them.
-        if (candidate.requestBody !== undefined) continue;
-        const claim = await claimForDestination(candidate.id, client.destination, signal);
-        if (!claim) continue;
-        attempted += 1;
-        try {
-          const receipt = await sendWithLease((attemptSignal) => client.submit(claim.entry.payload, attemptSignal), signal);
-          if (await settleSuccess(candidate.id, claim.token, receipt)) sent += 1;
-        } catch (error) {
-          const { failure } = await settleFailure(candidate.id, claim.token, claim.entry.attempts, error, client.destination);
-          if (failure.retryable || failure.status === 401 || failure.status === 403) break;
-        }
-      }
-      await pruneAcknowledged(maxItems);
-      return sent;
     },
   };
 }

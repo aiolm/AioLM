@@ -4,7 +4,7 @@ import { createBenchmarkOutbox } from "./outbox.ts";
 import { acknowledgeUploadedBenchmark } from "./desktopBenchmarkStorage.ts";
 import { isNativeRuntimeAvailable } from "../api/transport.ts";
 
-/** Desktop wiring; the outbox engine and HTTP client have no native or UI dependency. */
+/** Desktop wiring; the outbox engine itself has no native or UI dependency. */
 const outbox = createBenchmarkOutbox({
   store: createIndexedDbOutbox(),
   measurement: {

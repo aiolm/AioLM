@@ -130,7 +130,6 @@
 .performance-owned-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .performance-backup { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
 .performance-backup > summary { cursor: pointer; font-size: var(--ui-text-support); font-weight: 500; }
-.performance-backup > p { font-size: var(--ui-text-support); color: var(--ui-muted); margin-top: 12px; line-height: 1.7; }
 .performance-backup > .performance-actions { padding: 12px 0 0; border-top: 0; }
 /* Break at the page width, not the viewport: the sidebar takes a variable share of it. */
 @container workspace (min-width: 900px) {

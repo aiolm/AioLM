@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as renderView, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { BenchmarkOwnedList } from './BenchmarkOwnedList';
@@ -42,12 +42,15 @@ describe('owned recovery list', () => {
     await screen.findByText(/^Shared results/);
   });
 
-  it('shows dated rows with the service host and a manage action, never raw ownership', async () => {
+  it('lists each result once with its host, manage and backup actions, never raw ownership', async () => {
     vi.mocked(sharing.benchmarkSharingOwnedList).mockResolvedValue(page('00000000-0000-4000-8000-000000000001', null));
     vi.mocked(sharing.benchmarkSharingOpenManagement).mockResolvedValue(undefined);
     render(<BenchmarkOwnedList busy={false} copy={benchmarkCopy('en')} />);
     await screen.findByText(/example\.test/);
-    expect(screen.getByRole('button', { name: 'Manage on website' })).toBeInTheDocument();
+    const [row, ...extra] = screen.getAllByRole('listitem');
+    expect(extra).toHaveLength(0);
+    expect(row).toHaveTextContent(/example\.test/);
+    for (const name of ['Manage on website', 'Save backup file', 'Copy backup code']) expect(within(row).getByRole('button', { name })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Manage on website' }));
     await waitFor(() => expect(sharing.benchmarkSharingOpenManagement).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001'));
     // Raw identifiers and key material stay out of the visible management list.
@@ -93,6 +96,12 @@ describe('owned recovery list', () => {
     const backup = screen.getByText('Backup and restore').closest('details')!;
     expect(backup).toHaveAttribute('open');
     expect(screen.getByRole('button', { name: 'Save backup file' })).toBeVisible();
+    // Collapsing only the restore disclosure must not hide the keep-private
+    // warning while the secret save/copy actions remain on screen.
+    fireEvent.click(screen.getByText('Backup and restore'));
+    await waitFor(() => expect(backup).not.toHaveAttribute('open'));
+    expect(screen.getByRole('button', { name: 'Copy backup code' })).toBeVisible();
+    expect(screen.getByText(benchmarkCopy('en').backupHint)).toBeVisible();
     expect(sharing.benchmarkSharingRecoveryCopy).not.toHaveBeenCalled();
     expect(sharing.benchmarkSharingRecoveryExport).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: 'Copy backup code' }));
