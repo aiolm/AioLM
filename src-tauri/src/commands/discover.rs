@@ -69,6 +69,7 @@ pub(crate) async fn hf_open_model_card(repo_id: String) -> Result<(), String> {
 
 /// Discover's listing. `query` may be empty — the panel opens on the catalog
 /// before anything is typed — and `sort` picks the order the API ranks it in.
+/// Without a `format` the listing covers every model repository.
 #[tauri::command]
 pub(crate) async fn hf_search_models(
     query: String,
@@ -80,7 +81,7 @@ pub(crate) async fn hf_search_models(
         &query,
         limit,
         sort.as_deref().unwrap_or(discover::DEFAULT_SORT),
-        format.as_deref().unwrap_or("gguf"),
+        format.as_deref().unwrap_or(discover::DEFAULT_SEARCH_FORMAT),
     )
     .await
 }
@@ -106,8 +107,12 @@ pub(crate) async fn hf_installed_files(
     .map_err(|error| error.to_string())?
 }
 
+/// One read of the selected repository's file tree: its GGUF files and whether
+/// it has root safetensors weights a snapshot download could plan from.
 #[tauri::command]
-pub(crate) async fn hf_model_files(repo_id: String) -> Result<Vec<discover::HfFile>, String> {
+pub(crate) async fn hf_model_files(
+    repo_id: String,
+) -> Result<discover::HfRepositoryInspection, String> {
     discover::files(&repo_id).await
 }
 

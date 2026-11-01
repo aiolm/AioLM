@@ -28,7 +28,9 @@ const DOWNLOAD_CANCELLED: &str = "model download cancelled";
 /// Sort orders the Hugging Face model API accepts. The API answers HTTP 400
 /// for anything else, so the set is closed here rather than forwarded blindly.
 pub const SORT_KEYS: [&str; 4] = ["downloads", "likes", "lastModified", "trendingScore"];
-pub const DEFAULT_SORT: &str = "downloads";
+/// Discovery opens on what is rising on the Hub now; a request that omits the
+/// order gets the same ranking the panel starts with.
+pub const DEFAULT_SORT: &str = "trendingScore";
 
 /// Properties the listing has to ask for by name. `expand` replaces the
 /// default field set rather than adding to it, so every field `HfModel`
@@ -64,6 +66,18 @@ pub struct HfFile {
     pub is_mmproj: bool,
     pub download_url: String,
     pub companions_available: bool,
+}
+
+/// What one listing of a repository's file tree shows Discover can offer.
+///
+/// Both fields come from the same tree read. `has_root_safetensors` only says
+/// that root `.safetensors` weights exist, so the snapshot download is worth
+/// offering; the snapshot planner still validates the complete model before
+/// any byte is written, and neither field certifies runtime compatibility.
+#[derive(Serialize, Clone, Debug)]
+pub struct HfRepositoryInspection {
+    pub gguf_files: Vec<HfFile>,
+    pub has_root_safetensors: bool,
 }
 
 /// A repository file that is already present at its download destination.
@@ -424,7 +438,56 @@ async fn activate_download(part: &Path, target: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot clean up staged model download: {error}"))
 }
 
-/// List GGUF or safetensors repositories in the requested order.
+/// Search format used when a caller names none: every model repository.
+pub const DEFAULT_SEARCH_FORMAT: &str = "all";
+
+/// Hub tag filters for each search format. `all` sends none, so the listing
+/// covers every model repository whatever its files; MLX repositories carry
+/// both the `safetensors` and `mlx` tags.
+fn search_filters(format: &str) -> Result<&'static [&'static str], String> {
+    match format {
+        "all" => Ok(&[]),
+        "gguf" => Ok(&["gguf"]),
+        "safetensors" => Ok(&["safetensors"]),
+        "mlx" => Ok(&["safetensors", "mlx"]),
+        _ => Err("unsupported model format".into()),
+    }
+}
+
+/// The exact model-listing request URL, validated before anything is sent.
+fn search_url(query: &str, limit: u32, sort: &str, format: &str) -> Result<reqwest::Url, String> {
+    let filters = search_filters(format)?;
+    let query = query.trim();
+    if query.len() > MAX_QUERY_LENGTH || query.chars().any(char::is_control) {
+        return Err("model search query is invalid or too long".into());
+    }
+    if !SORT_KEYS.contains(&sort) {
+        return Err("model sort order is not supported".into());
+    }
+    let limit = limit.clamp(1, 50).to_string();
+    let mut url = reqwest::Url::parse(&format!("{HF_API}/models"))
+        .map_err(|error| format!("model search request is invalid: {error}"))?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        for tag in filters {
+            pairs.append_pair("filter", tag);
+        }
+        pairs
+            .append_pair("sort", sort)
+            .append_pair("direction", "-1")
+            .append_pair("limit", &limit);
+        for field in EXPAND_FIELDS {
+            pairs.append_pair("expand[]", field);
+        }
+        if !query.is_empty() {
+            pairs.append_pair("search", query);
+        }
+    }
+    Ok(url)
+}
+
+/// List model repositories in the requested order, narrowed to one artifact
+/// format only when the caller asks for one.
 ///
 /// An empty query is not an error: Discover opens on the catalog itself, and
 /// the `search` parameter is then left off so the API returns its ranked list
@@ -435,42 +498,9 @@ pub async fn search_format(
     sort: &str,
     format: &str,
 ) -> Result<Vec<HfModel>, String> {
-    if !["gguf", "safetensors", "mlx"].contains(&format) {
-        return Err("unsupported model format".into());
-    }
-    let query = query.trim();
-    if query.len() > MAX_QUERY_LENGTH || query.chars().any(char::is_control) {
-        return Err("model search query is invalid or too long".into());
-    }
-    if !SORT_KEYS.contains(&sort) {
-        return Err("model sort order is not supported".into());
-    }
-    let limit = limit.clamp(1, 50).to_string();
-    let mut params = vec![
-        (
-            "filter",
-            if format == "mlx" {
-                "safetensors"
-            } else {
-                format
-            },
-        ),
-        ("sort", sort),
-        ("direction", "-1"),
-        ("limit", limit.as_str()),
-    ];
-    if format == "mlx" {
-        params.push(("filter", "mlx"));
-    }
-    for field in EXPAND_FIELDS {
-        params.push(("expand[]", field));
-    }
-    if !query.is_empty() {
-        params.push(("search", query));
-    }
+    let url = search_url(query, limit, sort, format)?;
     let response = client()?
-        .get(format!("{HF_API}/models"))
-        .query(&params)
+        .get(url)
         .send()
         .await
         .map_err(|error| format!("Hugging Face model search failed: {error}"))?;
@@ -491,8 +521,32 @@ pub async fn search_format(
         .collect())
 }
 
-pub async fn files(repo_id: &str) -> Result<Vec<HfFile>, String> {
-    files_at(repo_id, "main", &AtomicBool::new(false)).await
+/// Read the selected repository's file tree once and report what Discover can
+/// offer from it: GGUF rows and whether root safetensors weights exist.
+pub async fn files(repo_id: &str) -> Result<HfRepositoryInspection, String> {
+    validate_repo_id(repo_id)?;
+    let entries = repository_tree(repo_id, "main", &AtomicBool::new(false)).await?;
+    inspect_repository(repo_id, "main", &entries)
+}
+
+fn inspect_repository(
+    repo_id: &str,
+    revision: &str,
+    entries: &[ApiTreeEntry],
+) -> Result<HfRepositoryInspection, String> {
+    Ok(HfRepositoryInspection {
+        gguf_files: listed_gguf_files(repo_id, revision, entries)?,
+        has_root_safetensors: has_root_safetensors(entries),
+    })
+}
+
+/// The same root-weight test the snapshot planner applies, read from the
+/// borrowed tree. Tags and the configured engine are never consulted.
+fn has_root_safetensors(entries: &[ApiTreeEntry]) -> bool {
+    entries.iter().any(|entry| {
+        let root = !entry.path.contains('/');
+        entry.entry_type == "file" && root && entry.path.ends_with(".safetensors")
+    })
 }
 
 async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, String> {
@@ -570,16 +624,6 @@ async fn repository_tree(
         }
     }
     Ok(entries)
-}
-
-async fn files_at(
-    repo_id: &str,
-    revision: &str,
-    cancel: &AtomicBool,
-) -> Result<Vec<HfFile>, String> {
-    validate_repo_id(repo_id)?;
-    let entries = repository_tree(repo_id, revision, cancel).await?;
-    listed_gguf_files(repo_id, revision, &entries)
 }
 
 fn listed_gguf_files(
@@ -1850,6 +1894,114 @@ mod tests {
             rejected.err(),
             Some("model sort order is not supported".to_string())
         );
+    }
+
+    fn filters_in(url: &reqwest::Url) -> Vec<String> {
+        url.query_pairs()
+            .filter(|(key, _)| key == "filter")
+            .map(|(_, value)| value.into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_default_search_lists_every_repository_without_a_hub_filter() {
+        let url = search_url(" qwen ", 30, DEFAULT_SORT, DEFAULT_SEARCH_FORMAT).unwrap();
+        assert!(filters_in(&url).is_empty(), "{url}");
+        let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+        for expected in [
+            ("search", "qwen"),
+            ("sort", "trendingScore"),
+            ("direction", "-1"),
+            ("limit", "30"),
+        ] {
+            assert!(
+                pairs.contains(&(expected.0.into(), expected.1.into())),
+                "{url}"
+            );
+        }
+        let catalog = search_url("", 500, "trendingScore", "all").unwrap();
+        assert!(filters_in(&catalog).is_empty(), "{catalog}");
+        assert!(!catalog.query_pairs().any(|(key, _)| key == "search"));
+        assert!(catalog
+            .query_pairs()
+            .any(|(key, value)| key == "limit" && value == "50"));
+    }
+
+    #[test]
+    fn explicit_format_filters_keep_their_hub_tags() {
+        for (format, expected) in [
+            ("gguf", vec!["gguf"]),
+            ("safetensors", vec!["safetensors"]),
+            ("mlx", vec!["safetensors", "mlx"]),
+        ] {
+            let url = search_url("", 30, "downloads", format).unwrap();
+            assert_eq!(filters_in(&url), expected, "{format}");
+        }
+        for format in ["", "ALL", "onnx", "bin"] {
+            assert_eq!(
+                search_url("", 30, "downloads", format).unwrap_err(),
+                "unsupported model format"
+            );
+        }
+        let long = "q".repeat(MAX_QUERY_LENGTH + 1);
+        assert!(search_url(&long, 30, "downloads", "all").is_err());
+        assert!(search_url("a\u{0}b", 30, "downloads", "all").is_err());
+    }
+
+    #[test]
+    fn repository_inspection_reports_downloadable_formats_from_actual_file_paths() {
+        let inspect = |paths: serde_json::Value| {
+            let entries: Vec<ApiTreeEntry> = serde_json::from_value(paths).unwrap();
+            inspect_repository("owner/model", "main", &entries).unwrap()
+        };
+        // ONNX and PyTorch-only repositories stay searchable but offer neither
+        // a GGUF row nor a safetensors snapshot.
+        let other = inspect(serde_json::json!([
+            {"type":"file", "path":"config.json", "size":2},
+            {"type":"file", "path":"tokenizer.json", "size":3},
+            {"type":"file", "path":"model.onnx", "size":4},
+            {"type":"file", "path":"onnx/model.onnx", "size":4},
+            {"type":"file", "path":"pytorch_model.bin", "size":5},
+            {"type":"file", "path":"README.md", "size":6}
+        ]));
+        assert!(other.gguf_files.is_empty());
+        assert!(!other.has_root_safetensors);
+        // Nested weights, a directory with the extension and a different case
+        // are not root weights the snapshot planner would accept.
+        let nested = inspect(serde_json::json!([
+            {"type":"file", "path":"config.json", "size":2},
+            {"type":"file", "path":"sub/model.safetensors", "size":7},
+            {"type":"directory", "path":"weights.safetensors"},
+            {"type":"file", "path":"MODEL.SAFETENSORS", "size":8}
+        ]));
+        assert!(!nested.has_root_safetensors);
+        let snapshot = inspect(serde_json::json!([
+            {"type":"file", "path":"config.json", "size":2},
+            {"type":"file", "path":"model-00001-of-00002.safetensors", "size":9}
+        ]));
+        assert!(snapshot.has_root_safetensors);
+        assert!(snapshot.gguf_files.is_empty());
+        let mixed = inspect(serde_json::json!([
+            {"type":"file", "path":"model.safetensors", "size":9},
+            {"type":"file", "path":"Q4/model.Q4_K_M.gguf", "size":10},
+            {"type":"file", "path":"mmproj-model-f16.gguf", "size":11}
+        ]));
+        assert!(mixed.has_root_safetensors);
+        assert_eq!(
+            mixed
+                .gguf_files
+                .iter()
+                .map(|file| (file.path.as_str(), file.is_mmproj))
+                .collect::<Vec<_>>(),
+            [
+                ("Q4/model.Q4_K_M.gguf", false),
+                ("mmproj-model-f16.gguf", true),
+            ]
+        );
+        let unsafe_entry =
+            serde_json::from_value(serde_json::json!({"type":"file", "path":"../escape.gguf"}))
+                .unwrap();
+        assert!(inspect_repository("owner/model", "main", &[unsafe_entry]).is_err());
     }
 
     #[test]

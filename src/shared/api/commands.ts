@@ -1,11 +1,11 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
-import type { HfInstalledFile, HfSortKey } from "./models.ts";
+import type { HfInstalledFile, HfSearchFormat, HfSortKey } from "./models.ts";
 import type { ImageAttachment, PreparedVideoFrame } from "./mediaTypes.ts";
 import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
-  DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
+  DownloadedModel, DownloadProgress, HfModel, HfRepositoryInspection, InstalledRuntime,
   LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
@@ -24,12 +24,13 @@ export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_sc
 export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
-/** An empty query lists the catalog itself, which is what Discover opens on. */
-export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads", format?: 'gguf' | 'safetensors' | 'mlx') =>
+/** An empty query lists the catalog itself, which is what Discover opens on. Without a format every repository is listed. */
+export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "trendingScore", format?: HfSearchFormat) =>
   invoke<HfModel[]>("hf_search_models", { query, limit, sort, ...(format ? { format } : {}) });
 export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
-export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files", { repoId });
+/** Reads the repository tree once: GGUF rows and whether root safetensors weights exist. */
+export const hfModelFiles = (repoId: string) => invoke<HfRepositoryInspection>("hf_model_files", { repoId });
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 /** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean) =>

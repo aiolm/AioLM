@@ -125,6 +125,17 @@ export interface HfFile {
   download_url: string;
 }
 
+/**
+ * One read of a repository's file tree. `has_root_safetensors` says only that
+ * root safetensors weights exist, so a snapshot download is worth offering;
+ * the snapshot planner still validates the model, and neither field certifies
+ * runtime compatibility.
+ */
+export interface HfRepositoryInspection {
+  gguf_files: HfFile[];
+  has_root_safetensors: boolean;
+}
+
 export interface DownloadedModel {
   repo_id: string;
   /** First shard for a split model; otherwise the selected file. */

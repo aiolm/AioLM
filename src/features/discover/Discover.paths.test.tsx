@@ -17,6 +17,11 @@ vi.mock("../../shared/api/index", async (importOriginal) => ({
   hfDownloadSnapshot: vi.fn(), hfInstalledSnapshots: vi.fn(), hfCancelDownload: vi.fn(async () => undefined),
 }));
 
+/** A repository tree with GGUF files and no root safetensors weights. */
+function ggufOnly(gguf_files: api.HfFile[]): api.HfRepositoryInspection {
+  return { gguf_files, has_root_safetensors: false };
+}
+
 
 /** Download stays disabled until the installed-file lookup has answered. */
 async function clickDownload(name: string) {
@@ -36,7 +41,7 @@ describe("Discover path presentation", () => {
     const file = projector ? "mmproj.gguf" : "download.gguf";
     const downloadedPath = `models/${file}`;
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ id: "owner/model", author: "owner", downloads: 1, likes: 1, last_modified: "", tags: [], gated: false }]);
-    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: file, size_bytes: 1000, is_mmproj: projector, download_url: "" }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: file, size_bytes: 1000, is_mmproj: projector, download_url: "" }]));
     vi.mocked(api.hfDownloadModel).mockResolvedValue({ path: downloadedPath, repo_id: "owner/model", file_path: file, size_bytes: 1000 });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     // The panel lists the catalog as soon as it opens; wait for that request
@@ -62,7 +67,7 @@ describe("Discover path presentation", () => {
     const display = String.raw`\\server\share\models`;
     const store = createTestStore({ models_dir: raw });
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ id: "owner/model", author: "owner", downloads: 1, likes: 1, last_modified: "", tags: [], gated: false }]);
-    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: "model.Q4_K_M.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: "model.Q4_K_M.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]));
     vi.mocked(api.hfDownloadModel).mockRejectedValue(new Error(`Cannot write ${raw}`));
     const { container } = render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     expect(screen.getByText(display)).toHaveAttribute("title", display);
@@ -82,7 +87,7 @@ describe("Discover path presentation", () => {
     let resolveDownload: (value: DownloadResult) => void;
     const downloadPromise = new Promise<DownloadResult>((resolve) => { resolveDownload = resolve; });
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ id: "owner/model", author: "owner", downloads: 1, likes: 1, last_modified: "", tags: [], gated: false }]);
-    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: "model.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: "model.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]));
     vi.mocked(api.hfDownloadModel).mockReturnValue(downloadPromise);
     const store = createTestStore();
     render(
@@ -125,21 +130,31 @@ function settingsContext(): ModelSettingsContext {
   return { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
 }
 
+/** Artifact format is a search filter the user picks; it never follows the configured engine. */
+function chooseFormat(name: 'All formats' | 'GGUF' | 'HF Safetensors' | 'MLX Safetensors') {
+  fireEvent.click(screen.getByRole('combobox', { name: 'Model format' }));
+  fireEvent.click(screen.getByRole('option', { name }));
+}
+
 describe('Discover runtime journeys', () => {
-  it('browses another engine without altering execution and starts setup with that engine instead of reusing a foreign runtime', async () => {
+  it('browses MLX artifacts without assigning an engine and starts setup from the configured engine and runtime', async () => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
-    const store = createTestStore({ active_provider: 'llama.cpp', active_runtime: 'old-foreign-runtime' });
+    const store = createTestStore({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime' });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
-    fireEvent.click(screen.getByRole('option', { name: 'MLX' }));
-    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, 'downloads', 'mlx'));
+    expect(screen.queryByRole('combobox', { name: 'Inference engine' })).not.toBeInTheDocument();
+    chooseFormat('MLX Safetensors');
+    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, expect.any(String), 'mlx'));
     expect(store.cfg?.active_provider).toBe('llama.cpp');
     expect(store.updateConfig).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'mlx-vlm', active_runtime: '' }) }));
+    // The settings editor receives the current execution setup and reports
+    // compatibility there; the browsed format never chooses an engine.
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime', active_model: snapshot.path }) }));
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.cfg?.active_provider).toBe('llama.cpp');
   });
   beforeEach(() => {
     vi.clearAllMocks(); localStorage.clear();
@@ -147,57 +162,71 @@ describe('Discover runtime journeys', () => {
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
     vi.mocked(api.hfInstalledFiles).mockResolvedValue([]);
     vi.mocked(api.hfSearchModels).mockResolvedValue([repo]);
-    vi.mocked(api.hfModelFiles).mockResolvedValue([]);
+    // Root safetensors weights in the actual tree make the snapshot download
+    // available; GGUF journeys below replace this with their own tree.
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(snapshot);
   });
   afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
 
-  it.each(['vllm', 'mlx-vlm'] as const)('preserves %s and its selected runtime when downloading MLX weights', async provider => {
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('opens on every repository format and preserves %s with its runtime through MLX setup', async provider => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
-    const store = createTestStore({ active_provider: provider, active_runtime: provider === 'vllm' ? 'synthetic-vllm-metal' : 'synthetic-mlx-vlm' });
+    const store = createTestStore({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime` });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
-    await waitFor(() => expect(api.hfSearchModels).toHaveBeenCalledWith('', 30, 'downloads', provider === 'vllm' ? 'safetensors' : 'mlx'));
+    await waitFor(() => expect(api.hfSearchModels).toHaveBeenCalledWith('', 30, expect.any(String), 'all'));
+    expect(screen.getByRole('combobox', { name: 'Model format' })).toHaveTextContent('All formats');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Model format' }));
+    for (const name of ['All formats', 'GGUF', 'HF Safetensors', 'MLX Safetensors']) expect(screen.getByRole('option', { name })).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('option', { name: 'MLX Safetensors' }));
+    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, expect.any(String), 'mlx'));
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: provider, active_runtime: store.cfg?.active_runtime, active_model: snapshot.path }) }));
-    expect(api.hfModelFiles).not.toHaveBeenCalled();
+    expect(api.hfModelFiles).toHaveBeenCalledWith(repo.id);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it('binds snapshot setup to the originating runtime even after switching providers in flight', async () => {
+  it('keeps the browsed format when the configured engine changes in flight and configures with the newer engine', async () => {
     let finish!: (artifact: api.ModelArtifact) => void;
     vi.mocked(api.hfDownloadSnapshot).mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal' });
     const renderPanel = () => <I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>;
     const view = render(renderPanel());
+    chooseFormat('HF Safetensors');
+    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, expect.any(String), 'safetensors'));
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
+    const searches = vi.mocked(api.hfSearchModels).mock.calls.length;
     store.cfg!.active_provider = 'mlx-vlm'; store.cfg!.active_runtime = 'another-runtime'; view.rerender(renderPanel());
-    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, 'downloads', 'mlx'));
     await act(async () => finish(snapshot));
+    // An engine change elsewhere neither resets the browse state nor lets the
+    // download resurrect the engine that was configured when it started.
+    expect(api.hfSearchModels).toHaveBeenCalledTimes(searches);
+    expect(screen.getByRole('combobox', { name: 'Model format' })).toHaveTextContent('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal' }) }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'mlx-vlm', active_runtime: 'another-runtime', active_model: snapshot.path }) }));
+    expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
   it('retires pending GGUF responses when the user switches to MLX search', async () => {
     let oldSearch!: (models: api.HfModel[]) => void;
     vi.mocked(api.hfSearchModels).mockReturnValueOnce(new Promise(resolve => { oldSearch = resolve; }));
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
-    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
-    fireEvent.click(screen.getByRole('option', { name: 'MLX' }));
-    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, 'downloads', 'mlx'));
+    chooseFormat('MLX Safetensors');
+    await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, expect.any(String), 'mlx'));
     await act(async () => oldSearch([{ ...repo, id: 'old/gguf' }]));
     expect(screen.queryByRole('button', { name: /old\/gguf/ })).not.toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /owner\/model/ })).toBeInTheDocument();
   });
 
   it('requires the model to be stopped for snapshot downloads', async () => {
-    const store = createTestStore({ active_provider: 'vllm' }); store.status = { state: 'running' };
+    const store = createTestStore(); store.status = { state: 'running' };
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    chooseFormat('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
@@ -207,7 +236,8 @@ describe('Discover runtime journeys', () => {
   it('classifies cancellation correctly and allows a verified retry without overlapping transfers', async () => {
     let rejectDownload!: (error: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectDownload = reject; }));
-    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore({ active_provider: 'vllm' })} /></I18nProvider>);
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    chooseFormat('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
@@ -225,8 +255,9 @@ describe('Discover runtime journeys', () => {
     let rejectRetry!: (error: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValueOnce(snapshot)
       .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRetry = reject; }));
-    const store = createTestStore({ active_provider: 'vllm' });
+    const store = createTestStore();
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    chooseFormat('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
@@ -247,21 +278,22 @@ describe('Discover runtime journeys', () => {
 
   it('marks complete snapshots and exposes interrupted snapshots for retry', async () => {
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([snapshot, { ...snapshot, path: 'models/interrupted', incomplete: true, missing: ['weights.safetensors'] }]);
-    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore({ active_provider: 'vllm' })} /></I18nProvider>);
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    chooseFormat('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     expect(await screen.findByText('Installed')).toBeInTheDocument();
     expect(await screen.findByText('Required files are missing.')).toBeInTheDocument();
     expect(api.hfInstalledSnapshots).toHaveBeenCalledWith('owner/model', 'models');
   });
 
-  it.each([false, true])('downloads same-repository GGUF companions only after explicit selection (opt in: %s)', async include => {
+  it.each([
+    ['llama.cpp', false], ['llama.cpp', true], ['vllm', true], ['mlx-vlm', true],
+  ] as const)('offers same-repository GGUF companions under %s and downloads them only after explicit selection (opt in: %s)', async (provider, include) => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
-    const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal' });
-    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: 'model.gguf', size_bytes: 10, is_mmproj: false, download_url: '', companions_available: true }]);
+    const store = createTestStore({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime` });
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: 'model.gguf', size_bytes: 10, is_mmproj: false, download_url: '', companions_available: true }]));
     vi.mocked(api.hfDownloadModel).mockResolvedValue({ path: 'models/model.gguf', repo_id: repo.id, file_path: 'model.gguf', size_bytes: 10 });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole('combobox', { name: 'Model format' }));
-    fireEvent.click(screen.getByRole('option', { name: 'GGUF' }));
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const checkbox = await screen.findByRole('checkbox', { name: 'Download GGUF with local config and tokenizer' });
     expect(checkbox).not.toBeChecked();
@@ -269,13 +301,22 @@ describe('Discover runtime journeys', () => {
     await clickDownload('Download: model.gguf');
     await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith(...(include ? [repo.id, 'model.gguf', 'models', true] : [repo.id, 'model.gguf', 'models'])));
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal' }) }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime`, active_model: 'models/model.gguf' }) }));
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the companion option when the repository supplies no GGUF companions', async () => {
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: 'model.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }]));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore({ active_provider: 'vllm' })} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    expect(await screen.findByRole('button', { name: 'Download: model.gguf' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Download GGUF with local config and tokenizer' })).not.toBeInTheDocument();
   });
 
   it('downloads a split GGUF with one action and configures its first shard after all parts arrive', async () => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
     const first = 'model-00001-of-00002.gguf', second = 'model-00002-of-00002.gguf';
-    vi.mocked(api.hfModelFiles).mockResolvedValue([first, second].map(path => ({ path, size_bytes: 10, is_mmproj: false, download_url: '' })));
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([first, second].map(path => ({ path, size_bytes: 10, is_mmproj: false, download_url: '' }))));
     const installed: api.HfInstalledFile[] = [];
     vi.mocked(api.hfInstalledFiles).mockImplementation(async () => installed.map(entry => ({ ...entry })));
     vi.mocked(api.hfDownloadModel).mockImplementation(async (_repo, path) => {
@@ -298,7 +339,7 @@ describe('Discover runtime journeys', () => {
   it.each(['model download cancelled', 'network failed'])('keeps a partial split model retryable after %s', async (failure) => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
     const first = 'model-00001-of-00002.gguf', second = 'model-00002-of-00002.gguf';
-    vi.mocked(api.hfModelFiles).mockResolvedValue([first, second].map(path => ({ path, size_bytes: 10, is_mmproj: false, download_url: '' })));
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([first, second].map(path => ({ path, size_bytes: 10, is_mmproj: false, download_url: '' }))));
     const installed: api.HfInstalledFile[] = [];
     vi.mocked(api.hfInstalledFiles).mockImplementation(async () => installed.map(entry => ({ ...entry })));
     vi.mocked(api.hfDownloadModel).mockImplementationOnce(async () => {
@@ -327,6 +368,7 @@ describe('Discover runtime journeys', () => {
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal', ctx_size: 2048 });
     rememberExecution({ ...store.cfg!, active_model: snapshot.path, active_runtime: 'older-runtime', ctx_size: 8192, provider_options: { vllm: { max_model_len: 8192 } } });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    chooseFormat('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
@@ -340,7 +382,7 @@ describe('Discover runtime journeys', () => {
     vi.mocked(useModelSettings).mockReturnValue(null);
     let finish!: (value: Awaited<ReturnType<typeof api.hfDownloadModel>>) => void;
     vi.mocked(api.hfDownloadModel).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: 'model.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: 'model.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }]));
     const store = createTestStore();
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
@@ -349,5 +391,116 @@ describe('Discover runtime journeys', () => {
     await act(async () => finish({ path: 'models/model.gguf', file_path: 'model.gguf', repo_id: repo.id, size_bytes: 10 }));
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('completed');
+  });
+});
+
+describe('Discover across every repository format', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); localStorage.clear();
+    vi.mocked(useModelSettings).mockReturnValue(settingsContext());
+    vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([]);
+    vi.mocked(api.hfInstalledFiles).mockResolvedValue([]);
+    vi.mocked(api.hfSearchModels).mockResolvedValue([repo]);
+    vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(snapshot);
+  });
+  afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+
+  const mixed: api.HfRepositoryInspection = {
+    gguf_files: [{ path: 'model.Q4_K_M.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }],
+    has_root_safetensors: true,
+  };
+
+  it('lists repositories of every format by default and narrows them only under an explicit filter', async () => {
+    const onnx = { ...repo, id: 'owner/onnx-model', tags: ['onnx'] };
+    const gguf = { ...repo, id: 'owner/gguf-model', tags: ['gguf'] };
+    // The synthetic Hub answers per requested scope: every repository without
+    // a filter, GGUF repositories under the GGUF filter, nothing otherwise.
+    vi.mocked(api.hfSearchModels).mockImplementation(async (_query, _limit, _sort, format) =>
+      format === 'all' ? [onnx, gguf] : format === 'gguf' ? [gguf] : []);
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    expect(await screen.findByRole('button', { name: /owner\/onnx-model/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /owner\/gguf-model/ })).toBeVisible();
+    chooseFormat('GGUF');
+    expect(await screen.findByRole('button', { name: /owner\/gguf-model/ })).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /owner\/onnx-model/ })).not.toBeInTheDocument());
+    chooseFormat('All formats');
+    expect(await screen.findByRole('button', { name: /owner\/onnx-model/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /owner\/gguf-model/ })).toBeVisible();
+  });
+
+  it('keeps a repository without GGUF or root safetensors searchable with its model card and no in-app download', async () => {
+    vi.mocked(api.hfSearchModels).mockResolvedValue([{ ...repo, pipeline_tag: 'feature-extraction' }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: false });
+    const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-runtime' });
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    expect(await screen.findByText(/no in-app download under the current format filter/)).toBeVisible();
+    // Neither the search scope nor a task tag is presented as file-format evidence.
+    expect(screen.queryByText(/^Model format ·/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Model card on Hugging Face' })).toHaveAttribute('href', 'https://huggingface.co/owner/model');
+    expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Download/ })).not.toBeInTheDocument();
+    expect(api.hfInstalledSnapshots).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['All formats', true, true],
+    ['GGUF', true, false],
+    ['HF Safetensors', false, true],
+  ] as const)('offers a mixed repository the actions its files support under %s', async (filter, gguf, folder) => {
+    vi.mocked(api.hfModelFiles).mockResolvedValue(mixed);
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    if (filter !== 'All formats') chooseFormat(filter);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    await waitFor(() => expect(api.hfModelFiles).toHaveBeenCalledWith(repo.id));
+    if (folder) expect(await screen.findByRole('button', { name: 'Download complete model folder' })).toBeInTheDocument();
+    if (gguf) expect(await screen.findByRole('button', { name: 'Download: model.Q4_K_M.gguf' })).toBeInTheDocument();
+    if (!folder) expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
+    if (!gguf) expect(screen.queryByRole('button', { name: 'Download: model.Q4_K_M.gguf' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/no in-app download/)).not.toBeInTheDocument();
+  });
+
+  it('downloads a snapshot reachable from the default listing without choosing an engine', async () => {
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    const store = createTestStore({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime' });
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    const download = await screen.findByRole('button', { name: 'Download complete model folder' });
+    await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
+    await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledWith(repo.id, 'models'));
+    expect(await screen.findByRole('button', { name: 'Configure and run' })).toBeVisible();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.cfg?.active_provider).toBe('llama.cpp');
+  });
+
+  it('offers no snapshot while the file tree is loading or after it fails', async () => {
+    let fail!: (error: Error) => void;
+    vi.mocked(api.hfModelFiles).mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    expect(await screen.findByText('Reading repository files')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
+    await act(async () => fail(new Error('tree unavailable')));
+    expect(await screen.findByText('tree unavailable')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Download/ })).not.toBeInTheDocument();
+    expect(api.hfInstalledSnapshots).not.toHaveBeenCalled();
+  });
+
+  it('never applies a previous repository tree to a newer selection', async () => {
+    let releaseFirst!: (value: api.HfRepositoryInspection) => void;
+    vi.mocked(api.hfSearchModels).mockResolvedValue([{ ...repo, id: 'owner/first' }, { ...repo, id: 'owner/second' }]);
+    vi.mocked(api.hfModelFiles)
+      .mockReturnValueOnce(new Promise(resolve => { releaseFirst = resolve; }))
+      .mockResolvedValueOnce({ gguf_files: [], has_root_safetensors: false });
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/first/ }));
+    fireEvent.click(screen.getByRole('button', { name: /owner\/second/ }));
+    expect(await screen.findByText(/no in-app download/)).toBeVisible();
+    await act(async () => releaseFirst(mixed));
+    expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download: model.Q4_K_M.gguf' })).not.toBeInTheDocument();
+    expect(api.hfInstalledSnapshots).not.toHaveBeenCalled();
   });
 });

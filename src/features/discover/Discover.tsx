@@ -21,8 +21,19 @@ import { previewExecution } from '../models/modelExecutionState';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
 import { modelActions } from '../../shared/i18n/modelActions';
 import ModelIcon from '../../shared/ui/ModelIcon';
-import EngineSelect from '../../shared/ui/EngineSelect';
 
+type ArtifactFormat = api.HfSearchFormat;
+
+/**
+ * Discover opens on every model repository whatever engine is configured. A
+ * specific format is an optional search filter, never an engine choice, and
+ * what can be downloaded in-app is read from the selected repository's files.
+ */
+const FILTER_OPTIONS: { value: Exclude<ArtifactFormat, 'all'>; label: string }[] = [
+  { value: 'gguf', label: 'GGUF' },
+  { value: 'safetensors', label: 'HF Safetensors' },
+  { value: 'mlx', label: 'MLX Safetensors' },
+];
 
 function formatCount(locale: string, value: number): string {
   return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -77,27 +88,24 @@ function matches(lookup: InstalledLookup | null, repoId: string, modelsDir: stri
 
 export default function DiscoverPanel({ store, active = true, onSelectModel, onOpenModels }: { store: AppStore; active?: boolean; onSelectModel?: (path: string) => Promise<void>; onOpenModels?: () => void }) {
   const { t, locale } = useI18n();
-  const [provider, setProvider] = useState<api.ProviderId>(() => api.providerOf(store.cfg ?? {}));
-  const configuredProvider = api.providerOf(store.cfg ?? {});
-  const previousConfiguredProvider = useRef(configuredProvider);
-  useEffect(() => {
-    if (previousConfiguredProvider.current !== configuredProvider) { previousConfiguredProvider.current = configuredProvider; setProvider(configuredProvider); }
-  }, [configuredProvider]);
-  const defaultFormat = provider === 'mlx-vlm' ? 'mlx' : provider === 'vllm' ? 'safetensors' : 'gguf';
-  const [format, setFormat] = useState<'gguf' | 'safetensors' | 'mlx'>(defaultFormat);
+  const [format, setFormat] = useState<ArtifactFormat>('all');
   const [includeCompanions, setIncludeCompanions] = useState(false);
   const modelSettings = useModelSettings();
   const modelCopy = modelActions(locale);
-  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean; provider?: api.ProviderId; runtime?: string } | null>(null);
+  // A finished download names only the artifact. The engine and runtime are
+  // taken from the configuration current when the user chooses to configure it.
+  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean } | null>(null);
   const guard = useDraftGuard();
   const latestStore = useRef(store); latestStore.current = store;
 
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<api.HfSortKey>("downloads");
+  const [sort, setSort] = useState<api.HfSortKey>("trendingScore");
   const [results, setResults] = useState<api.HfModel[]>([]);
   const [listed, setListed] = useState(false);
   const [selected, setSelected] = useState<api.HfModel | null>(null);
-  const [files, setFiles] = useState<api.HfFile[] | null>(null);
+  // The selected repository's file tree, stamped with the repository it was
+  // read for. Only this answer establishes what can be downloaded in-app.
+  const [inspection, setInspection] = useState<(api.HfRepositoryInspection & { repo: string }) | null>(null);
   const [searching, setSearching] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -126,26 +134,34 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const inspectGeneration = useRef(0);
   const installedGeneration = useRef(0);
   const modelsDir = store.cfg?.models_dir ?? "";
+  // The configured engine and runtime are part of what a late completion is
+  // checked against: changing either while a file downloads means the result
+  // no longer belongs to the execution setup it started under.
   const latestTransferContext = useRef<TransferContext | null>(null);
   latestTransferContext.current = selected && store.cfg ? {
     repo: selected.id,
     destination: modelsDir,
-    provider,
-    runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '',
+    provider: api.providerOf(store.cfg),
+    runtime: store.cfg.active_runtime ?? '',
     activeModel: store.cfg.active_model,
     mmproj: store.cfg.mmproj,
   } : null;
   const downloadBusy = !!downloading || downloadTask?.state === 'running' || downloadTask?.state === 'cancelling';
   const [snapshots, setSnapshots] = useState<{ repo: string; destination: string; artifacts: api.ModelArtifact[] } | null>(null);
   const [checkingSnapshots, setCheckingSnapshots] = useState(false);
-  const previousProvider = useRef(provider);
-  useEffect(() => {
-    if (previousProvider.current === provider) return;
-    previousProvider.current = provider;
-    searchGeneration.current += 1; inspectGeneration.current += 1;
-    setSelected(null); setFiles(null); setResults([]); setLoadingFiles(false);
-    setFormat(defaultFormat); opened.current = '';
-  }, [provider, defaultFormat]);
+  // What the selected repository's own files allow under the chosen filter.
+  // Tags, the configured engine and a missing, loading or failed inspection
+  // never make an action available.
+  const inspected = selected && inspection?.repo === selected.id ? inspection : null;
+  const files = inspected && format !== 'safetensors' && format !== 'mlx' ? inspected.gguf_files : null;
+  const snapshotCandidate = !!inspected && format !== 'gguf' && inspected.has_root_safetensors;
+  const noInAppDownload = !!inspected && !files?.length && !snapshotCandidate;
+  // The header names only formats found in the repository's files; neither
+  // the search filter nor a task tag is evidence of how weights are stored.
+  const fileFormats = inspected ? [
+    ...(inspected.gguf_files.length > 0 ? ['GGUF'] : []),
+    ...(inspected.has_root_safetensors ? ['Safetensors'] : []),
+  ] : [];
 
   // An empty query is a listing, not a mistake: the panel opens on the catalog
   // in the selected order and the search box narrows it from there.
@@ -157,11 +173,11 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setError(null);
     setNotice(null);
     setSelected(null);
-    setFiles(null);
+    setInspection(null);
     setLoadingFiles(false);
     setSearching(true);
     try {
-      const next = format === 'gguf' ? await api.hfSearchModels(term.trim(), 30, order) : await api.hfSearchModels(term.trim(), 30, order, format);
+      const next = await api.hfSearchModels(term.trim(), 30, order, format);
       if (generation !== searchGeneration.current) return;
       setResults(next);
       setListed(true);
@@ -179,11 +195,10 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   // the user has never opened never spends a request.
   const opened = useRef('');
   useEffect(() => {
-    const identity = `${provider}:${format}`;
-    if (!active || opened.current === identity) return;
-    opened.current = identity;
+    if (!active || opened.current === format) return;
+    opened.current = format;
     void runSearch(query, sort);
-  }, [active, runSearch, query, sort, provider, format]);
+  }, [active, runSearch, query, sort, format]);
 
   useEffect(() => () => {
     searchGeneration.current += 1; inspectGeneration.current += 1; installedGeneration.current += 1;
@@ -211,14 +226,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const generation = ++inspectGeneration.current;
     setSelected(model);
     setIncludeCompanions(false);
-    setFiles(null);
+    setInspection(null);
     setError(null);
     setNotice(null);
     setLoadingFiles(true);
-    if (format !== 'gguf') { setLoadingFiles(false); return; }
     try {
       const next = await api.hfModelFiles(model.id);
-      if (generation === inspectGeneration.current) setFiles(next);
+      if (generation === inspectGeneration.current) setInspection({ ...next, repo: model.id });
     } catch (caught) {
       if (generation === inspectGeneration.current) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -262,7 +276,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   useEffect(() => {
     let retired = false;
     setSnapshots(null);
-    if (!selected || format === 'gguf') { setCheckingSnapshots(false); return; }
+    if (!selected || !snapshotCandidate) { setCheckingSnapshots(false); return; }
     const repo = selected.id;
     setCheckingSnapshots(true);
     void api.hfInstalledSnapshots(repo, modelsDir).then(artifacts => {
@@ -271,7 +285,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       if (!retired) setCheckingSnapshots(false);
     });
     return () => { retired = true; };
-  }, [selected, format, modelsDir, installedRevision]);
+  }, [selected, snapshotCandidate, modelsDir, installedRevision]);
 
   const transferActive = () => getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && ['running', 'cancelling'].includes(task.state));
   const currentTransferTask = () => getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
@@ -305,7 +319,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     // same name must not inherit its result.
     const repoId = selected.id;
     const destination = store.cfg.models_dir;
-    const execution = { provider, runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '' };
+    const execution = { provider: api.providerOf(store.cfg), runtime: store.cfg.active_runtime ?? '' };
     const origin: TransferOrigin = {
       repo: repoId,
       file: file.path,
@@ -347,7 +361,9 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setNotice(null);
     let transferred = false;
     try {
-      const downloaded = provider === 'vllm' && includeCompanions && file.companions_available
+      // Companions are an explicit per-download request, offered whenever the
+      // repository supplies them; no engine has to be selected to ask for them.
+      const downloaded = includeCompanions && file.companions_available
         ? await api.hfDownloadModel(repoId, file.path, destination, true)
         : await api.hfDownloadModel(repoId, file.path, destination);
       transferred = true;
@@ -380,7 +396,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       if (modelSettings) {
         const projector = file.is_mmproj || isMmprojPath(file.path);
         if (ownsCurrentDownload(origin)) {
-          setDownloadedChoice({ path: modelPath, projector, ...execution });
+          setDownloadedChoice({ path: modelPath, projector });
           setNotice(t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }));
         }
         return;
@@ -450,12 +466,12 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     }
     const repo = selected.id;
     const destination = store.cfg.models_dir;
-    const execution = { provider, runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '' };
     const origin: TransferOrigin = {
       repo,
       file: repo,
       destination,
-      ...execution,
+      provider: api.providerOf(store.cfg),
+      runtime: store.cfg.active_runtime ?? '',
       activeModel: store.cfg.active_model,
       mmproj: store.cfg.mmproj,
       taskCancel: null,
@@ -476,7 +492,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       if (!ownsTransferOrigin(origin)) return;
       if (canUpdateTransferPanel(origin)) {
         setInstalledRevision(revision => revision + 1);
-        setDownloadedChoice({ path: artifact.path, projector: false, ...execution });
+        setDownloadedChoice({ path: artifact.path, projector: false });
         setNotice(t('ui.downloadedModel', { file: repo }));
       }
     } catch (cause) {
@@ -503,17 +519,20 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const repoSnapshots = snapshots?.repo === selected?.id && snapshots?.destination === modelsDir ? snapshots.artifacts : [];
   const installedSnapshot = repoSnapshots.find(artifact => !artifact.incomplete && artifact.missing.length === 0);
 
+  // Configuration starts from the engine and runtime that are configured right
+  // now; the model settings editor then reports compatibility and owns any
+  // engine change. Discover never picks an engine for the artifact.
   const configureDownloaded = (choice: NonNullable<typeof downloadedChoice>) => {
     const cfg = latestStore.current.getConfig();
     if (!cfg) return;
     try {
       const config = choice.projector ? { ...cfg, mmproj: choice.path }
-        : { ...cfg, ...previewExecution({ ...cfg, active_provider: choice.provider ?? api.providerOf(cfg), active_runtime: choice.runtime ?? cfg.active_runtime }, choice.path), active_provider: choice.provider ?? api.providerOf(cfg), active_runtime: choice.runtime ?? cfg.active_runtime, active_model: choice.path };
+        : { ...cfg, ...previewExecution(cfg, choice.path), active_model: choice.path };
       if (modelSettings) modelSettings.open({ target: { kind: 'default' }, config, section: choice.projector ? 'adapters' : 'model' });
       else void guard.run(async () => {
         if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
         await latestStore.current.updateConfig(current => choice.projector ? { mmproj: choice.path }
-          : { ...previewExecution({ ...current, active_provider: choice.provider ?? api.providerOf(current), active_runtime: choice.runtime ?? current.active_runtime }, choice.path), active_provider: choice.provider ?? api.providerOf(current), active_runtime: choice.runtime ?? current.active_runtime, active_model: choice.path });
+          : { ...previewExecution(current, choice.path), active_model: choice.path });
         if (onSelectModel && !choice.projector) await onSelectModel(choice.path);
         onOpenModels?.();
       }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)));
@@ -538,11 +557,10 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); void runSearch(query, sort); }} className="discover-toolbar" aria-busy={searching || loadingFiles || downloading !== null}>
-        <EngineSelect value={provider} onChange={setProvider} disabled={downloadBusy} />
         <label className="discover-toolbar-field">{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
-          options={provider === 'llama.cpp' ? [{ value: 'gguf', label: 'GGUF' }] : provider === 'mlx-vlm' ? [{ value: 'mlx', label: 'MLX Safetensors' }] : [{ value: 'safetensors', label: 'HF Safetensors' }, { value: 'gguf', label: 'GGUF' }]}
+          options={[{ value: 'all' as ArtifactFormat, label: providerCopy[locale].allFormats }, ...FILTER_OPTIONS]}
           disabled={downloadBusy}
-          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value as typeof format); setSelected(null); setFiles(null); setLoadingFiles(false); setResults([]); opened.current = ''; }} /></label>
+          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]); opened.current = ''; }} /></label>
         <label className="discover-toolbar-field discover-toolbar-search" htmlFor="discover-search">{t("extra.search")}
           <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={providerCopy[locale].discoverPlaceholder} className="app-input" />
         </label>
@@ -593,13 +611,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{providerCopy[locale].discoverSelect}</div>}
           {selected && <>
-            {format !== 'gguf' && <><button type="button" className="app-button app-button--primary m-3" disabled={downloadBusy || store.busy || checkingSnapshots}
+            {snapshotCandidate && <><button type="button" className="app-button app-button--primary m-3" disabled={downloadBusy || store.busy || checkingSnapshots}
               onClick={() => void downloadSnapshot()}>{repoSnapshots.some(artifact => artifact.incomplete) ? modelCopy.retry : providerCopy[locale].snapshot}</button>
               {installedSnapshot && <Badge tone="neutral">{t('ui.discoverInstalled')}</Badge>}
-              {installedSnapshot && <button type="button" className="app-button app-button--ghost" onClick={() => configureDownloaded({ path: installedSnapshot.path, projector: false, provider, runtime: provider === api.providerOf(store.cfg ?? {}) ? store.cfg?.active_runtime ?? '' : '' })}>{modelCopy.configure}</button>}
+              {installedSnapshot && <button type="button" className="app-button app-button--ghost" onClick={() => configureDownloaded({ path: installedSnapshot.path, projector: false })}>{modelCopy.configure}</button>}
               {repoSnapshots.some(artifact => artifact.incomplete || artifact.missing.length > 0) && <p role="status" className="px-3 text-xs ui-color-warning">{providerCopy[locale].files}</p>}</>}
-            {format === 'gguf' && provider === 'vllm' && <div className="p-3 text-xs ui-color-muted"><p>{providerCopy[locale].ggufPrerequisites}</p>
-              {files?.some(file => file.companions_available) && <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={includeCompanions} disabled={downloadBusy} onChange={event => setIncludeCompanions(event.target.checked)} />{providerCopy[locale].ggufCompanions}</label>}
+            {files?.some(file => file.companions_available) && <div className="p-3 text-xs ui-color-muted"><p>{providerCopy[locale].ggufPrerequisites}</p>
+              <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={includeCompanions} disabled={downloadBusy} onChange={event => setIncludeCompanions(event.target.checked)} />{providerCopy[locale].ggufCompanions}</label>
             </div>}
             <div className="border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={selected.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges mode="detail" model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
               {validateHfRepoId(selected.id) && <a
@@ -612,9 +630,9 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
                     setError(caught instanceof Error ? caught.message : String(caught));
                   });
                 }}
-              >{t("ui.discoverModelCard")}<span aria-hidden="true">↗</span></a>}<div className="mt-1 text-xs ui-color-faint" >{providerCopy[locale].formats} · {selected.pipeline_tag || (format === 'gguf' ? 'GGUF' : format === 'mlx' ? 'MLX Safetensors' : 'HF Safetensors')}</div>{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
+              >{t("ui.discoverModelCard")}<span aria-hidden="true">↗</span></a>}{fileFormats.length > 0 && <div className="mt-1 text-xs ui-color-faint" >{providerCopy[locale].formats} · {fileFormats.join(' · ')}</div>}{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
             {loadingFiles && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.readingFiles")}</div>}
-            {!loadingFiles && files?.length === 0 && <div className="p-6 text-center text-xs ui-color-faint" >{t("extra.noFiles")}</div>}
+            {!loadingFiles && noInAppDownload && <div className="p-6 text-center text-xs ui-color-faint" role="status">{providerCopy[locale].noInAppDownload}</div>}
             {!loadingFiles && files && files.length > 0 && <div role="list" className="space-y-1.5 p-2">
               {groupHfFiles(files).map((group) => {
                 const { file } = group;
@@ -624,7 +642,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
                 const present = firstPresent?.missing_shards.length === 0 && group.files.every(part => installed[part.path]) ? firstPresent : undefined;
                 const missing = firstPresent?.missing_shards.length ?? (shardTotal(file.path) ? (shardTotal(file.path)! - group.files.filter(part => installed[part.path]).length) : 0);
                 const canDownload = ["stopped", "failed", "crashed"].includes(store.status.state);
-                const downloadCompanions = provider === 'vllm' && includeCompanions && file.companions_available;
+                const downloadCompanions = includeCompanions && file.companions_available;
                 const downloadActionLabel = present && !downloadCompanions ? t("ui.discoverInstalled") : activeDownload ? `${t("extra.downloading")}` : file.is_mmproj ? t("extra.downloadProjector") : t("extra.download");
                 const blockedReason = present ? t("ui.discoverInstalledAt", { path: normalizeDisplayPath(present.local_path) })
                   : checkingInstalled ? t("ui.discoverInstalledChecking")

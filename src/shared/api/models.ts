@@ -16,6 +16,13 @@ export const hfInstalledSnapshots = (repoId: string, modelsDir: string) =>
 export const HF_SORT_KEYS = ["downloads", "likes", "lastModified", "trendingScore"] as const;
 export type HfSortKey = (typeof HF_SORT_KEYS)[number];
 
+/**
+ * Discover search scope. `all` sends no Hub tag filter, so every model
+ * repository is listed; the others narrow the listing to one artifact format.
+ * Searching never decides what can be downloaded or run.
+ */
+export type HfSearchFormat = 'all' | 'gguf' | 'safetensors' | 'mlx';
+
 /** A repository file this machine already holds at its download destination. */
 export interface HfInstalledFile {
   /** Repository-relative path, matching `HfFile.path`. */
