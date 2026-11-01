@@ -2252,7 +2252,7 @@ fn cmake_not_found_error() -> String {
 /// The oldest CMake that can run the command lines in this file.
 ///
 /// Not llama.cpp's own floor - that is lower - but ours: `-S`/`-B` needs 3.13,
-/// `--target a b` (llama-server *and* llama-bench in one build) needs 3.15,
+/// `--target a b` (llama-server *and* llama-perplexity in one build) needs 3.15,
 /// and `CMAKE_CUDA_ARCHITECTURES` needs 3.18. A PR whose own
 /// `cmake_minimum_required` is higher still fails at configure, and
 /// `build_failure_hint` explains that case separately.
@@ -2694,8 +2694,11 @@ fn probe_devices(output: &str) -> Vec<String> {
         .collect()
 }
 
-fn classify_preflight(version: bool, help: bool, devices: bool, bench: bool) -> &'static str {
-    if version && help && devices && bench {
+/// Serving readiness depends only on llama-server's own probes. llama-bench is
+/// an optional diagnostic helper: its result is reported separately and never
+/// decides availability.
+fn classify_preflight(version: bool, help: bool, devices: bool) -> &'static str {
+    if version && help && devices {
         "available"
     } else {
         "failed preflight"
@@ -2806,12 +2809,14 @@ async fn probe_with_cancel(
     if cancelled() {
         return Err("server start cancelled".into());
     }
+    // llama-bench is optional. An absent helper is not a problem and adds no
+    // diagnostic; a present helper is still executed, and only a successful
+    // `--help` run reports it as available. File existence alone never does.
     let bench_binary = if backend.is_empty() && build.is_empty() {
         which::which(bench_executable_name()).ok().or_else(|| {
             binary
                 .parent()
                 .map(|parent| parent.join(bench_executable_name()))
-                .filter(|path| path.is_file())
         })
     } else {
         Some(bench_bin_for(backend, build)?)
@@ -2827,18 +2832,10 @@ async fn probe_with_cancel(
             )
             .await
         }
-        Some(path) => ProbeCommand {
+        _ => ProbeCommand {
             success: false,
             text: String::new(),
-            diagnostic: Some(format!(
-                "llama-bench executable is missing: {}",
-                path.display()
-            )),
-        },
-        None => ProbeCommand {
-            success: false,
-            text: String::new(),
-            diagnostic: Some("llama-bench executable was not found on PATH".into()),
+            diagnostic: None,
         },
     };
     if cancelled() {
@@ -2864,20 +2861,19 @@ fn capabilities_from_probes(
     if let Some(error) = dependency_error.as_ref() {
         diagnostics.push(error.clone());
     }
-    for result in [&version, &help, &devices, &bench] {
+    for result in [&version, &help, &devices] {
         if let Some(diagnostic) = &result.diagnostic {
             diagnostics.push(diagnostic.clone());
         }
     }
+    // Name the optional helper so its failure is not read as a server failure.
+    if let Some(diagnostic) = &bench.diagnostic {
+        diagnostics.push(format!("optional llama-bench check failed: {diagnostic}"));
+    }
     let state = if dependency_error.is_some() {
         "failed preflight"
     } else {
-        classify_preflight(
-            version.success,
-            help.success,
-            devices.success,
-            bench.success,
-        )
+        classify_preflight(version.success, help.success, devices.success)
     };
     // Failed commands can print plausible flags or device names while reporting
     // initialization errors. Keep that output in diagnostics, not capabilities.
@@ -2936,9 +2932,8 @@ fn installed_directories_in(root: &Path) -> impl Iterator<Item = (String, String
                 return None;
             }
             let dir = entry.path();
-            if !dir.join(server_executable_name()).is_file()
-                || !dir.join(bench_executable_name()).is_file()
-            {
+            // llama-bench is optional; only the serving executable is required.
+            if !dir.join(server_executable_name()).is_file() {
                 return None;
             }
             Some((build.into(), backend.into(), dir))
@@ -4917,8 +4912,8 @@ pub async fn install_with(
 }
 
 /// Build a pull request locally with the user's installed CMake/toolchain and
-/// place the resulting server and bench binaries in the same managed-runtime
-/// layout as release archives.
+/// place the resulting server, with any optional tools the build produced, in
+/// the same managed-runtime layout as release archives.
 pub async fn install_pr(
     app: AppHandle,
     backend: &str,
@@ -5669,15 +5664,17 @@ async fn detected_cuda_capabilities() -> Vec<String> {
 /// What a PR build produces, stated once so the UI, the docs and the build
 /// itself cannot drift apart.
 ///
-/// aiolm builds the server, the benchmark tool and the perplexity tool that
-/// GPU verification runs before a device placement may start; without it a
-/// GPU PR runtime could never pass that check. Nothing else is built.
+/// aiolm builds the server and the perplexity tool that GPU verification runs
+/// before a device placement may start; without it a GPU PR runtime could never
+/// pass that check. Nothing else is built: llama-bench is an optional
+/// diagnostic helper that aiolm never needs, so a source build neither builds
+/// nor requires it.
 /// Tests and examples are off because they roughly double the build for code
 /// aiolm never runs. The server's optional embedded web UI is **not**
 /// built here: aiolm uses the loopback API directly, so no Node
 /// toolchain is needed and no UI asset is fetched at build time - the same
 /// reason the network options in `SOURCE_BUILD_OFFLINE_OPTIONS` are off.
-pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench", "llama-perplexity"];
+pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-perplexity"];
 
 fn source_build_configure_args(
     backend: &str,
@@ -6150,15 +6147,15 @@ fn find_built_runtime_dir(build_root: &Path) -> Result<PathBuf, String> {
         }
     }
     Err(format!(
-        "CMake completed but {} or {} was not found in the build output",
-        server_executable_name(),
-        bench_executable_name()
+        "CMake completed but {} was not found in the build output",
+        server_executable_name()
     ))
 }
 
+/// The build output directory is the one holding llama-server. Optional tools
+/// such as llama-bench are copied with it when present but are not required.
 fn has_runtime_binaries(directory: &Path) -> bool {
     directory.join(server_executable_name()).is_file()
-        && directory.join(bench_executable_name()).is_file()
 }
 
 fn copy_runtime_tree(
@@ -6883,14 +6880,14 @@ async fn write_download_chunk(output: &mut tokio::fs::File, chunk: &[u8]) -> Res
         .map_err(|error| error.to_string())
 }
 
+/// A runtime requires llama-server. Optional tools such as llama-bench may be
+/// absent; when an archive includes them, its manifest/hash checks still cover
+/// those files like every other entry.
 fn verify_runtime_files(staging: &Path) -> Result<(), String> {
-    let server = staging.join(server_executable_name());
-    let bench = staging.join(bench_executable_name());
-    if !server.is_file() || !bench.is_file() {
+    if !staging.join(server_executable_name()).is_file() {
         return Err(format!(
-            "runtime archive is missing {} or {}",
-            server_executable_name(),
-            bench_executable_name()
+            "runtime archive is missing {}",
+            server_executable_name()
         ));
     }
     Ok(())
@@ -6902,7 +6899,9 @@ async fn preflight_staged_runtime(
     progress: ProgressSink<'_>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Option<RuntimeVersion>, String> {
-    let checks: [(&str, &[&str], &str); 4] = [
+    // Only llama-server gates activation. The optional llama-bench helper is
+    // probed later as a diagnostic and never blocks an otherwise valid runtime.
+    let checks: [(&str, &[&str], &str); 3] = [
         (
             server_executable_name(),
             &["--version"],
@@ -6914,7 +6913,6 @@ async fn preflight_staged_runtime(
             &["--list-devices"],
             "llama-server --list-devices",
         ),
-        (bench_executable_name(), &["--help"], "llama-bench --help"),
     ];
     let total = checks.len() as f64;
     let mut version = None;
@@ -7381,6 +7379,35 @@ mod tests {
         let manifest = test_bundle_manifest(&root);
         validate_bundle_manifest(&manifest).expect("validate test manifest");
         verify_bundle_files(&root, &manifest).expect("verify test bundle");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundles_need_only_the_server_and_still_verify_an_included_optional_helper() {
+        let root = test_directory("bundle-optional-helper");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(server_executable_name()), b"server").unwrap();
+        write_source_manifest(&root, &test_source()).unwrap();
+        let server_only = test_bundle_manifest(&root);
+        verify_bundle_files(&root, &server_only).expect("a server-only bundle is complete");
+
+        fs::write(root.join(bench_executable_name()), b"bench").unwrap();
+        assert!(
+            verify_bundle_files(&root, &server_only).is_err(),
+            "an undeclared extra file is still refused"
+        );
+        let with_helper = test_bundle_manifest(&root);
+        verify_bundle_files(&root, &with_helper).expect("the declared helper verifies");
+        fs::write(root.join(bench_executable_name()), b"bencX").unwrap();
+        assert!(verify_bundle_files(&root, &with_helper)
+            .unwrap_err()
+            .contains("digest mismatch"));
+
+        fs::remove_file(root.join(server_executable_name())).unwrap();
+        let without_server = test_bundle_manifest(&root);
+        assert!(verify_bundle_files(&root, &without_server)
+            .unwrap_err()
+            .contains(server_executable_name()));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -8253,16 +8280,15 @@ mod tests {
     }
 
     #[test]
-    fn preflight_requires_server_and_bench_checks() {
-        assert_eq!(classify_preflight(true, true, true, true), "available");
-        assert_eq!(
-            classify_preflight(true, true, true, false),
-            "failed preflight"
-        );
-        assert_eq!(
-            classify_preflight(false, true, true, true),
-            "failed preflight"
-        );
+    fn preflight_requires_every_server_check() {
+        assert_eq!(classify_preflight(true, true, true), "available");
+        for failed in 0..3 {
+            let [version, help, devices] = std::array::from_fn(|index| index != failed);
+            assert_eq!(
+                classify_preflight(version, help, devices),
+                "failed preflight"
+            );
+        }
     }
 
     #[test]
@@ -8286,15 +8312,69 @@ mod tests {
                 None,
                 probes,
             );
-            assert_eq!(capabilities.state, "failed preflight");
+            // A failed optional llama-bench check never gates serving readiness.
+            let expected_state = if failed == 3 {
+                "available"
+            } else {
+                "failed preflight"
+            };
+            assert_eq!(capabilities.state, expected_state);
             assert_eq!(capabilities.version.is_empty(), failed == 0);
             assert_eq!(capabilities.flags.is_empty(), failed == 1);
             assert_eq!(capabilities.server_help.is_empty(), failed == 1);
             assert_eq!(capabilities.supports_dflash, failed != 1);
             assert_eq!(capabilities.devices.is_empty(), failed == 2);
             assert_eq!(capabilities.bench_available, failed != 3);
-            assert_eq!(capabilities.diagnostics, ["synthetic loader failure"]);
+            let expected_diagnostic = if failed == 3 {
+                "optional llama-bench check failed: synthetic loader failure"
+            } else {
+                "synthetic loader failure"
+            };
+            assert_eq!(capabilities.diagnostics, [expected_diagnostic]);
         }
+    }
+
+    #[test]
+    fn an_absent_optional_helper_is_unavailable_without_a_diagnostic() {
+        let ok = |text: &str| ProbeCommand {
+            success: true,
+            text: text.into(),
+            diagnostic: None,
+        };
+        let absent = ProbeCommand {
+            success: false,
+            text: String::new(),
+            diagnostic: None,
+        };
+        let capabilities = capabilities_from_probes(
+            "cpu".into(),
+            "b123".into(),
+            Path::new("synthetic-runtime"),
+            None,
+            [
+                ok("version: 0.1.0 (build 123, commit abcdef)"),
+                ok("--model FILE"),
+                ok("CPU: synthetic"),
+                absent,
+            ],
+        );
+        assert_eq!(capabilities.state, "available");
+        assert!(!capabilities.bench_available);
+        assert!(capabilities.diagnostics.is_empty());
+        // A missing vendor dependency still blocks, with or without the helper.
+        let blocked = capabilities_from_probes(
+            "cuda".into(),
+            "b123".into(),
+            Path::new("synthetic-runtime"),
+            Some("missing vendor libraries".into()),
+            [
+                ok("v"),
+                ok("--model FILE"),
+                ok("CUDA0: synthetic"),
+                ok("llama-bench"),
+            ],
+        );
+        assert_eq!(blocked.state, "failed preflight");
     }
 
     #[tokio::test]
@@ -9413,7 +9493,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {
+    fn a_pr_build_produces_the_server_and_verification_tool_and_nothing_else() {
         let args = source_build_args(Path::new("build"));
         for target in SOURCE_BUILD_TARGETS {
             assert!(args.iter().any(|arg| arg == target), "{target}");
@@ -9640,7 +9720,7 @@ mod tests {
     }
 
     #[test]
-    fn the_built_runtime_directory_is_the_one_holding_both_binaries() {
+    fn the_built_runtime_directory_is_the_one_holding_the_server() {
         let root = std::env::temp_dir().join(format!(
             "aiolm-built-{}-{}",
             std::process::id(),
@@ -9648,11 +9728,15 @@ mod tests {
         ));
         let release = root.join("bin").join("Release");
         fs::create_dir_all(&release).expect("create bin/Release");
-        // Only the server: an incomplete build must not be accepted.
-        fs::write(release.join(server_executable_name()), b"exe").expect("server");
-        assert!(find_built_runtime_dir(&root).is_err());
-
+        // Only the optional helper: a build without the server is not accepted.
         fs::write(release.join(bench_executable_name()), b"exe").expect("bench");
+        assert!(find_built_runtime_dir(&root)
+            .unwrap_err()
+            .contains(server_executable_name()));
+
+        // The server alone is a complete result; llama-bench is not required.
+        fs::remove_file(release.join(bench_executable_name())).expect("remove bench");
+        fs::write(release.join(server_executable_name()), b"exe").expect("server");
         assert_eq!(find_built_runtime_dir(&root).expect("found"), release);
         let _ = fs::remove_dir_all(root);
     }
@@ -9681,13 +9765,19 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root = test_directory("cpu-preflight");
         fs::create_dir_all(&root).expect("create staged CPU runtime");
-        for name in [server_executable_name(), bench_executable_name()] {
-            let path = root.join(name);
-            fs::write(&path, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) printf 'Available devices:\\n(none)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        let server = root.join(server_executable_name());
+        fs::write(&server, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) printf 'Available devices:\\n(none)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).unwrap();
         let progress: ProgressSink = &|_, _, _| {};
         let cancel = Arc::new(AtomicBool::new(false));
+        // A server-only runtime passes; llama-bench is optional.
+        assert!(preflight_staged_runtime(&root, "cpu", progress, &cancel)
+            .await
+            .is_ok());
+        // A present but broken optional helper does not gate activation either.
+        let bench = root.join(bench_executable_name());
+        fs::write(&bench, b"#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&bench, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(preflight_staged_runtime(&root, "cpu", progress, &cancel)
             .await
             .is_ok());
@@ -9695,7 +9785,6 @@ mod tests {
             .await
             .unwrap_err()
             .contains("no accelerator"));
-        let server = root.join(server_executable_name());
         for devices in [
             "warning: HIP backend could not be loaded\\nAvailable devices:\\n(none)\\n",
             "Available devices:\\nVulkan0: Synthetic GPU (8192 MiB, 8192 MiB free)\\n",

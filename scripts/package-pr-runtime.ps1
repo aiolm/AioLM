@@ -100,10 +100,10 @@ try {
     }
   }
 
+  # llama-bench.exe is an optional helper; it is packaged when present.
   $server = Join-Path $packageRoot 'llama-server.exe'
-  $bench = Join-Path $packageRoot 'llama-bench.exe'
-  if (-not (Test-Path -LiteralPath $server -PathType Leaf) -or -not (Test-Path -LiteralPath $bench -PathType Leaf)) {
-    throw "The runtime directory must contain llama-server.exe and llama-bench.exe."
+  if (-not (Test-Path -LiteralPath $server -PathType Leaf)) {
+    throw "The runtime directory must contain llama-server.exe."
   }
 
   $checkedOutRef = ''

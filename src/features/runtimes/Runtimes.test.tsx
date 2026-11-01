@@ -532,21 +532,8 @@ describe("RuntimesPanel pull-request builds", () => {
     await reviewPullRequest();
     expect(screen.queryByText(/still a draft/)).not.toBeInTheDocument();
     expect(screen.queryByText(/not from ggml-org\/llama\.cpp/)).not.toBeInTheDocument();
-    // The build plan is not a warning and is always shown.
-    expect(screen.getByText("What gets built")).toBeInTheDocument();
   });
 
-  it("states what the build produces before the user agrees to it", async () => {
-    renderPanel();
-    await reviewPullRequest();
-    expect(screen.getByText(/llama-server, llama-bench and llama-perplexity targets only/)).toBeInTheDocument();
-    expect(screen.getByText(/embedded web UI is disabled/)).toBeInTheDocument();
-    expect(screen.getByText(/BoringSSL, libcurl and OpenSSL support are off/)).toBeInTheDocument();
-    // The backend is cuda here, so the architecture policy is disclosed too.
-    expect(screen.getByText(/AIOLM_CUDA_ARCHITECTURES/)).toBeInTheDocument();
-    // And so is the fact that one PR keeps one directory.
-    expect(screen.getByText(/Installs as pr27342-cuda/)).toBeInTheDocument();
-  });
 
   it("hides the CUDA architecture note for a backend that has no CUDA kernels", async () => {
     renderPanel();

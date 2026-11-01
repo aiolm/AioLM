@@ -1529,7 +1529,7 @@ fn help_value() -> Value {
             "runtime export <vllm|mlx-vlm> <id> <zip>":"export exact package wheels for offline import on a compatible OS, architecture and Python ABI; destination must be new",
             "runtime import <zip>":"verify a portable Python runtime bundle and recreate a new isolated environment offline; Ctrl-C cancels and cleans up",
             "runtime device":"detect local GPUs and recommended backends",
-            "runtime probe <backend> <build>":"run version/help/device/bench preflight",
+            "runtime probe <backend> <build>":"run version/help/device preflight and report the optional llama-bench helper",
             "runtime probe <vllm|mlx-vlm> <id>":"re-probe a registered Python engine environment",
             "runtime select <backend> <build>":"save the configured runtime backend and build together",
             "server start":"start the selected provider's server with the active model, without API-key persistence",

@@ -129,7 +129,8 @@ jobs:
       - name: Build runtime targets
         shell: pwsh
         run: |
-          cmake --build build --config Release --target llama-server llama-bench --parallel
+          # Only the serving target is required; llama-bench is an optional helper.
+          cmake --build build --config Release --target llama-server --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed." }
 
       - name: Locate and preflight runtime
@@ -138,10 +139,6 @@ jobs:
           $server = Get-ChildItem -Path build -Filter llama-server.exe -Recurse -File | Select-Object -First 1
           if ($null -eq $server) { throw "llama-server.exe was not produced." }
           $runtime = $server.Directory.FullName
-          $bench = Join-Path $runtime 'llama-bench.exe'
-          if (-not (Test-Path -LiteralPath $bench -PathType Leaf)) {
-            throw "llama-bench.exe was not produced beside llama-server.exe."
-          }
           New-Item -ItemType Directory -Force -Path runtime-output | Out-Null
           Copy-Item -Path (Join-Path $runtime '*') -Destination runtime-output -Recurse -Force
           & $server --version
@@ -150,8 +147,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "llama-server --help failed." }
           & $server --list-devices *> $null
           if ($LASTEXITCODE -ne 0) { throw "llama-server --list-devices failed." }
-          & $bench --help *> $null
-          if ($LASTEXITCODE -ne 0) { throw "llama-bench --help failed." }
+          # llama-bench is an optional helper: report its state, never gate on it.
+          $bench = Join-Path $runtime 'llama-bench.exe'
+          if (Test-Path -LiteralPath $bench -PathType Leaf) {
+            & $bench --help *> $null
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Optional llama-bench --help failed." }
+            # The runner ends the step with the last native exit code.
+            $global:LASTEXITCODE = 0
+          }
 
       - name: Upload raw runtime artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -219,7 +222,8 @@ jobs:
     # Backstop against a hung smoke test; this job only extracts and
     # exercises an already-packaged runtime archive.
     timeout-minutes: 20
-    # This job executes the PR-derived llama-server.exe/llama-bench.exe, so
+    # This job executes the PR-derived llama-server.exe (and the optional
+    # llama-bench.exe when packaged), so
     # it is treated as low-trust: unlike build/package it never checks out
     # any repository, runs the packaging/release scripts, or receives
     # release/signing secrets, and it holds no write-capable permissions.
@@ -259,7 +263,7 @@ jobs:
             }
             $server = Join-Path $runtime.FullName 'llama-server.exe'
             $bench = Join-Path $runtime.FullName 'llama-bench.exe'
-            if (-not (Test-Path -LiteralPath $server -PathType Leaf) -or -not (Test-Path -LiteralPath $bench -PathType Leaf)) { throw 'The extracted runtime is missing its executables.' }
+            if (-not (Test-Path -LiteralPath $server -PathType Leaf)) { throw 'The extracted runtime is missing llama-server.exe.' }
             $env:Path = $runtime.FullName
             foreach ($name in @('CUDA_PATH', 'CUDA_HOME', 'CUDA_TOOLKIT_ROOT_DIR', 'CUDACXX', 'HIP_PATH', 'ROCM_PATH', 'VULKAN_SDK', 'VK_SDK_PATH', 'ROCBLAS_TENSILE_LIBPATH', 'HIPBLASLT_TENSILE_LIBPATH')) {
               Remove-Item -LiteralPath ("Env:" + $name) -ErrorAction SilentlyContinue
@@ -270,8 +274,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Packaged llama-server --help failed.' }
             & $server --list-devices *> $null
             if ($LASTEXITCODE -ne 0) { throw 'Packaged llama-server --list-devices failed.' }
-            & $bench --help *> $null
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged llama-bench --help failed.' }
+            if (Test-Path -LiteralPath $bench -PathType Leaf) {
+              & $bench --help *> $null
+              if ($LASTEXITCODE -ne 0) { Write-Warning 'Optional packaged llama-bench --help failed.' }
+              # The runner ends the step with the last native exit code.
+              $global:LASTEXITCODE = 0
+            }
           } finally {
             if (Test-Path -LiteralPath $smokeRoot) { Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue }
           }

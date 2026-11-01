@@ -491,7 +491,9 @@ mod tests {
             fixture.write(&format!("{name}/{}", server_executable_name()), b"s");
             fixture.write(&format!("{name}/{}", bench_executable_name()), b"b");
         }
+        // A server-only runtime is listed: llama-bench is an optional helper.
         fixture.write(&format!("b3-cpu/{}", server_executable_name()), b"s");
+        // The optional helper alone is not a runtime.
         fixture.write(&format!("b2-cpu/{}", bench_executable_name()), b"b");
         fixture.write("b1-cpu", b"not a directory");
         let current = br#"{"semver":"current","build":9,"commit":"current"}"#;
@@ -516,6 +518,7 @@ mod tests {
             expected_entry("b9-cpu", "b9", "cpu", Some("b9 (current)")),
             expected_entry("b9-cuda", "b9", "cuda", Some("b2 (legacy)")),
             expected_entry("b9-future-backend", "b9", "future-backend", None),
+            expected_entry("b3-cpu", "b3", "cpu", None),
             expected_entry("b11-cpu", "b11", "cpu", None),
             expected_entry("b10-cpu", "b10", "cpu", None)
         ]);
@@ -538,9 +541,11 @@ mod tests {
         );
         expected[0]["version"] = json!("b12 (fresh)");
         fixture.remove_file("b10-cpu/aiolm-runtime.json");
-        expected[4]["version"] = json!("b2 (legacy)");
+        expected[5]["version"] = json!("b2 (legacy)");
+        // Removing the optional helper keeps the runtime; removing the server drops it.
         fixture.remove_file(&format!("b9-future-backend/{}", bench_executable_name()));
-        expected.as_array_mut().unwrap().remove(2);
+        fixture.remove_file(&format!("b3-cpu/{}", server_executable_name()));
+        expected.as_array_mut().unwrap().remove(3);
         assert_json(
             "managed fresh manifest and executable edits",
             read(&fixture.root),
