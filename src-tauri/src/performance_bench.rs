@@ -486,7 +486,7 @@ impl RuntimeInfo {
             .unwrap_or_default();
         let root = crate::benchmark::data_root()?;
         let model = tokio::task::spawn_blocking(move || {
-            let mut identity = crate::benchmark::identity::cached(&root, &model_path);
+            let mut identity = crate::benchmark::identity::capture(&root, &model_path);
             identity.metadata = crate::benchmark::model_metadata::collect(&root, &model_path);
             identity
         })

@@ -114,6 +114,19 @@ pub async fn probed_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             set_llama_mode(&mut info, mode, &cfg.active_model)?;
         }
     }
+    let backend = cfg.active_backend.clone();
+    let build = cfg.active_build.clone();
+    // Bundle verification reads the selected executable, outside the async
+    // worker. A missing/old/mismatched manifest leaves the backend unknown.
+    let backend = tokio::task::spawn_blocking(move || {
+        crate::runtime::installed_reported_backend(&backend, &build)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(metadata) = &mut info.serving_metadata {
+        metadata.runtime.backend = backend.as_deref().and_then(observed_label);
+    }
     Ok(info)
 }
 

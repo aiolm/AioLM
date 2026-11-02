@@ -1,16 +1,13 @@
-//! The app does not hash models. This module only reads digests that an earlier
-//! build cached, and never reads a model. The cache is invalidated by file
-//! metadata changes. A Hugging Face or MLX snapshot directory is identified by
-//! its format, its immutable upstream revision when one is known, and AioLM's
-//! local fingerprint of the files as they are now; none of those is a content
-//! digest, so a snapshot is never reported with a `sha256`.
+//! Model identity capture reuses stamp-validated digests and bounds new GGUF
+//! hashing before measurement. Snapshot fingerprints and revisions are not
+//! weight digests; snapshot directories and multipart models have no SHA-256.
 use crate::providers::artifacts::{self, ArtifactFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct ModelIdentity {
@@ -211,12 +208,76 @@ pub(crate) fn cached(root: &Path, path: &Path) -> ModelIdentity {
         .unwrap_or(fallback)
 }
 
+// Keep optional provenance collection bounded independently of model size.
+const MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Best-effort full-file identity for a new run, never for history/replay.
+/// Failure or a changing file leaves the existing truthful unidentified state.
+pub(crate) fn capture(root: &Path, path: &Path) -> ModelIdentity {
+    let identity = cached(root, path);
+    if identity.status != "unidentified" || identity.format != Some(ArtifactFormat::Gguf) {
+        return identity;
+    }
+    capture_gguf(root, path, &identity).unwrap_or(identity)
+}
+
+fn capture_gguf(root: &Path, path: &Path, fallback: &ModelIdentity) -> Option<ModelIdentity> {
+    let started = Instant::now();
+    let path = path.canonicalize().ok()?;
+    let before = stamp(&path).ok()?;
+    if before.modified.is_none() || before.size < 4 || before.size > MAX_CAPTURE_BYTES {
+        return None;
+    }
+    let mut file = File::open(&path).ok()?;
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(magic);
+    let mut bytes_read = 4u64;
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        if started.elapsed() >= CAPTURE_TIMEOUT {
+            return None;
+        }
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        bytes_read = bytes_read.checked_add(count as u64)?;
+        if bytes_read > before.size {
+            return None;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    if bytes_read != before.size || stamp(&path).ok()? != before {
+        return None;
+    }
+    let identity = ModelIdentity {
+        status: "sha256".into(),
+        sha256: Some(format!("{:x}", hasher.finalize())),
+        size_bytes: Some(bytes_read),
+        ..fallback.clone()
+    };
+    let cached = CachedIdentity {
+        stamp: before,
+        identity: identity.clone(),
+    };
+    // Cache persistence is not a prerequisite for using the observed digest.
+    if let Ok(bytes) = serde_json::to_vec(&cached) {
+        let _ = crate::config::atomic_write(&cache_path(root, &path), &bytes);
+    }
+    Some(identity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Writes the cache entry an earlier build stored after hashing `model`.
-    /// The app no longer hashes models, so tests seed that legacy shape directly.
+    /// Writes the legacy cache shape without newer optional identity fields.
     fn seed_legacy_cache(root: &Path, model: &Path, contents: &[u8]) -> ModelIdentity {
         let resolved = model.canonicalize().unwrap();
         let identity = ModelIdentity {
@@ -252,6 +313,46 @@ mod tests {
         assert_eq!(cached(&root, &model), identity);
         fs::write(&model, b"changed synthetic model").unwrap();
         assert_eq!(cached(&root, &model).status, "unidentified");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_hashes_complete_gguf_bytes_and_reuses_only_unchanged_identity() {
+        let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let model = root.join("synthetic.gguf");
+        fs::write(&model, b"GGUF").unwrap();
+        let first = capture(&root, &model);
+        assert_eq!(first.status, "sha256");
+        assert_eq!(first.size_bytes, Some(4));
+        assert_eq!(
+            first.sha256.as_deref(),
+            Some("b83633aa785344791618f2fddf131b010ea04912a60430760b070bad293f65bd")
+        );
+        assert_eq!(cached(&root, &model), first);
+        fs::write(&model, b"GGUFchanged").unwrap();
+        assert_eq!(cached(&root, &model).status, "unidentified");
+        let changed = capture(&root, &model);
+        assert_eq!(changed.status, "sha256");
+        assert_ne!(changed.sha256, first.sha256);
+        // A recorded identity is a frozen value, not a live file reference.
+        assert_eq!(first.size_bytes, Some(4));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_does_not_digest_references_non_gguf_files_or_shards() {
+        let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for (name, bytes) in [
+            ("reference.json", b"GGUF".as_slice()),
+            ("not-weights.gguf", b"not a GGUF".as_slice()),
+            ("synthetic-00001-of-00002.gguf", b"GGUF".as_slice()),
+        ] {
+            let model = root.join(name);
+            fs::write(&model, bytes).unwrap();
+            assert!(capture(&root, &model).sha256.is_none(), "{name}");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

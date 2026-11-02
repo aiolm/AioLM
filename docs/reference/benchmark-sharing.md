@@ -66,6 +66,21 @@ observations, never reconstructed from process names or local IDs. Missing
 identity, model format, settings or token/cache counters does not prevent sharing
 a complete successful workload. Legacy snapshots retain their original fields.
 
+New runs collect a complete single-file GGUF SHA-256 before timing, on a blocking
+worker with a 64 GiB file-size and 60-second collection bound. An unchanged local
+identity cache avoids rereading the file. A changed file, read failure or collection
+limit leaves the digest unknown; directory snapshots, references and multipart
+models are not assigned a single-file weight digest. This never updates old runs.
+
+The native adapter records binary-reported version/build. It records a bundle's
+declared backend only when the manifest version and selected server's complete
+file digest match; the installation folder and configured backend are not evidence.
+Absent variant/plugin metadata remains unrecorded, not a claim of inapplicability.
+The ordinary launch path currently reports available devices and explicit
+configured assignments, but no authoritative automatic device-selection result.
+Automatic placement therefore does not turn an installed GPU into a selected GPU,
+and shared host RAM is never substituted for unknown GPU VRAM.
+
 When you compare results, keep these limits in mind:
 
 - A selected GPU records how the run was configured, not proof that every layer

@@ -840,6 +840,42 @@ pub fn installed_reported_version(
     Ok(read_version_manifest(&runtime_dir(backend, build)?))
 }
 
+/// Bundle-declared backend tied to the exact installed server bytes, not its
+/// installation directory. This describes the runtime build, not GPU use.
+pub(crate) fn installed_reported_backend(backend: &str, build: &str) -> Option<String> {
+    let binary = server_bin_for(backend, build).ok()?;
+    let directory = binary.parent()?;
+    let version = read_version_manifest(directory)?;
+    reported_bundle_backend(directory, &binary, &version)
+}
+
+fn reported_bundle_backend(
+    directory: &Path,
+    binary: &Path,
+    version: &RuntimeVersion,
+) -> Option<String> {
+    let manifest = read_bundle_manifest(directory).ok()?;
+    if manifest.version.as_ref() != Some(version) {
+        return None;
+    }
+    let relative = bundle_relative_path(directory, binary).ok()?;
+    let declared = manifest.files.iter().find(|file| file.path == relative)?;
+    let before = fs::metadata(binary).ok()?;
+    // Identity collection must not scan an arbitrarily large replacement file.
+    if !before.is_file() || before.len() != declared.bytes || before.len() > 512 * 1024 * 1024 {
+        return None;
+    }
+    let modified = before.modified().ok()?;
+    if sha256_file(binary).ok()? != declared.sha256 {
+        return None;
+    }
+    let after = fs::metadata(binary).ok()?;
+    if !after.is_file() || after.len() != before.len() || after.modified().ok()? != modified {
+        return None;
+    }
+    Some(manifest.backend)
+}
+
 /// The installed runtime's identity for help caching: what its own
 /// `--version` reported at install time, or the build directory when the
 /// runtime predates the version sidecar. The executable hash is separate.
@@ -7344,6 +7380,42 @@ mod tests {
             source: Some(test_source()),
             files,
         }
+    }
+
+    #[test]
+    fn public_backend_requires_manifest_version_and_exact_server_bytes() {
+        let root = test_directory("observed-bundle-backend");
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join(server_executable_name());
+        fs::write(&binary, b"synthetic server").unwrap();
+        let version = RuntimeVersion {
+            semver: "0.8.0-dev".into(),
+            build: 12345,
+            commit: "abcdef123".into(),
+        };
+        assert_eq!(reported_bundle_backend(&root, &binary, &version), None);
+        let mut manifest = test_bundle_manifest(&root);
+        manifest.backend = "metal".into();
+        manifest.version = Some(version.clone());
+        fs::write(
+            root.join(RUNTIME_BUNDLE_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reported_bundle_backend(&root, &binary, &version).as_deref(),
+            Some("metal")
+        );
+        let mut other_version = version.clone();
+        other_version.build += 1;
+        assert_eq!(
+            reported_bundle_backend(&root, &binary, &other_version),
+            None
+        );
+        // Same-length replacements must not inherit the old bundle's backend.
+        fs::write(&binary, b"replacement data").unwrap();
+        assert_eq!(reported_bundle_backend(&root, &binary, &version), None);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn write_test_archive(path: &Path, name: &str, contents: &[u8]) {
