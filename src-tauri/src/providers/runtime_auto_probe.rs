@@ -305,7 +305,7 @@ impl StreamCheck {
             self.done = true;
             return Ok(true);
         }
-        let value: Value = serde_json::from_str(&data)
+        let value: Value = serde_json::from_str(data)
             .map_err(|_| "local stream contained invalid completion JSON")?;
         if value.get("model").and_then(Value::as_str) != Some(model) {
             return Err("local stream did not confirm the selected model identity".into());

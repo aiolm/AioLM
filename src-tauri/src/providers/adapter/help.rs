@@ -330,80 +330,85 @@ pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
     })
 }
 
+type BenchmarkDeclaration = (&'static str, Option<&'static str>, Option<BenchmarkRole>);
+
 /// Portable safety belongs to each adapter catalog, never to the runner.
 pub(crate) fn builtin_metadata(provider: ProviderId) -> Option<OptionMetadata> {
     use BenchmarkRole::*;
-    let (id, declarations): (&str, Vec<(&str, Option<&str>, Option<BenchmarkRole>)>) =
-        match provider {
-            ProviderId::Llama => (
-                "llama.cpp",
-                vec![
-                    ("--ctx-size", Some("tokens"), Some(ContextTotalTokens)),
-                    ("--parallel", Some("count"), Some(ConcurrencyCapacity)),
-                    ("--n-gpu-layers", Some("layers"), None),
-                    ("--threads", Some("threads"), None),
-                    ("--threads-batch", Some("threads"), None),
-                    ("--batch-size", Some("tokens"), None),
-                    ("--ubatch-size", Some("tokens"), None),
-                    ("--flash-attn", None, None),
-                    ("--cache-type-k", None, None),
-                    ("--cache-type-v", None, None),
-                    ("--split-mode", None, None),
-                    ("--tensor-split", Some("ratio"), None),
-                ],
-            ),
-            ProviderId::Vllm => (
-                "vllm",
-                vec![
-                    (
-                        "--max-model-len",
-                        Some("tokens"),
-                        Some(ContextPerSequenceTokens),
-                    ),
-                    ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
-                    ("--dtype", None, None),
-                    ("--quantization", None, None),
-                    ("--kv-cache-dtype", None, None),
-                    ("--gpu-memory-utilization", Some("ratio"), None),
-                    ("--tensor-parallel-size", Some("count"), None),
-                    ("--pipeline-parallel-size", Some("count"), None),
-                    ("--max-num-batched-tokens", Some("tokens"), None),
-                    ("--enable-prefix-caching", None, None),
-                    ("--enable-chunked-prefill", None, None),
-                    ("--enforce-eager", None, None),
-                ],
-            ),
-            ProviderId::MlxVlm => (
-                "mlx-vlm",
-                vec![
-                    (
-                        "--max-kv-size",
-                        Some("tokens"),
-                        Some(ContextPerRequestKvTokens),
-                    ),
-                    ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
-                    ("--kv-bits", Some("bits"), None),
-                    ("--kv-quant-scheme", None, None),
-                    ("--kv-group-size", Some("count"), None),
-                    ("--quantized-kv-start", Some("tokens"), None),
-                    ("--prefill-step-size", Some("tokens"), None),
-                    ("--enable-thinking", None, None),
-                    ("--thinking-budget", Some("tokens"), None),
-                ],
-            ),
-            _ => return None,
-        };
-    let mut entries: Vec<_> = declarations
-        .into_iter()
-        .map(|(flag, unit, role)| MetadataOption {
-            flag: Some(flag.into()),
-            benchmark_public: Some(true),
-            benchmark_role: role,
-            unit: unit.map(str::to_owned),
-            repeatable: Some(false),
-            ..Default::default()
-        })
-        .collect();
+    let (id, declarations): (&str, &[BenchmarkDeclaration]) = match provider {
+        ProviderId::Llama => (
+            "llama.cpp",
+            &[
+                ("--ctx-size", Some("tokens"), Some(ContextTotalTokens)),
+                ("--parallel", Some("count"), Some(ConcurrencyCapacity)),
+                ("--n-gpu-layers", Some("layers"), None),
+                ("--threads", Some("threads"), None),
+                ("--threads-batch", Some("threads"), None),
+                ("--batch-size", Some("tokens"), None),
+                ("--ubatch-size", Some("tokens"), None),
+                ("--flash-attn", None, None),
+                ("--cache-type-k", None, None),
+                ("--cache-type-v", None, None),
+                ("--split-mode", None, None),
+                ("--tensor-split", Some("ratio"), None),
+            ],
+        ),
+        ProviderId::Vllm => (
+            "vllm",
+            &[
+                (
+                    "--max-model-len",
+                    Some("tokens"),
+                    Some(ContextPerSequenceTokens),
+                ),
+                ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
+                ("--dtype", None, None),
+                ("--quantization", None, None),
+                ("--kv-cache-dtype", None, None),
+                ("--gpu-memory-utilization", Some("ratio"), None),
+                ("--tensor-parallel-size", Some("count"), None),
+                ("--pipeline-parallel-size", Some("count"), None),
+                ("--max-num-batched-tokens", Some("tokens"), None),
+                ("--enable-prefix-caching", None, None),
+                ("--enable-chunked-prefill", None, None),
+                ("--enforce-eager", None, None),
+            ],
+        ),
+        ProviderId::MlxVlm => (
+            "mlx-vlm",
+            &[
+                (
+                    "--max-kv-size",
+                    Some("tokens"),
+                    Some(ContextPerRequestKvTokens),
+                ),
+                ("--max-num-seqs", Some("count"), Some(ConcurrencyCapacity)),
+                ("--kv-bits", Some("bits"), None),
+                ("--kv-quant-scheme", None, None),
+                ("--kv-group-size", Some("count"), None),
+                ("--quantized-kv-start", Some("tokens"), None),
+                ("--prefill-step-size", Some("tokens"), None),
+                ("--enable-thinking", None, None),
+                ("--thinking-budget", Some("tokens"), None),
+            ],
+        ),
+        _ => return None,
+    };
+    let mut entries =
+        Vec::with_capacity(declarations.len() + usize::from(provider == ProviderId::Llama));
+    entries.extend(
+        declarations
+            .iter()
+            .copied()
+            .map(|(flag, unit, role)| MetadataOption {
+                flag: Some(flag.into()),
+                benchmark_public: Some(true),
+                benchmark_role: role,
+                unit: unit.map(str::to_owned),
+                repeatable: Some(false),
+                ..Default::default()
+            }),
+    );
     if provider == ProviderId::Llama {
         entries.push(MetadataOption {
             flag: Some("--hf-token".into()),
@@ -443,6 +448,7 @@ fn native_binding(flag: &str) -> ManagedBinding {
 fn native_catalog() -> Vec<OptionDefinition> {
     use runtime_schema::{blank, documented};
     let source = adapter_source("llama.cpp", "catalog-v1");
+    let managed_flags = options::app_managed_flags(ProviderId::Llama);
     let tuning: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../src/shared/config/tuningDefaultsCatalog.json"
     ))
@@ -526,9 +532,7 @@ fn native_catalog() -> Vec<OptionDefinition> {
             );
             option.repeatable = documented(false, &source);
             // Capture annotations never change the existing launch ownership.
-            option.managed = options::app_managed_flags(ProviderId::Llama)
-                .contains(&flag)
-                .then(|| native_binding(flag));
+            option.managed = managed_flags.contains(&flag).then(|| native_binding(flag));
             option.help = row
                 .and_then(|row| row["description"].as_str())
                 .unwrap_or("")
@@ -574,7 +578,11 @@ fn native_catalog() -> Vec<OptionDefinition> {
             option.kind = documented(ValueKind::Boolean, &source);
         }
         option.repeatable = documented(false, &source);
-        option.managed = Some(ManagedBinding::Discovery);
+        option.managed = option.spellings.iter().find_map(|spelling| {
+            managed_flags
+                .contains(&spelling.flag.as_str())
+                .then(|| native_binding(&spelling.flag))
+        });
         definitions.push(option);
     }
     definitions

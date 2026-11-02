@@ -47,4 +47,8 @@ Dedicated model, adapter, GPU, context and reasoning controls remain the owners 
 
 Options are saved as server arguments with the profile, so existing configuration files, execution profiles and project snapshots keep them. Correct invalid input before switching between guided controls and **Direct input**. Direct input provides the server-argument and chat-JSON editors without a second editable copy on screen.
 
-Benchmarks use the selected model's server configuration to launch a dedicated `llama-server`. Workload controls temporarily override context size, concurrent slots, prompt-cache reuse, and the loopback port. Other compatible tuning and memory options remain server arguments. These temporary overrides do not change saved settings; see [Benchmarks](benchmarks.md) for the workflow and recorded configuration.
+Benchmark capture metadata does not make additional flags app-managed.
+Ordinary runtime tunings such as `--top-k` retain their saved overrides and
+argument order.
+
+Benchmarks launch the selected engine through the common adapter path using its configured launch profile. Workload controls do not override context size, parallel capacity, cache, GPU or thinking settings. AioLM still manages the run's local server binding and authentication; see [Benchmarks](benchmarks.md) for the workflow and recorded configuration.

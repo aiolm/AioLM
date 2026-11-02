@@ -968,6 +968,8 @@ pub struct SpawnedServer {
     pub readiness: Readiness,
 }
 
+pub type SpawnCapture<'a> = &'a mut dyn FnMut(&Path, &[String]);
+
 /// Spawn the server and drain both output pipes into independent bounded tails.
 ///
 /// The optional observer receives the actual program and final, unredacted
@@ -978,7 +980,7 @@ pub fn spawn(
     api_key: &str,
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
-    capture: Option<&mut dyn FnMut(&Path, &[String])>,
+    capture: Option<SpawnCapture<'_>>,
 ) -> Result<SpawnedServer, String> {
     let adapter = crate::providers::adapter::resolve(cfg);
     let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
