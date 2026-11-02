@@ -7,6 +7,11 @@ services. Tokenizer, cache-reset and final usage APIs are not admission
 requirements. Embedding-only, speech-only or models without a usable chat
 adapter cannot serve this workload, regardless of engine name.
 
+The common benchmark path does not remove a managed engine's normal OS and
+hardware requirements; for example, locally managed MLX still requires Apple
+Silicon macOS. An attached service follows its own host's requirements. See
+[inference runtimes](inference-runtimes.md) for managed-engine platform support.
+
 Results are client-observed and self-reported, not independently verified
 hardware or engine rankings. Missing token, cache, identity and memory facts
 remain unknown; they do not prevent a successful byte/time measurement.

@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inspection_operation_reconnects_and_observes_listener_and_model_changes() {
+    async fn inspection_operations_reconnect_and_observe_live_endpoint_changes() {
         let inspector = EndpointInspector::new().unwrap();
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
@@ -625,7 +625,9 @@ mod tests {
                     0
                 );
             }
-            address
+            // Keep ownership of the port across handler phases: releasing it
+            // would let another parallel fixture claim it before replacement.
+            listener
         });
         assert_eq!(
             inspector
@@ -645,8 +647,7 @@ mod tests {
                 .len(),
             MODEL_LIMIT
         );
-        let address = serving.await.unwrap();
-        let replacement = TcpListener::bind(address).await.unwrap();
+        let replacement = serving.await.unwrap();
         let task = tokio::spawn(async move {
             let (mut socket, _) = replacement.accept().await.unwrap();
             let request = read_request(&mut socket).await;

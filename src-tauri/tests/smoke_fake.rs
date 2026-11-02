@@ -845,13 +845,13 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
 
     // A synthetic interpreter exercises the real built-in Python launch command.
     // This fixture asserts adapter plumbing, never installed-engine inference.
-    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+    let provider = if cfg!(target_os = "macos") {
+        providers::ProviderId::MlxVlm
+    } else {
+        providers::ProviderId::Vllm
+    };
+    if provider.availability().supported {
         use providers::python_env::{InstallationKind, ProbeRecord, PythonRuntimeManifest};
-        let provider = if cfg!(target_os = "macos") {
-            providers::ProviderId::MlxVlm
-        } else {
-            providers::ProviderId::Vllm
-        };
         let snapshot = root.join("serving-python-model");
         fs::create_dir(&snapshot).unwrap();
         fs::write(
