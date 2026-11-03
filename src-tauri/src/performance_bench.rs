@@ -467,6 +467,7 @@ pub struct RuntimeInfo {
     pub(crate) provenance: ServingBenchmarkProvenance,
     pub(crate) input_texts: Vec<String>,
     pub(crate) checkpoint: Option<Checkpoint>,
+    gpu_profile: crate::hardware::DeviceProfile,
 }
 impl RuntimeInfo {
     /// Preflight freezes input texts/hashes and observed runtime/model/host facts.
@@ -492,9 +493,10 @@ impl RuntimeInfo {
         })
         .await
         .map_err(|error| error.to_string())?;
+        let gpu_profile = crate::hardware::detect();
         let provenance = crate::benchmark::provenance::capture_serving(
             cfg,
-            crate::hardware::detect(),
+            &gpu_profile,
             model,
             workload,
             engine.serving_metadata.as_ref(),
@@ -506,6 +508,7 @@ impl RuntimeInfo {
             provenance,
             input_texts,
             checkpoint: None,
+            gpu_profile,
         })
     }
 }
@@ -601,6 +604,7 @@ pub async fn run(
         provenance,
         input_texts,
         checkpoint,
+        gpu_profile,
     } = runtime;
     result.provenance = Some(provenance);
     result.message = None;
@@ -628,6 +632,10 @@ pub async fn run(
             let argv: Vec<String> = std::iter::once(program.to_string_lossy().into_owned()).chain(args.iter().cloned()).collect();
             result.args = crate::providers::runtime_schema::mask_argv(&crate::providers::registry::root(),&isolated,redacted_args(argv.clone()),"[redacted]");
             let provenance = result.provenance.as_mut().expect("frozen provenance");
+            provenance.environment.host.execution =
+                crate::benchmark::provenance::capture_serving_gpu_execution(
+                    &isolated, &gpu_profile, &gpu, args,
+                );
             let request_slots = provenance.execution.settings.len();
             let captured = crate::providers::runtime_schema::effective(&crate::providers::registry::root(), &isolated, false)
                 .and_then(|effective| crate::providers::runtime_schema::capture_benchmark_settings(&effective, &argv, &result.args, request_slots));

@@ -14,6 +14,7 @@ const en = {
   retry: 'Retry', confirm: 'Create profile', defaultConfirm: 'Create default profile',
   noSettings: 'No compatible launch settings can be restored. Confirming creates a default profile for the chosen destination, not a reproduction of this run.',
   existing: 'This source already has a profile for this engine. Its saved name and user-edited settings will be kept.',
+  unavailableSettings: 'This run has no recorded configuration, so a settings profile cannot be created.',
 };
 const translations: Record<Locale, typeof en> = {
   en,
@@ -31,6 +32,7 @@ const translations: Record<Locale, typeof en> = {
     retry: '다시 시도', confirm: '프로필 생성', defaultConfirm: '기본 프로필 생성',
     noSettings: '복원 가능한 호환 실행 설정이 없습니다. 확인하면 이 실행을 재현하는 대신 선택한 대상의 기본 프로필을 생성합니다.',
     existing: '이 원본에서 이 엔진용으로 만든 프로필이 이미 있습니다. 저장된 이름과 사용자가 수정한 설정을 유지합니다.',
+    unavailableSettings: '이 실행에는 기록된 구성이 없어 설정 프로필을 생성할 수 없습니다.',
   },
   ja: {
     website: 'AioLM ウェブサイト', browse: '公開ベンチマークを参照',
@@ -46,6 +48,7 @@ const translations: Record<Locale, typeof en> = {
     retry: '再試行', confirm: 'プロファイルを作成', defaultConfirm: '既定プロファイルを作成',
     noSettings: '復元できる互換起動設定はありません。確認すると実行の再現ではなく、選択した移行先の既定プロファイルを作成します。',
     existing: 'このソースとエンジンのプロファイルは既にあります。保存済みの名前とユーザーが編集した設定を保持します。',
+    unavailableSettings: 'この実行には記録された構成がないため、設定プロファイルを作成できません。',
   },
   zh: {
     website: 'AioLM 网站', browse: '浏览公开基准测试',
@@ -61,6 +64,7 @@ const translations: Record<Locale, typeof en> = {
     retry: '重试', confirm: '创建配置档', defaultConfirm: '创建默认配置档',
     noSettings: '没有可恢复的兼容启动设置。确认后将为所选目标创建默认配置档，而不是重现此运行。',
     existing: '此来源在该引擎中已有配置档。将保留已保存的名称和用户修改的设置。',
+    unavailableSettings: '此运行没有记录的配置，因此无法创建设置配置档。',
   },
 };
 export const benchmarkExplorerCopy = (locale: Locale) => translations[locale];

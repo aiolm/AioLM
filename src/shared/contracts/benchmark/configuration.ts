@@ -34,7 +34,8 @@ function normalizeLegacyConfiguration(legacy: Pick<LegacyPublicBenchmarkSubmissi
   // The historical curated settings have known semantics. Raw argv is not a typed snapshot.
   if (runtime.name === 'llama.cpp') {
     const add = (name: string, value: RecordedSetting['value'], unit: RecordedSetting['unit'], role: RecordedSetting['role'] = null) => {
-      if (value !== null && !(typeof value === 'string' && (value.length > 128 || value.startsWith('-')))) {
+      if (value !== null && !(Array.isArray(value) && value.length > 64)
+        && !(typeof value === 'string' && (value.length > 128 || value.startsWith('-')))) {
         settings.push({ target: 'launch', scope: [], name, value, unit, role });
       }
     };

@@ -27,6 +27,7 @@ interface PendingImport {
 export function useBenchmarkProfileImport(store: AppStore) {
   const { locale } = useI18n();
   const copy = benchmarkExplorerCopy(locale);
+  const { getConfig } = store;
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [pending, setPending] = useState<PendingImport | null>(null);
   const [destination, setDestination] = useState<AppConfig>();
@@ -53,7 +54,7 @@ export function useBenchmarkProfileImport(store: AppStore) {
   }, []);
   const importProfile = useCallback(async (id: string, load: PendingImport['load']) => {
     if (savingLock.current) return;
-    const current = store.getConfig();
+    const current = getConfig();
     if (!current) { setNotice({ error: true, text: copy.failed }); return; }
     const request = { epoch: ++epoch.current, id, load };
     // The current provider is only an initial destination tab. Even its runtime
@@ -63,7 +64,7 @@ export function useBenchmarkProfileImport(store: AppStore) {
       gpu: emptyGpuPlacement(), server_args: [], chat_options: {} });
     setPending(request); setReady(null); setSaveError(''); setNotice(null);
     await loadSource(request);
-  }, [store, copy.failed, loadSource]);
+  }, [getConfig, copy.failed, loadSource]);
   useEffect(() => {
     if (!pending || !source || !destination || !effective || ready !== true
       || effective.help_state === 'stale' || effective.help_state === 'unchecked') return;
@@ -73,7 +74,7 @@ export function useBenchmarkProfileImport(store: AppStore) {
     void benchmarkSettingsProfile(source, pending.id, { cfg: destination, effective }).then(result => {
       if (epoch.current !== owner || previewRequest.current !== request) return;
       const provider = providerOf(destination);
-      const existing = store.getConfig()?.settings_profiles?.entries.find(entry =>
+      const existing = getConfig()?.settings_profiles?.entries.find(entry =>
         (entry.provider ?? 'llama.cpp') === provider && (entry.id === result.profile.id || entry.id === `profile-benchmark-${pending.id}`));
       setPreview({ source, destination, effective, revision: previewRevision, ...result,
         ...(existing ? { profile: existing, reused: true } : {}) });
@@ -83,7 +84,7 @@ export function useBenchmarkProfileImport(store: AppStore) {
       }
     });
     return () => { if (previewRequest.current === request) previewRequest.current = null; };
-  }, [pending, source, destination, effective, ready, previewRevision, store]);
+  }, [pending, source, destination, effective, ready, previewRevision, getConfig]);
   useEffect(() => () => { epoch.current++; previewRequest.current = null; }, []);
   const chooseProvider = useCallback((provider: ProviderId) => {
     if (savingLock.current) return;
@@ -174,7 +175,13 @@ export function useBenchmarkProfileImport(store: AppStore) {
     </>} /> : null;
   return { notice, importing: !!pending, listenerReady, pendingSource: pending?.source ?? null, importDialog,
     dismissNotice: () => setNotice(null),
-    importLocal: (record: PerformanceBenchmarkRecord) => importProfile(`local-${record.id}`, async () => localBenchmarkProfileSource(record)) };
+    importLocal: (record: PerformanceBenchmarkRecord) => {
+      if (record.schemaVersion === 2 && !record.result.provenance) {
+        setNotice({ error: true, text: copy.unavailableSettings });
+        return;
+      }
+      return importProfile(`local-${record.id}`, async () => localBenchmarkProfileSource(record));
+    } };
 }
 
 export default function BenchmarkExplorerActions({ listenerReady }: { listenerReady: boolean }) {

@@ -193,7 +193,7 @@ enum LlamaMode {
 }
 
 /// b11617 looks `--` arguments up with `_` read as `-`.
-fn llama_argument_name(argument: &str) -> String {
+pub(super) fn llama_argument_name(argument: &str) -> String {
     if argument.starts_with("--") {
         argument.replace('_', "-")
     } else {
@@ -218,7 +218,7 @@ fn help_flag(text: &str) -> Option<&str> {
 /// `src/shared/config/serverOptions.ts` read it: b11617 prints each option's
 /// names joined by `, ` and then its value hints, and aligns the description
 /// after two or more spaces.
-fn llama_help_arity(help: &str) -> std::collections::HashMap<String, usize> {
+pub(super) fn llama_help_arity(help: &str) -> std::collections::HashMap<String, usize> {
     let mut arity = std::collections::HashMap::new();
     let lines = help
         .lines()

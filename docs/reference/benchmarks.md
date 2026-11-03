@@ -68,6 +68,10 @@ Saved request defaults are not injected. Only the explicit usage checkbox adds
 engine-specific retry. Missing usage is a normal successful response. Warmup
 runs the same point at the same concurrency once before timed repetitions.
 
+Native readiness accepts a configured model alias only when that launch
+advertises it, then routes through the verified advertised ID. A path-based
+model name is not required for an aliased native server.
+
 The cache policy is **as configured**, not cold cache. AioLM starts and owns only
 its run's child/helper. For an attached service, cancelling closes AioLM's work
 and owned helper, not the upstream process/container; shared caches are not
@@ -91,6 +95,10 @@ or a non-finite derived rate remains unavailable. Usage can be complete, partial
 missing or invalid independently of successful byte/time measurement. Counters
 are never inferred from chunks, bytes, request caps or earlier usage snapshots.
 
+A JSON extension such as `"error": null` is not an engine error. Non-null error
+objects and named SSE error events still fail the batch; successful completion
+still requires `[DONE]`.
+
 Repeated successful rows use the shared per-metric median, minimum, maximum and
 sample count. Missing observations do not become zero or invalidate other known
 samples. Failed batches add no partial or fabricated measurement row. Cancellation
@@ -110,6 +118,13 @@ CSV, Excel and Markdown use the same recorded identities and serving-point
 statistics. A recorded label is display-only, not a model identity; changing or
 removing local files does not rewrite recorded canonical columns. Repository
 revision is provenance, not a weight SHA or proof of unmodified weights.
+
+Failed records without provenance can show their saved local model selection in
+history and confirmation dialogs, but this UI label never fills canonical
+export identity. If no configuration was recorded, profile import is disabled
+with an associated localized explanation rather than opening a retry dialog.
+Profile conversion omits out-of-bounds legacy settings independently, retaining
+other safe settings, omission evidence and frozen input metadata.
 
 Legacy local schema1 and public schema1/2 remain readable, exportable and
 manageable with their original token/PP/TG/TTFT/TPOT units. Mixed exports keep

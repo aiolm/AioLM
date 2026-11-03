@@ -196,6 +196,103 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         "expected SSE completion marker, got: {got}"
     );
 
+    // These expectations come from the real b12001 llama-server /v1/models,
+    // including accumulated aliases rather than an assumed last-wins scalar.
+    for (raw, expected) in [
+        (vec!["--alias", "served-long"], "served-long"),
+        (vec!["-a", "served-short"], "served-short"),
+        (
+            vec!["--alias", "\u{3000}wide\u{3000}"],
+            "\u{3000}wide\u{3000}",
+        ),
+        (vec!["--alias", "a-first", "-a", "z-last"], "a-first"),
+        (
+            vec!["--alias", "z-first", "-a", " a-last, z-last,,"],
+            "a-last",
+        ),
+        (vec!["--alias", "kept", "-a", ",,"], "kept"),
+        (
+            vec!["--alias", "a-first,z-last", "--fake-native-alias-last"],
+            "z-last",
+        ),
+        (vec!["--chat-template", "--alias"], "fake-model.gguf"),
+        (
+            vec![
+                "--alias",
+                "kept",
+                "--control-vector-layer-range",
+                "0",
+                "--alias",
+            ],
+            "kept",
+        ),
+    ] {
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let case = AppConfig {
+            port: reservation.local_addr().unwrap().port(),
+            server_args: raw.into_iter().map(str::to_owned).collect(),
+            ..cfg.clone()
+        };
+        drop(reservation);
+        let server::SpawnedServer {
+            child,
+            url: case_url,
+            key_file,
+            readiness,
+        } = server::spawn(&case, api_key, &ring, &Default::default(), None).unwrap();
+        let state = Arc::new(Mutex::new(server::ServerState::default()));
+        state.lock().unwrap().attach_starting(
+            child,
+            case_url.clone(),
+            api_key.into(),
+            case.active_model.clone(),
+            String::new(),
+            String::new(),
+        );
+        state.lock().unwrap().engine = Some(aiolm_lib::providers::protocol::EngineInfo::llama(
+            &case.active_model,
+            aiolm_lib::providers::artifacts::Modalities::text_only(),
+        ));
+        let outcome = rt.block_on(async {
+            server::wait_ready(state.clone(), &case_url, api_key, 20, &ring, readiness).await?;
+            let engine = state.lock().unwrap().engine.clone().unwrap();
+            let mut request = serde_json::json!({
+                "model": engine.upstream_model,
+                "messages": [{"role":"user","content":"Reply OK"}],
+                "stream": true,
+            });
+            aiolm_lib::providers::protocol::adapt_request(
+                &engine,
+                "chat/completions",
+                &mut request,
+                aiolm_lib::providers::protocol::RequestDefaultsPolicy::Omit,
+            )
+            .map_err(|error| error.message)?;
+            let response = client
+                .post(format!("{case_url}/chat/completions"))
+                .bearer_auth(api_key)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            let status = response.status();
+            let body = response.text().await.map_err(|error| error.to_string())?;
+            Ok::<_, String>((engine.upstream_model, status, body))
+        });
+        let served_model = state.lock().unwrap().model.clone();
+        server::kill(&mut state.lock().unwrap().child, None);
+        server::cleanup_api_key_file(key_file.as_deref());
+        let (upstream, status, body) = outcome.expect("native alias readiness and routing");
+        assert_eq!(
+            served_model, expected,
+            "must not select the preceding decoy"
+        );
+        assert_eq!(upstream, expected);
+        assert!(status.is_success(), "{status}: {body}");
+        assert!(body.contains("[DONE]"));
+        assert!(key_file.is_none_or(|path| !path.exists()));
+    }
+
     // Config-file mode is not present in the app's argv prediction. Resolve it
     // through the owned endpoint and reject unknown/unusable tasks before Ready.
     // The original server remains alive throughout failure cleanup.
@@ -660,6 +757,8 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         server_args: vec![
             "--benchmark-receipt".into(),
             receipt.to_string_lossy().into_owned(),
+            "-a".into(),
+            "native-benchmark-alias".into(),
         ],
         ..Default::default()
     };
@@ -755,6 +854,7 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     for call in chats {
         let body = call["body"].as_object().unwrap();
         assert_eq!(body.len(), 5, "no saved defaults or vendor-only fields");
+        assert_eq!(body["model"], "native-benchmark-alias");
         assert_eq!(body["temperature"], 0);
         assert_eq!(body["max_tokens"], 128);
         assert_eq!(body["stream"], true);

@@ -102,6 +102,74 @@ pub(super) fn native_arguments(
     Ok(args)
 }
 
+/// Explicit native aliases only; arity keeps alias-looking option values out.
+/// b12001 accumulates comma aliases into a sorted set. Keep every authorized
+/// alias for readiness rather than assuming all runtime versions advertise
+/// that set in the same order.
+fn native_model_aliases(args: &[String]) -> Vec<String> {
+    if !args
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--alias" | "-a"))
+    {
+        return Vec::new();
+    }
+    static ARITY: std::sync::LazyLock<std::collections::HashMap<String, usize>> =
+        std::sync::LazyLock::new(|| {
+            let catalog: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../src/shared/config/serverOptionsCatalog.json"
+            ))
+            .expect("checked-in native server catalog");
+            let help = catalog["options"]
+                .as_array()
+                .expect("native server catalog options")
+                .iter()
+                .filter_map(|option| option["signature"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            super::execution::llama_help_arity(&help)
+        });
+    let mut aliases = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        let name = if argument.starts_with("--") && argument.contains('_') {
+            std::borrow::Cow::Owned(super::execution::llama_argument_name(argument))
+        } else {
+            std::borrow::Cow::Borrowed(argument.as_str())
+        };
+        if matches!(name.as_ref(), "--alias" | "-a") {
+            if let Some(value) = args.get(index + 1) {
+                for candidate in value
+                    .split(',')
+                    .map(|value| {
+                        value.trim_matches(|character| {
+                            matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+                        })
+                    })
+                    .filter(|value| !value.is_empty())
+                {
+                    aliases.push(candidate);
+                }
+            }
+            index += 2;
+        } else {
+            // Preserve raw options absent from the catalog. As in the legacy
+            // native argument recognizer, their ordinary non-flag value is
+            // consumed without treating it as an option.
+            let count = ARITY.get(name.as_ref()).copied().unwrap_or_else(|| {
+                usize::from(
+                    args.get(index + 1)
+                        .is_some_and(|value| !value.starts_with('-')),
+                )
+            });
+            index += 1 + count;
+        }
+    }
+    aliases.sort_unstable();
+    aliases.dedup();
+    aliases.into_iter().map(str::to_owned).collect()
+}
+
 impl InferenceRuntimeAdapter for BuiltinAdapter {
     fn runtime_id(&self, cfg: &AppConfig) -> String {
         if self.kind() == RuntimeKind::Native {
@@ -160,24 +228,38 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         }
         let mut cfg = cfg.clone();
         cfg.port = port;
+        let args = native_arguments(&cfg, key, gpu)?;
+        let aliases = native_model_aliases(&args);
+        let upstream_model = aliases.first().unwrap_or(&cfg.active_model).clone();
         Ok(EngineCommand {
             program: PathBuf::from(self.executable(&cfg)?),
-            args: native_arguments(&cfg, key, gpu)?,
+            args,
             env: crate::runtime::child_environment_for_runtime(
                 &cfg.active_backend,
                 &cfg.active_build,
             )?,
             working_directory: super::execution_context::directory(&cfg, None)?,
-            upstream_model: cfg.active_model.clone(),
+            upstream_model: upstream_model.clone(),
             readiness: Readiness {
                 health_path: "/health".into(),
                 health_authenticated: true,
-                expected_model: cfg.active_model,
+                expected_model: upstream_model,
+                expected_model_aliases: aliases,
             },
         })
     }
     fn engine_info(&self, cfg: &AppConfig) -> Result<EngineInfo, String> {
-        super::execution::builtin_info(cfg)
+        let mut info = super::execution::builtin_info(cfg)?;
+        if self.kind() == RuntimeKind::Native {
+            let args = native_arguments(cfg, "", &ResolvedGpu::default())?;
+            let aliases = native_model_aliases(&args);
+            let model = aliases.first().unwrap_or(&cfg.active_model);
+            info.upstream_model = model.to_owned();
+            if info.embedding_model.is_some() {
+                info.embedding_model = Some(model.to_owned());
+            }
+        }
+        Ok(info)
     }
 }
 impl InferenceRuntimeAdapter for ProcessAdapter {

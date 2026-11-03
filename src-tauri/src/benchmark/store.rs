@@ -267,7 +267,8 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
     {
         return Err("complete serving benchmark is missing requested trials".into());
     }
-    if serde_json::to_vec(record).map_err(|e| e.to_string())?.len() > MAX_RECORD_BYTES {
+    // A complete serving grid can exceed the publication cap while fitting its local journal.
+    if serde_json::to_vec(record).map_err(|e| e.to_string())?.len() as u64 > MAX_JOURNAL_BYTES {
         return Err("benchmark record exceeds the storage size limit".into());
     }
     Ok(())
@@ -1100,7 +1101,7 @@ mod tests {
         let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
         result.provenance = Some(super::super::provenance::capture_serving(
             &cfg,
-            profile,
+            &profile,
             model,
             workload,
             None,
@@ -1115,6 +1116,58 @@ mod tests {
                 "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":128,
                 "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":false},
             "result":serving_result(id)})
+    }
+
+    #[test]
+    fn serving_maximum_grid_replays_after_finish() {
+        struct Directory(PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = root();
+        let _directory = Directory(root.clone());
+        let mut initial = serving_record("maximum-serving-grid", 1);
+        initial["request"]["prompt_bytes"] = json!((256..320).collect::<Vec<_>>());
+        initial["request"]["concurrencies"] = json!([64]);
+        initial["request"]["repetitions"] = json!(100);
+        let mut result = serving_result("maximum-serving-grid");
+        let provenance = result.provenance.as_mut().unwrap();
+        provenance.workload.inputs = (256..320)
+            .map(|bytes| crate::benchmark::provenance::ServingInput {
+                bytes,
+                sha256: "a".repeat(64),
+            })
+            .collect();
+        provenance.workload.concurrencies = vec![64];
+        provenance.workload.repetitions = 100;
+        initial["result"] = serde_json::to_value(&result).unwrap();
+        let journal = RunJournal::begin(&root, initial).unwrap();
+        for input in 256..320 {
+            for repetition in 1..=100 {
+                let mut row = serving_row();
+                row.id = format!("b{input}-c64-r{repetition}");
+                row.input_bytes = input;
+                row.concurrency = 64;
+                row.repetition = repetition;
+                row.content_bytes = 128;
+                row.output_bytes = 128;
+                row.finish_reasons = vec!["not_reported".into(); 64];
+                result.rows.push(row);
+            }
+        }
+        result.status = "complete";
+        result.message = None;
+        journal.finish(&result).unwrap();
+        let path = journal.path.clone();
+        drop(journal);
+        let restored = replay(&path).unwrap();
+        assert_eq!(restored["result"]["status"], "complete");
+        assert_eq!(
+            restored["result"]["rows"],
+            serde_json::to_value(&result.rows).unwrap()
+        );
     }
     #[test]
     fn import_validates_a_later_duplicate_before_creating_the_store() {

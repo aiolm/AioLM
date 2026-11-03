@@ -1,4 +1,5 @@
 import type { Locale } from '../../shared/i18n/i18n';
+import { inferenceMetricCopy } from '../../shared/i18n/inferenceMetricCopy';
 import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { SERVING_METRIC_KEYS, summarizePerformanceRows, summarizeServingPoints } from '../../shared/contracts/benchmark/aggregation';
 import { publicModelSource } from '../../shared/contracts/benchmark/publicBenchmark';
@@ -35,12 +36,6 @@ const statLabels: Record<Locale, string[]> = {
   en: ['median', 'min', 'max', 'samples'], ko: ['중앙값', '최소', '최대', '표본 수'],
   ja: ['中央値', '最小', '最大', '標本数'], zh: ['中位数', '最小', '最大', '样本数'],
 };
-const legacyColumns = [
-  ['prompt_tokens', 'Input tokens'], ['generation_length', 'Output tokens'], ['ttft_ms', 'TTFT (ms)'],
-  ['tpot_ms', 'TPOT (ms)'], ['pp_tps', 'PP (tok/s)'], ['tg_tps', 'TG (tok/s)'],
-  ['tg_stddev', 'TG standard deviation (tok/s)'], ['speedup', 'Speedup'],
-  ['e2e_seconds', 'Total time (s)'], ['total_tps', 'Total throughput (tok/s)'], ['peak_memory_gib', 'Peak process RAM (GiB)'],
-] as const;
 
 /** Same local clock as history, with a sortable spreadsheet representation. */
 function measuredAt(value: number): string {
@@ -57,6 +52,13 @@ const finite = (value: number | null | undefined) => value != null && Number.isF
 /** One data projection for CSV, XLSX and Markdown. No live model/runtime lookups or argv parsing. */
 export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: Locale = 'en'): BenchmarkReport {
   const copy = benchmarkCopy(locale);
+  const legacyColumns = [
+    ['prompt_tokens', copy.promptLengths], ['generation_length', copy.generation], ['ttft_ms', `${copy.ttft} (ms)`],
+    ['tpot_ms', `${copy.tpot} (ms)`], ['pp_tps', `${copy.pp} (tok/s)`], ['tg_tps', `${copy.tg} (tok/s)`],
+    ['tg_stddev', `${inferenceMetricCopy(locale).decodeDeviation} (tok/s)`], ['speedup', copy.speedup],
+    ['e2e_seconds', `${copy.e2e} (${copy.seconds})`], ['total_tps', `${copy.throughput} (tok/s)`],
+    ['peak_memory_gib', `${copy.memory} (GiB)`],
+  ] as const;
   const columns: BenchmarkReport['columns'] = [
     { key: 'recorded_model_label', label: copy.shareModel, width: 42 },
     ...identityKeys.map((key, index) => ({ key, label: identityLabels[locale][index], width: key === 'execution.settings' ? 60 : 24, ...(key === 'model.size_bytes' ? { numFmt: '#,##0' } : {}) })),
@@ -65,7 +67,7 @@ export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: L
       key: `${key}.${stat}`, label: `${metricLabels[locale][index]} · ${statLabels[locale][statIndex]}`, width: 24,
       numFmt: stat === 'samples' ? '#,##0' : '#,##0.###############',
     }))),
-    ...legacyColumns.map(([key, label]) => ({ key: `legacy.${key}`, label: `Legacy · ${label}`, width: 26, numFmt: '#,##0.###############' })),
+    ...legacyColumns.map(([key, label]) => ({ key: `legacy.${key}`, label: `${copy.legacy} · ${label}`, width: 26, numFmt: '#,##0.###############' })),
     { key: 'status', label: copy.shareStatus, width: 14 },
   ];
   const rows: BenchmarkReport['rows'] = [];

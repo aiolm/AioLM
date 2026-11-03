@@ -15,6 +15,10 @@ so an interrupted run keeps the measurements it completed. A damaged record is
 kept and reported without hiding the rest of the history. History loads in
 pages of at most 100 runs.
 
+Serving history replay follows the journal's 16 MiB budget, so a valid large
+concurrency/repetition grid is not rejected by the older 4 MiB local-record
+ceiling. Legacy local records and public publication retain their 4 MiB limits.
+
 Results that earlier versions kept in browser storage are imported the first
 time history opens. The original browser data is left unchanged, and an
 interrupted import is safe to retry.
@@ -25,7 +29,7 @@ deletion.
 
 ## Versioned public contracts
 
-`@aiolm/benchmark-contracts` 0.9.0 accepts legacy schema1/2 snapshots unchanged
+`@aiolm/benchmark-contracts` 0.10.0 accepts legacy schema1/2 snapshots unchanged
 and schema3 `openai-chat-serving@1` snapshots through the same `/v1` API.
 Schema3 identifies inputs by exact UTF-8 byte count and SHA-256, not token
 length. Its runtime identity has six nullable fields and permits any safe
@@ -76,10 +80,13 @@ The native adapter records binary-reported version/build. It records a bundle's
 declared backend only when the manifest version and selected server's complete
 file digest match; the installation folder and configured backend are not evidence.
 Absent variant/plugin metadata remains unrecorded, not a claim of inapplicability.
-The ordinary launch path currently reports available devices and explicit
-configured assignments, but no authoritative automatic device-selection result.
-Automatic placement therefore does not turn an installed GPU into a selected GPU,
-and shared host RAM is never substituted for unknown GPU VRAM.
+For new Common API runs, saved device choices remain unknown before child spawn.
+Explicit selection requires a successful native-adapter spawn, resolved devices
+present in the host inventory and final arguments consistent with that selection.
+Custom, Python and attached profiles do not inherit a native device assignment.
+The launch path has no authoritative automatic device-selection result:
+automatic placement does not turn an installed GPU into a selected GPU, and
+shared host RAM is never substituted for unknown GPU VRAM.
 
 When you compare results, keep these limits in mind:
 

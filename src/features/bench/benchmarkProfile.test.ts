@@ -94,4 +94,25 @@ describe('destination-checked benchmark profiles', () => {
     expect(first.profile.id).not.toBe(second.profile.id);
     expect(() => publicBenchmarkProfileSource({ id: 'other', benchmark: {} }, 'legacy')).toThrow();
   });
+
+  it.each([64, 65])('retains safe legacy settings when tensor split has %i entries without changing the source', length => {
+    const split = Array.from({ length }, () => 1);
+    const detail = { id: 'legacy-array', benchmark: { schema_version: 1,
+      runtime: { name: 'llama.cpp', version: null, backend: null, build: null },
+      execution: { context_size: 4096, parallel: 2, effective_args: ['--threads', '8'],
+        settings: { gpu_layers: null, threads: 8, threads_batch: null, flash_attention: 'on',
+          cache_type_k: null, cache_type_v: null, split_mode: null, tensor_split: split } } } };
+    const frozen = JSON.stringify(detail);
+    const normalized = publicBenchmarkProfileSource(detail, detail.id);
+    expect(normalized.source_schema_version).toBe(1);
+    expect(normalized.source_omissions).toBe(true);
+    expect(normalized.execution.settings).toEqual([
+      setting('ctx-size', 4096, { unit: 'tokens', role: 'context.total_tokens' }),
+      setting('flash-attn', 'on'),
+      setting('parallel', 2, { unit: 'count', role: 'concurrency.capacity' }),
+      ...(length === 64 ? [setting('tensor-split', split, { unit: 'ratio' })] : []),
+      setting('threads', 8, { unit: 'threads' }),
+    ]);
+    expect(JSON.stringify(detail)).toBe(frozen);
+  });
 });

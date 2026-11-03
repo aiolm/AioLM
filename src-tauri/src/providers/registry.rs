@@ -1468,6 +1468,7 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
             health_path: m.health_path,
             health_authenticated: m.health_authenticated,
             expected_model: info.upstream_model,
+            expected_model_aliases: Vec::new(),
         },
     })
 }

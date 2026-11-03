@@ -1381,8 +1381,15 @@ pub async fn wait_ready(
                         .and_then(serde_json::Value::as_array)
                         .and_then(|items| {
                             items.iter().find(|item| {
-                                item.get("id").and_then(serde_json::Value::as_str)
-                                    == Some(readiness.expected_model.as_str())
+                                item.get("id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|id| {
+                                        id == readiness.expected_model
+                                            || readiness
+                                                .expected_model_aliases
+                                                .iter()
+                                                .any(|alias| alias == id)
+                                    })
                             })
                         })
                         .and_then(|item| item.get("id"))
@@ -1411,7 +1418,15 @@ pub async fn wait_ready(
                         .await
                         .unwrap_or(false);
                         if owns_listener {
-                            let confirmed = if let Some(info) = engine.clone() {
+                            let confirmed = if let Some(mut info) = engine.clone() {
+                                if info.provider == crate::providers::ProviderId::Llama {
+                                    // Use the launch-confirmed alias, retaining the original
+                                    // filesystem bindings on ServerState for memory/status.
+                                    info.upstream_model = model_id.clone();
+                                    if info.embedding_model.is_some() {
+                                        info.embedding_model = Some(model_id.clone());
+                                    }
+                                }
                                 let confirmation = tokio::time::timeout_at(
                                     tokio::time::Instant::from_std(deadline),
                                     crate::providers::execution::confirm_ready(
@@ -1912,6 +1927,7 @@ mod tests {
                     health_path: "/launch-health".into(),
                     health_authenticated: false,
                     expected_model: "dummy-model".into(),
+                    expected_model_aliases: Vec::new(),
                 },
             ));
 
@@ -2379,6 +2395,7 @@ mod tests {
                 health_path: "/health".into(),
                 health_authenticated: true,
                 expected_model: "model.gguf".into(),
+                expected_model_aliases: Vec::new(),
             },
         ));
         let error = result.expect_err("an unresponsive server must time out");
@@ -2422,6 +2439,7 @@ mod tests {
                         health_path: "/health".into(),
                         health_authenticated: true,
                         expected_model: "model.gguf".into(),
+                        expected_model_aliases: Vec::new(),
                     },
                 ),
             )

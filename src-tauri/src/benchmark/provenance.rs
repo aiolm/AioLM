@@ -237,8 +237,8 @@ pub(crate) struct ServingBenchmarkProvenance {
 }
 
 pub(crate) fn capture_serving(
-    cfg: &AppConfig,
-    profile: DeviceProfile,
+    _cfg: &AppConfig,
+    profile: &DeviceProfile,
     mut model: ModelIdentity,
     workload: ServingWorkload,
     metadata: Option<&crate::providers::protocol::ServingMetadata>,
@@ -269,15 +269,6 @@ pub(crate) fn capture_serving(
         model.metadata = None;
     }
     model.format = Some(format);
-    let selected_gpus: Vec<_> = cfg
-        .gpu
-        .gpu_ids
-        .iter()
-        .filter_map(|id| profile.gpus.iter().find(|gpu| gpu.stable_id == *id))
-        .map(BenchmarkGpu::from)
-        .collect();
-    let selection_complete =
-        !cfg.gpu.gpu_ids.is_empty() && selected_gpus.len() == cfg.gpu.gpu_ids.len();
     let settings = common_request_settings(workload.max_output_tokens, workload.request_usage);
     ServingBenchmarkProvenance {
         schema_version: 2,
@@ -294,23 +285,14 @@ pub(crate) fn capture_serving(
         environment: ServingEnvironment {
             scope: "aiolm_host".into(),
             host: Environment {
-                os: profile.os,
-                arch: profile.arch,
-                cpu: profile.cpu,
+                os: profile.os.clone(),
+                arch: profile.arch.clone(),
+                cpu: profile.cpu.clone(),
                 system_memory_bytes: crate::hardware_memory::system_memory_bytes(),
                 installed_gpus: profile.gpus.iter().map(BenchmarkGpu::from).collect(),
-                execution: Execution {
-                    mode: if selection_complete {
-                        "selected"
-                    } else {
-                        "unknown"
-                    }
-                    .into(),
-                    selected_gpus,
-                    devices: vec![],
-                    selection_complete,
-                },
-                detection: profile.detection,
+                // Preferences are not evidence that any launched engine used them.
+                execution: unknown_gpu_execution(),
+                detection: profile.detection.clone(),
             },
         },
         execution: ServingExecution {
@@ -320,6 +302,168 @@ pub(crate) fn capture_serving(
             settings,
         },
         recorded_model_label,
+    }
+}
+
+fn unknown_gpu_execution() -> Execution {
+    Execution {
+        mode: "unknown".into(),
+        selected_gpus: vec![],
+        devices: vec![],
+        selection_complete: false,
+    }
+}
+
+/// Only the native adapter applies ResolvedGpu. Confirm its placement against
+/// the final spawned argv, never the saved profile or installed inventory alone.
+pub(crate) fn capture_serving_gpu_execution(
+    cfg: &AppConfig,
+    profile: &DeviceProfile,
+    resolved: &crate::gpu::ResolvedGpu,
+    args: &[String],
+) -> Execution {
+    use crate::providers::adapter::{resolve, RuntimeKind};
+    let unknown = unknown_gpu_execution;
+    if resolve(cfg).kind() != RuntimeKind::Native {
+        return unknown();
+    }
+    // Duplicate aliases and arbitrary tensor/device overrides make the resolved
+    // mapping insufficient evidence, even when an earlier flag still matches.
+    let mut device = None;
+    let mut layers = None;
+    let mut main_gpu = None;
+    let mut split_mode = None;
+    let mut tensor_split = None;
+    let mut no_kv = false;
+    let mut no_op = false;
+    let mut no_mmproj = false;
+    for (index, argument) in args.iter().enumerate() {
+        let (name, inline) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(name, value)| {
+                (name, Some(value))
+            });
+        let slot = match name {
+            "--device" | "-dev" => Some(&mut device),
+            "--n-gpu-layers" | "--gpu-layers" | "-ngl" => Some(&mut layers),
+            "--main-gpu" | "-mg" => Some(&mut main_gpu),
+            "--split-mode" | "-sm" => Some(&mut split_mode),
+            "--tensor-split" | "-ts" => Some(&mut tensor_split),
+            "--override-tensor"
+            | "-ot"
+            | "--spec-draft-override-tensor"
+            | "--override-tensor-draft"
+            | "-otd"
+            | "--mmproj-device"
+            | "-mmdev" => return unknown(),
+            "--spec-draft-device" | "--device-draft" | "-devd" => {
+                // Auxiliary placement may name a GPU outside the resolved set.
+                if inline.or_else(|| args.get(index + 1).map(String::as_str)) != Some("none") {
+                    return unknown();
+                }
+                None
+            }
+            "--spec-draft-ngl" | "--n-gpu-layers-draft" | "--gpu-layers-draft" | "-ngld" => {
+                if inline.or_else(|| args.get(index + 1).map(String::as_str)) != Some("0") {
+                    return unknown();
+                }
+                None
+            }
+            "--spec-type" => {
+                if inline.or_else(|| args.get(index + 1).map(String::as_str)) != Some("none") {
+                    return unknown();
+                }
+                None
+            }
+            "--kv-offload" | "-kvo" | "--op-offload" | "--mmproj-offload" => return unknown(),
+            "--no-kv-offload" | "-nkvo" => {
+                no_kv = true;
+                None
+            }
+            "--no-op-offload" => {
+                no_op = true;
+                None
+            }
+            "--no-mmproj-offload" => {
+                no_mmproj = true;
+                None
+            }
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            let Some(value) = inline.or_else(|| args.get(index + 1).map(String::as_str)) else {
+                return unknown();
+            };
+            if slot.replace(value).is_some() {
+                return unknown();
+            }
+        }
+    }
+    // Zero layers alone does not disable KV, operation or projector offload.
+    if device == Some("none") && layers == Some("0") && no_kv && no_op && no_mmproj {
+        return Execution {
+            mode: "cpu".into(),
+            selected_gpus: vec![],
+            devices: vec![],
+            selection_complete: true,
+        };
+    }
+    if layers
+        .and_then(|value| value.parse::<i64>().ok())
+        .is_none_or(|value| value == 0)
+    {
+        return unknown();
+    }
+    let Some(expected_devices) = resolved.device_flag.as_deref() else {
+        return unknown();
+    };
+    if device != Some(expected_devices)
+        || cfg.gpu.gpu_ids.is_empty()
+        || expected_devices.split(',').count() != cfg.gpu.gpu_ids.len()
+        || expected_devices
+            .split(',')
+            .any(|value| value.is_empty() || value == "none")
+        || main_gpu.and_then(|value| value.parse::<usize>().ok()) != resolved.main_gpu_index
+        || (main_gpu.is_some() && resolved.main_gpu_index.is_none())
+        || split_mode != resolved.split_mode
+        || split_mode == Some("none")
+    {
+        return unknown();
+    }
+    match tensor_split {
+        Some(value) => {
+            let mut values = value.split(',');
+            for expected in &resolved.tensor_split {
+                if values.next().and_then(|value| value.parse::<f32>().ok()) != Some(*expected)
+                    || !expected.is_finite()
+                    || *expected <= 0.0
+                {
+                    return unknown();
+                }
+            }
+            if values.next().is_some() || resolved.tensor_split.len() != cfg.gpu.gpu_ids.len() {
+                return unknown();
+            }
+        }
+        None if !resolved.tensor_split.is_empty() => return unknown(),
+        None => {}
+    }
+    let mut selected_gpus = Vec::with_capacity(cfg.gpu.gpu_ids.len());
+    for (index, id) in cfg.gpu.gpu_ids.iter().enumerate() {
+        // Runtime-index-only IDs do not establish a physical host GPU match.
+        let Some(gpu) = profile.gpus.iter().find(|gpu| gpu.stable_id == *id) else {
+            return unknown();
+        };
+        if cfg.gpu.gpu_ids[..index].contains(id) {
+            return unknown();
+        }
+        selected_gpus.push(BenchmarkGpu::from(gpu));
+    }
+    Execution {
+        mode: "selected".into(),
+        selected_gpus,
+        devices: vec![],
+        selection_complete: true,
     }
 }
 
@@ -575,6 +719,162 @@ mod tests {
                 detection: profile.detection,
             },
         }
+    }
+
+    #[test]
+    fn unapplied_gpu_preferences_do_not_claim_selected_hardware() {
+        let profile = profile();
+        let mut cfg = AppConfig::default();
+        cfg.gpu.gpu_ids = profile
+            .gpus
+            .iter()
+            .map(|gpu| gpu.stable_id.clone())
+            .collect();
+        let workload = serde_json::from_value(json!({
+            "corpus": "novel_en",
+            "corpus_version": 1,
+            "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
+            "max_output_tokens": 128,
+            "concurrencies": [1],
+            "repetitions": 1,
+            "warmup": false,
+            "request_usage": false,
+            "cache_policy": "as_configured"
+        }))
+        .unwrap();
+        let provenance = capture_serving(
+            &cfg,
+            &profile,
+            legacy_fixture().model,
+            workload,
+            None,
+            "Recorded model".into(),
+        );
+        assert_eq!(provenance.environment.host.execution.mode, "unknown");
+        assert!(provenance
+            .environment
+            .host
+            .execution
+            .selected_gpus
+            .is_empty());
+        assert!(!provenance.environment.host.execution.selection_complete);
+        assert_eq!(provenance.environment.host.installed_gpus.len(), 1);
+    }
+
+    #[test]
+    fn selected_gpu_requires_resolved_mapping_applied_to_final_native_launch() {
+        let mut profile = profile();
+        let mut unused = profile.gpus[0].clone();
+        unused.name = "Another installed GPU".into();
+        unused.stable_id = "other-private-id".into();
+        profile.gpus.push(unused);
+        let mut cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            ngl: 16,
+            runtime_defaults: vec![],
+            ..AppConfig::default()
+        };
+        cfg.gpu.gpu_ids = vec!["private-id".into()];
+        let resolved = crate::gpu::resolve_with_runtime_devices(
+            &cfg.gpu,
+            "vulkan",
+            &profile,
+            &["Vulkan3: Unused GPU (1024 MiB, 800 MiB free)".into()],
+        )
+        .unwrap();
+        let args = crate::server::build_args_with_gpu(&cfg, "", &resolved);
+        let execution = capture_serving_gpu_execution(&cfg, &profile, &resolved, &args);
+        assert_eq!(execution.mode, "selected");
+        assert!(execution.selection_complete);
+        assert_eq!(
+            execution.selected_gpus,
+            vec![BenchmarkGpu::from(&profile.gpus[0])]
+        );
+        assert!(
+            execution.devices.is_empty(),
+            "private IDs stay out of the snapshot"
+        );
+
+        // The same saved IDs are not applied by Python or attached/custom adapters.
+        for provider in ["vllm", "mlx-vlm", "custom.auto-test"] {
+            cfg.active_provider = provider.into();
+            let execution = capture_serving_gpu_execution(
+                &cfg,
+                &profile,
+                &crate::gpu::ResolvedGpu::default(),
+                &args,
+            );
+            assert_eq!(execution.mode, "unknown", "{provider}");
+            assert!(execution.selected_gpus.is_empty(), "{provider}");
+            assert!(!execution.selection_complete, "{provider}");
+        }
+    }
+
+    #[test]
+    fn final_cpu_placement_overrides_saved_gpu_but_zero_layers_alone_proves_no_gpu_set() {
+        let profile = profile();
+        let mut cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            ngl: 0,
+            runtime_defaults: vec![],
+            ..AppConfig::default()
+        };
+        cfg.gpu.gpu_ids = vec!["private-id".into()];
+        let resolved = crate::gpu::resolve(&cfg.gpu, "vulkan", &profile).unwrap();
+        let args = crate::server::build_args_with_gpu(&cfg, "", &resolved);
+        let execution = capture_serving_gpu_execution(&cfg, &profile, &resolved, &args);
+        assert_eq!(execution.mode, "unknown");
+        assert!(execution.selected_gpus.is_empty());
+        assert!(!execution.selection_complete);
+
+        cfg.active_backend = "cpu".into();
+        cfg.ngl = 16;
+        let args = crate::server::build_args_with_gpu(&cfg, "", &resolved);
+        let execution = capture_serving_gpu_execution(&cfg, &profile, &resolved, &args);
+        assert_eq!(execution.mode, "cpu");
+        assert!(execution.selected_gpus.is_empty());
+        assert!(execution.selection_complete);
+    }
+
+    #[test]
+    fn automatic_unmatched_and_overridden_placement_stay_unknown() {
+        let profile = profile();
+        let mut cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            ngl: 16,
+            runtime_defaults: vec![],
+            ..AppConfig::default()
+        };
+        let automatic = crate::gpu::ResolvedGpu::default();
+        let args = crate::server::build_args_with_gpu(&cfg, "", &automatic);
+        let execution = capture_serving_gpu_execution(&cfg, &profile, &automatic, &args);
+        assert_eq!(execution.mode, "unknown");
+        assert!(execution.selected_gpus.is_empty());
+        assert!(!execution.selection_complete);
+
+        cfg.gpu.gpu_ids = vec!["private-id".into()];
+        let resolved = crate::gpu::resolve(&cfg.gpu, "vulkan", &profile).unwrap();
+        for raw in [
+            vec!["--device=Vulkan99"],
+            vec!["-dev", "Vulkan99"],
+            vec!["-ngl", "0"],
+            vec!["--split-mode", "none"],
+            vec!["--tensor-split", "0"],
+            vec!["--override-tensor", "blk.*=Vulkan99"],
+        ] {
+            let mut args = crate::server::build_args_with_gpu(&cfg, "", &resolved);
+            args.extend(raw.iter().map(|value| (*value).to_owned()));
+            let execution = capture_serving_gpu_execution(&cfg, &profile, &resolved, &args);
+            assert_eq!(execution.mode, "unknown", "{raw:?}");
+            assert!(execution.selected_gpus.is_empty(), "{raw:?}");
+            assert!(!execution.selection_complete, "{raw:?}");
+        }
+        cfg.gpu.gpu_ids = vec!["runtime:vulkan:Vulkan0".into()];
+        let args = crate::server::build_args_with_gpu(&cfg, "", &resolved);
+        let execution = capture_serving_gpu_execution(&cfg, &profile, &resolved, &args);
+        assert_eq!(execution.mode, "unknown");
+        assert!(execution.selected_gpus.is_empty());
+        assert!(!execution.selection_complete);
     }
 
     #[test]

@@ -738,15 +738,19 @@ jobs:
           body: |
             ## What's changed
 
-            - Hugging Face model search is engine-neutral: it lists models in all formats and opens on Trending by default.
-              Downloads remain limited to GGUF files and complete safetensors repositories.
-            - Loaded model controls are integrated into one place. The standalone diagnostics, sessions and deep verify
-              screens have been removed.
-            - Fixed navigation and help when moving repeatedly between engines.
-            - Ownership sharing has a leaner interface, and llama-bench is optional.
-            - User documentation has been simplified.
+            - Single-file GGUF benchmark runs collect the complete weights SHA-256 before timing,
+              allowing the website to match exact Hugging Face catalog files by hash and size.
+              Unavailable hashes remain unknown; historical measurements are not rewritten.
+            - Native runtime provenance records a bundle's declared backend only when its version
+              and the selected server executable's SHA-256 match the manifest.
+            - Native readiness verifies configured model aliases and routes through the advertised
+              ID. GPU assignments require matching native launch evidence, not saved device choices.
+            - Failed history keeps its saved display label without inventing export provenance;
+              unavailable configuration import explains why it is disabled in all four languages.
+            - Streaming completion accepts null error metadata, and serving history replay supports
+              valid large grids within the journal budget without increasing publication limits.
 
-            Search listings do not imply that every model, format or media type runs on every engine or device.
+            Token counts, automatic GPU placement and absent provenance are not inferred.
 
             ## Packages and verification
 
@@ -758,7 +762,7 @@ jobs:
             install.sh, which verifies the DMG's SHA-256.
             DEB registers the launcher and icon automatically. For AppImage desktop integration,
             use register-linux-desktop.py from this release after verifying its checksum.
-            Installation guide: https://github.com/aiolm/AioLM/blob/v0.3.4/docs/guides/install.md
+            Installation guide: https://github.com/aiolm/AioLM/blob/${{ needs.prepare.outputs.tag_name }}/docs/guides/install.md
           draft: false
           prerelease: false
           make_latest: true

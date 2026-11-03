@@ -1,5 +1,5 @@
 import type { LegacyPerformanceBenchmarkRequest, LegacyPerformanceBenchmarkResult, LegacyPerformanceBenchmarkRow, PerformanceBenchmarkRequest, PerformanceBenchmarkResult } from '../../shared/api/types.ts';
-import { normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
+import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkReport } from './benchmarkReport';
 import { validateBenchmarkConfiguration, type BenchmarkReceipt } from '@aiolm/benchmark-contracts';
@@ -211,6 +211,11 @@ export function inspectLegacyPerformanceHistory(): { records: PerformanceBenchma
 /** New exports use only the private label frozen with the run, never a live presentation lookup. */
 export function recordedBenchmarkModelLabel(record: PerformanceBenchmarkRecord): string {
   return record.schemaVersion === 2 ? record.result.provenance?.recorded_model_label ?? '' : record.model;
+}
+
+/** UI-only fallback from the run's saved local selection, not current model files or metadata. */
+export function benchmarkHistoryModelLabel(record: PerformanceBenchmarkRecord): string {
+  return normalizeDisplayText(recordedBenchmarkModelLabel(record) || modelDisplayName(record.model));
 }
 
 export function readPerformanceHistory(): PerformanceBenchmarkRecord[] {

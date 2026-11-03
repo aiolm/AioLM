@@ -133,7 +133,12 @@ function validateServing(result: ServingPublicBenchmarkSubmission): void {
 
 /** Shared by public export, the upload queue, and HTTP boundary validation. */
 export function validatePublicBenchmark(value: unknown): PublicBenchmarkSubmission {
-  assertSchema(value, contractSchema, 'benchmark');
+  const version = value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>).schema_version : undefined;
+  if (version !== 1 && version !== 2 && version !== 3) throw new Error('Invalid public benchmark field: benchmark.schema_version');
+  // The published root oneOf has disjoint versions. Validate the declared branch
+  // directly so an invalid serving field is not replaced by a legacy branch error.
+  assertSchema(value, { $ref: version === 3 ? '#/$defs/serving' : '#/$defs/legacy' }, 'benchmark');
   const result = value as PublicBenchmarkSubmission;
   if (result.schema_version === 3) validateServing(result);
   else validateLegacy(result);

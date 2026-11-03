@@ -14,6 +14,40 @@ fn port_arg() -> u16 {
         .unwrap_or(0)
 }
 
+// Native b12001 accumulates trimmed, nonempty comma aliases across both
+// spellings and advertises the first alias in its ordered set.
+fn native_aliases(args: &[String]) -> std::collections::BTreeSet<String> {
+    let mut aliases = std::collections::BTreeSet::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--alias" | "-a" => {
+                if let Some(value) = args.get(index + 1) {
+                    aliases.extend(
+                        value
+                            .split(',')
+                            .map(|value| {
+                                value.trim_matches(|character| {
+                                    matches!(
+                                        character,
+                                        ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'
+                                    )
+                                })
+                            })
+                            .filter(|alias| !alias.is_empty())
+                            .map(str::to_owned),
+                    );
+                }
+                index += 2;
+            }
+            "--chat-template" => index += 2,
+            "--control-vector-layer-range" => index += 3,
+            _ => index += 1,
+        }
+    }
+    aliases
+}
+
 fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &str) {
     let response = format!(
         "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -130,14 +164,21 @@ fn handle(mut stream: TcpStream) {
         }
         ("GET", "/v1/models") => {
             let args: Vec<String> = std::env::args().collect();
-            let model = args
-                .iter()
-                .position(|arg| arg == "--served-model-name")
-                .or_else(|| args.iter().position(|arg| arg == "--model"))
-                .or_else(|| args.iter().position(|arg| arg == "-m"))
-                .and_then(|index| args.get(index + 1))
-                .map(String::as_str)
-                .unwrap_or("fake-model");
+            let aliases = native_aliases(&args);
+            let alias = if args.iter().any(|arg| arg == "--fake-native-alias-last") {
+                aliases.last()
+            } else {
+                aliases.first()
+            };
+            let model = alias.map(String::as_str).unwrap_or_else(|| {
+                args.iter()
+                    .position(|arg| arg == "--served-model-name")
+                    .or_else(|| args.iter().position(|arg| arg == "--model"))
+                    .or_else(|| args.iter().position(|arg| arg == "-m"))
+                    .and_then(|index| args.get(index + 1))
+                    .map(String::as_str)
+                    .unwrap_or("fake-model")
+            });
             // The decoy ID precedes the selected model to exercise exact
             // launch-plan matching instead of accepting the first model.
             let body = serde_json::json!({"data":[
@@ -203,6 +244,25 @@ fn handle(mut stream: TcpStream) {
             }
         }
         ("POST", "/v1/chat/completions") => {
+            let aliases = native_aliases(&arguments);
+            if !aliases.is_empty()
+                && !serde_json::from_slice::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|body| {
+                        body.get("model")
+                            .and_then(|model| model.as_str())
+                            .map(str::to_owned)
+                    })
+                    .is_some_and(|model| aliases.contains(&model))
+            {
+                respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":{"message":"request did not route the selected native alias"}}"#,
+                );
+                return;
+            }
             static CHAT_CALLS: std::sync::atomic::AtomicUsize =
                 std::sync::atomic::AtomicUsize::new(0);
             let call = CHAT_CALLS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);

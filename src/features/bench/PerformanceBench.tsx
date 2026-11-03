@@ -16,7 +16,7 @@ import { finishTask, registerTask, updateTask, useTasks } from "../../shared/sta
 import { useI18n } from "../../shared/i18n/i18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { readPerformanceHistory, recordedBenchmarkModelLabel, summarizePerformanceRows, summarizeServingPoints, type PerformanceBenchmarkRecord } from "./performanceRecords";
+import { readPerformanceHistory, benchmarkHistoryModelLabel, summarizePerformanceRows, summarizeServingPoints, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import { exportBenchmarkResults, type BenchmarkExportFormat } from './benchmarkExport';
 import { performanceMarkdown } from './performanceMarkdown';
 import { deleteBenchmarkHistoryRecord, initializeBenchmarkHistory, loadAllBenchmarkHistory, loadBenchmarkHistoryPage, rememberBenchmarkResult } from './benchmarkRepository';
@@ -204,6 +204,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptBytes.length * concurrencies.length * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
+  const localImportUnavailable = selectedRecord?.schemaVersion === 2 && !selectedRecord.result.provenance;
   const copyTargetRef = useRef({ record: selectedRecord, locale });
   copyTargetRef.current = { record: selectedRecord, locale };
   const previousRecords = history.filter(item => item.id !== record?.id);
@@ -478,10 +479,10 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       {previousRecords.length > 0 ? <label><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy || exporting || deleting}
         onChange={value => { setSelectedHistory(value); resetCopied(); setError(null); setExportNotice(null); setHistoryNotice(null); }}
         options={[{ value: '', label: copy.current }, ...previousRecords.map((item, index) => ({ value: item.id,
-          label: `${new Date(item.createdAt).toLocaleString()} · ${item.schemaVersion === 2 ? recordedBenchmarkModelLabel(item) : historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
+          label: `${new Date(item.createdAt).toLocaleString()} · ${item.schemaVersion === 2 ? benchmarkHistoryModelLabel(item) || copy.unavailable : historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting || localImportUnavailable} aria-describedby={localImportUnavailable ? 'benchmark-import-unavailable' : undefined} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting || copying} aria-busy={copying} data-icon="copy" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
       </>}<CustomSelect className="performance-export-format" ariaLabel={copy.exportFormat} value={exportFormat} disabled={busy || exporting || deleting}
         onChange={value => { setExportFormat(value); setExportNotice(null); }} options={[{ value: 'xlsx', label: 'Excel (.xlsx)' }, { value: 'csv', label: 'CSV (.csv)' }]} />
@@ -489,11 +490,12 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       {(exportAllDiffers || historyOffset !== null) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} data-icon="download" onClick={() => void exportResults(true)}>{copy.exportAllCsv}</button>}
       {selectedRecord && <button type="button" className="app-button app-button--danger app-button--sm" disabled={busy || otherBenchmark || exporting || historyLoading || deleting || sharingBusy} data-icon="delete" onClick={() => { setDeleteError(false); setHistoryNotice(null); setPendingDelete(selectedRecord); }}>{deleting ? copy.deleting : copy.deleteHistory}</button>}</div>
     </div>}
+    {localImportUnavailable && <p id="benchmark-import-unavailable" className="performance-hint">{explorerCopy.unavailableSettings}</p>}
     {exportNotice && <FeedbackBanner tone="success" className="performance-notice">{exportNotice}</FeedbackBanner>}
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{selectedRecord.schemaVersion === 2 ? recordedBenchmarkModelLabel(selectedRecord) : <><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></>}</strong><span>{statusLabel} · {selectedRecord.schemaVersion === 1 ? `${copy.legacy} · ${selectedRecord.backend} · ${formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}` : `${selectedRecord.request.method.id}@${selectedRecord.request.method.version}`} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{selectedRecord.schemaVersion === 2 ? benchmarkHistoryModelLabel(selectedRecord) || copy.unavailable : <><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></>}</strong><span>{statusLabel} · {selectedRecord.schemaVersion === 1 ? `${copy.legacy} · ${selectedRecord.backend} · ${formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}` : `${selectedRecord.request.method.id}@${selectedRecord.request.method.version}`} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     {legacyRecord ? <><ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} /></> : <ServingResultTable points={servingPoints} copy={copy} />}
     {selectedRecord && (selectedRecord.schemaVersion === 1 || selectedRecord.result.status === 'complete'
       ? <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />
@@ -558,7 +560,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     </dl><p>{legacyRecord ? copy.metricsHint : copy.medianHint}</p></details>
     <ConfirmDialog open={!!pendingDelete} title={copy.deleteTitle} confirmLabel={copy.deleteHistory} busy={deleting}
       confirmDisabled={busy || otherBenchmark || exporting || sharingBusy || historyLoading}
-      description={<>{pendingDelete && <p><strong>{pendingDelete.schemaVersion === 2 ? recordedBenchmarkModelLabel(pendingDelete) : <ModelName model={pendingDelete.model} />}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
+      description={<>{pendingDelete && <p><strong>{pendingDelete.schemaVersion === 2 ? benchmarkHistoryModelLabel(pendingDelete) || copy.unavailable : <ModelName model={pendingDelete.model} />}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
       onConfirm={() => void deleteSelectedHistory()} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </div>;
 }

@@ -1037,8 +1037,11 @@ pub struct Readiness {
     pub health_path: String,
     /// Whether the health endpoint requires the bearer key.
     pub health_authenticated: bool,
-    /// The model id that must appear in `/v1/models`.
+    /// The selected model id, or provisional native alias, expected in `/v1/models`.
     pub expected_model: String,
+    /// Explicit aliases from the final native argv. Empty for other adapters.
+    /// A matching returned id, not alias ordering, determines final routing.
+    pub expected_model_aliases: Vec<String>,
 }
 
 fn interpreter_flags(kind: InstallationKind) -> Vec<String> {
@@ -1223,6 +1226,7 @@ pub fn engine_command(
                     health_path: "/health".into(),
                     health_authenticated: false,
                     expected_model: served,
+                    expected_model_aliases: Vec::new(),
                 },
             )
         }
@@ -1291,6 +1295,7 @@ pub fn engine_command(
                     health_path: "/health".into(),
                     health_authenticated: true,
                     expected_model: model.to_owned(),
+                    expected_model_aliases: Vec::new(),
                 },
             )
         }
@@ -1594,6 +1599,7 @@ mod tests {
                 health_path: "/health".into(),
                 health_authenticated: false,
                 expected_model: served,
+                expected_model_aliases: Vec::new(),
             }
         );
         metal_snapshot(
@@ -1791,6 +1797,7 @@ mod tests {
                     health_path: "/health".into(),
                     health_authenticated: false,
                     expected_model: "Qwen2.5-VL-7B".into(),
+                    expected_model_aliases: Vec::new(),
                 },
             }
         );

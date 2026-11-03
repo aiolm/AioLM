@@ -5,7 +5,7 @@ import type { PerformanceBenchmarkRow } from '../../shared/api/types';
 import { benchmarkReport } from './benchmarkReport';
 import { benchmarkWorkbook } from './benchmarkWorkbook';
 import { performanceMarkdown } from './performanceMarkdown';
-import { performanceCsv, type LegacyPerformanceBenchmarkRecord, type ServingPerformanceBenchmarkRecord } from './performanceRecords';
+import { benchmarkHistoryModelLabel, recordedBenchmarkModelLabel, performanceCsv, type LegacyPerformanceBenchmarkRecord, type ServingPerformanceBenchmarkRecord } from './performanceRecords';
 
 function serving(rows: PerformanceBenchmarkRow[]): ServingPerformanceBenchmarkRecord {
   return {
@@ -65,7 +65,8 @@ describe('benchmark report exports', () => {
       'Input UTF8 bytes': 4096, 'Max output token request': 128, 'Samples': 3,
       'First output (ms) · median': 20, 'First output (ms) · min': 10, 'First output (ms) · max': 30, 'First output (ms) · samples': 2,
       'Observed output (B/s) · median': 20, 'Observed output (B/s) · min': 10, 'Observed output (B/s) · max': 30, 'Observed output (B/s) · samples': 2,
-      'Reasoning (bytes) · median': 0, 'Reported tokens/s · median': null, 'Legacy · PP (tok/s)': null,
+      'Reasoning (bytes) · median': 0, 'Reported tokens/s · median': null,
+      'Legacy · token-based cold-prompt method · Input processing (Prefill / PP) · estimated (tok/s)': null,
     };
     for (const [header, value] of Object.entries(expected)) {
       const index = csv[0].indexOf(header);
@@ -109,12 +110,17 @@ describe('benchmark report exports', () => {
     const record = serving([]);
     delete record.result.provenance;
     record.result.status = 'failed';
+    expect(benchmarkHistoryModelLabel(record)).toBe('replaced-model');
+    expect(recordedBenchmarkModelLabel(record)).toBe('');
     const report = benchmarkReport([record]);
     for (const key of ['recorded_model_label', 'runtime.name', 'model.format', 'model.sha256', 'model.size_bytes', 'execution.settings']) {
       const value = report.rows[0][report.columns.findIndex(column => column.key === key)];
       expect(value).toBe(key === 'recorded_model_label' ? '' : null);
     }
     expect(performanceCsv([record])).not.toMatch(/synthetic|PRIVATE|replaced-model|--threads/);
+    record.model = '/other/local-selection';
+    expect(benchmarkHistoryModelLabel(record)).toBe('local-selection');
+    expect(benchmarkReport([record])).toEqual(report);
   });
 
   it('keeps historical token measurements in separate Legacy columns when exported alongside serving data', () => {

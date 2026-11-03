@@ -177,7 +177,7 @@ fn result(request: &PerformanceBenchRequest) -> PerformanceBenchResult {
     let mut result = failed(request, &cfg, "pending".into());
     result.provenance = Some(crate::benchmark::provenance::capture_serving(
         &cfg,
-        profile,
+        &profile,
         model,
         workload,
         None,

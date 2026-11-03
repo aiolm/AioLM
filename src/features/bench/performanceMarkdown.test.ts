@@ -27,9 +27,9 @@ describe('performance Markdown', () => {
       row({ id: 'b1', concurrency: 2, tg_tps: 170 }), row({ id: 'b2', concurrency: 2, repetition: 2, tg_tps: 190 }),
     ]), 'en');
     const [headers, , single, batch] = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
-    expect(single[headers.indexOf('Legacy · TG (tok/s)')]).toBe('100');
-    expect(batch[headers.indexOf('Legacy · TG (tok/s)')]).toBe('180');
-    expect(batch[headers.indexOf('Legacy · Speedup')]).toBe('1.8');
+    expect(single[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('100');
+    expect(batch[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('180');
+    expect(batch[headers.indexOf('Legacy · token-based cold-prompt method · Speedup')]).toBe('1.8');
     expect(single[headers.indexOf('Input unit')]).toBe('tokens');
     expect(single[headers.indexOf('Input UTF8 bytes')]).toBe('N/A');
     expect(single[headers.indexOf('First output (ms) · median')]).toBe('N/A');
@@ -43,7 +43,7 @@ describe('performance Markdown', () => {
     const markdown = performanceMarkdown(failed, 'en');
     const [headers, , values] = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
     expect(values[headers.indexOf('Status')]).toBe('Failed');
-    expect(values[headers.indexOf('Legacy · TG (tok/s)')]).toBe('N/A');
+    expect(values[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('N/A');
     expect(markdown).not.toMatch(/PRIVATE|synthetic/);
     failed.result.status = 'cancelled';
     expect(performanceMarkdown(failed, 'en')).toBe('');

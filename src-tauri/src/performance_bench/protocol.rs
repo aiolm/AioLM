@@ -143,7 +143,7 @@ impl Observed {
         let object = value
             .as_object()
             .ok_or("benchmark SSE data is not an object")?;
-        if object.contains_key("error") {
+        if object.get("error").is_some_and(|value| !value.is_null()) {
             return Err("runtime returned a completion error".into());
         }
         if let Some(usage) = object.get("usage").filter(|value| !value.is_null()) {
@@ -339,6 +339,20 @@ mod tests {
             .as_bytes(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn serving_null_error_metadata_keeps_completed_output() {
+        let body = format!(
+            "{}data: [DONE]\n\n",
+            event(json!({
+                "error": null,
+                "choices": [{"delta": {"content": "눈길"}, "finish_reason": "stop"}]
+            }))
+        );
+        let row = measured(body.as_bytes()).unwrap();
+        assert_eq!(row.content_bytes, 6);
+        assert_eq!(row.finish_reason, "stop");
     }
 
     #[test]
