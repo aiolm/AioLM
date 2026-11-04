@@ -3,18 +3,25 @@ import * as api from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { canBuildPrBackend, formatRuntimeVersion, isInstallCancellation } from "../../shared/runtime/runtimeUtils";
 import { translate } from "../../shared/i18n/i18nUnified";
-import { finishTask, registerTask } from "../../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, type TaskState } from "../../shared/state/taskRegistry";
 import type { BackendRow } from "./runtimesHelpers";
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 const RUNTIME_TASK_ID = "runtime-operation";
 
-function beginRuntimeTask(label: string, phase: string, cancel = api.rtCancel, installs = false): string {
-  // The download, extraction and build all run in the backend and keep emitting
-  // progress whichever panel is on screen, so leaving this page costs nothing.
-  // The task strip is where it stays visible. Only a real installation counts
-  // as a finished download; exports and imports are local file work.
-  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel, notifyOnComplete: installs ? "download" : undefined });
+type RuntimeTaskOwner = { id: string; cancel: () => Promise<void> };
+
+function beginRuntimeTask(label: string, phase: string, installs = false): RuntimeTaskOwner | null {
+  if (getTaskSnapshot().some(task => task.id === RUNTIME_TASK_ID && (task.state === 'running' || task.state === 'cancelling'))) return null;
+  // Each acquisition has its own cancel token: a late response cannot finish
+  // a newer operation registered under the same shared task ID.
+  const cancel = () => api.rtCancel();
+  const id = registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel, notifyOnComplete: installs ? "download" : undefined });
+  return { id, cancel };
+}
+
+function finishRuntimeTask(owner: RuntimeTaskOwner, state: Exclude<TaskState, 'running' | 'cancelling'>, detail?: string): void {
+  if (getTaskSnapshot().find(task => task.id === owner.id)?.cancel === owner.cancel) finishTask(owner.id, state, detail);
 }
 
 interface CommonDeps {
@@ -34,8 +41,7 @@ export async function runInstall(
   bundleBusy: boolean,
   deps: CommonDeps,
 ): Promise<void> {
-  if (prBusy || bundleBusy) return;
-  deps.setFailure(null);
+  if (prBusy || bundleBusy || rows.some(row => row.busy)) return;
   const row = rows.find((item) => item.backend === backend);
   const info = row?.latest;
   if (!info) {
@@ -46,20 +52,22 @@ export async function runInstall(
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
+  const owner = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"), true);
+  if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
+  deps.setFailure(null);
   setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true } : item));
-  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"), api.rtCancel, true);
   try {
     const installed = await api.rtInstall(backend, info.build);
     notifyRuntimeInventoryChanged();
     deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: formatRuntimeVersion(info.build, installed?.version) }));
     await refresh();
-    finishTask(taskId, "completed");
+    finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = isInstallCancellation(message);
     if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
-    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
+    finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);
   } finally {
     setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: false, progress: null } : item));
   }
@@ -81,10 +89,11 @@ export async function runExportRuntime(
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
+  const owner = beginRuntimeTask(translate(deps.locale, "ui.exportRuntime"), translate(deps.locale, "ui.runtimeBundleWorking"));
+  if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
   deps.setFailure(null);
   setBundleBusy(true);
   setBundleProgress(null);
-  const taskId = beginRuntimeTask(translate(deps.locale, "ui.exportRuntime"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const info = await api.rtExport(backend, build);
     deps.flashT(translate(deps.locale, "ui.runtimeBundleExported", {
@@ -93,7 +102,7 @@ export async function runExportRuntime(
       path: info.path,
       sha: info.archive_sha256,
     }));
-    finishTask(taskId, "completed");
+    finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = message === "runtime export cancelled" || isInstallCancellation(message);
@@ -102,7 +111,7 @@ export async function runExportRuntime(
     } else {
       deps.setFailure(translate(deps.locale, "ui.runtimeBundleExportFailed") + ": " + message);
     }
-    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
+    finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);
   } finally {
     setBundleBusy(false);
     setBundleProgress(null);
@@ -122,16 +131,17 @@ export async function runImportRuntime(
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
+  const owner = beginRuntimeTask(translate(deps.locale, "ui.importRuntimeBundle"), translate(deps.locale, "ui.runtimeBundleWorking"));
+  if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
   deps.setFailure(null);
   setBundleBusy(true);
   setBundleProgress(null);
-  const taskId = beginRuntimeTask(translate(deps.locale, "ui.importRuntimeBundle"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const installed = await api.rtImport();
     notifyRuntimeInventoryChanged();
     deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: formatRuntimeVersion(installed.build, installed.version) }));
     await refresh(true);
-    finishTask(taskId, "completed");
+    finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = message === "runtime import cancelled" || isInstallCancellation(message);
@@ -140,7 +150,7 @@ export async function runImportRuntime(
     } else {
       deps.setFailure(translate(deps.locale, "ui.runtimeBundleImportFailed") + ": " + message);
     }
-    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
+    finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);
   } finally {
     setBundleBusy(false);
     setBundleProgress(null);
@@ -193,7 +203,6 @@ export async function runReviewPullRequest(
 
 export interface PrInstallState {
   pending: { backend: string; source: string; preview: api.PullRequestPreview };
-  prInstallInFlight: { current: boolean };
   prBusy: boolean;
   bundleBusy: boolean;
   rows: BackendRow[];
@@ -212,12 +221,10 @@ export interface PrInstallState {
  * is force-pushed between the dialog and this call is caught, not built.
  */
 export async function runInstallPullRequest(state: PrInstallState, deps: CommonDeps): Promise<void> {
-  if (state.prInstallInFlight.current) return;
   if (state.prBusy || state.bundleBusy || state.rows.some((row) => row.busy)) return;
   // Pin the backend for the whole run: the busy flag has to be cleared on
   // the row it was set on, whatever the picker says by the time we finish.
   const { backend, source, preview } = state.pending;
-  state.setPrPreview(null);
   if (!canBuildPrBackend(backend)) {
     deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend }));
     return;
@@ -226,13 +233,13 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
-  if (state.prBusy || state.bundleBusy || state.rows.some((row) => row.busy)) return;
-  state.prInstallInFlight.current = true;
+  const owner = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), true);
+  if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
+  state.setPrPreview(null);
   deps.setFailure(null);
   state.setPrBusy(true);
   state.setActivePrBackend(backend);
   state.setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true, progress: null } : item));
-  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), api.rtCancel, true);
   try {
     const installed = await api.rtInstallPr(backend, source, preview.commit);
     notifyRuntimeInventoryChanged();
@@ -244,15 +251,14 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
       : translate(deps.locale, "ui.installedPrOk", { backend, pr: installed.source?.pull_request ?? source }));
     state.setPrSource("");
     await state.refresh();
-    finishTask(taskId, "completed");
+    finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = isInstallCancellation(message);
     if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
-    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
+    finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);
   } finally {
-    state.prInstallInFlight.current = false;
     state.setPrBusy(false);
     state.setActivePrBackend(null);
     state.setCancelBusy(false);

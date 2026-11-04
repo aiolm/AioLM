@@ -32,12 +32,13 @@ import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadin
 import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
+import { modelActions } from '../../shared/i18n/modelActions';
 
 
 /** `sessions` comes from a parent that already holds the detailed session
  * subscription; without it the panel subscribes itself. `children` render the
  * parent's loaded-model controls between the page heading and the library. */
-export default function ModelsPanel({ store, onSelectModel, onModels, compact = false, active = true, sessions: providedSessions, children }: { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; children?: ReactNode }) {
+export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, onModels, compact = false, active = true, sessions: providedSessions, children }: { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onDiscoverModels?: () => void; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; children?: ReactNode }) {
   const { t, locale } = useI18n();
   useSyncExternalStore(subscribeRuntimeCatalog, runtimeCatalogSnapshot, runtimeCatalogSnapshot);
   const copy = executionText[locale];
@@ -54,6 +55,9 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
   const [providerFilter, setProviderFilter] = useState<api.ProviderId | 'all'>('all');
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
   const [folderSaved, setFolderSaved] = useState(false);
+  const [folderAction, setFolderAction] = useState<'idle' | 'choosing' | 'saving'>('idle');
+  const folderInFlight = useRef(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [scanRequest, setScanRequest] = useState(0);
   const [showVision, setShowVision] = useState(false);
   const [flash, notify, dismissFlash] = useFlashMessage();
@@ -63,6 +67,7 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
   const scanGeneration = useRef(0);
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
   const requestedScanDirRef = useRef("");
+  const performedScanRef = useRef<{ request: number; scan: () => Promise<void> } | null>(null);
   const [ownSessions, setSessions] = useState<api.SessionStatus[]>([]);
   const sessions = providedSessions ?? ownSessions;
   const modelSettings = useModelSettings();
@@ -131,21 +136,28 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
   }, []);
 
   useEffect(() => {
+    if (folderInFlight.current) return;
     const nextDir = cfg?.models_dir?.trim() ?? "";
     if (!nextDir || requestedScanDirRef.current === nextDir) return;
     requestedScanDirRef.current = nextDir;
     if (nextDir !== dir) setDir(nextDir);
     setScanRequest((current) => current + 1);
-  }, [cfg?.models_dir, dir]);
+  }, [cfg?.models_dir, dir, folderAction]);
 
   useEffect(() => {
-    if (!active || scanRequest <= 0) return;
+    if (!active) { performedScanRef.current = null; return; }
+    if (scanRequest <= 0 || folderAction !== 'idle') return;
+    // Releasing a picker/save guard resumes pending scans, not a completed scan.
+    if (performedScanRef.current?.request === scanRequest && performedScanRef.current.scan === scan) return;
     if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
-    scanTimer.current = window.setTimeout(() => void scan(), 0);
+    scanTimer.current = window.setTimeout(() => {
+      performedScanRef.current = { request: scanRequest, scan };
+      void scan();
+    }, 0);
     return () => {
       if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
     };
-  }, [active, scanRequest, scan]);
+  }, [active, scanRequest, scan, folderAction]);
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
   const visible = (models ?? []).filter((model) => {
@@ -208,16 +220,28 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
   };
 
   const browse = async () => {
+    if (folderInFlight.current) return;
+    folderInFlight.current = true;
+    setFolderAction('choosing');
+    setFolderError(null);
+    setFolderSaved(false);
+    let saving = false;
     try {
       const chosen = await api.pickModelsDir();
-      if (!chosen) return;
-      setDir(chosen.trim());
-      await store.updateConfig({ models_dir: chosen });
-      setFolderSaved(true);
-      requestedScanDirRef.current = chosen.trim();
+      if (!chosen?.trim()) return;
+      saving = true;
+      setFolderAction('saving');
+      const saved = await store.updateConfig({ models_dir: chosen });
+      const savedDir = saved.models_dir.trim();
+      setDir(savedDir);
+      requestedScanDirRef.current = savedDir;
       setScanRequest((current) => current + 1);
+      setFolderSaved(true);
     } catch (error) {
-      notify(`${t("panel.browseFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      setFolderError(`${t(saving ? "panel.saveFailed" : "panel.browseFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      folderInFlight.current = false;
+      setFolderAction('idle');
     }
   };
 
@@ -296,6 +320,7 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
       {compact && <header className="app-page-header"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.hint}</p></div></header>}
 
       <PanelFeedback>
+        {folderError && <FeedbackBanner tone="error" onDismiss={() => setFolderError(null)}>{folderError}</FeedbackBanner>}
         {!scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {folderSaved && (
@@ -311,7 +336,7 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
 
       {children}
 
-      <div className="models-folder">
+      <div className="models-folder" aria-busy={folderAction !== 'idle'}>
       <div className="models-folder-actions min-w-0 items-center gap-2.5">
         <label htmlFor="models-dir" className="text-sm text-muted">{t("panel.modelsDirectory")}</label>
         <input
@@ -322,7 +347,7 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
           placeholder="models"
         />
         <div className="models-folder-buttons">
-        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
+        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={scanning || folderAction !== 'idle'} className="app-button app-button--secondary shrink-0">{folderAction === 'saving' ? copy.saving : folderAction === 'choosing' ? t('status.working') : t("panel.browse")}</button>
         </div>
       </div>
       </div>
@@ -363,7 +388,7 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
         <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
         <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>
 
       {runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
@@ -386,7 +411,10 @@ export default function ModelsPanel({ store, onSelectModel, onModels, compact = 
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
           models.length === 0 ? <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
-            action={dir.trim() ? { label: t("panel.chooseFolder"), onClick: () => void browse() } : undefined} />
+          ><div className="app-empty-actions">
+            {onDiscoverModels && <button type="button" className="app-button app-button--primary min-w-0 max-w-full" onClick={onDiscoverModels}>{modelActions(locale).find}</button>}
+            <button type="button" className="app-button app-button--secondary min-w-0 max-w-full" onClick={() => void browse()} disabled={folderAction !== 'idle'}>{t("panel.chooseFolder")}</button>
+          </div></EmptyState>
             : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={t("ui.modelsVisionHiddenBody")}
               action={{ label: t(hasModelFilters ? "ui.modelsClearAndShowVision" : "ui.modelsShowVision"), onClick: () => { clearModelFilters(); setShowVision(true); } }} />
               : <EmptyState title={t("ui.modelsNoMatches")} description={t("ui.modelsNoMatchesBody")}

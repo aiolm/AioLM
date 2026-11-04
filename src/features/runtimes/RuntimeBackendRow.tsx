@@ -17,6 +17,7 @@ export interface RuntimeBackendRowProps {
   row: BackendRow;
   device: api.DeviceReport | null;
   serverRunning: boolean;
+  runtimeBusy: boolean;
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
@@ -33,7 +34,7 @@ export interface RuntimeBackendRowProps {
  * its install action on the same line, then installed versions as indented rows
  * with an aligned size and inline Probe and Remove actions. */
 export default function RuntimeBackendRow({
-  t, locale, row, device, serverRunning, prBusy, bundleBusy, cancelBusy, probeBusy, probeTarget,
+  t, locale, row, device, serverRunning, runtimeBusy, prBusy, bundleBusy, cancelBusy, probeBusy, probeTarget,
   onBlockedAction, onCancelInstall, onInstall, onProbe, onUninstall,
 }: RuntimeBackendRowProps) {
   const state = stateOf(locale, row);
@@ -52,7 +53,7 @@ export default function RuntimeBackendRow({
       ? t("ui.installingPr")
       : bundleBusy
         ? t("ui.runtimeBundleWorking")
-        : !info ? t("ui.noLatestResolved") : null;
+        : runtimeBusy && !row.busy ? t("ui.runtimeOperationInProgress") : !info ? t("ui.noLatestResolved") : null;
   const probeBlockedReason = serverRunning ? t("ui.stopBeforeSelect") : null;
   return (
     <section className={`runtime-group${row.busy ? " is-busy" : ""}`} aria-labelledby={`runtime-${row.backend}`} aria-busy={row.busy}>
@@ -89,7 +90,7 @@ export default function RuntimeBackendRow({
       {row.installed.length > 0 && <ul className="runtime-versions" aria-label={t("ui.installedBuilds", { label: backendName })}>
         {row.installed.map((item) => {
           const probed = probeTarget?.backend === row.backend && probeTarget.build === item.build;
-          const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
+          const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : runtimeBusy ? t("ui.runtimeOperationInProgress") : null;
           const version = normalizeDisplayText(formatRuntimeVersion(item.build, item.version));
           return <li key={item.build} className={`runtime-version${probed ? " is-selected" : ""}`} title={normalizeDisplayPath(item.dir)}>
             <span className="runtime-version__name" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>

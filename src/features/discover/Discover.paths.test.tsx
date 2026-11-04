@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
@@ -9,6 +9,8 @@ import DiscoverPanel from "./Discover";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { rememberExecution } from '../models/modelExecutionState';
 
+import { MODEL_CATALOG_CHANGED } from "../model-settings/useModelCatalog";
+import { useModelDownloadTask } from "../../shared/state/modelDownloadTask";
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", async (importOriginal) => ({
@@ -210,6 +212,74 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'mlx-vlm', active_runtime: 'another-runtime', active_model: snapshot.path }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each(['repository', 'search', 'destination'] as const)('finishes an owned snapshot without publishing stale actions after changing the %s', async change => {
+    let finish!: (artifact: api.ModelArtifact) => void;
+    vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    vi.mocked(api.hfSearchModels).mockResolvedValue([repo, { ...repo, id: 'owner/other' }]);
+    const store = createTestStore();
+    const page = () => <I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>;
+    const view = render(page());
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    await clickDownload('Download complete model folder');
+    if (change === 'repository') fireEvent.click(screen.getByRole('button', { name: /owner\/other/ }));
+    else if (change === 'search') fireEvent.click(screen.getByRole('button', { name: 'Search models' }));
+    else { store.cfg!.models_dir = '/synthetic/other-destination'; view.rerender(page()); }
+    const catalogChanged = vi.fn();
+    window.addEventListener(MODEL_CATALOG_CHANGED, catalogChanged);
+    try {
+      await act(async () => finish(snapshot));
+      expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('completed');
+      expect(catalogChanged).toHaveBeenCalledOnce();
+      expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
+      expect(store.updateConfig).not.toHaveBeenCalled();
+    } finally { window.removeEventListener(MODEL_CATALOG_CHANGED, catalogChanged); }
+  });
+
+  it.each(['repository', 'destination', 'format'] as const)('removes a completed snapshot action immediately when changing the %s', async change => {
+    vi.mocked(api.hfSearchModels).mockResolvedValue([repo, { ...repo, id: 'owner/other' }]);
+    const store = createTestStore();
+    const page = () => <I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>;
+    const view = render(page());
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    await clickDownload('Download complete model folder');
+    await screen.findByRole('button', { name: 'Configure and run' });
+    if (change === 'repository') fireEvent.click(screen.getByRole('button', { name: /owner\/other/ }));
+    else if (change === 'format') chooseFormat('GGUF');
+    else { store.cfg!.models_dir = '/synthetic/other-destination'; view.rerender(page()); }
+    expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
+  });
+
+  it('shows received bytes without a false percentage until a positive transfer total arrives', async () => {
+    let rejectDownload!: (cause: Error) => void;
+    vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_, reject) => { rejectDownload = reject; }));
+    function DownloadHarness() {
+      useModelDownloadTask();
+      return <DiscoverPanel store={store} />;
+    }
+    const store = createTestStore();
+    render(<I18nProvider initialLocale="en"><DownloadHarness /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    await clickDownload('Download complete model folder');
+    const report = vi.mocked(api.onModelDownloadProgress).mock.calls[0][0];
+    act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 0 }));
+    const progress = screen.getByRole('progressbar', { name: 'Download progress' });
+    const card = within(progress.closest<HTMLElement>('[role="status"]')!);
+    expect(progress).not.toHaveAttribute('value');
+    expect(card.getByText('1.0 KiB')).toBeVisible();
+    expect(card.queryByText(/%|of 0 B/)).not.toBeInTheDocument();
+    expect(card.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 4096 }));
+    expect(progress).toHaveAttribute('value', '25');
+    expect(card.getByText('25%')).toBeVisible();
+    expect(card.getByText('1.0 KiB of 4.0 KiB')).toBeVisible();
+    fireEvent.click(card.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
+    await act(async () => rejectDownload(new Error('model download cancelled')));
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
   });
 
   it('retires pending GGUF responses when the user switches to MLX search', async () => {

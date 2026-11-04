@@ -11,7 +11,7 @@ const latest = { build: "b10638", file_name: "llama-b10638-bin-win-cuda-x64.zip"
 
 function renderRow(installed: InstalledRuntime[]) {
   const row = { ...initialRows().find((item) => item.backend === "cuda")!, latest, installed };
-  return render(<RuntimeBackendRow t={t} locale="en" row={row} device={null} serverRunning={false} prBusy={false} bundleBusy={false}
+  return render(<RuntimeBackendRow t={t} locale="en" row={row} device={null} serverRunning={false} runtimeBusy={false} prBusy={false} bundleBusy={false}
     cancelBusy={false} probeBusy={false} probeTarget={null} onCancelInstall={vi.fn()} onInstall={vi.fn()} onProbe={vi.fn()} onUninstall={vi.fn()} />);
 }
 

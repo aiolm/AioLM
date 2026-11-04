@@ -10,6 +10,7 @@ import { createTestStore } from "../../testing/appStore";
 import ModelsPanel from "./Models";
 import { panelText } from "../../shared/i18n/panelI18n";
 import { providerCopy } from "../../shared/i18n/providerCopy";
+import { useAppStore } from "../../shared/state/store";
 
 vi.mock("../../shared/api/index", async importOriginal => ({
   ...await importOriginal<typeof import("../../shared/api/index")>(),
@@ -19,6 +20,9 @@ vi.mock("../../shared/api/index", async importOriginal => ({
   pickModelsDir: vi.fn(async () => null),
   sessionList: vi.fn(async () => []),
   deleteModel: vi.fn(async () => undefined),
+  getConfig: vi.fn(),
+  saveConfig: vi.fn(),
+  serverStatus: vi.fn(async () => ({ state: 'stopped' })),
 }));
 
 const cfg = {
@@ -371,5 +375,89 @@ describe('model library empty results and filter recovery', () => {
     expect(api.listModels).toHaveBeenCalledTimes(3);
     expect(onModels).toHaveBeenCalledOnce();
     expect(base.updateConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('model folder persistence', () => {
+  const folderA = '/synthetic/models-a';
+  const folderB = '/synthetic/models-b';
+  const savedB = '/synthetic/normalized-models-b';
+  function FolderHarness() {
+    const base = useAppStore({ autoStart: false, pollIntervalMs: 60_000 });
+    return <I18nProvider initialLocale="en">
+      <output aria-label="Configuration state">{base.bootState}</output>
+      <output aria-label="Saved folder">{base.cfg?.models_dir}</output>
+      {base.bootState === 'ready' && <ModelsPanel store={base} compact onSelectModel={async () => undefined} />}
+    </I18nProvider>;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    vi.mocked(api.getConfig).mockResolvedValue({ ...cfg, active_model: '', models_dir: folderA });
+    vi.mocked(api.saveConfig).mockReset().mockImplementation(async value => value);
+    vi.mocked(api.pickModelsDir).mockReset().mockResolvedValue(folderB);
+    vi.mocked(api.listModels).mockReset().mockImplementation(async dir => ({
+      models: [{ name: dir === savedB ? 'B.gguf' : 'A.gguf', path: `${dir}/model.gguf`, size_mb: 1, is_vision: false }], truncated: false,
+    }));
+  });
+
+  it('keeps the committed library through an optimistic save failure and switches only to the successful response on retry', async () => {
+    render(<FolderHarness />);
+    await screen.findByRole('button', { name: 'Configure & run: A.gguf' });
+    expect(screen.getByLabelText('Configuration state')).toHaveTextContent('ready');
+    let rejectSave!: (cause: Error) => void;
+    vi.mocked(api.saveConfig).mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+    vi.mocked(api.saveConfig).mockClear();
+    vi.mocked(api.listModels).mockClear();
+    const browse = screen.getByRole('button', { name: panelText.en.browse });
+    act(() => { fireEvent.click(browse); fireEvent.click(browse); });
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalledOnce());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(folderA);
+    expect(screen.getByRole('button', { name: 'Configure & run: A.gguf' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rescan' })).toBeDisabled();
+    expect(api.pickModelsDir).toHaveBeenCalledOnce();
+    expect(api.listModels).not.toHaveBeenCalled();
+    await act(async () => { rejectSave(new Error('synthetic models directory save failure')); });
+    const error = screen.getByRole('alert');
+    expect(error).toHaveTextContent('synthetic models directory save failure');
+    expect(screen.getByLabelText('Saved folder')).toHaveTextContent(folderA);
+    expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(folderA);
+    expect(screen.getByRole('button', { name: 'Configure & run: A.gguf' })).toBeVisible();
+    expect(screen.queryByText(panelText.en.modelsSaved)).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    vi.mocked(api.saveConfig).mockImplementationOnce(async value => ({ ...value, models_dir: savedB }));
+    fireEvent.click(screen.getByRole('button', { name: panelText.en.browse }));
+    expect(await screen.findByRole('button', { name: 'Configure & run: B.gguf' })).toBeVisible();
+    expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(savedB);
+    expect(screen.getByLabelText('Saved folder')).toHaveTextContent(savedB);
+    expect(api.listModels).toHaveBeenCalledOnce();
+    expect(vi.mocked(api.listModels).mock.calls[0][0]).toBe(savedB);
+  });
+
+  it.each([null, '   '])('keeps the current catalog without saving or scanning when the picker returns %j', async chosen => {
+    render(<FolderHarness />);
+    await screen.findByRole('button', { name: 'Configure & run: A.gguf' });
+    vi.mocked(api.saveConfig).mockClear();
+    vi.mocked(api.listModels).mockClear();
+    let finishPicker!: (path: string | null) => void;
+    vi.mocked(api.pickModelsDir).mockImplementationOnce(() => new Promise(resolve => { finishPicker = resolve; }));
+    const browse = screen.getByRole('button', { name: panelText.en.browse });
+    act(() => { fireEvent.click(browse); fireEvent.click(browse); });
+    expect(browse).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rescan' })).toBeDisabled();
+    expect(api.pickModelsDir).toHaveBeenCalledOnce();
+    await act(async () => { finishPicker(chosen); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(folderA);
+    expect(screen.getByRole('button', { name: 'Configure & run: A.gguf' })).toBeVisible();
+    expect(api.saveConfig).not.toHaveBeenCalled();
+    expect(api.listModels).not.toHaveBeenCalled();
+    expect(browse).toBeEnabled();
   });
 });

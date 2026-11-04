@@ -46,7 +46,7 @@ import { displayChatTitle } from './chatThreadTitle';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { chatPersistenceCopy } from './chatPersistenceCopy';
 
-export default function ChatPanel({ store, preferences, onOpenModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; active?: boolean }) {
+export default function ChatPanel({ store, preferences, onOpenModels, onDiscoverModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onDiscoverModels?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
@@ -419,6 +419,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, active = t
             onRetry={() => void send(true)}
             ct={ct}
             onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}
+            onDiscoverModels={selectedSessionId === "default" && !configuredModel ? onDiscoverModels : undefined}
             modelSettingsLabel={modelSettings ? modelSettingsCopy[locale].title : undefined}
             onStart={() => void startSelectedSession()}
             starting={store.busy || startingSession}

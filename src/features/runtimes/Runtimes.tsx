@@ -74,7 +74,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
-  const busy = rt.runtimeBusy || rt.probeBusy || providerBusy || adapterBusy;
+  const busy = rt.ownedRuntimeBusy || rt.probeBusy || providerBusy || adapterBusy;
   const operationBusy = busy || rt.prReviewBusy || rt.uninstallBusy || rt.cancelBusy;
   useEffect(() => { onBusyChange?.(operationBusy); }, [operationBusy, onBusyChange]);
   const inventoryRevision = useRuntimeInventoryRevision();
@@ -246,6 +246,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
             visibleRows={visibleRows}
             device={rt.device}
             serverRunning={rt.serverRunning}
+            runtimeBusy={rt.runtimeBusy}
             prBusy={rt.prBusy}
             bundleBusy={rt.bundleBusy}
             cancelBusy={rt.cancelBusy}

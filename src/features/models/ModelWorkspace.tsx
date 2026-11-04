@@ -15,7 +15,7 @@ import LoadedModels, { type SessionPoll } from './LoadedModels';
 export type ExecutionSection = 'setup' | 'tuning' | 'profiles' | 'lora' | 'gpu';
 type Props = { store: AppStore; active: boolean; section: { id: ExecutionSection; revision: number }; onNavigate: (view: ViewId) => void; onSelectModel: (path: string) => Promise<void> };
 
-export default function ModelWorkspace({ store, onSelectModel, active }: Props) {
+export default function ModelWorkspace({ store, onSelectModel, onNavigate, active }: Props) {
   const settings = useModelSettings();
   const [error, setError] = useState('');
   // One detailed subscription serves the loaded-model controls and the
@@ -43,7 +43,7 @@ export default function ModelWorkspace({ store, onSelectModel, active }: Props) 
   };
   return <div className="model-workspace">
     {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
-    <div className="model-workspace-library"><ModelsPanel store={store} onSelectModel={select} compact active={active} sessions={poll.sessions}>
+    <div className="model-workspace-library"><ModelsPanel store={store} onSelectModel={select} onDiscoverModels={() => onNavigate('discover')} compact active={active} sessions={poll.sessions}>
       <LoadedModels store={store} poll={poll} refresh={refreshSessions} />
     </ModelsPanel></div>
   </div>;

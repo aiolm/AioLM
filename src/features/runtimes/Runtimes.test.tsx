@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import { createElement } from "react";
 import RuntimesPanel from "./Runtimes";
@@ -13,6 +13,9 @@ import * as runtimeAuto from "../../shared/api/runtimeAuto";
 import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { effectiveSchema } from "../../testing/effectiveSchema";
 import { testConfig } from "../../testing/appStore";
+import { getTaskSnapshot, registerTask, removeTask } from "../../shared/state/taskRegistry";
+
+afterEach(() => { act(() => { for (const task of getTaskSnapshot()) removeTask(task.id); }); });
 
 vi.mock("../../shared/api/index", () => ({
   isNativeRuntimeAvailable: () => false,
@@ -309,6 +312,74 @@ describe("RuntimesPanel pull-request builds", () => {
     mocked.rtPrPreview.mockResolvedValue(PREVIEW);
     // A build that never settles keeps the panel in its busy state.
     mocked.rtInstallPr.mockImplementation(() => new Promise(() => undefined));
+  });
+
+  it('keeps one CPU install owner when another backend and import are clicked before React commits', async () => {
+    let finish!: (value: api.InstalledRuntime) => void;
+    mocked.rtInstall.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('switch', { name: 'Show all backends' }));
+    const cpu = await screen.findByRole('button', { name: 'Install b10638: CPU-only' });
+    const vulkan = screen.getByRole('button', { name: 'Install b10638: Vulkan' });
+    const importBundle = screen.getByRole('button', { name: 'Import runtime ZIP' });
+    act(() => { fireEvent.click(cpu); fireEvent.click(vulkan); fireEvent.click(importBundle); });
+    expect(mocked.rtInstall).toHaveBeenCalledTimes(1);
+    expect(mocked.rtInstall).toHaveBeenCalledWith('cpu', 'b10638');
+    expect(mocked.rtImport).not.toHaveBeenCalled();
+    const owner = getTaskSnapshot().find(task => task.id === 'runtime-operation')!;
+    expect(owner.label).toMatch(/cpu/);
+    const report = mocked.onRuntimeProgress.mock.calls[0][0];
+    act(() => report({ backend: 'cpu', build: 'b10638', phase: 'downloading', received: 512, total: 1024 }));
+    expect(screen.getByRole('progressbar', { name: 'cpu installed builds' })).toHaveAttribute('value', '50');
+    expect(screen.getAllByRole('button', { name: 'Cancel install' })).toHaveLength(1);
+    expect(vulkan).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(vulkan);
+    expect(screen.getByRole('alert')).toHaveTextContent('Another runtime operation is in progress');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel install' }));
+    await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledOnce());
+    expect(getTaskSnapshot().find(task => task.id === owner.id)?.cancel).toBe(owner.cancel);
+    await act(async () => finish({ backend: 'cpu', build: 'b10638', dir: '/synthetic/cpu', size_mb: 1 }));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === owner.id)?.state).toBe('completed'));
+    expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument();
+  });
+
+  it.each(['completed', 'cancelled', 'failed'] as const)('releases the install row after %s so another backend can start', async outcome => {
+    let finish!: (value: api.InstalledRuntime) => void;
+    let fail!: (cause: Error) => void;
+    mocked.rtInstall.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }))
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('switch', { name: 'Show all backends' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install b10638: CPU-only' }));
+    expect(screen.getByRole('button', { name: 'Cancel install' })).toBeEnabled();
+    if (outcome === 'cancelled') fireEvent.click(screen.getByRole('button', { name: 'Cancel install' }));
+    await act(async () => {
+      if (outcome === 'completed') finish({ backend: 'cpu', build: 'b10638', dir: '/synthetic/cpu', size_mb: 1 });
+      else fail(new Error(outcome === 'cancelled' ? 'runtime install cancelled' : 'synthetic install failure'));
+    });
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')?.state).toBe(outcome));
+    expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument();
+    const next = screen.getByRole('button', { name: 'Install b10638: Vulkan' });
+    expect(next).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(next);
+    expect(mocked.rtInstall).toHaveBeenCalledTimes(2);
+    expect(mocked.rtInstall).toHaveBeenLastCalledWith('vulkan', 'b10638');
+    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({ state: 'running', label: expect.stringContaining('vulkan') });
+  });
+
+  it('does not let a late install completion finish a replacement runtime task', async () => {
+    let finish!: (value: api.InstalledRuntime) => void;
+    mocked.rtInstall.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('switch', { name: 'Show all backends' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Install b10638: Vulkan' }));
+    const cancelReplacement = vi.fn(async () => undefined);
+    act(() => registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic replacement runtime', phase: 'downloading', state: 'cancelling', interruptible: true, cancel: cancelReplacement }));
+    await act(async () => finish({ backend: 'vulkan', build: 'b10638', dir: '/synthetic/vulkan', size_mb: 1 }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument());
+    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({
+      label: 'Synthetic replacement runtime', state: 'cancelling', cancel: cancelReplacement,
+    });
   });
 
   it("keeps one backend cancel action for a PR build when advanced settings are collapsed", async () => {

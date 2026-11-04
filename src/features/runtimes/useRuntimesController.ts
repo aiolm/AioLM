@@ -10,7 +10,7 @@ import { isServerBusy } from "../../shared/lib/serverLifecycle";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { useSessionTransitionInProgress } from "../../shared/state/sessionTransitions";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
-import { updateTask } from "../../shared/state/taskRegistry";
+import { updateTask, useTasks } from "../../shared/state/taskRegistry";
 import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
 import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest } from "./runtimesActions";
 
@@ -54,14 +54,16 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const refreshGeneration = useRef(0);
   const probeGeneration = useRef(0);
   const prBackendTouched = useRef(false);
-  const prInstallInFlight = useRef(false);
   const [sessionsInUse, setSessionsInUse] = useState(false);
   const transitionInProgress = useSessionTransitionInProgress();
   useSessionPolling({ active, onData: sessions => setSessionsInUse(sessions.some(session => isServerBusy(session.state))) });
   // Runtime mutations share the native lock across the default model and
   // named sessions, including their starting/stopping transitions.
   const serverRunning = isServerBusy(store.status.state) || sessionsInUse || transitionInProgress;
-  const runtimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
+  const tasks = useTasks();
+  const ownedRuntimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
+  const runtimeBusy = ownedRuntimeBusy
+    || tasks.some(task => task.id === 'runtime-operation' && (task.state === 'running' || task.state === 'cancelling'));
 
   // A probe names the build it describes, so a later one always wins and a
   // result can never be read as belonging to a different build.
@@ -219,7 +221,6 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     if (!prPreview) return Promise.resolve();
     return runInstallPullRequest({
       pending: prPreview,
-      prInstallInFlight,
       prBusy,
       bundleBusy,
       rows,
@@ -279,7 +280,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     prBackend, setPrBackend, prBackendTouched,
     prSource, setPrSource, prBusy, bundleBusy, bundleProgress, activePrBackend, prReviewBusy,
     prPreview, setPrPreview, pendingUninstall, setPendingUninstall, uninstallBusy, cancelBusy,
-    device, showAll, toggleShowAll, probeTarget, serverRunning, runtimeBusy,
+    device, showAll, toggleShowAll, probeTarget, serverRunning, runtimeBusy, ownedRuntimeBusy,
     probe, refresh,
     cancelInstall, exportRuntime, importRuntime, install,
     reviewPullRequest, installPullRequest, uninstall, confirmUninstall,

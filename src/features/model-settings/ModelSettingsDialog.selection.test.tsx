@@ -10,6 +10,8 @@ import { registerTask, removeTask } from '../../shared/state/taskRegistry';
 import { LocalTaskCancelButton, TaskCancellationProvider } from '../../shared/ui/TaskCancellation';
 import TaskStrip from '../../shared/ui/TaskStrip';
 
+import RuntimesPanel from '../runtimes/Runtimes';
+import { createTestStore } from '../../testing/appStore';
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -81,6 +83,40 @@ describe('model settings editor', { timeout: 45000 }, () => {
       expect(cancel).toHaveBeenCalledOnce();
       expect(commit).not.toHaveBeenCalled(); expect(reload).not.toHaveBeenCalled();
     } finally { act(() => removeTask('runtime-adapter-registration')); }
+  });
+  it('lets an observer runtime manager return or close while another panel owns an installation', async () => {
+    vi.spyOn(api, 'deviceProfile').mockResolvedValue({
+      profile: { schema_version: 1, os: 'darwin', arch: 'aarch64', cpu: { name: 'Synthetic CPU', logical_cores: 8 }, gpus: [], detection: 'synthetic', fingerprint: 'synthetic' },
+      backends: [{ backend: 'cpu', fit: 'recommended', reason: 'cpu' }],
+    });
+    vi.spyOn(api, 'rtLatest').mockResolvedValue({ build: 'b456', file_name: 'synthetic-runtime.zip', url: 'https://example.invalid/runtime.zip' });
+    vi.spyOn(api, 'onRuntimeProgress').mockResolvedValue(() => undefined);
+    let finish!: (value: api.InstalledRuntime) => void;
+    vi.spyOn(api, 'rtInstall').mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const base = createTestStore(cfg);
+    const ownerPanel = render(<I18nProvider initialLocale="en"><RuntimesPanel store={base} engineRequest={{ provider: 'llama.cpp', revision: 1 }} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install b456: CPU-only' }));
+    try {
+      const { onClose } = mount({ initialSection: 'runtime', renderRuntimeManager: ({ active, revision, onBusyChange }) =>
+        <RuntimesPanel store={base} active={active} engineRequest={{ provider: 'llama.cpp', revision }} onBusyChange={onBusyChange} /> });
+      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+      const modal = screen.getByRole('dialog', { name: 'Manage runtimes' });
+      const manager = within(modal);
+      const install = await manager.findByRole('button', { name: 'Install b456: CPU-only' });
+      expect(install).toHaveAttribute('aria-disabled', 'true');
+      expect(manager.getByRole('button', { name: 'Back to runtime' })).toBeEnabled();
+      expect(manager.getByRole('button', { name: 'Close' })).toBeEnabled();
+      fireEvent.click(manager.getByRole('button', { name: 'Back to runtime' }));
+      expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+      fireEvent.click(manager.getByRole('button', { name: 'Close' }));
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'Cancel install' })).toBeEnabled();
+    } finally {
+      await act(async () => finish({ backend: 'cpu', build: 'b456', dir: '/synthetic/cpu-b456', size_mb: 1 }));
+      ownerPanel.unmount();
+      act(() => removeTask('runtime-operation'));
+    }
   });
   it('manages runtimes inside the same modal, retains both drafts and waits for active operations', async () => {
     const inventory = vi.spyOn(api, 'providerRuntimes');

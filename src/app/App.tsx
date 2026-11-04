@@ -333,7 +333,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <PanelFeedbackOutlet />
         </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
-          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} />)}
+          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onDiscoverModels={() => { navigate('discover'); }} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}

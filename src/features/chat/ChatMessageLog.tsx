@@ -10,6 +10,7 @@ import EmptyState from "../../shared/ui/EmptyState";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import RuntimeFailureDetails from "../models/RuntimeFailureDetails";
 import type { ResponseMetrics } from "../../shared/lib/metrics";
+import { modelActions } from "../../shared/i18n/modelActions";
 
 interface ChatMessageLogProps {
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -38,6 +39,7 @@ interface ChatMessageLogProps {
   onRetry: () => void;
   ct: (key: ChatTextKey) => string;
   onOpenModels?: () => void;
+  onDiscoverModels?: () => void;
   modelSettingsLabel?: string;
   onStart: () => void;
   starting: boolean;
@@ -46,7 +48,7 @@ interface ChatMessageLogProps {
 export default function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
   copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
-  onOpenModels, modelSettingsLabel, onStart, starting,
+  onOpenModels, onDiscoverModels, modelSettingsLabel, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
   const isStarting = !serverOn && (starting || status.state === "starting");
@@ -54,6 +56,8 @@ export default function ChatMessageLog({
   // empty conversation, otherwise after the retained messages.
   const showsEmptyState = disabled && msgs.length === 0;
   const hasFailureDetails = isFailed && Boolean(status.error?.trim() || status.log_tail?.trim());
+  const initialGuidance = showsEmptyState && !model && status.state === "stopped" && !starting && !!onDiscoverModels;
+  const actions = modelActions(locale);
   return (
     <div
       ref={scrollRef}
@@ -74,11 +78,12 @@ export default function ChatMessageLog({
             ) : (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M10 3.5 11.8 8.2H16.5L12.6 10.9 13.9 15.5 10 12.8 6.1 15.5 7.4 10.9 3.5 8.2H8.2L10 3.5Z" /></svg>
             )}
-            title={isFailed ? ct("requestFailed") : isStarting ? ct("startingServer") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
-            description={isFailed ? ct("blockedFailedDescription") : isStarting ? ct("blockedStartingDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
+            title={initialGuidance ? actions.choose : isFailed ? ct("requestFailed") : isStarting ? ct("startingServer") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
+            description={initialGuidance ? actions.noModelHint : isFailed ? ct("blockedFailedDescription") : isStarting ? ct("blockedStartingDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
           >
           <div className="app-empty-actions">
-            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting || isStarting}>{modelSettingsLabel ?? ct("openModels")}</button>}
+            {initialGuidance && <button type="button" className="app-button app-button--primary min-w-0 max-w-full" onClick={onDiscoverModels}>{actions.find}</button>}
+            {onOpenModels && <button type="button" className="app-button app-button--secondary min-w-0 max-w-full" data-icon="settings" onClick={onOpenModels} disabled={starting || isStarting}>{initialGuidance ? actions.choose : modelSettingsLabel ?? ct("openModels")}</button>}
             {model && !serverOn && !isFailed && !isStarting && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
           </div>
           {/* The failed launch's own error and log, read where the failure is shown. */}

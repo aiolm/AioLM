@@ -94,7 +94,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const modelCopy = modelActions(locale);
   // A finished download names only the artifact. The engine and runtime are
   // taken from the configuration current when the user chooses to configure it.
-  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean } | null>(null);
+  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean; repo: string; destination: string } | null>(null);
   const guard = useDraftGuard();
   const latestStore = useRef(store); latestStore.current = store;
 
@@ -129,7 +129,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     : null;
   const speedBps = downloadTask?.speedBps ?? null;
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ message: string; repo: string; destination: string } | null>(null);
   const searchGeneration = useRef(0);
   const inspectGeneration = useRef(0);
   const installedGeneration = useRef(0);
@@ -172,6 +172,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     inspectGeneration.current += 1;
     setError(null);
     setNotice(null);
+    setDownloadedChoice(null);
     setSelected(null);
     setInspection(null);
     setLoadingFiles(false);
@@ -229,6 +230,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setInspection(null);
     setError(null);
     setNotice(null);
+    setDownloadedChoice(null);
     setLoadingFiles(true);
     try {
       const next = await api.hfModelFiles(model.id);
@@ -300,6 +302,10 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const task = currentTransferTask();
     return canUpdateTransferPanel(origin) && origin.taskCancel !== null && !origin.cancelled && !origin.superseded
       && (!task || task.cancel === origin.taskCancel);
+  };
+  const ownsCurrentRepository = (origin: TransferOrigin): boolean => {
+    const current = latestTransferContext.current;
+    return ownsTransferOrigin(origin) && !!current && current.repo === origin.repo && current.destination === origin.destination;
   };
   const ownsCurrentDownload = (origin: TransferOrigin) => {
     const current = latestTransferContext.current;
@@ -388,16 +394,16 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         const entries = await api.hfInstalledFiles(repoId, [firstShard(file.path)], destination);
         const first = entries.find(entry => entry.path === firstShard(file.path));
         if (!first || first.missing_shards.length > 0) {
-          if (ownsCurrentDownload(origin)) setNotice(t('ui.downloadedModel', { file: file.path }));
+          if (ownsCurrentRepository(origin)) setNotice({ message: t('ui.downloadedModel', { file: file.path }), repo: repoId, destination });
           return;
         }
         modelPath = first.local_path;
       }
       if (modelSettings) {
         const projector = file.is_mmproj || isMmprojPath(file.path);
-        if (ownsCurrentDownload(origin)) {
-          setDownloadedChoice({ path: modelPath, projector });
-          setNotice(t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }));
+        if (ownsCurrentRepository(origin)) {
+          setDownloadedChoice({ path: modelPath, projector, repo: repoId, destination });
+          setNotice({ message: t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }), repo: repoId, destination });
         }
         return;
       }
@@ -408,7 +414,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
           await latestStore.current.updateConfig({ mmproj: downloaded.path });
         });
-        if (applied && ownsCurrentDownload(origin)) setNotice(t("ui.downloadedProjector", { file: file.path }));
+        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedProjector", { file: file.path }), repo: repoId, destination });
       } else {
         if (!ownsCurrentDownload(origin)) return;
         const applied = onSelectModel
@@ -422,7 +428,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
             await latestStore.current.updateConfig({ active_model: modelPath });
           });
-        if (applied && ownsCurrentDownload(origin)) setNotice(t("ui.downloadedModel", { file: file.path }));
+        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedModel", { file: file.path }), repo: repoId, destination });
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -489,11 +495,10 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     try {
       const artifact = await api.hfDownloadSnapshot(repo, destination);
       invalidateModelCatalog(); finishTransferTask(cancelDownload, 'completed');
-      if (!ownsTransferOrigin(origin)) return;
-      if (canUpdateTransferPanel(origin)) {
-        setInstalledRevision(revision => revision + 1);
-        setDownloadedChoice({ path: artifact.path, projector: false });
-        setNotice(t('ui.downloadedModel', { file: repo }));
+      if (canUpdateTransferPanel(origin)) setInstalledRevision(revision => revision + 1);
+      if (ownsCurrentRepository(origin)) {
+        setDownloadedChoice({ path: artifact.path, projector: false, repo, destination });
+        setNotice({ message: t('ui.downloadedModel', { file: repo }), repo, destination });
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -522,7 +527,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   // Configuration starts from the engine and runtime that are configured right
   // now; the model settings editor then reports compatibility and owns any
   // engine change. Discover never picks an engine for the artifact.
-  const configureDownloaded = (choice: NonNullable<typeof downloadedChoice>) => {
+  const configureDownloaded = (choice: { path: string; projector: boolean }) => {
     const cfg = latestStore.current.getConfig();
     if (!cfg) return;
     try {
@@ -541,7 +546,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
 
   const progressPercent = progress && progress.total > 0
     ? Math.min(100, Math.round(progress.received / progress.total * 100))
-    : 0;
+    : undefined;
 
   return (
     <div className="app-page-scroll discover-panel relative flex h-full min-h-0 flex-col">
@@ -560,7 +565,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         <label className="discover-toolbar-field">{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
           options={[{ value: 'all' as ArtifactFormat, label: providerCopy[locale].allFormats }, ...FILTER_OPTIONS]}
           disabled={downloadBusy}
-          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]); opened.current = ''; }} /></label>
+          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]); setDownloadedChoice(null); setNotice(null); opened.current = ''; }} /></label>
         <label className="discover-toolbar-field discover-toolbar-search" htmlFor="discover-search">{t("extra.search")}
           <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={providerCopy[locale].discoverPlaceholder} className="app-input" />
         </label>
@@ -571,20 +576,20 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       </form>
 
       <PanelFeedback>
-        {downloadedChoice && <FeedbackBanner tone="info" action={{ label: modelCopy.configure, onClick: () => configureDownloaded(downloadedChoice) }}>{downloadedChoice.path.split(/[\\/]/).pop()}</FeedbackBanner>}
+        {downloadedChoice?.repo === selected?.id && downloadedChoice?.destination === modelsDir && <FeedbackBanner tone="info" action={{ label: modelCopy.configure, onClick: () => configureDownloaded(downloadedChoice) }}>{downloadedChoice.path.split(/[\\/]/).pop()}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
-        {notice && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
+        {notice?.repo === selected?.id && notice?.destination === modelsDir && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice.message}</FeedbackBanner>}
       </PanelFeedback>
 
       {downloadBusy && progress && (
         <div className="discover-progress-card app-card app-card--accent mb-4" role="status">
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t("ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
-            <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
+            <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent !== undefined ? `${progressPercent}%` : t("extra.downloading")}</span>
           </div>
           <ProgressBar label={t("ui.downloadProgress")} value={progress.total > 0 ? progressPercent : undefined} className="mt-2.5" />
           <div className="discover-progress-summary mt-2.5 flex items-center justify-between gap-3">
-            <span className="discover-progress-bytes text-xs tabular-nums ui-color-muted">{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span>
+            <span className="discover-progress-bytes text-xs tabular-nums ui-color-muted">{progress.total > 0 ? t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) }) : formatBytes(progress.received)}</span>
             <span className="discover-progress-actions flex items-center justify-end gap-2.5">
               <span className="discover-progress-rate text-right text-sm font-semibold tabular-nums ui-color-accent">{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span>
               <LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton>

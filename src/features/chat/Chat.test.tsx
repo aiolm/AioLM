@@ -100,6 +100,35 @@ function renderPanel(panelStore = store) {
   return render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ChatPanel, { store: panelStore }) }));
 }
 
+describe('initial model guidance', () => {
+  it('offers discovery only for an unconfigured stopped default session without changing execution settings', async () => {
+    const base = createTestStore({ active_model: '' });
+    const discover = vi.fn();
+    const openModels = vi.fn();
+    const page = () => <I18nProvider initialLocale="en"><ChatPanel store={base} onDiscoverModels={discover} onOpenModels={openModels} /></I18nProvider>;
+    const view = render(page());
+    const log = within(screen.getByRole('log', { name: 'Conversation' }));
+    fireEvent.click(await log.findByRole('button', { name: 'Find a model' }));
+    expect(discover).toHaveBeenCalledOnce();
+    fireEvent.click(log.getByRole('button', { name: 'Choose model' }));
+    expect(openModels).toHaveBeenCalledOnce();
+    expect(base.updateConfig).not.toHaveBeenCalled();
+    expect(base.start).not.toHaveBeenCalled();
+
+    base.cfg!.active_model = 'synthetic/selected.gguf';
+    view.rerender(page());
+    expect(log.queryByRole('button', { name: 'Find a model' })).not.toBeInTheDocument();
+    base.cfg!.active_model = '';
+    base.status = { state: 'failed', error: 'synthetic load failure' };
+    view.rerender(page());
+    expect(log.queryByRole('button', { name: 'Find a model' })).not.toBeInTheDocument();
+    expect(log.getByText('synthetic load failure')).toBeVisible();
+    base.status = { state: 'starting' };
+    view.rerender(page());
+    expect(log.queryByRole('button', { name: 'Find a model' })).not.toBeInTheDocument();
+  });
+});
+
 function namedSessionStore() {
   const definition: api.SessionDefinition = { id: "work", name: "Work", enabled: false,
     models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },

@@ -10,6 +10,7 @@ interface Props {
   visibleRows: BackendRow[];
   device: api.DeviceReport | null;
   serverRunning: boolean;
+  runtimeBusy: boolean;
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
