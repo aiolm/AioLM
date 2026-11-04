@@ -10,8 +10,8 @@
 //!
 //! Flags and request fields were checked against upstream source:
 //! vLLM v0.31.0 (`vllm/engine/arg_utils.py`, `vllm/entrypoints/launchers/cli_args.py`,
-//! `vllm/config/{cache,model,scheduler}.py`) and mlx-vlm v0.7.6
-//! (`mlx_vlm/server/cli.py`, `mlx_vlm/server/schemas.py`). llama.cpp keeps its
+//! `vllm/config/{cache,model,scheduler}.py`, `vllm/sampling_params.py`) and
+//! mlx-vlm v0.7.6 (`mlx_vlm/server/{cli,schemas}.py`, `mlx_vlm/sample_utils.py`). llama.cpp keeps its
 //! typed configuration fields and server-help driven catalog, so it has no
 //! entries here; options never cross from one provider to another.
 use super::ProviderId;
@@ -24,10 +24,18 @@ pub enum OptionKind {
     Integer {
         min: i64,
         max: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        choices: Option<&'static [i64]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sentinel_values: Option<&'static [i64]>,
     },
     Number {
         min: f64,
         max: f64,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        min_exclusive: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        max_exclusive: bool,
     },
     /// A store-true style flag; `false` emits no argument. The launcher can
     /// distinguish an explicit opt-out from an absent application default.
@@ -68,6 +76,8 @@ pub struct OptionSpec {
     /// default is derived from the model or hardware at load time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_default: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help: Option<&'static str>,
 }
 
 const fn launch(
@@ -84,6 +94,7 @@ const fn launch(
         target: OptionTarget::Launch,
         group,
         runtime_default,
+        help: None,
     }
 }
 
@@ -100,6 +111,7 @@ const fn request(
         target: OptionTarget::Request,
         group,
         runtime_default,
+        help: None,
     }
 }
 
@@ -137,19 +149,30 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         "model",
         Some("auto"),
     ),
-    launch(
-        "max_model_len",
-        "--max-model-len",
-        OptionKind::Integer { min: 1, max: I32 },
-        "context",
-        None,
-    ),
+    {
+        let mut spec = launch(
+            "max_model_len",
+            "--max-model-len",
+            OptionKind::Integer {
+                min: 1,
+                max: I32,
+                choices: None,
+                sentinel_values: Some(&[-1]),
+            },
+            "context",
+            None,
+        );
+        spec.help = Some("-1: auto-fit the context length to available GPU memory. Positive values set an explicit token limit.");
+        spec
+    },
     launch(
         "gpu_memory_utilization",
         "--gpu-memory-utilization",
         OptionKind::Number {
-            min: 0.01,
+            min: 0.0,
             max: 1.0,
+            min_exclusive: true,
+            max_exclusive: false,
         },
         "memory",
         Some("0.92"),
@@ -169,6 +192,8 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: 0.0,
             max: 4096.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "memory",
         Some("0"),
@@ -206,21 +231,36 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "seed",
         "--seed",
-        OptionKind::Integer { min: 0, max: I32 },
+        OptionKind::Integer {
+            min: 0,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "model",
         Some("0"),
     ),
     launch(
         "tensor_parallel_size",
         "--tensor-parallel-size",
-        OptionKind::Integer { min: 1, max: 64 },
+        OptionKind::Integer {
+            min: 1,
+            max: 64,
+            choices: None,
+            sentinel_values: None,
+        },
         "parallel",
         Some("1"),
     ),
     launch(
         "pipeline_parallel_size",
         "--pipeline-parallel-size",
-        OptionKind::Integer { min: 1, max: 64 },
+        OptionKind::Integer {
+            min: 1,
+            max: 64,
+            choices: None,
+            sentinel_values: None,
+        },
         "parallel",
         Some("1"),
     ),
@@ -230,6 +270,8 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Integer {
             min: 1,
             max: 65_536,
+            choices: None,
+            sentinel_values: None,
         },
         "parallel",
         Some("128"),
@@ -237,7 +279,12 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "max_num_batched_tokens",
         "--max-num-batched-tokens",
-        OptionKind::Integer { min: 1, max: I32 },
+        OptionKind::Integer {
+            min: 1,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "parallel",
         None,
     ),
@@ -272,14 +319,24 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "max_loras",
         "--max-loras",
-        OptionKind::Integer { min: 1, max: 1024 },
+        OptionKind::Integer {
+            min: 1,
+            max: 1024,
+            choices: None,
+            sentinel_values: None,
+        },
         "lora",
         Some("1"),
     ),
     launch(
         "max_lora_rank",
         "--max-lora-rank",
-        OptionKind::Integer { min: 1, max: 4096 },
+        OptionKind::Integer {
+            min: 1,
+            max: 512,
+            choices: Some(&[1, 8, 16, 32, 64, 128, 256, 320, 512]),
+            sentinel_values: None,
+        },
         "lora",
         Some("16"),
     ),
@@ -336,26 +393,43 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         "temperature",
         OptionKind::Number {
             min: 0.0,
-            max: 100.0,
+            max: 2.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
     ),
     request(
         "top_p",
-        OptionKind::Number { min: 0.0, max: 1.0 },
+        OptionKind::Number {
+            min: 0.0,
+            max: 1.0,
+            min_exclusive: true,
+            max_exclusive: false,
+        },
         "sampling",
         None,
     ),
     request(
         "top_k",
-        OptionKind::Integer { min: -1, max: I32 },
+        OptionKind::Integer {
+            min: -1,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "sampling",
         None,
     ),
     request(
         "min_p",
-        OptionKind::Number { min: 0.0, max: 1.0 },
+        OptionKind::Number {
+            min: 0.0,
+            max: 1.0,
+            min_exclusive: false,
+            max_exclusive: false,
+        },
         "sampling",
         None,
     ),
@@ -364,6 +438,8 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: 0.0,
             max: 100.0,
+            min_exclusive: true,
+            max_exclusive: false,
         },
         "sampling",
         None,
@@ -373,6 +449,8 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: -2.0,
             max: 2.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
@@ -382,13 +460,20 @@ pub const VLLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: -2.0,
             max: 2.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
     ),
     request(
         "max_tokens",
-        OptionKind::Integer { min: 1, max: I32 },
+        OptionKind::Integer {
+            min: 1,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "sampling",
         None,
     ),
@@ -408,14 +493,24 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "max_tokens",
         "--max-tokens",
-        OptionKind::Integer { min: 1, max: I32 },
+        OptionKind::Integer {
+            min: 1,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "context",
         None,
     ),
     launch(
         "max_kv_size",
         "--max-kv-size",
-        OptionKind::Integer { min: 1, max: I32 },
+        OptionKind::Integer {
+            min: 1,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "context",
         None,
     ),
@@ -425,6 +520,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Integer {
             min: 1,
             max: 1_048_576,
+            choices: None,
+            sentinel_values: None,
         },
         "memory",
         None,
@@ -435,6 +532,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: 1.0,
             max: 16.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "memory",
         None,
@@ -451,14 +550,24 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "kv_group_size",
         "--kv-group-size",
-        OptionKind::Integer { min: 1, max: 4096 },
+        OptionKind::Integer {
+            min: 1,
+            max: 4096,
+            choices: None,
+            sentinel_values: None,
+        },
         "memory",
         None,
     ),
     launch(
         "quantized_kv_start",
         "--quantized-kv-start",
-        OptionKind::Integer { min: 0, max: I32 },
+        OptionKind::Integer {
+            min: 0,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "memory",
         None,
     ),
@@ -468,6 +577,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Integer {
             min: 0,
             max: 10_000,
+            choices: None,
+            sentinel_values: None,
         },
         "multimodal",
         Some("20"),
@@ -478,6 +589,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Integer {
             min: 1,
             max: 65_536,
+            choices: None,
+            sentinel_values: None,
         },
         "parallel",
         None,
@@ -492,7 +605,12 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "thinking_budget",
         "--thinking-budget",
-        OptionKind::Integer { min: 0, max: I32 },
+        OptionKind::Integer {
+            min: 0,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "reasoning",
         None,
     ),
@@ -508,7 +626,12 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
     launch(
         "draft_block_size",
         "--draft-block-size",
-        OptionKind::Integer { min: 1, max: 4096 },
+        OptionKind::Integer {
+            min: 1,
+            max: 4096,
+            choices: None,
+            sentinel_values: None,
+        },
         "speculative",
         None,
     ),
@@ -517,25 +640,42 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: 0.0,
             max: 100.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
     ),
     request(
         "top_p",
-        OptionKind::Number { min: 0.0, max: 1.0 },
+        OptionKind::Number {
+            min: 0.0,
+            max: 1.0,
+            min_exclusive: false,
+            max_exclusive: false,
+        },
         "sampling",
         None,
     ),
     request(
         "top_k",
-        OptionKind::Integer { min: 0, max: I32 },
+        OptionKind::Integer {
+            min: 0,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "sampling",
         Some("0"),
     ),
     request(
         "min_p",
-        OptionKind::Number { min: 0.0, max: 1.0 },
+        OptionKind::Number {
+            min: 0.0,
+            max: 1.0,
+            min_exclusive: false,
+            max_exclusive: false,
+        },
         "sampling",
         Some("0"),
     ),
@@ -544,6 +684,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: 0.0,
             max: 100.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
@@ -553,6 +695,8 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: -2.0,
             max: 2.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
@@ -562,13 +706,20 @@ pub const MLX_VLM_OPTIONS: &[OptionSpec] = &[
         OptionKind::Number {
             min: -2.0,
             max: 2.0,
+            min_exclusive: false,
+            max_exclusive: false,
         },
         "sampling",
         None,
     ),
     request(
         "seed",
-        OptionKind::Integer { min: 0, max: I32 },
+        OptionKind::Integer {
+            min: 0,
+            max: I32,
+            choices: None,
+            sentinel_values: None,
+        },
         "sampling",
         None,
     ),
@@ -670,7 +821,20 @@ fn issue(key: &str, code: &'static str, message: String) -> OptionIssue {
 fn check_value(spec: &OptionSpec, value: &Value) -> Option<OptionIssue> {
     let key = spec.key;
     match spec.kind {
-        OptionKind::Integer { min, max } => match value.as_i64() {
+        OptionKind::Integer {
+            min,
+            max,
+            choices,
+            sentinel_values,
+        } => match value.as_i64() {
+            Some(number) if choices.is_some_and(|choices| !choices.contains(&number)) => {
+                Some(issue(
+                    key,
+                    "choice",
+                    format!("{key} must be one of the listed values"),
+                ))
+            }
+            Some(number) if sentinel_values.is_some_and(|values| values.contains(&number)) => None,
             Some(number) if (min..=max).contains(&number) => None,
             Some(_) => Some(issue(
                 key,
@@ -679,12 +843,40 @@ fn check_value(spec: &OptionSpec, value: &Value) -> Option<OptionIssue> {
             )),
             None => Some(issue(key, "type", format!("{key} must be an integer"))),
         },
-        OptionKind::Number { min, max } => match value.as_f64() {
-            Some(number) if number.is_finite() && number >= min && number <= max => None,
+        OptionKind::Number {
+            min,
+            max,
+            min_exclusive,
+            max_exclusive,
+        } => match value.as_f64() {
+            Some(number)
+                if (super::runtime_options::NumericRange {
+                    min: Some(min),
+                    max: Some(max),
+                    min_exclusive,
+                    max_exclusive,
+                    sentinel_values: Vec::new(),
+                })
+                .contains(number) =>
+            {
+                None
+            }
             Some(_) => Some(issue(
                 key,
                 "range",
-                format!("{key} must be between {min} and {max}"),
+                format!(
+                    "{key} must be {} {min} and {} {max}",
+                    if min_exclusive {
+                        "greater than"
+                    } else {
+                        "at least"
+                    },
+                    if max_exclusive {
+                        "less than"
+                    } else {
+                        "at most"
+                    }
+                ),
             )),
             None => Some(issue(key, "type", format!("{key} must be a number"))),
         },
@@ -1284,6 +1476,83 @@ mod tests {
         assert!(codes.contains(&("extra_args", "managed")));
         assert_eq!(issues.len(), 4);
         assert_eq!(options.len(), 6, "validation never removes values");
+    }
+
+    #[test]
+    fn context_auto_sentinel_imports_and_launches_without_admitting_zero() {
+        for value in [-1, 1, 4096] {
+            let command = format!("vllm serve synthetic/model --max-model-len {value}");
+            let imported = import_command(ProviderId::Vllm, &command).unwrap();
+            assert_eq!(imported.options["max_model_len"], json!(value));
+            assert!(validate(ProviderId::Vllm, &imported.options).is_empty());
+            assert_eq!(
+                launch_args(ProviderId::Vllm, &imported.options),
+                ["--max-model-len".to_owned(), value.to_string()]
+            );
+        }
+        for value in [-2, 0] {
+            let values = map(json!({"max_model_len": value}));
+            let before = values.clone();
+            assert_eq!(validate(ProviderId::Vllm, &values)[0].code, "range");
+            assert_eq!(values, before);
+        }
+    }
+
+    #[test]
+    fn provider_sampling_boundaries_preserve_engine_specific_disabled_values() {
+        for disabled in [-1, 0] {
+            let values = map(json!({
+                "temperature": 1.5, "top_k": disabled, "top_p": 0.000001,
+                "min_p": 0, "repetition_penalty": 0.000001, "max_tokens": 1,
+                "presence_penalty": -2, "frequency_penalty": 2,
+            }));
+            assert!(validate(ProviderId::Vllm, &values).is_empty());
+            assert_eq!(request_fields(ProviderId::Vllm, &values), values);
+        }
+        for (key, value) in [
+            ("temperature", json!(2.01)),
+            ("top_p", json!(0)),
+            ("repetition_penalty", json!(0)),
+            ("top_k", json!(-2)),
+            ("min_p", json!(1.01)),
+            ("max_tokens", json!(0)),
+        ] {
+            let values = Map::from_iter([(key.to_owned(), value)]);
+            let before = values.clone();
+            assert_eq!(validate(ProviderId::Vllm, &values)[0].key, key);
+            assert_eq!(
+                values, before,
+                "invalid saved values remain available for correction"
+            );
+        }
+        let mlx = map(json!({"temperature": 1.5, "top_p": 0, "top_k": 0, "repetition_penalty": 0}));
+        assert!(validate(ProviderId::MlxVlm, &mlx).is_empty());
+        assert_eq!(request_fields(ProviderId::MlxVlm, &mlx), mlx);
+    }
+
+    #[test]
+    fn gpu_utilization_accepts_positive_fractions_without_an_arbitrary_floor() {
+        let imported = import_command(
+            ProviderId::Vllm,
+            "vllm serve synthetic/model --gpu-memory-utilization 0.005",
+        )
+        .unwrap();
+        assert!(validate(ProviderId::Vllm, &imported.options).is_empty());
+        assert_eq!(
+            launch_args(ProviderId::Vllm, &imported.options),
+            ["--gpu-memory-utilization", "0.005"]
+        );
+        for value in [0.0, -0.001, 1.001] {
+            assert_eq!(
+                validate(
+                    ProviderId::Vllm,
+                    &map(json!({"gpu_memory_utilization": value}))
+                )[0]
+                .code,
+                "range"
+            );
+        }
+        assert!(validate(ProviderId::Vllm, &map(json!({"gpu_memory_utilization": 1}))).is_empty());
     }
 
     #[test]

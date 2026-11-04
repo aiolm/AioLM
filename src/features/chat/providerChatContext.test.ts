@@ -10,6 +10,8 @@ describe('runtime chat context', () => {
     expect(chatContextBudget({ ...testConfig, active_provider: 'vllm', ctx_size: 512, provider_options: { vllm: {} } }).runtimeContext).toBe(true);
     expect(chatContextBudget({ ...testConfig, active_provider: 'vllm', provider_options: { vllm: { max_model_len: 128 } } }))
       .toEqual({ contextSize: 128, runtimeContext: false });
+    expect(chatContextBudget({ ...testConfig, active_provider: 'vllm', provider_options: { vllm: { max_model_len: -1 } } }))
+      .toEqual({ contextSize: 4096, runtimeContext: true });
     expect(chatContextBudget({ ...testConfig, active_provider: 'mlx-vlm', ctx_size: 512, provider_options: { 'mlx-vlm': { max_kv_size: 1024 } } }).runtimeContext).toBe(true);
   });
 });

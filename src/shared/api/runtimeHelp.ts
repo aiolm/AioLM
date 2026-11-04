@@ -59,6 +59,22 @@ export interface OptionSchemaSpelling {
   polarity?: boolean | null;
 }
 
+/** Absent exclusivity flags retain the original inclusive range contract. */
+export interface NumericRange {
+  min?: number | null;
+  max?: number | null;
+  min_exclusive?: boolean;
+  max_exclusive?: boolean;
+  sentinel_values?: number[];
+}
+
+export function inNumericRange(value: number, range: NumericRange): boolean {
+  return Number.isFinite(value)
+    && (range.sentinel_values?.includes(value) === true
+      || (range.min == null || (range.min_exclusive ? value > range.min : value >= range.min))
+        && (range.max == null || (range.max_exclusive ? value < range.max : value <= range.max)));
+}
+
 export interface OptionSchemaDefinition {
   key: string;
   scope: string[];
@@ -68,7 +84,7 @@ export interface OptionSchemaDefinition {
   arity: OptionSchemaFact<{ min: number; max?: number | null }>;
   repeatable: OptionSchemaFact<boolean>;
   choices: OptionSchemaFact<unknown[]>;
-  range: OptionSchemaFact<{ min?: number | null; max?: number | null }>;
+  range: OptionSchemaFact<NumericRange>;
   unit: OptionSchemaFact<string>;
   runtime_default: OptionSchemaFact<{ literal: unknown }>;
   group: string;

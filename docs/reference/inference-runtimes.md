@@ -42,6 +42,27 @@ Engine-neutral presentation does not imply identical flags or verification tools
 
 The option editor uses the selected installation's schema and probed flags. Metal constraints also restrict option values: a flag appearing in vLLM's generic help does not prove its implementation supports it. Absent values inherit that engine's defaults. Saved unsupported values remain available to inspect and clear; launch validation also checks them in Rust. Sampling options can be delivered to the next request. Changes to context allocation, parallelism, model/draft/embedding bindings and launch arguments require a restart. Command import and preview use the same schema, and app-owned host, port, model alias and authentication settings cannot be overridden by extra arguments.
 
+### Engine-specific option contracts
+
+The built-in vLLM catalog follows the supported [v0.31.0 sampling validation](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/sampling_params.py), not an assumption that every sampling value is a probability:
+
+| vLLM setting | Supported values |
+| --- | --- |
+| Temperature | `0–2`, including values above `1`. |
+| Top-p | Greater than `0` and at most `1`. |
+| Repetition penalty | Strictly positive; `0` is not a disable value. |
+| GPU memory utilization | Greater than `0` and at most `1`, including fractions below `0.01`; the existing `0.92` default is unchanged. |
+| Maximum LoRA rank | `1`, `8`, `16`, `32`, `64`, `128`, `256`, `320`, or `512`. |
+| Maximum model length | `-1` auto-fits context to available GPU memory; positive integers set an explicit length. `0` is rejected. |
+
+GPU utilization, rank choices and automatic context follow the pinned [cache](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/cache.py), [LoRA](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/lora.py), and [model](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/model.py) configurations. Automatic context is displayed as runtime-owned and does not become a negative chat token budget.
+
+The numeric context editor accepts `-1` for automatic fitting or a positive integer for an explicit length. Text spellings such as `auto` and unit-suffixed lengths are not accepted by this numeric control; use `-1` or the expanded integer instead.
+
+Effective schemas carry optional exclusive endpoints, numeric choices and `sentinel_values`. Missing flags retain the existing inclusive range contract. Guided editing, command/benchmark import and native validation share these facts; discovered runtime metadata retains its existing precedence. Unsupported saved choices remain visibly saved values, not apparent inherited defaults.
+
+Engine semantics are not copied across providers: [MLX-VLM v0.7.6](https://github.com/Blaizzy/mlx-vlm/blob/v0.7.6/mlx_vlm/sample_utils.py) intentionally treats repetition penalty `0` as disabled, so the vLLM-only positive constraint is not applied to MLX.
+
 Changing the runtime retains the saved model path for correction and checks it against the newly selected installation before enabling launch. Replacement launch validates the new configuration before unloading the current model. Python interpreters are probed again at launch, so a registration record does not establish that the environment still has the same packages or accelerator. Project and session summaries display the selected engine installation rather than a leftover llama.cpp backend/build.
 
 Metal launches currently bind one local device. Its KV dtype choices are `auto`, `float16` and `bfloat16`; an explicit KV dtype must match an explicit model dtype. Quantization overrides must match the checkpoint's supported loader method. Text safetensors generation can use PEFT LoRA, and validated local draft, MTP or ngram settings can use speculative decoding. LoRA and speculative decoding cannot be combined. Pooling, native image and GGUF LoRA combinations, distributed topology and arbitrary loader overrides have no app binding in this version.

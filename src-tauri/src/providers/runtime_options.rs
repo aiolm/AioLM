@@ -157,11 +157,55 @@ pub enum ManagedBinding {
     Reserved,
 }
 
+/// Bounds remain inclusive for schemas saved before exclusivity was recorded.
+/// Open endpoints use their exact value, not an arbitrary positive epsilon.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumericRange {
     pub min: Option<f64>,
     pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub min_exclusive: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub max_exclusive: bool,
+    /// Explicit control values accepted in addition to the ordinary range.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sentinel_values: Vec<f64>,
+}
+
+impl NumericRange {
+    pub fn contains(&self, number: f64) -> bool {
+        number.is_finite()
+            && (self.sentinel_values.contains(&number)
+                || self.min.is_none_or(|min| {
+                    if self.min_exclusive {
+                        number > min
+                    } else {
+                        number >= min
+                    }
+                }) && self.max.is_none_or(|max| {
+                    if self.max_exclusive {
+                        number < max
+                    } else {
+                        number <= max
+                    }
+                }))
+    }
+
+    pub fn valid(&self) -> bool {
+        self.min.is_none_or(f64::is_finite)
+            && self.max.is_none_or(f64::is_finite)
+            && self.sentinel_values.len() <= 128
+            && self.sentinel_values.iter().all(|value| value.is_finite())
+            && (!self.min_exclusive || self.min.is_some())
+            && (!self.max_exclusive || self.max.is_some())
+            && match (self.min, self.max) {
+                (Some(min), Some(max)) => {
+                    min < max || min == max && !self.min_exclusive && !self.max_exclusive
+                }
+                _ => true,
+            }
+    }
 }
 
 /// A wrapper keeps a documented JSON null distinct from an unknown default.
@@ -567,9 +611,12 @@ impl OptionSchema {
                 if !matches!(
                     option.kind.supported(),
                     Some(ValueKind::Integer | ValueKind::Number)
-                ) || range.min.is_some_and(|n| !n.is_finite())
-                    || range.max.is_some_and(|n| !n.is_finite())
-                    || matches!((range.min, range.max), (Some(a), Some(b)) if a > b)
+                ) || !range.valid()
+                    || option.kind.supported() == Some(&ValueKind::Integer)
+                        && range
+                            .sentinel_values
+                            .iter()
+                            .any(|value| value.fract() != 0.0)
                 {
                     return Err(format!("{}: invalid numeric range", option.key));
                 }
@@ -945,7 +992,7 @@ impl OptionDefinition {
         }
         if let Some(range) = self.range.supported() {
             let number = value.as_f64().ok_or("numeric range requires a number")?;
-            if range.min.is_some_and(|n| number < n) || range.max.is_some_and(|n| number > n) {
+            if !range.contains(number) {
                 return Err("value is outside the documented numeric range".into());
             }
         }
@@ -1329,6 +1376,32 @@ mod tests {
     }
 
     #[test]
+    fn documented_open_bounds_are_enforced_without_rounding_or_repairing_values() {
+        let mut ratio = option("ratio", ValueKind::Number, 1, Some(1));
+        ratio.range = known(NumericRange {
+            min: Some(0.0),
+            max: Some(2.0),
+            min_exclusive: true,
+            max_exclusive: true,
+            sentinel_values: Vec::new(),
+        });
+        let schema = schema(vec![ratio]);
+        for value in [json!(f64::from_bits(1)), json!(0.00000001), json!(1.5)] {
+            let values = selected(&[("ratio", vec![vec![value.clone()]])]);
+            let before = values.clone();
+            let resolved = schema.resolve(&[], &values).unwrap();
+            assert_eq!(resolved.argv, ["--ratio".to_string(), value.to_string()]);
+            assert_eq!(values, before);
+        }
+        for value in [json!(0), json!(2), json!(-0.1)] {
+            let values = selected(&[("ratio", vec![vec![value]])]);
+            let before = values.clone();
+            assert!(schema.resolve(&[], &values).is_err());
+            assert_eq!(values, before);
+        }
+    }
+
+    #[test]
     fn unknown_arity_retains_value_but_refuses_to_guess_argv() {
         let mut unknown = option("new-flag", ValueKind::Text, 1, Some(1));
         unknown.arity = Fact {
@@ -1354,6 +1427,9 @@ mod tests {
             value: Some(NumericRange {
                 min: Some(1.0),
                 max: Some(2.0),
+                min_exclusive: false,
+                max_exclusive: false,
+                sentinel_values: Vec::new(),
             }),
             ..Fact::default()
         };
@@ -1597,6 +1673,9 @@ mod tests {
         count.range = known(NumericRange {
             min: Some(0.0),
             max: Some(16.0),
+            min_exclusive: false,
+            max_exclusive: false,
+            sentinel_values: Vec::new(),
         });
         let mut schema = schema(vec![
             fast,
@@ -1842,6 +1921,9 @@ mod tests {
         invalid.range = known(NumericRange {
             min: Some(0.0),
             max: Some(1.0),
+            min_exclusive: false,
+            max_exclusive: false,
+            sentinel_values: Vec::new(),
         });
         assert!(schema(vec![invalid]).validate().is_err());
     }

@@ -33,6 +33,8 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             min={field.min}
             max={field.max}
             step={field.step}
+            excludedValues={field.excludedValues}
+            allowZero={field.allowZero}
             hint={description}
             value={draft}
             onChange={(value) => onChange(field.key, value)}

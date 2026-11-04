@@ -2736,6 +2736,9 @@ mod tests {
         ranged.range = known(super::super::runtime_options::NumericRange {
             min: Some(0.0),
             max: Some(8.0),
+            min_exclusive: false,
+            max_exclusive: false,
+            sentinel_values: Vec::new(),
         });
         let ranged_schema = schema(vec![ranged]);
         let outside = import_plan_text(&ranged_schema, &[], "--count 9").unwrap();

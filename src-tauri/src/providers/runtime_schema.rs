@@ -706,6 +706,9 @@ fn compat_definition(
                 NumericRange {
                     min: Some(min),
                     max: Some(max),
+                    min_exclusive: false,
+                    max_exclusive: false,
+                    sentinel_values: Vec::new(),
                 },
                 source,
             );
@@ -755,8 +758,8 @@ fn compat_definition(
 /// A built-in catalog option as a common schema option.
 pub fn from_spec(spec: &OptionSpec, source: &Source) -> OptionDefinition {
     let kind = match spec.kind {
-        OptionKind::Integer { min, max } => CompatKind::Integer(min as f64, max as f64),
-        OptionKind::Number { min, max } => CompatKind::Number(min, max),
+        OptionKind::Integer { min, max, .. } => CompatKind::Integer(min as f64, max as f64),
+        OptionKind::Number { min, max, .. } => CompatKind::Number(min, max),
         OptionKind::Flag => CompatKind::Flag,
         OptionKind::Toggle => CompatKind::Toggle,
         OptionKind::Choice { choices } => {
@@ -766,7 +769,7 @@ pub fn from_spec(spec: &OptionSpec, source: &Source) -> OptionDefinition {
         OptionKind::Path => CompatKind::Path,
         OptionKind::Json => CompatKind::Json,
     };
-    compat_definition(
+    let mut definition = compat_definition(
         spec.key,
         spec.group,
         spec.flag,
@@ -774,7 +777,39 @@ pub fn from_spec(spec: &OptionSpec, source: &Source) -> OptionDefinition {
         kind,
         spec.runtime_default,
         source,
-    )
+    );
+    if let OptionKind::Number {
+        min_exclusive,
+        max_exclusive,
+        ..
+    } = spec.kind
+    {
+        if let Some(range) = &mut definition.range.value {
+            range.min_exclusive = min_exclusive;
+            range.max_exclusive = max_exclusive;
+        }
+    }
+    if let OptionKind::Integer {
+        choices: Some(choices),
+        ..
+    } = spec.kind
+    {
+        definition.choices = documented(
+            choices.iter().map(|value| Value::from(*value)).collect(),
+            source,
+        );
+    }
+    if let OptionKind::Integer {
+        sentinel_values: Some(values),
+        ..
+    } = spec.kind
+    {
+        if let Some(range) = &mut definition.range.value {
+            range.sentinel_values = values.iter().map(|value| *value as f64).collect();
+        }
+    }
+    definition.help = spec.help.unwrap_or_default().into();
+    definition
 }
 
 /// A manifest v1 option as a common schema option.
@@ -806,6 +841,12 @@ pub fn from_external(option: &ExternalOption, source: &Source) -> Option<OptionD
         option.runtime_default.as_deref(),
         source,
     );
+    if matches!(option.kind["type"].as_str(), Some("integer" | "number")) {
+        definition.range = documented(registry::numeric_range(&option.kind)?, source);
+        if let Some(choices) = option.kind.get("choices") {
+            definition.choices = documented(choices.as_array()?.clone(), source);
+        }
+    }
     if let Some(scope) = &option.scope {
         definition.scope = scope.clone();
     }
@@ -3246,9 +3287,40 @@ mod tests {
 
     fn samples(spec: &OptionSpec) -> Vec<Value> {
         match spec.kind {
-            OptionKind::Integer { min, max } => vec![json!(min), json!(max)],
-            OptionKind::Number { min, max } => {
-                vec![json!(min), json!(max), json!((min + max) / 2.0)]
+            OptionKind::Integer {
+                choices: Some(choices),
+                ..
+            } => choices.iter().copied().map(Value::from).collect(),
+            OptionKind::Integer {
+                min,
+                max,
+                sentinel_values,
+                ..
+            } => {
+                let mut values = vec![json!(min), json!(max)];
+                values.extend(
+                    sentinel_values
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .map(Value::from),
+                );
+                values
+            }
+            OptionKind::Number {
+                min,
+                max,
+                min_exclusive,
+                max_exclusive,
+            } => {
+                let mut values = vec![json!((min + max) / 2.0)];
+                if !min_exclusive {
+                    values.push(json!(min));
+                }
+                if !max_exclusive {
+                    values.push(json!(max));
+                }
+                values
             }
             OptionKind::Flag | OptionKind::Toggle => vec![json!(true), json!(false)],
             OptionKind::Choice { choices } => choices.iter().map(|c| json!(c)).collect(),
@@ -3315,6 +3387,87 @@ mod tests {
             &source
         )
         .is_none());
+    }
+
+    #[test]
+    fn selected_vllm_schema_enforces_sampling_boundaries_before_request_forwarding() {
+        let root = owned_fixture_home();
+        let runtime = super::super::python_env::PythonRuntimeManifest {
+            format: 1,
+            provider: ProviderId::Vllm,
+            id: "synthetic-bounds".into(),
+            kind: super::super::python_env::InstallationKind::External,
+            python: "/synthetic/python".into(),
+            requested_version: None,
+            probe: None,
+        };
+        let selected = Selected::python(&runtime).unwrap();
+        let cfg = AppConfig::default();
+        let values = json!({"temperature": 2.0, "top_p": 0.000001, "repetition_penalty": 0.000001,
+            "top_k": -1, "min_p": 1, "max_tokens": 1})
+        .as_object()
+        .unwrap()
+        .clone();
+        let effective = effective_for(&root, &cfg, &selected, false).unwrap();
+        let resolved =
+            runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &values).unwrap();
+        assert_eq!(resolved.request, values);
+        assert!(resolved.argv.is_empty());
+        for (key, value) in [
+            ("top_p", json!(0)),
+            ("repetition_penalty", json!(0)),
+            ("temperature", json!(2.01)),
+        ] {
+            let mut invalid = values.clone();
+            invalid.insert(key.into(), value);
+            let before = invalid.clone();
+            let issues = saved_issues_for(
+                &root,
+                &cfg,
+                Ok(Selected::python(&runtime).unwrap()),
+                &invalid,
+                &BTreeSet::new(),
+            );
+            assert!(issues.iter().any(|issue| issue.key == key));
+            assert!(
+                runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &invalid)
+                    .is_err()
+            );
+            assert_eq!(invalid, before);
+        }
+        for rank in [1, 8, 16, 32, 64, 128, 256, 320, 512] {
+            let values = json!({"max_lora_rank": rank}).as_object().unwrap().clone();
+            assert!(options::validate(ProviderId::Vllm, &values).is_empty());
+            let (resolved, _) =
+                resolve_launch_plan(&root, &cfg, &selected, values, None, &[]).unwrap();
+            assert_eq!(
+                resolved.argv,
+                ["--max-lora-rank".to_string(), rank.to_string()]
+            );
+        }
+        for rank in [2, 4096] {
+            let values = json!({"max_lora_rank": rank}).as_object().unwrap().clone();
+            assert_eq!(
+                options::validate(ProviderId::Vllm, &values)[0].code,
+                "choice"
+            );
+            assert!(resolve_launch_plan(&root, &cfg, &selected, values, None, &[]).is_err());
+        }
+        for length in [-1, 1, 4096] {
+            let values = json!({"max_model_len": length})
+                .as_object()
+                .unwrap()
+                .clone();
+            let (resolved, _) =
+                resolve_launch_plan(&root, &cfg, &selected, values, None, &[]).unwrap();
+            assert_eq!(
+                resolved.argv,
+                ["--max-model-len".to_string(), length.to_string()]
+            );
+        }
+        let invalid = json!({"max_model_len": 0}).as_object().unwrap().clone();
+        assert!(resolve_launch_plan(&root, &cfg, &selected, invalid, None, &[]).is_err());
+        remove_owned_fixture_home(&root);
     }
 
     #[test]

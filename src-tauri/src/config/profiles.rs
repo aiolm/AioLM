@@ -1588,6 +1588,53 @@ mod tests {
     }
 
     #[test]
+    fn profile_import_validation_preserves_keep_all_and_disabled_top_k() {
+        let mut profiles = library();
+        for settings in profiles
+            .entries
+            .iter_mut()
+            .filter(|profile| profile.provider == crate::providers::ProviderId::Llama.as_str())
+            .map(|profile| &mut profile.settings)
+            .chain(
+                profiles
+                    .applied
+                    .values_mut()
+                    .filter(|application| {
+                        application.provider == crate::providers::ProviderId::Llama.as_str()
+                    })
+                    .map(|application| &mut application.settings),
+            )
+        {
+            settings.insert("keep".into(), json!(-1));
+            settings.insert("top_k".into(), json!(0));
+            settings.insert("temperature".into(), json!(1.5));
+        }
+        let imported: SettingsProfileLibrary =
+            serde_json::from_slice(&serde_json::to_vec(&profiles).unwrap()).unwrap();
+        imported.validate().unwrap();
+        assert_eq!(imported, profiles);
+        for settings in imported
+            .entries
+            .iter()
+            .filter(|profile| profile.provider == crate::providers::ProviderId::Llama.as_str())
+            .map(|profile| &profile.settings)
+            .chain(
+                imported
+                    .applied
+                    .values()
+                    .filter(|application| {
+                        application.provider == crate::providers::ProviderId::Llama.as_str()
+                    })
+                    .map(|application| &application.settings),
+            )
+        {
+            assert_eq!(settings["keep"], json!(-1));
+            assert_eq!(settings["top_k"], json!(0));
+            assert_eq!(settings["temperature"], json!(1.5));
+        }
+    }
+
+    #[test]
     fn profile_updates_require_the_latest_revision_and_at_least_one_entry() {
         let current = library();
         assert!(validate_update(None, Some(&current)).is_ok());

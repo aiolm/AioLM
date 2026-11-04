@@ -11,7 +11,7 @@ function rejectionText(entry: RejectedSetting, copy: (typeof modelSettingsCopy)[
   if (entry.reason === 'request') return `${entry.flag} — ${copy.benchmarkRequest}`;
   if (entry.reason === 'unknown') return `${entry.flag} — ${copy.pasteUnknown}`;
   if (entry.reason === 'missing') return `${entry.flag} — ${copy.pasteMissing}`;
-  const range = entry.range ? ` (${entry.range.min}–${entry.range.max})` : '';
+  const range = entry.range ? ` (${entry.range.allowZero ? '0, ' : ''}${entry.range.minExclusive ? `> ${entry.range.min}, ≤ ${entry.range.max}` : `${entry.range.min}–${entry.range.max}`}${entry.range.excludedValues?.map(value => `, ≠ ${value}`).join('') ?? ''})` : '';
   return `${entry.flag} ${entry.value ?? ''} — ${copy.pasteBadValue}${range}`;
 }
 

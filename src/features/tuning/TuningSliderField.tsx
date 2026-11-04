@@ -22,6 +22,9 @@ export interface TuningSliderFieldProps {
   min?: number;
   max?: number;
   step?: number;
+  minExclusive?: boolean;
+  excludedValues?: readonly number[];
+  allowZero?: boolean;
   hint?: string;
   value: string;
   disabled?: boolean;
@@ -51,6 +54,9 @@ export default function TuningSliderField({
   min,
   max,
   step,
+  minExclusive = false,
+  excludedValues,
+  allowZero = false,
   hint,
   value,
   disabled = false,
@@ -70,7 +76,7 @@ export default function TuningSliderField({
   const resolvedHint = hint ?? field?.hint;
   const hintId = resolvedHint ? `${inputId}-hint` : undefined;
   const rangeValue = Math.min(resolvedMax, Math.max(resolvedMin, finiteValue(value, resolvedMin)));
-  const invalid = !value.trim() || !Number.isFinite(Number(value)) || Number(value) < resolvedMin || Number(value) > resolvedMax;
+  const invalid = !value.trim() || !Number.isFinite(Number(value)) || (resolvedStep >= 1 && !Number.isInteger(Number(value))) || (!(allowZero && Number(value) === 0) && (minExclusive ? Number(value) <= resolvedMin : Number(value) < resolvedMin)) || Number(value) > resolvedMax || excludedValues?.includes(Number(value));
   const errorId = `${inputId}-error`;
   const pendingValue = useRef<string | null>(null);
 
@@ -126,9 +132,9 @@ export default function TuningSliderField({
           type="number"
           inputMode={resolvedStep < 1 ? "decimal" : "numeric"}
           value={value}
-          min={resolvedMin}
+          min={allowZero ? 0 : resolvedMin}
           max={resolvedMax}
-          step={resolvedStep}
+          step={resolvedStep >= 1 ? 1 : "any"}
           onChange={update}
           onBlur={commit}
           onKeyDown={commitOnEnter}
@@ -140,7 +146,7 @@ export default function TuningSliderField({
         />
       </div>
       {resolvedHint && <span id={hintId} className="tuning-slider-field__hint">{resolvedHint}</span>}
-      {invalid && <span id={errorId} className="text-error" role="alert">{executionText[locale].invalidNumber} ({resolvedMin}–{resolvedMax})</span>}
+      {invalid && <span id={errorId} className="text-error" role="alert">{executionText[locale].invalidNumber} ({allowZero ? '0, ' : ''}{minExclusive ? `> ${resolvedMin}, ≤ ${resolvedMax}` : `${resolvedMin}–${resolvedMax}`}{excludedValues?.map(value => `, ≠ ${value}`).join('')})</span>}
     </div>
   );
 }

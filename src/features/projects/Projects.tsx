@@ -512,7 +512,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{<ModelName model={displayConfig?.active_model} empty={t("load.noModel")} />}<ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="ui-color-ink"><RuntimeSelectionLabel config={displayConfig} separator=" · " /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="ui-color-ink">{providerOf(displayConfig ?? {}) !== 'llama.cpp'
-                ? providerOf(displayConfig ?? {}) === 'vllm' && typeof displayConfig?.provider_options?.vllm?.max_model_len === 'number'
+                ? providerOf(displayConfig ?? {}) === 'vllm' && typeof displayConfig?.provider_options?.vllm?.max_model_len === 'number' && displayConfig.provider_options.vllm.max_model_len > 0
                   ? displayConfig.provider_options.vllm.max_model_len.toLocaleString() : providerCopy[locale].inherit
                 : displayConfig?.runtime_defaults?.includes("ctx_size") ? <DefaultValue info={settingDefaultInfo("ctx_size", SERVER_OPTIONS, false, locale, { selected: true })} /> : displayConfig?.ctx_size.toLocaleString()}</dd></div>
             </dl>

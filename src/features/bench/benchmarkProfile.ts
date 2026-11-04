@@ -1,7 +1,7 @@
 import { validateBenchmarkConfiguration, type RecordedSetting } from '@aiolm/benchmark-contracts';
 import { providerOf } from '../../shared/api/providers';
 import type { AppConfig } from '../../shared/api/types';
-import { runtimeHelpResolvePlan, type EffectiveSchema, type OptionSchemaDefinition, type OptionSchemaFact, type PlannedOccurrence } from '../../shared/api/runtimeHelp';
+import { inNumericRange, runtimeHelpResolvePlan, type EffectiveSchema, type OptionSchemaDefinition, type OptionSchemaFact, type PlannedOccurrence } from '../../shared/api/runtimeHelp';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import type { SettingsProfile } from '../../shared/config/settingsProfiles';
 import catalog from '../../shared/config/tuningDefaultsCatalog.json';
@@ -40,7 +40,7 @@ function occurrences(option: OptionSchemaDefinition, value: NonNullable<Recorded
     if (count < arity.min || arity.max != null && count > arity.max) return null;
     for (const item of row) {
       if (!typed(item) || choices?.length && !choices.some(choice => JSON.stringify(choice) === JSON.stringify(item))) return null;
-      if (typeof item === 'number' && range && (range.min != null && item < range.min || range.max != null && item > range.max)) return null;
+      if (typeof item === 'number' && range && !inNumericRange(item, range)) return null;
     }
   }
   return rows.map(values => ({ key: option.key, values }));
@@ -128,6 +128,24 @@ export async function benchmarkSettingsProfile(source: BenchmarkProfileSource, i
       ...(gpu.split_mode !== 'none' ? { split_mode: gpu.split_mode } : {}),
       ...(gpu.tensor_split.length ? { tensor_split: gpu.tensor_split } : {}) };
     if (server_args) settings.server_args = [...(settings.server_args ?? []), ...server_args];
+  }
+  if (native && settings.ubatch_size !== undefined && !settings.runtime_defaults?.includes('ubatch_size')) {
+    // This new global profile owns omitted fields as runtime defaults; current
+    // destination values must not leak into the imported benchmark profile.
+    const batchOption = effective.schema.options.find(option => option.target === 'launch' && option.scope.length === 0
+      && option.spellings.some(spelling => spelling.flag === '--batch-size' || spelling.flag === '-b'));
+    const literal = supported(batchOption?.runtime_default)?.literal;
+    const runtimeBatch = typeof literal === 'number' ? literal
+      : typeof literal === 'string' && literal.trim() ? Number(literal) : NaN;
+    const batch = settings.runtime_defaults?.includes('batch_size') || settings.batch_size === undefined
+      ? runtimeBatch : settings.batch_size;
+    // Unknown defaults cannot establish that a standalone microbatch fits.
+    // Omitting the incompatible value reports the existing import omission;
+    // never round/clamp it, or substitute a guessed/default destination batch.
+    if (!Number.isInteger(batch) || batch < 1 || settings.ubatch_size > batch) {
+      delete settings.ubatch_size;
+      omitted = true;
+    }
   }
   const digest = await sha256HexText(JSON.stringify([id, provider]));
   return { profile: { id: `profile-benchmark-${digest}`, name: `Benchmark ${id.slice(0, 12)}`, provider, scope: 'global', revision: 1, settings, system_prompt: '' }, omitted };

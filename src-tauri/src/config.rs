@@ -369,7 +369,7 @@ pub struct AppConfig {
     #[serde(default = "default_ubatch_size")]
     pub ubatch_size: u32,
     #[serde(default = "default_keep")]
-    pub keep: u32,
+    pub keep: i32,
     #[serde(default = "default_cache_type")]
     pub cache_type_k: String,
     #[serde(default = "default_cache_type")]
@@ -495,7 +495,7 @@ fn default_ubatch_size() -> u32 {
     512
 }
 
-fn default_keep() -> u32 {
+fn default_keep() -> i32 {
     0
 }
 
@@ -595,8 +595,19 @@ impl AppConfig {
             self.ctx_size = self.ctx_size.clamp(512, MAX_CONTEXT);
         }
         self.batch_size = self.batch_size.clamp(1, 131_072);
-        self.ubatch_size = self.ubatch_size.clamp(1, self.batch_size);
-        self.keep = self.keep.min(131_072);
+        // An omitted batch or microbatch is resolved by the runtime, not by
+        // stale raw values retained behind an inheritance marker.
+        let ubatch_max = if self
+            .runtime_defaults
+            .iter()
+            .any(|key| key == "batch_size" || key == "ubatch_size")
+        {
+            131_072
+        } else {
+            self.batch_size
+        };
+        self.ubatch_size = self.ubatch_size.clamp(1, ubatch_max);
+        self.keep = self.keep.clamp(-1, 131_072);
         if !CACHE_TYPES.contains(&self.cache_type_k.as_str()) {
             self.cache_type_k = default_cache_type();
         }
@@ -615,7 +626,7 @@ impl AppConfig {
         } else {
             0.95
         };
-        self.top_k = self.top_k.clamp(1, 200);
+        self.top_k = self.top_k.min(200);
         self.spec_type = if self.spec_type.trim().is_empty() {
             "none".into()
         } else {
@@ -981,7 +992,7 @@ fn migrate_server_args(cfg: &mut AppConfig, raw: Option<&serde_json::Value>) {
                     }
                 }
                 "--keep" if infer("keep") => {
-                    if let Some(value) = value.and_then(|value| value.parse::<u32>().ok()) {
+                    if let Some(value) = value.and_then(|value| value.parse::<i32>().ok()) {
                         cfg.keep = value;
                     }
                 }
@@ -1336,6 +1347,95 @@ fn save_to_path(cfg: &AppConfig, path: &Path) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_batch_settings_survive_save_reload_without_cross_clamping_raw_values() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-batch-defaults-{}", Uuid::new_v4()));
+        let path = directory.join("config.json");
+        for inherited in ["batch_size", "ubatch_size"] {
+            let cfg = AppConfig {
+                models_dir: "models".into(),
+                active_model: "model.gguf".into(),
+                ctx_size: 0,
+                batch_size: 128,
+                ubatch_size: 1024,
+                runtime_defaults: vec![inherited.into()],
+                ..Default::default()
+            };
+            save_to_path(&cfg, &path).unwrap();
+            let loaded = load_from_path(&path).unwrap();
+            assert_eq!(loaded.ctx_size, 0);
+            assert_eq!(loaded.batch_size, 128);
+            assert_eq!(loaded.ubatch_size, 1024);
+            assert_eq!(loaded.runtime_defaults, vec![inherited]);
+            let snapshot = execution::snapshot(&loaded);
+            assert_eq!(snapshot["ubatch_size"], serde_json::json!(1024));
+            let args = crate::server::build_args(&loaded, "");
+            assert_eq!(
+                args.iter().any(|arg| arg == "--batch-size"),
+                inherited != "batch_size"
+            );
+            assert_eq!(
+                args.iter().any(|arg| arg == "--ubatch-size"),
+                inherited != "ubatch_size"
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn sampling_and_keep_sentinels_survive_save_reload_sessions_and_launch() {
+        let directory = std::env::temp_dir().join(format!("aiolm-sampling-{}", Uuid::new_v4()));
+        let path = directory.join("config.json");
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "models_dir": "models",
+            "active_model": "model.gguf",
+            "keep": -1,
+            "top_k": 0,
+            "temperature": 1.5,
+            "runtime_defaults": [],
+            "sessions": [{
+                "id": "saved",
+                "models": {"primary_model": "model.gguf"},
+                "execution": {"keep": -1, "top_k": 0, "temperature": 1.5}
+            }]
+        }))
+        .unwrap();
+        for keep in [-1, 0, 64] {
+            cfg.keep = keep;
+            save_to_path(&cfg, &path).unwrap();
+            let loaded = load_from_path(&path).unwrap();
+            assert_eq!(loaded.keep, keep);
+            assert_eq!(loaded.top_k, 0);
+            assert_eq!(loaded.temperature, 1.5);
+            let snapshot = execution::snapshot(&loaded);
+            assert_eq!(snapshot["keep"], serde_json::json!(keep));
+            let effective = execution::session_config(&loaded, &loaded.sessions[0]).unwrap();
+            assert_eq!(effective.keep, -1);
+            assert_eq!(effective.top_k, 0);
+            assert_eq!(effective.temperature, 1.5);
+            let args = crate::server::build_args(&effective, "");
+            assert!(args.windows(2).any(|pair| pair == ["--keep", "-1"]));
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn legacy_keep_all_arguments_migrate_without_changing_ordinary_keep_values() {
+        for (argument, expected) in [("-1", -1), ("0", 0), ("64", 64)] {
+            let migrated = migrate_value(serde_json::json!({
+                "config_version": 7,
+                "models_dir": "models",
+                "top_k": 0,
+                "server_args": ["--keep", argument]
+            }))
+            .unwrap();
+            assert_eq!(migrated.keep, expected);
+            assert_eq!(migrated.top_k, 0);
+            assert!(migrated.server_args.is_empty());
+        }
+    }
 
     #[test]
     fn a_fresh_installation_gets_its_default_model_folder_and_keeps_what_is_in_it() {

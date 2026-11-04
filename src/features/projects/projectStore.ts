@@ -98,15 +98,17 @@ function loraAdapters(value: unknown): LoraAdapterConfig[] {
 
 function normalizeConfig(value: unknown): ProjectConfig {
   const source = value && typeof value === "object" ? value as Partial<ProjectConfig> : {};
+  const runtime_defaults = stringList(source.runtime_defaults, MAX_PROJECT_RUNTIME_DEFAULTS);
   const batch_size = clampInt(source.batch_size, 2048, 1, 131072);
-  const ubatch_size = Math.min(batch_size, clampInt(source.ubatch_size, 512, 1, 131072));
-  const keep = clampInt(source.keep, 0, 0, 131072);
+  const ubatchMax = runtime_defaults.includes('batch_size') || runtime_defaults.includes('ubatch_size') ? 131072 : batch_size;
+  const ubatch_size = clampInt(source.ubatch_size, 512, 1, ubatchMax);
+  const keep = clampInt(source.keep, 0, -1, 131072);
   const cache_type_k = typeof source.cache_type_k === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_k) ? source.cache_type_k : "f16";
   const cache_type_v = typeof source.cache_type_v === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_v) ? source.cache_type_v : "f16";
   const selectedProvider = stringValue(source.active_provider);
   if (selectedProvider && !isProviderId(selectedProvider)) throw new Error('Unknown inference engine in project settings.');
   return {
-    runtime_defaults: stringList(source.runtime_defaults, MAX_PROJECT_RUNTIME_DEFAULTS),
+    runtime_defaults,
     ...(source.gpu ? { gpu: safeClone(source.gpu) } : {}),
     active_model: stringValue(source.active_model),
     active_provider: isProviderId(selectedProvider) ? selectedProvider : 'llama.cpp',
@@ -115,7 +117,7 @@ function normalizeConfig(value: unknown): ProjectConfig {
     active_backend: stringValue(source.active_backend),
     active_build: stringValue(source.active_build),
     mmproj: stringValue(source.mmproj),
-    ctx_size: clampInt(source.ctx_size, 4096, 1, 1_048_576),
+    ctx_size: clampInt(source.ctx_size, 4096, 0, 1_048_576),
     batch_size,
     ubatch_size,
     keep,

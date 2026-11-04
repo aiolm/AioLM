@@ -217,9 +217,7 @@ pub(crate) fn typed(kind: ValueKind, value: &Value) -> bool {
 }
 
 fn in_range(range: &NumericRange, value: &Value) -> bool {
-    value.as_f64().is_some_and(|n| {
-        range.min.is_none_or(|min| n >= min) && range.max.is_none_or(|max| n <= max)
-    })
+    value.as_f64().is_some_and(|n| range.contains(n))
 }
 
 impl MetadataOption {
@@ -296,9 +294,12 @@ impl MetadataOption {
         }
         if let Some(range) = &self.range {
             if !matches!(self.kind, Some(ValueKind::Integer | ValueKind::Number))
-                || range.min.is_some_and(|n| !n.is_finite())
-                || range.max.is_some_and(|n| !n.is_finite())
-                || matches!((range.min, range.max), (Some(a), Some(b)) if a > b)
+                || !range.valid()
+                || self.kind == Some(ValueKind::Integer)
+                    && range
+                        .sentinel_values
+                        .iter()
+                        .any(|value| value.fract() != 0.0)
             {
                 return Err(
                     "a numeric range needs a declared integer or number type and finite bounds"
@@ -981,6 +982,86 @@ mod tests {
 
     fn find<'a>(schema: &'a OptionSchema, key: &str) -> &'a OptionDefinition {
         schema.options.iter().find(|o| o.key == key).unwrap()
+    }
+
+    #[test]
+    fn numeric_metadata_checks_open_bounds_and_defaults_without_overriding_observed_ranges() {
+        for default in [0.0, 1.0] {
+            let declared = metadata(
+                json!([{
+                    "flag": "--cache", "kind": "number",
+                    "range": {"min": 0, "max": 1, "min_exclusive": true, "max_exclusive": true},
+                    "runtime_default": {"literal": default},
+                }]),
+                json!([]),
+            );
+            assert!(declared.validate(engine()).is_err());
+        }
+        let declared = metadata(
+            json!([{
+                "flag": "--cache", "kind": "number",
+                "range": {"min": 0, "max": 1, "min_exclusive": true, "max_exclusive": true},
+                "runtime_default": {"literal": 0.5},
+            }]),
+            json!([]),
+        );
+        declared.validate(engine()).unwrap();
+        let mut discovered = schema();
+        let view = apply(&mut discovered, &declared, false, true);
+        assert!(view.error.is_none());
+        let cache = find(&discovered, "cache");
+        assert!(cache.resolve_one(&None, &[json!(0)]).is_err());
+        assert!(cache.resolve_one(&None, &[json!(1)]).is_err());
+        assert!(cache.resolve_one(&None, &[json!(0.00000001)]).is_ok());
+        discovered.options[0].range = observed(NumericRange {
+            min: Some(0.0),
+            max: Some(1.0),
+            min_exclusive: false,
+            max_exclusive: false,
+            sentinel_values: Vec::new(),
+        });
+        let view = apply(&mut discovered, &declared, false, true);
+        assert!(view
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.field == "range"));
+        assert!(find(&discovered, "cache")
+            .resolve_one(&None, &[json!(0)])
+            .is_ok());
+        let empty = metadata(
+            json!([{
+                "flag": "--cache", "kind": "number", "range": {"min": 1, "max": 1, "min_exclusive": true},
+            }]),
+            json!([]),
+        );
+        assert!(empty.validate(engine()).is_err());
+    }
+
+    #[test]
+    fn declared_control_sentinels_accept_auto_defaults_without_admitting_zero() {
+        let declared = metadata(
+            json!([{
+                "flag": "--cache", "kind": "integer",
+                "range": {"min": 1, "max": 64, "sentinel_values": [-1]},
+                "runtime_default": {"literal": -1},
+            }]),
+            json!([]),
+        );
+        declared.validate(engine()).unwrap();
+        let mut discovered = schema();
+        assert!(apply(&mut discovered, &declared, false, true)
+            .error
+            .is_none());
+        let cache = find(&discovered, "cache");
+        assert!(cache.resolve_one(&None, &[json!(-1)]).is_ok());
+        assert!(cache.resolve_one(&None, &[json!(1)]).is_ok());
+        assert!(cache.resolve_one(&None, &[json!(0)]).is_err());
+        let mut invalid = declared.clone();
+        invalid.options[0].runtime_default.as_mut().unwrap().literal = json!(0);
+        assert!(invalid.validate(engine()).is_err());
+        invalid.options[0].runtime_default.as_mut().unwrap().literal = json!(1);
+        invalid.options[0].range.as_mut().unwrap().sentinel_values = vec![-1.5];
+        assert!(invalid.validate(engine()).is_err());
     }
 
     #[test]

@@ -9,7 +9,7 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
-import type { ConfirmedSyntax, EffectiveSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import { inNumericRange, type ConfirmedSyntax, type EffectiveSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import RuntimeOptionSchemaForm, { OccurrenceOrder, SchemaOptionField } from '../runtimes/RuntimeOptionSchemaForm';
 import { maskPreview, maskImportReview } from '../runtimes/optionPresentation';
 import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
@@ -426,7 +426,7 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
       if (option.kind.type === 'json') parsed = parseJsonOption(text);
       if (['integer', 'number'].includes(option.kind.type)) {
         parsed = Number(text);
-        if (!Number.isFinite(parsed) || option.kind.type === 'integer' && !Number.isSafeInteger(parsed) || option.kind.min !== undefined && Number(parsed) < option.kind.min || option.kind.max !== undefined && Number(parsed) > option.kind.max) throw new Error('range');
+        if (typeof parsed !== 'number' || !inNumericRange(parsed, option.kind) || option.kind.type === 'integer' && !Number.isSafeInteger(parsed) || option.kind.choices?.length && !option.kind.choices.includes(parsed)) throw new Error('range');
       }
       invalidRef.current = false; setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
     } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
@@ -434,11 +434,12 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
   const label = <>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small></>;
   return <div>
     {selection ? <span>{label}</span> : <label htmlFor={controlId}>{label}</label>}
+    {option.help && <p className="app-section-hint">{option.help}</p>}
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
     {readOnly && <small>{modelSettingsCopy[locale].benchmarkRequest}</small>}
     {readOnly && value !== undefined && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => onChange(undefined)}>{runtimeOptionsCopy[locale].useDefault}</button>}
     {selection ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled || readOnly} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
-      options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea id={controlId} className="app-textarea" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
+      options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value: String(value), label: String(value) }))]} /> : option.kind.type === 'json' ? <textarea id={controlId} className="app-textarea" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
       : <input id={controlId} className="app-input" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
     {invalid && <span id={errorId} role="alert">{jsonNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : copy.invalid}</span>}
   </div>;

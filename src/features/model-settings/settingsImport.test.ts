@@ -73,6 +73,76 @@ describe('pasted settings', () => {
     expect(result.rejected).toEqual([{ flag: '--temp', reason: 'value', value: '9', range: { min: 0, max: 2 } }]);
     expect(result.patch).toEqual({});
   });
+  it('imports context zero or at least 512 rather than accepting a value native save would replace', () => {
+    const invalid = parseSettingsText('--ctx-size 256', SERVER_OPTIONS, base);
+    expect(invalid.patch).toEqual({});
+    expect(invalid.rejected).toEqual([{ flag: '--ctx-size', reason: 'value', value: '256', range: { min: 512, max: 131072, allowZero: true } }]);
+    expect(parseSettingsText('--ctx-size 0', SERVER_OPTIONS, base).patch).toEqual({ ctx_size: 0 });
+    expect(parseSettingsText('--ctx-size 512', SERVER_OPTIONS, base).patch).toEqual({ ctx_size: 512 });
+  });
+
+  it('rejects incompatible explicit batch edits while importing a valid pair in either order', () => {
+    expect(parseSettingsText('--ubatch-size 4096', SERVER_OPTIONS, base).patch).toEqual({});
+    expect(parseSettingsText('--batch-size 256', SERVER_OPTIONS, base).patch).toEqual({});
+    for (const command of ['--batch-size 256 --ubatch-size 128', '--ubatch-size 128 --batch-size 256']) {
+      const result = parseSettingsText(command, SERVER_OPTIONS, base);
+      expect(result.rejected).toEqual([]);
+      expect(result.patch).toEqual({ batch_size: 256, ubatch_size: 128 });
+    }
+  });
+
+  it('uses runtime-help batch defaults and never constrains a new batch against an inherited microbatch', () => {
+    const options = SERVER_OPTIONS.map(option => option.flags.includes('--batch-size')
+      ? { ...option, description: 'logical maximum batch size (default: 4096)' } : option);
+    const batchInherited = { ...base, batch_size: 128, ubatch_size: 512, runtime_defaults: ['batch_size'] };
+    const microbatch = parseSettingsText('--ubatch-size 3072', options, batchInherited);
+    expect(microbatch.rejected).toEqual([]);
+    expect(microbatch.patch).toEqual({ ubatch_size: 3072 });
+    const microbatchInherited = { ...base, ubatch_size: 512, runtime_defaults: ['ubatch_size'] };
+    const batch = parseSettingsText('--batch-size 128', SERVER_OPTIONS, microbatchInherited);
+    expect(batch.rejected).toEqual([]);
+    expect(batch.patch).toEqual({ batch_size: 128 });
+    expect(microbatchInherited).toMatchObject({ ubatch_size: 512, runtime_defaults: ['ubatch_size'] });
+  });
+
+  it('imports keep-all and disabled Top-k without changing their sentinel values', () => {
+    const result = parseSettingsText('--keep -1 --top-k 0 --temp 1.5', SERVER_OPTIONS, base);
+    expect(result.rejected).toEqual([]);
+    expect(result.patch).toEqual({ keep: -1, top_k: 0, temperature: 1.5 });
+  });
+
+  it('rejects zero idle sleep while preserving its disabled and positive settings', () => {
+    const zero = parseSettingsText('--sleep-idle-seconds 0', SERVER_OPTIONS, base);
+    expect(zero.patch).toEqual({});
+    expect(zero.rejected).toHaveLength(1);
+    expect(parseSettingsText('--sleep-idle-seconds -1', SERVER_OPTIONS, base).patch).toEqual({ sleep_idle_seconds: -1 });
+    expect(parseSettingsText('--sleep-idle-seconds 1', SERVER_OPTIONS, base).patch).toEqual({ sleep_idle_seconds: 1 });
+  });
+
+  it('replaces canonical request aliases when importing an explicit control value', () => {
+    const result = parseSettingsText('--mirostat-lr 0.3 -n 256', SERVER_OPTIONS, {
+      ...base, chat_options: { mirostat_eta: 0.7, max_completion_tokens: 512 },
+    });
+    expect(result.rejected).toEqual([]);
+    expect(result.patch.chat_options).toEqual({ mirostat_lr: 0.3, max_tokens: 256 });
+  });
+
+  it('rejects zero repetition penalty without imposing an artificial positive minimum', () => {
+    const zero = parseSettingsText('--repeat-penalty 0', SERVER_OPTIONS, base);
+    expect(zero.patch).toEqual({});
+    expect(zero.rejected).toEqual([{ flag: '--repeat-penalty', reason: 'value', value: '0', range: { min: 0, minExclusive: true, max: 2 } }]);
+    const positive = parseSettingsText('--repeat-penalty 0.001', SERVER_OPTIONS, base);
+    expect(positive.rejected).toEqual([]);
+    expect(positive.patch.chat_options).toEqual({ repeat_penalty: 0.001 });
+  });
+
+  it('rejects fractional token counts instead of silently rounding or storing them', () => {
+    const result = parseSettingsText('--keep 1.5 --top-k 2.5 --dry-allowed-length 1.5 -n 2.5', SERVER_OPTIONS, base);
+    expect(result.patch).toEqual({});
+    expect(result.rejected.map(entry => [entry.flag, entry.reason])).toEqual([
+      ['--keep', 'value'], ['--top-k', 'value'], ['--dry-allowed-length', 'value'], ['-n', 'value'],
+    ]);
+  });
 
   it('keeps negative numeric arguments as values instead of treating them as flags', () => {
     const result = parseSettingsText('-n -1 --threads -1', SERVER_OPTIONS, base);

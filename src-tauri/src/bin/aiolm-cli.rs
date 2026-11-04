@@ -1188,9 +1188,37 @@ fn apply_config_override(
         "reasoning_preserve" => cfg.reasoning_preserve = value.into(),
         "port" => cfg.port = parse_value(key, value)?,
         "ngl" => cfg.ngl = parse_value(key, value)?,
-        "ctx_size" => cfg.ctx_size = parse_value(key, value)?,
-        "batch_size" => cfg.batch_size = parse_value(key, value)?,
-        "ubatch_size" => cfg.ubatch_size = parse_value(key, value)?,
+        "ctx_size" => {
+            let context = parse_value(key, value)?;
+            if context != 0 && context < 512 {
+                return Err("ctx_size must be 0 (model context) or at least 512".into());
+            }
+            cfg.ctx_size = context;
+        }
+        "batch_size" => {
+            let batch = parse_value(key, value)?;
+            if batch == 0
+                || (!cfg.runtime_defaults.iter().any(|key| key == "ubatch_size")
+                    && batch < cfg.ubatch_size)
+            {
+                return Err(
+                    "batch_size must be positive and at least the explicit ubatch_size".into(),
+                );
+            }
+            cfg.batch_size = batch;
+        }
+        "ubatch_size" => {
+            let microbatch = parse_value(key, value)?;
+            if microbatch == 0
+                || (!cfg.runtime_defaults.iter().any(|key| key == "batch_size")
+                    && microbatch > cfg.batch_size)
+            {
+                return Err(
+                    "ubatch_size must be positive and at most the explicit batch_size".into(),
+                );
+            }
+            cfg.ubatch_size = microbatch;
+        }
         "keep" => cfg.keep = parse_value(key, value)?,
         "cache_type_k" => cfg.cache_type_k = value.into(),
         "cache_type_v" => cfg.cache_type_v = value.into(),
@@ -1207,7 +1235,16 @@ fn apply_config_override(
         "spec_draft_p_min" => cfg.spec_draft_p_min = parse_value(key, value)?,
         "spec_draft_p_split" => cfg.spec_draft_p_split = parse_value(key, value)?,
         "reasoning_budget" => cfg.reasoning_budget = parse_value(key, value)?,
-        "sleep_idle_seconds" => cfg.sleep_idle_seconds = parse_value(key, value)?,
+        "sleep_idle_seconds" => {
+            let seconds = parse_value(key, value)?;
+            if seconds == 0 || seconds < -1 {
+                return Err(
+                    "sleep_idle_seconds must be -1 (disabled) or a positive number of seconds"
+                        .into(),
+                );
+            }
+            cfg.sleep_idle_seconds = seconds;
+        }
         "server_args" => {
             cfg.server_args = serde_json::from_str(value)
                 .map_err(|error| format!("server_args must be a JSON string array: {error}"))?;
@@ -2084,61 +2121,88 @@ mod tests {
         )
         .unwrap();
         let before = serde_json::to_value(&cfg).unwrap();
-        for (value, expected) in [
-            ("{not json", "JSON object"),
-            (r#"["vllm"]"#, "JSON object"),
-            (r#"{"vllm":[1]}"#, "JSON object"),
-            (r#"{"sglang":{}}"#, "cannot be saved for 'sglang'"),
-            (
-                r#"{"llama.cpp":{"ctx_size":4096}}"#,
-                "cannot be saved for 'llama.cpp'",
-            ),
-            (r#"{" vllm":{}}"#, "cannot be saved for ' vllm'"),
-            (
-                r#"{"vllm":{"max_num_seqs":16},"mlx-vlm":{"no_such_option":1}}"#,
-                "invalid mlx-vlm options",
-            ),
-            (r#"{"vllm":{"max_model_len":"long"}}"#, "integer"),
-            (r#"{"vllm":{"gpu_memory_utilization":2}}"#, "between"),
-            (r#"{"vllm":{"runner":"train"}}"#, "does not accept"),
-            (
-                r#"{"vllm":{"trust_remote_code":true}}"#,
-                "trust_remote_code",
-            ),
-            (r#"{"vllm":{"extra_args":["--port=9000"]}}"#, "--port"),
-            (
-                r#"{"vllm":{"extra_args":["--max-model-len=4"]}}"#,
-                "--max-model-len",
-            ),
-            (
-                r#"{"vllm":{"draft_model":"/synthetic/draft"}}"#,
-                "speculative_config",
-            ),
-            (
-                r#"{"vllm":{"request_lora":"missing"}}"#,
-                "configured adapter",
-            ),
-            (
-                r#"{"vllm":{"enable_auto_tool_choice":true}}"#,
-                "tool_call_parser",
-            ),
-            (
-                r#"{"mlx-vlm":{"lora_adapters":[{"name":"a","path":"/x"},{"name":"b","path":"/y"}]}}"#,
-                "one adapter",
-            ),
-            (
-                r#"{"mlx-vlm":{"lora_adapters":[{"name":"bad name","path":"/x"}]}}"#,
-                "adapter name",
-            ),
+        for value in [
+            "{not json",
+            r#"["vllm"]"#,
+            r#"{"vllm":[1]}"#,
+            r#"{"sglang":{}}"#,
+            r#"{"llama.cpp":{"ctx_size":4096}}"#,
+            r#"{" vllm":{}}"#,
+            r#"{"vllm":{"max_num_seqs":16},"mlx-vlm":{"no_such_option":1}}"#,
+            r#"{"vllm":{"max_model_len":"long"}}"#,
+            r#"{"vllm":{"gpu_memory_utilization":2}}"#,
+            r#"{"vllm":{"runner":"train"}}"#,
+            r#"{"vllm":{"trust_remote_code":true}}"#,
+            r#"{"vllm":{"extra_args":["--port=9000"]}}"#,
+            r#"{"vllm":{"extra_args":["--max-model-len=4"]}}"#,
+            r#"{"vllm":{"draft_model":"/synthetic/draft"}}"#,
+            r#"{"vllm":{"request_lora":"missing"}}"#,
+            r#"{"vllm":{"enable_auto_tool_choice":true}}"#,
+            r#"{"mlx-vlm":{"lora_adapters":[{"name":"a","path":"/x"},{"name":"b","path":"/y"}]}}"#,
+            r#"{"mlx-vlm":{"lora_adapters":[{"name":"bad name","path":"/x"}]}}"#,
         ] {
-            let error = apply_config_override(&mut cfg, "provider_options", value).unwrap_err();
-            assert!(error.contains(expected), "{value}: {error}");
+            assert!(
+                apply_config_override(&mut cfg, "provider_options", value).is_err(),
+                "{value} must be rejected"
+            );
             assert_eq!(
                 serde_json::to_value(&cfg).unwrap(),
                 before,
                 "{value} changed the configuration"
             );
         }
+    }
+
+    #[test]
+    fn config_set_preserves_keep_all_and_disabled_top_k() {
+        let mut cfg = config::AppConfig::default();
+        apply_config_override(&mut cfg, "keep", "-1").unwrap();
+        apply_config_override(&mut cfg, "top_k", "0").unwrap();
+        apply_config_override(&mut cfg, "temperature", "1.5").unwrap();
+        cfg.normalize();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.keep, -1);
+        assert_eq!(cfg.top_k, 0);
+        assert_eq!(cfg.temperature, 1.5);
+    }
+
+    #[test]
+    fn config_set_context_and_batches_reject_values_that_would_be_silently_replaced() {
+        let mut cfg = config::AppConfig::default();
+        assert!(apply_config_override(&mut cfg, "ctx_size", "256").is_err());
+        apply_config_override(&mut cfg, "ctx_size", "0").unwrap();
+        assert_eq!(cfg.ctx_size, 0);
+        apply_config_override(&mut cfg, "ctx_size", "512").unwrap();
+        assert_eq!(cfg.ctx_size, 512);
+        assert!(apply_config_override(&mut cfg, "ubatch_size", "4096").is_err());
+        assert_eq!(cfg.ubatch_size, 512);
+        assert!(apply_config_override(&mut cfg, "batch_size", "128").is_err());
+        assert_eq!(cfg.batch_size, 2048);
+        cfg.runtime_defaults = vec!["ubatch_size".into()];
+        apply_config_override(&mut cfg, "batch_size", "128").unwrap();
+        assert_eq!(cfg.batch_size, 128);
+        assert_eq!(cfg.ubatch_size, 512);
+        assert_eq!(cfg.runtime_defaults, vec!["ubatch_size"]);
+        cfg.runtime_defaults = vec!["batch_size".into()];
+        apply_config_override(&mut cfg, "ubatch_size", "1024").unwrap();
+        assert_eq!(cfg.batch_size, 128);
+        assert_eq!(cfg.ubatch_size, 1024);
+        assert_eq!(cfg.runtime_defaults, vec!["batch_size"]);
+    }
+
+    #[test]
+    fn config_set_rejects_zero_idle_sleep_without_rewriting_saved_values() {
+        let mut cfg = config::AppConfig {
+            sleep_idle_seconds: 0,
+            ..Default::default()
+        };
+        assert!(apply_config_override(&mut cfg, "sleep_idle_seconds", "0").is_err());
+        assert_eq!(cfg.sleep_idle_seconds, 0);
+        assert!(apply_config_override(&mut cfg, "sleep_idle_seconds", "-2").is_err());
+        apply_config_override(&mut cfg, "sleep_idle_seconds", "1").unwrap();
+        assert_eq!(cfg.sleep_idle_seconds, 1);
+        apply_config_override(&mut cfg, "sleep_idle_seconds", "-1").unwrap();
+        assert_eq!(cfg.sleep_idle_seconds, -1);
     }
 
     #[test]

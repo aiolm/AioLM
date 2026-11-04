@@ -653,14 +653,60 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     }
     Ok(())
 }
+pub(super) fn numeric_range(kind: &Value) -> Option<super::runtime_options::NumericRange> {
+    let range = super::runtime_options::NumericRange {
+        min: Some(kind["min"].as_f64()?),
+        max: Some(kind["max"].as_f64()?),
+        min_exclusive: kind
+            .get("min_exclusive")
+            .map_or(Some(false), Value::as_bool)?,
+        max_exclusive: kind
+            .get("max_exclusive")
+            .map_or(Some(false), Value::as_bool)?,
+        sentinel_values: match kind.get("sentinel_values") {
+            Some(values) => {
+                let values = values.as_array()?;
+                if values.len() > 128 {
+                    return None;
+                }
+                values
+                    .iter()
+                    .map(Value::as_f64)
+                    .collect::<Option<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        },
+    };
+    if kind["type"] == "integer"
+        && range
+            .sentinel_values
+            .iter()
+            .any(|value| value.fract() != 0.0)
+    {
+        return None;
+    }
+    Some(range)
+}
+
 fn validate_kind(kind: &Value) -> Result<(), String> {
     let t = kind.get("type").and_then(Value::as_str).unwrap_or("");
     match t {
         "integer" | "number"
-            if kind["min"]
-                .as_f64()
-                .zip(kind["max"].as_f64())
-                .is_some_and(|(a, b)| a.is_finite() && b.is_finite() && a <= b) =>
+            if numeric_range(kind).is_some_and(|range| {
+                range.valid()
+                    && kind.get("choices").is_none_or(|choices| {
+                        choices.as_array().is_some_and(|choices| {
+                            !choices.is_empty()
+                                && choices.len() <= 128
+                                && choices.iter().all(|choice| {
+                                    (t != "integer" || choice.as_i64().is_some())
+                                        && choice
+                                            .as_f64()
+                                            .is_some_and(|value| range.contains(value))
+                                })
+                        })
+                    })
+            }) =>
         {
             Ok(())
         }
@@ -689,13 +735,20 @@ pub fn option_issues(
             let spec = m.options.iter().find(|s| s.key == *key);
             let valid = spec.is_some_and(|s| match s.kind["type"].as_str().unwrap_or("") {
                 "integer" => value.as_i64().is_some_and(|n| {
-                    n as f64 >= s.kind["min"].as_f64().unwrap()
-                        && n as f64 <= s.kind["max"].as_f64().unwrap()
+                    numeric_range(&s.kind).is_some_and(|range| range.contains(n as f64))
+                        && s.kind.get("choices").is_none_or(|choices| {
+                            choices
+                                .as_array()
+                                .is_some_and(|choices| choices.contains(value))
+                        })
                 }),
                 "number" => value.as_f64().is_some_and(|n| {
-                    n.is_finite()
-                        && n >= s.kind["min"].as_f64().unwrap()
-                        && n <= s.kind["max"].as_f64().unwrap()
+                    numeric_range(&s.kind).is_some_and(|range| range.contains(n))
+                        && s.kind.get("choices").is_none_or(|choices| {
+                            choices
+                                .as_array()
+                                .is_some_and(|choices| choices.contains(value))
+                        })
                 }),
                 "flag" | "toggle" => value.is_boolean(),
                 "choice" => s.kind["choices"].as_array().unwrap().contains(value),
@@ -2722,6 +2775,87 @@ mod tests {
             assert!(ProviderId::parse(name).is_none());
         }
     }
+    #[test]
+    fn manifest_numeric_constraints_reach_validation_and_argument_resolution() {
+        let mut manifest = example();
+        manifest.options[0].kind = serde_json::json!({
+            "type": "number", "min": 0, "max": 1, "min_exclusive": true, "max_exclusive": true,
+        });
+        validate_manifest(&manifest).unwrap();
+        let source = super::super::runtime_schema::adapter_source("custom.example", "test");
+        let definition =
+            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
+        for value in [0.00000001, 0.5] {
+            let values = serde_json::json!({"workers": value})
+                .as_object()
+                .unwrap()
+                .clone();
+            assert!(option_issues(&manifest, &values).is_empty());
+            assert!(definition
+                .resolve_one(&None, &[serde_json::json!(value)])
+                .is_ok());
+        }
+        for value in [0.0, 1.0] {
+            let values = serde_json::json!({"workers": value})
+                .as_object()
+                .unwrap()
+                .clone();
+            assert_eq!(option_issues(&manifest, &values).len(), 1);
+            assert!(definition
+                .resolve_one(&None, &[serde_json::json!(value)])
+                .is_err());
+        }
+        manifest.options[0].kind =
+            serde_json::json!({"type": "integer", "min": 1, "max": 8, "choices": [1, 8]});
+        validate_manifest(&manifest).unwrap();
+        let definition =
+            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
+        assert!(definition
+            .resolve_one(&None, &[serde_json::json!(8)])
+            .is_ok());
+        assert!(definition
+            .resolve_one(&None, &[serde_json::json!(2)])
+            .is_err());
+        assert_eq!(
+            option_issues(
+                &manifest,
+                serde_json::json!({"workers":2}).as_object().unwrap()
+            )
+            .len(),
+            1
+        );
+        manifest.options[0].kind["min_exclusive"] = serde_json::json!("true");
+        assert!(validate_manifest(&manifest).is_err());
+        manifest.options[0].kind =
+            serde_json::json!({"type": "integer", "min": 1, "max": 8, "sentinel_values": [-1]});
+        validate_manifest(&manifest).unwrap();
+        let definition =
+            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
+        for value in [-1, 1] {
+            let values = serde_json::json!({"workers":value})
+                .as_object()
+                .unwrap()
+                .clone();
+            assert!(option_issues(&manifest, &values).is_empty());
+            assert!(definition
+                .resolve_one(&None, &[serde_json::json!(value)])
+                .is_ok());
+        }
+        assert_eq!(
+            option_issues(
+                &manifest,
+                serde_json::json!({"workers":0}).as_object().unwrap()
+            )
+            .len(),
+            1
+        );
+        assert!(definition
+            .resolve_one(&None, &[serde_json::json!(0)])
+            .is_err());
+        manifest.options[0].kind["sentinel_values"] = serde_json::json!([-1.5]);
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
     #[test]
     fn options_validate_types_ranges_and_request_changes_keep_launch_identity() {
         let manifest = example();

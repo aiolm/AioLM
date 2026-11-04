@@ -1833,6 +1833,9 @@ mod tests {
                     value: Some(super::super::runtime_options::NumericRange {
                         min: Some(1.0),
                         max: Some(64.0),
+                        min_exclusive: false,
+                        max_exclusive: false,
+                        sentinel_values: Vec::new(),
                     }),
                     certainty: Certainty::Verified,
                     source: Some(Source::Adapter {

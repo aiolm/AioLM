@@ -7,6 +7,7 @@ import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
+import { providerCopy } from '../../shared/i18n/providerCopy';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -269,14 +270,15 @@ describe("Project configuration snapshots", () => {
     expect(readProjects().find(item => item.id === project.id)).toEqual(project);
   });
 
-  it('displays the Python runtime and its context instead of stale llama settings', async () => {
+  it.each([512, -1])('displays Python context %s as an explicit limit or runtime-owned context instead of stale llama settings', async maxModelLen => {
     mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
     mockedApi.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
-      provider_options: { vllm: { max_model_len: 512 } } });
+      provider_options: { vllm: { max_model_len: maxModelLen } } });
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · Installed by AioLM')).toBeVisible();
-    expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent('512');
+    expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent(maxModelLen > 0 ? '512' : providerCopy.en.inherit);
+    expect(store.cfg?.provider_options?.vllm?.max_model_len).toBe(maxModelLen);
     expect(screen.getByTestId('project-prompt-preview')).not.toHaveTextContent('stale-build');
   });
 

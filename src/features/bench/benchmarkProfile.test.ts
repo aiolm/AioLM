@@ -6,6 +6,7 @@ import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { testConfig } from '../../testing/appStore';
 import { webcrypto } from 'node:crypto';
 import type { AppConfig } from '../../shared/api/types';
+import { applySettingsProfile } from '../../shared/config/settingsProfiles';
 
 vi.mock('../../shared/api/runtimeHelp', async importOriginal => ({ ...await importOriginal<object>(), runtimeHelpResolvePlan: vi.fn(async () => ({ argv: [], request: {} })) }));
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const });
@@ -21,6 +22,16 @@ function option(key: string, extra: Partial<OptionSchemaDefinition> = {}): Optio
 function destination(options: OptionSchemaDefinition[], names: Record<string, string>, overrides: Partial<EffectiveSchema> = {}): { cfg: AppConfig; effective: EffectiveSchema } {
   return { cfg: { ...testConfig, active_provider: 'custom.destination', active_runtime: 'destination-runtime' },
     effective: effectiveSchema([], options, { benchmark_names: names, ...overrides }) };
+}
+
+function nativeBatchDestination(batchDefault?: number) {
+  const dest = destination([
+    option('batch', { spellings: [{ flag: '--batch-size' }], managed: 'discovery',
+      runtime_default: batchDefault === undefined ? { certainty: 'unknown' } : known({ literal: batchDefault }) }),
+    option('microbatch', { spellings: [{ flag: '--ubatch-size' }], managed: 'discovery' }),
+  ], { batch: 'batch-size', microbatch: 'ubatch-size' });
+  dest.cfg = { ...dest.cfg, active_provider: 'llama.cpp', batch_size: 8192, ubatch_size: 4096, runtime_defaults: [] };
+  return dest;
 }
 
 beforeEach(() => {
@@ -56,6 +67,24 @@ describe('destination-checked benchmark profiles', () => {
     expect(omitted).toBe(true);
   });
 
+  it.each([[0, false], [0.00000001, true], [1, true]] as const)(
+    'keeps a benchmark ratio %s only when it satisfies the destination open lower bound', async (value, accepted) => {
+      const dest = destination([option('ratio', { kind: known('number'), range: known({ min: 0, max: 1, min_exclusive: true }) })], { ratio: 'ratio' });
+      const { profile, omitted } = await benchmarkSettingsProfile(source([setting('ratio', value)]), 'ratio', dest);
+      expect(profile.settings).toEqual(accepted ? { provider_options: { 'custom.destination': { ratio: value } } } : {});
+      expect(omitted).toBe(!accepted);
+    },
+  );
+
+  it.each([[-1, true], [0, false], [1, true]] as const)(
+    'imports context %s only if it is a declared positive length or explicit sentinel', async (value, accepted) => {
+      const dest = destination([option('context', { range: known({ min: 1, max: 4096, sentinel_values: [-1] }) })], { context: 'context' });
+      const { profile, omitted } = await benchmarkSettingsProfile(source([setting('context', value)]), 'context-sentinel', dest);
+      expect(profile.settings).toEqual(accepted ? { provider_options: { 'custom.destination': { context: value } } } : {});
+      expect(omitted).toBe(!accepted);
+    },
+  );
+
   it('preserves false, zero and numeric arrays only when their exact destination shape is established', async () => {
     const dest = destination([option('cache', { kind: known('boolean'), arity: known({ min: 0, max: 0 }) }),
       option('zero'), option('split', { kind: known('json') }), option('repeated', { repeatable: known(true) })],
@@ -73,6 +102,67 @@ describe('destination-checked benchmark profiles', () => {
     expect(profile).not.toHaveProperty('legacy_runtime');
     expect(dest.effective.schema.options[0].managed).toBe('discovery');
   });
+
+  it('validates the complete imported native batch pair rather than individual fields against destination values', async () => {
+    const dest = nativeBatchDestination();
+    const { profile, omitted } = await benchmarkSettingsProfile(source([
+      setting('batch-size', 256), setting('ubatch-size', 128),
+    ]), 'native-batch-pair', dest);
+    expect(omitted).toBe(false);
+    expect(profile.settings).toEqual({ batch_size: 256, ubatch_size: 128 });
+    const applied = applySettingsProfile(dest.cfg, profile);
+    expect(applied).toMatchObject({ batch_size: 256, ubatch_size: 128 });
+    expect(applied.runtime_defaults).not.toContain('batch_size');
+    expect(applied.runtime_defaults).not.toContain('ubatch_size');
+    expect(dest.cfg).toMatchObject({ batch_size: 8192, ubatch_size: 4096, runtime_defaults: [] });
+  });
+
+  it('omits an incompatible imported microbatch instead of changing its value or the valid imported batch', async () => {
+    const dest = nativeBatchDestination(4096);
+    const { profile, omitted } = await benchmarkSettingsProfile(source([
+      setting('batch-size', 128), setting('ubatch-size', 256),
+    ]), 'native-batch-conflict', dest);
+    expect(omitted).toBe(true);
+    expect(profile.settings).toEqual({ batch_size: 128 });
+    const applied = applySettingsProfile(dest.cfg, profile);
+    expect(applied.batch_size).toBe(128);
+    expect(applied.runtime_defaults).toContain('ubatch_size');
+  });
+
+  it('checks a standalone imported microbatch against the checked runtime batch default, not destination raw settings', async () => {
+    const dest = nativeBatchDestination(4096);
+    const accepted = await benchmarkSettingsProfile(source([setting('ubatch-size', 3072)]), 'native-inherited-batch', dest);
+    expect(accepted.omitted).toBe(false);
+    expect(accepted.profile.settings).toEqual({ ubatch_size: 3072 });
+    expect(applySettingsProfile(dest.cfg, accepted.profile).runtime_defaults).toContain('batch_size');
+    const rejected = await benchmarkSettingsProfile(source([setting('ubatch-size', 8192)]), 'native-inherited-batch-large', dest);
+    expect(rejected).toMatchObject({ omitted: true, profile: { settings: {} } });
+  });
+
+  it('does not invent a batch default when importing a standalone microbatch', async () => {
+    const result = await benchmarkSettingsProfile(source([setting('ubatch-size', 128)]), 'native-batch-unknown', nativeBatchDestination());
+    expect(result).toMatchObject({ omitted: true, profile: { settings: {} } });
+  });
+
+  it('allows an imported smaller batch while its omitted microbatch follows runtime defaults', async () => {
+    const dest = nativeBatchDestination();
+    const { profile, omitted } = await benchmarkSettingsProfile(source([setting('batch-size', 128)]), 'native-inherited-microbatch', dest);
+    expect(omitted).toBe(false);
+    expect(profile.settings).toEqual({ batch_size: 128 });
+    const applied = applySettingsProfile(dest.cfg, profile);
+    expect(applied.batch_size).toBe(128);
+    expect(applied.runtime_defaults).toContain('ubatch_size');
+  });
+
+  it.each([[0, true], [256, false], [512, true]] as const)(
+    'imports native context %s only when it will not be rewritten by native policy', async (value, accepted) => {
+      const dest = destination([option('context', { spellings: [{ flag: '--ctx-size' }], managed: 'discovery' })], { context: 'ctx-size' });
+      dest.cfg = { ...dest.cfg, active_provider: 'llama.cpp' };
+      const result = await benchmarkSettingsProfile(source([setting('ctx-size', value)]), 'native-context-boundary', dest);
+      expect(result.profile.settings).toEqual(accepted ? { ctx_size: value } : {});
+      expect(result.omitted).toBe(!accepted);
+    },
+  );
 
   it('omits resolver-rejected values but surfaces genuine API failures for retry', async () => {
     const dest = destination([option('batch')], { batch: 'batch' });

@@ -3,7 +3,6 @@ import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
-import { clampNumber } from "../../shared/config/tuningValidation";
 import { chatOptionValue, tuningFieldDescription, tuningFieldLabel, type ChatOptionField } from "./tuningFields";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
@@ -26,7 +25,7 @@ export default function TuningChatOptionField({
   chatOptionSelectModes, setChatOptionSelectModes, onCommit,
 }: Props) {
   const id = useTuningId();
-  const current = clampNumber(chatOptionValue(cfg, field), field.min, field.max, field.defaultValue);
+  const current = chatOptionValue(cfg, field);
   const draft = chatOptionDrafts[field.key] ?? String(current);
   const inputId = `${id}-${field.key}`;
   const label = tuningFieldLabel(t as never, field);
@@ -97,6 +96,7 @@ export default function TuningChatOptionField({
           id={inputId}
           label={label}
           min={field.min}
+          minExclusive={field.minExclusive}
           max={field.max}
           step={field.step}
           hint={description}

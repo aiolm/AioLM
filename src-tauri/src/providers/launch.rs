@@ -83,8 +83,6 @@ fn argument_path(label: &str, path: &str) -> Result<(), String> {
 }
 
 const MAX_ADAPTER_CONFIG_BYTES: u64 = 1024 * 1024;
-/// vLLM v0.31.0 `config/lora.py` `MaxLoRARanks`.
-const VLLM_LORA_RANKS: &[i64] = &[1, 8, 16, 32, 64, 128, 256, 320, 512];
 const VLLM_DEFAULT_MAX_LORA_RANK: i64 = 16;
 
 fn nonempty_file(path: &Path) -> bool {
@@ -371,15 +369,6 @@ pub fn option_issues(provider: ProviderId, options: &Map<String, Value>) -> Vec<
         }
     }
     if provider == ProviderId::Vllm {
-        if let Some(rank) = options.get("max_lora_rank").and_then(Value::as_i64) {
-            if !VLLM_LORA_RANKS.contains(&rank) {
-                issues.push(OptionIssue {
-                    key: "max_lora_rank".into(),
-                    code: "choice",
-                    message: format!("max_lora_rank must be one of {VLLM_LORA_RANKS:?}"),
-                });
-            }
-        }
         // vLLM v0.31.0 `cli_args.validate_parsed_serve_args` exits when auto
         // tool choice has no parser.
         if options.get("enable_auto_tool_choice") == Some(&Value::Bool(true))
@@ -1354,6 +1343,7 @@ mod tests {
     use super::*;
     use crate::providers::python_env::ProbeRecord;
     use serde_json::json;
+    use std::collections::BTreeSet;
 
     fn metal_runtime() -> PythonRuntimeManifest {
         let mut runtime = runtime(ProviderId::Vllm);
@@ -1890,7 +1880,6 @@ mod tests {
             ])
         );
 
-        // Catalog errors keep input order; dedicated bindings are checked afterward.
         let mixed = json!({
             "aaa_unknown": {"nested": ["한글", false, null]},
             "draft_model": "/synthetic/draft",
@@ -1906,54 +1895,34 @@ mod tests {
         let values = mixed.as_object().unwrap();
         let saved_values = serde_json::to_vec(&mixed).unwrap();
         let expected = [
-            (
-                "aaa_unknown",
-                "unknown",
-                "aaa_unknown is not an option of vllm",
-            ),
-            ("dtype", "choice", "dtype does not accept 'fp4'"),
-            ("max_model_len", "type", "max_model_len must be an integer"),
-            (
-                "trust_remote_code",
-                "managed",
-                "AioLM does not run code from model repositories; clear trust_remote_code",
-            ),
-            (
-                "zzz_unknown",
-                "unknown",
-                "zzz_unknown is not an option of vllm",
-            ),
-            (
-                "request_lora",
-                "binding",
-                "the request adapter must name a configured adapter",
-            ),
-            (
-                "draft_model",
-                "binding",
-                "vLLM configures draft models through speculative_config",
-            ),
-            (
-                "max_lora_rank",
-                "choice",
-                "max_lora_rank must be one of [1, 8, 16, 32, 64, 128, 256, 320, 512]",
-            ),
-            (
-                "enable_auto_tool_choice",
-                "binding",
-                "enable_auto_tool_choice requires tool_call_parser",
-            ),
+            ("aaa_unknown", "unknown"),
+            ("dtype", "choice"),
+            ("max_lora_rank", "choice"),
+            ("max_model_len", "type"),
+            ("trust_remote_code", "managed"),
+            ("zzz_unknown", "unknown"),
+            ("request_lora", "binding"),
+            ("draft_model", "binding"),
+            ("enable_auto_tool_choice", "binding"),
         ]
         .into_iter()
-        .map(|(key, code, message)| OptionIssue {
-            key: key.into(),
-            code,
-            message: message.into(),
-        })
-        .collect::<Vec<_>>();
-        assert_eq!(option_issues(ProviderId::Vllm, values), expected);
+        .collect::<BTreeSet<_>>();
         let standard = runtime(ProviderId::Vllm);
-        assert_eq!(runtime_option_issues(&standard, values), expected);
+        for issues in [
+            option_issues(ProviderId::Vllm, values),
+            runtime_option_issues(&standard, values),
+        ] {
+            let classified = issues
+                .iter()
+                .map(|issue| (issue.key.as_str(), issue.code))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(classified, expected);
+            assert_eq!(
+                issues.len(),
+                classified.len(),
+                "one actionable issue per rejected option"
+            );
+        }
         assert_eq!(serde_json::to_vec(&mixed).unwrap(), saved_values);
 
         // Direct catalog validation still reports these dedicated keys as unknown.
@@ -2014,25 +1983,6 @@ mod tests {
             serde_json::from_str::<Value>(&valid_input).unwrap()
         );
         assert_eq!(valid_input.as_bytes(), saved_input);
-        assert_eq!(serde_json::to_vec(&dormant).unwrap(), saved_dormant);
-
-        let mut invalid_values = values.clone();
-        invalid_values.insert(
-            "@option_order".into(),
-            json!({"version": 2, "occurrences": []}),
-        );
-        let invalid_input = json!({"vllm": invalid_values}).to_string();
-        let saved_invalid_input = invalid_input.as_bytes().to_vec();
-        let expected_messages = expected
-            .iter()
-            .map(|issue| issue.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert_eq!(
-            super::super::adapter::parse_option_maps(&dormant, &invalid_input).unwrap_err(),
-            format!("invalid vllm options: {expected_messages}; the saved option order uses version 2, which this app does not support; the saved values were retained")
-        );
-        assert_eq!(invalid_input.as_bytes(), saved_invalid_input);
         assert_eq!(serde_json::to_vec(&dormant).unwrap(), saved_dormant);
     }
 

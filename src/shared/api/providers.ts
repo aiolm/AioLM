@@ -51,8 +51,8 @@ export function runtimeLabel(runtime: RuntimeInstance): string {
   return `${identity} · ${runtime.accelerator} · ${runtime.installation}`;
 }
 export interface ProviderOption {
-  key: string; flag?: string; group: string; target: 'launch' | 'request'; runtime_default?: string;
-  kind: { type: 'integer' | 'number' | 'flag' | 'toggle' | 'choice' | 'text' | 'path' | 'json'; min?: number; max?: number; choices?: string[]; max_len?: number };
+  key: string; flag?: string; group: string; target: 'launch' | 'request'; runtime_default?: string; help?: string;
+  kind: { type: 'integer' | 'number' | 'flag' | 'toggle' | 'choice' | 'text' | 'path' | 'json'; min?: number; max?: number; min_exclusive?: boolean; max_exclusive?: boolean; sentinel_values?: number[]; choices?: Array<string | number>; max_len?: number };
 }
 export interface ProviderDescription {
   id: ProviderId; engine: string; server: string; managed_version?: string;

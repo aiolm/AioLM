@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildChatRequestBody } from "../../src/shared/api/index.ts";
+import { buildChatRequestBody } from "../../src/shared/api/chat.ts";
 import { assertUnmanagedServerArgs, parseChatOptions } from "../../src/shared/config/tuningValidation.ts";
 
 assert.deepEqual(

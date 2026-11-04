@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import RuntimeOptionSchemaForm from './RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm, { SchemaOptionField } from './RuntimeOptionSchemaForm';
 import { maskImportReview, maskPreview } from './optionPresentation';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
@@ -144,6 +144,92 @@ describe('generic runtime option renderer', () => {
     expect(screen.getByLabelText(/^--unknown/)).toHaveAccessibleDescription('unknown help');
     expect(screen.queryByText('numeric range: 1–32')).not.toBeInTheDocument();
     await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+  });
+
+  it('retains saved values and requires exact inclusive or exclusive numeric boundaries when edited', () => {
+    const option = textOption('top-p', { kind: known('number'), range: known({ min: 0, max: 1, min_exclusive: true }) });
+    const onStore = vi.fn();
+    const onInvalid = vi.fn();
+    render(<I18nProvider initialLocale="en"><SchemaOptionField option={option} stored={-3} disabled={false}
+      onStore={onStore} onInvalid={onInvalid} /></I18nProvider>);
+    const input = screen.getByRole('textbox', { name: /^--top-p/ });
+    expect(input).toHaveValue('-3');
+    expect(onStore).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(input).toHaveValue('0');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:top-p', true);
+    expect(onStore).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '0.00000001' } });
+    expect(input).not.toHaveAttribute('aria-invalid');
+    expect(onStore).toHaveBeenLastCalledWith(0.00000001);
+    fireEvent.change(input, { target: { value: '1' } });
+    expect(onStore).toHaveBeenLastCalledWith(1);
+    fireEvent.change(input, { target: { value: '1.001' } });
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(onStore).toHaveBeenLastCalledWith(1);
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onStore).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('applies runtime-provided upper exclusivity but never guesses unknown constraints', () => {
+    const option = textOption('quota', { kind: known('number'), range: known({ min: 0, max: 2, max_exclusive: true }) });
+    const onStore = vi.fn();
+    const view = render(<I18nProvider initialLocale="en"><SchemaOptionField option={option} stored={1} disabled={false} onStore={onStore} /></I18nProvider>);
+    const input = screen.getByRole('textbox', { name: /^--quota/ });
+    fireEvent.change(input, { target: { value: '2' } });
+    expect(onStore).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(input, { target: { value: '1.5' } });
+    expect(onStore).toHaveBeenLastCalledWith(1.5);
+    view.rerender(<I18nProvider initialLocale="en"><SchemaOptionField
+      option={{ ...option, range: { ...option.range, certainty: 'unknown' } }} stored={1} disabled={false} onStore={onStore} /></I18nProvider>);
+    fireEvent.change(input, { target: { value: '2' } });
+    expect(onStore).toHaveBeenLastCalledWith(2);
+    expect(input).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('keeps an auto-context sentinel editable without admitting zero or treating it as a default', () => {
+    const context = textOption('max-model-len', { kind: known('integer'),
+      range: known({ min: 1, max: 4096, sentinel_values: [-1] }) });
+    const onStore = vi.fn();
+    render(<I18nProvider initialLocale="en"><SchemaOptionField option={context} stored={-1} disabled={false} onStore={onStore} /></I18nProvider>);
+    const input = screen.getByRole('textbox', { name: /^--max-model-len/ });
+    expect(input).toHaveValue('-1');
+    expect(onStore).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(onStore).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '1' } });
+    expect(input).not.toHaveAttribute('aria-invalid');
+    expect(onStore).toHaveBeenLastCalledWith(1);
+    fireEvent.change(input, { target: { value: '-1' } });
+    expect(input).not.toHaveAttribute('aria-invalid');
+    expect(onStore).toHaveBeenLastCalledWith(-1);
+    fireEvent.change(input, { target: { value: '-2' } });
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(onStore).toHaveBeenLastCalledWith(-1);
+  });
+
+  it('shows an unsupported saved numeric choice until the user replaces or clears it', () => {
+    const rank = textOption('max-lora-rank', { kind: known('integer'), choices: known([1, 8, 16, 32, 64, 128, 256, 320, 512]) });
+    const onStore = vi.fn();
+    const view = (stored: number | undefined) => <I18nProvider initialLocale="en"><SchemaOptionField option={rank} stored={stored}
+      disabled={false} onStore={onStore} /></I18nProvider>;
+    const rendered = render(view(2));
+    const input = screen.getByRole('combobox', { name: '--max-lora-rank' });
+    expect(input).toHaveTextContent('2');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(onStore).not.toHaveBeenCalled();
+    fireEvent.click(input);
+    expect(screen.getByRole('option', { name: '2' })).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('option', { name: '128' }));
+    expect(onStore).toHaveBeenLastCalledWith(128);
+    rendered.rerender(view(128));
+    expect(input).not.toHaveAttribute('aria-invalid');
+    fireEvent.click(input);
+    fireEvent.click(screen.getByRole('option', { name: runtimeOptionsCopy.en.inherit }));
+    expect(onStore).toHaveBeenLastCalledWith(undefined);
   });
 
   it('does not disclose a sensitive option through its numeric bounds', async () => {

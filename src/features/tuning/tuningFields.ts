@@ -45,6 +45,8 @@ export interface NumericField extends TuningFieldMetadata {
   step: number;
   min: number;
   max: number;
+  excludedValues?: readonly number[];
+  allowZero?: boolean;
   server: boolean;
   hint: string;
 }
@@ -54,6 +56,8 @@ export interface ChatOptionField extends TuningFieldMetadata {
   label: string;
   step: number;
   min: number;
+  /** Whether the lower endpoint itself is invalid (for example repeat_penalty > 0). */
+  minExclusive?: boolean;
   max: number;
   defaultValue: number;
   hint: string;
@@ -62,15 +66,15 @@ export interface ChatOptionField extends TuningFieldMetadata {
 
 export const SERVER_FIELDS: NumericField[] = [
   { key: "ngl", label: "GPU layers (ngl)", step: 1, min: 0, max: 999, server: true, hint: "0–999. 0 keeps inference on CPU; a value past the layer count offloads all of them.", category: "runtime", tooltip: { title: "GPU layers", description: "Number of model layers offloaded to the selected GPU." }, aliases: ["--n-gpu-layers", "--gpu-layers", "-ngl"] },
-  { key: "ctx_size", label: "Context size", step: 256, min: 0, max: 131072, server: true, hint: "0 uses the model context size. Restart required.", category: "context", tooltip: { title: "Context size", description: "Maximum prompt and generation context allocated by the server." }, aliases: ["--ctx-size", "-c"] },
+  { key: "ctx_size", label: "Context size", step: 256, min: 512, max: 131072, allowZero: true, server: true, hint: "0 uses the model context size; explicit context sizes start at 512 in this app. Restart required.", category: "context", tooltip: { title: "Context size", description: "Maximum prompt and generation context allocated by the server. 0 uses the model context size; this app accepts explicit sizes of at least 512 tokens." }, aliases: ["--ctx-size", "-c"] },
   { key: "batch_size", label: "Batch size", step: 64, min: 1, max: 131072, server: true, hint: "Logical prompt-processing batch. Restart required.", category: "context", tooltip: { title: "Batch size", description: "Maximum number of tokens processed together during prompt evaluation." }, aliases: ["--batch-size", "-b"] },
   { key: "ubatch_size", label: "Micro batch size", step: 64, min: 1, max: 131072, server: true, hint: "Physical micro-batch; keep it at or below batch size.", category: "context", tooltip: { title: "Micro batch size", description: "Physical batch submitted to the backend at once; smaller values reduce peak memory." }, aliases: ["--ubatch-size", "-ub"] },
-  { key: "keep", label: "Keep prompt tokens", step: 1, min: 0, max: 131072, server: true, hint: "Tokens retained when context shifting. Restart required.", category: "context", tooltip: { title: "Keep prompt tokens", description: "Number of initial prompt tokens retained when the context window shifts." }, aliases: ["--keep"] },
-  { key: "n_cpu_moe", label: "CPU MoE (n-cpu-moe)", step: 1, min: 0, max: 64, server: true, hint: "0–64 experts kept on CPU.", category: "runtime", tooltip: { title: "CPU MoE", description: "Keep a selected number of mixture-of-experts layers on the CPU." }, aliases: ["--n-cpu-moe", "-ncmoe"] },
+  { key: "keep", label: "Keep prompt tokens", step: 1, min: -1, max: 131072, server: true, hint: "−1 keeps all initial prompt tokens; 0 keeps none. Restart required.", category: "context", tooltip: { title: "Keep prompt tokens", description: "Number of initial prompt tokens retained when the context window shifts; −1 keeps all and 0 keeps none." }, aliases: ["--keep"] },
+  { key: "n_cpu_moe", label: "CPU MoE (n-cpu-moe)", step: 1, min: 0, max: 64, server: true, hint: "MoE weights of the first 0–64 layers kept on CPU.", category: "runtime", tooltip: { title: "CPU MoE", description: "Keep the mixture-of-experts weights of the first N layers on the CPU, not N individual experts." }, aliases: ["--n-cpu-moe", "-ncmoe"] },
   { key: "threads", label: "Threads", step: 1, min: 0, max: 64, server: true, hint: "0 = auto. Restart required.", category: "runtime", tooltip: { title: "CPU threads", description: "Inference thread count; zero lets llama.cpp choose automatically." }, aliases: ["--threads", "-t"] },
   { key: "parallel", label: "Server slots", step: 1, min: 0, max: 128, server: true, hint: "0 = auto. More slots increase concurrent memory use.", category: "runtime", tooltip: { title: "Server slots", description: "Concurrent request slots. More slots increase KV memory use." }, aliases: ["--parallel", "-np"] },
   { key: "request_timeout_seconds", label: "Request timeout (seconds)", step: 1, min: 1, max: 86400, server: true, hint: "llama-server read/write timeout. Restart required.", category: "runtime", tooltip: { title: "Request timeout", description: "Maximum time llama-server waits for a request or response." }, aliases: ["--timeout", "-to"] },
-  { key: "sleep_idle_seconds", label: "Sleep after idle (seconds)", step: 1, min: -1, max: 604800, server: true, hint: "−1 disables sleep; llama.cpp releases idle compute state.", category: "runtime", tooltip: { title: "Idle sleep", description: "Release idle compute state after this many seconds; −1 disables it." }, aliases: ["--sleep-idle-seconds"] },
+  { key: "sleep_idle_seconds", label: "Sleep after idle (seconds)", step: 1, min: -1, max: 604800, excludedValues: [0], server: true, hint: "−1 disables sleep; otherwise use a positive number of seconds.", category: "runtime", tooltip: { title: "Idle sleep", description: "Release idle compute state after a positive number of seconds; −1 disables sleep. 0 is not accepted by llama.cpp." }, aliases: ["--sleep-idle-seconds"] },
 ];
 
 export const MTP_FIELDS: NumericField[] = [
@@ -85,9 +89,9 @@ export const REASONING_FIELDS: NumericField[] = [
 ];
 
 export const SAMPLING_FIELDS: NumericField[] = [
-  { key: "temperature", label: "Temperature", step: 0.05, min: 0, max: 2, server: false, hint: "0–2. Higher = more random.", category: "sampling", tooltip: { title: "Temperature", description: "Controls how much probability is spread across candidate tokens." }, aliases: ["temperature"] },
+  { key: "temperature", label: "Temperature", step: 0.05, min: 0, max: 2, server: false, hint: "0–2 slider range. Not a probability; values above 1 are valid.", category: "sampling", tooltip: { title: "Temperature", description: "Controls output randomness, not a probability. 0 selects greedily; values above 1 are valid and produce more varied responses. The slider uses a 0–2 range." }, aliases: ["temperature"] },
   { key: "top_p", label: "Top-p", step: 0.01, min: 0.01, max: 1, server: false, hint: "0.01–1. Nucleus sampling.", category: "sampling", tooltip: { title: "Top-p", description: "Limits sampling to the smallest set of tokens within this cumulative probability." }, aliases: ["top_p"] },
-  { key: "top_k", label: "Top-k", step: 1, min: 1, max: 200, server: false, hint: "1–200. Candidate pool size.", category: "sampling", tooltip: { title: "Top-k", description: "Limits sampling to the most likely K candidate tokens." }, aliases: ["top_k"] },
+  { key: "top_k", label: "Top-k", step: 1, min: 0, max: 200, server: false, hint: "0 disables Top-k; otherwise limits the candidate pool.", category: "sampling", tooltip: { title: "Top-k", description: "Limits sampling to the most likely K candidate tokens; 0 disables this filter." }, aliases: ["top_k"] },
 ];
 
 export const ADVANCED_SAMPLING_FIELDS: ChatOptionField[] = [
@@ -98,8 +102,8 @@ export const ADVANCED_SAMPLING_FIELDS: ChatOptionField[] = [
   { key: "xtc_threshold", label: "XTC threshold", step: 0.01, min: 0, max: 1, defaultValue: 0.1, hint: "1 disables XTC token filtering.", category: "sampling", tooltip: { title: "XTC threshold", description: "Minimum candidate probability used by XTC filtering." }, aliases: ["xtc_threshold"] },
   { key: "dynatemp_range", label: "Dynamic temperature range", step: 0.05, min: 0, max: 2, defaultValue: 0, hint: "0 disables dynamic temperature.", category: "sampling", tooltip: { title: "Dynamic temperature range", description: "Amount by which temperature can vary with the distribution." }, aliases: ["dynatemp_range"] },
   { key: "dynatemp_exponent", label: "Dynamic temperature exponent", step: 0.05, min: 0.1, max: 3, defaultValue: 1, hint: "Exponent used when dynamic temperature is enabled.", category: "sampling", tooltip: { title: "Dynamic temperature exponent", description: "Exponent applied to the dynamic temperature adjustment." }, aliases: ["dynatemp_exponent"] },
-  { key: "repeat_last_n", label: "Repeat last n", step: 1, min: -1, max: 131072, defaultValue: 64, hint: "−1 uses the context size; 0 disables repetition penalties.", category: "sampling", tooltip: { title: "Repeat window", description: "Number of recent tokens examined for repetition penalties." }, aliases: ["repeat_last_n"] },
-  { key: "repeat_penalty", label: "Repeat penalty", step: 0.01, min: 0, max: 2, defaultValue: 1, hint: "1 disables the traditional repetition penalty.", category: "sampling", tooltip: { title: "Repeat penalty", description: "Penalize tokens that appeared in the repetition window." }, aliases: ["repeat_penalty"] },
+  { key: "repeat_last_n", label: "Repeat last n", step: 1, min: 0, max: 131072, defaultValue: 64, hint: "0 disables repetition penalties. Negative windows are not accepted by the current request schema.", category: "sampling", tooltip: { title: "Repeat window", description: "Number of recent tokens examined for repetition penalties; 0 disables them. Negative windows are not accepted by the current request schema." }, aliases: ["repeat_last_n"] },
+  { key: "repeat_penalty", label: "Repeat penalty", step: 0.01, min: 0, minExclusive: true, max: 2, defaultValue: 1, hint: "Must be greater than 0; 1 disables the traditional repetition penalty.", category: "sampling", tooltip: { title: "Repeat penalty", description: "Penalize tokens that appeared in the repetition window. Must be greater than 0; 1 disables the penalty." }, aliases: ["repeat_penalty"] },
   { key: "presence_penalty", label: "Presence penalty", step: 0.01, min: -2, max: 2, defaultValue: 0, hint: "0 disables presence penalty.", category: "sampling", tooltip: { title: "Presence penalty", description: "Adjust the likelihood of tokens that have appeared at least once." }, aliases: ["presence_penalty"] },
   { key: "frequency_penalty", label: "Frequency penalty", step: 0.01, min: -2, max: 2, defaultValue: 0, hint: "0 disables frequency penalty.", category: "sampling", tooltip: { title: "Frequency penalty", description: "Adjust token likelihood based on how often each token appeared." }, aliases: ["frequency_penalty"] },
   { key: "dry_multiplier", label: "DRY multiplier", step: 0.05, min: 0, max: 2, defaultValue: 0, hint: "0 disables DRY repetition control.", category: "sampling", tooltip: { title: "DRY multiplier", description: "Strength of the DRY repetition penalty." }, aliases: ["dry_multiplier"] },
@@ -160,7 +164,10 @@ export const TUNING_FIELD_CATALOG: readonly TuningFieldCatalogEntry[] = [
 ];
 
 export const chatOptionValue = (cfg: { chat_options?: Record<string, unknown>; server_args?: string[] }, field: ChatOptionField): number => {
-  const value = cfg.chat_options?.[field.key];
+  const options = cfg.chat_options;
+  const keys = [field.requestKey ?? field.key, field.key, ...(field.aliases ?? [])];
+  const key = keys.find(name => !name.startsWith('-') && options?.[name] !== undefined);
+  const value = key === undefined ? undefined : options?.[key];
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   const args = cfg.server_args ?? [];
   const flags = serverAliasesForRequest(field.key);

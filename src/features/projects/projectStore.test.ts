@@ -113,6 +113,27 @@ describe('project settings snapshots', () => {
     expect(restored.config).not.toHaveProperty('settings_profiles');
     expect(restored.config).not.toHaveProperty('sessions');
   });
+  it.each([-1, 0, 64])('preserves keep %s and disabled Top-k through project storage, export and application', keep => {
+    const { store } = memoryStorage();
+    const cfg = { ...testConfig, keep, top_k: 0, temperature: 1.5, runtime_defaults: [] };
+    const project = projectFromConfig('Sampling project', '', cfg);
+    writeProjects([project], store);
+    const restored = importProject(exportProject(readProjects(store)[0]));
+    expect(restored.config).toMatchObject({ keep, top_k: 0, temperature: 1.5 });
+    expect(projectConfigPatch(restored)).toMatchObject({ keep, top_k: 0, temperature: 1.5 });
+  });
+
+  it.each(['batch_size', 'ubatch_size'])('preserves %s inheritance and its raw values across project storage and import', inherited => {
+    const { store } = memoryStorage();
+    const cfg = { ...testConfig, ctx_size: 0, batch_size: 128, ubatch_size: 1024, runtime_defaults: [inherited] };
+    const project = projectFromConfig('Inherited batch project', '', cfg);
+    writeProjects([project], store);
+    const restored = importProject(exportProject(readProjects(store)[0]));
+    expect(projectConfigPatch(restored)).toMatchObject({
+      ctx_size: 0, batch_size: 128, ubatch_size: 1024, runtime_defaults: [inherited],
+    });
+  });
+
   it('preserves every valid cache type through project normalization and falls back independently', () => {
     for (const cacheType of CACHE_TYPE_OPTIONS) {
       const project = projectFromConfig('Cache project', '', { ...testConfig, cache_type_k: cacheType, cache_type_v: 'q4_1' });

@@ -14,6 +14,27 @@ Open **Model settings**, choose the runtime, select a profile, then adjust its o
 
 Model loading and memory options such as mmap, mlock, DirectIO, load-mode, lazy-mode, NUMA, cache RAM, KV/operation offload, repacking, automatic fitting and SWA appear when reported by that runtime. Defaults are inherited by omitting an override; the reference catalog does not impose defaults from another version. Other engines use their own discovered schema instead of the llama.cpp field catalog.
 
+## Numeric limits and special values
+
+Temperature controls sampling randomness, not a probability. Values above `1` are valid; the app retains its `0–2` slider policy rather than incorrectly limiting it to `1`. The selected runtime's contract still takes precedence over the offline reference.
+
+| Control | Guided input and meaning |
+| --- | --- |
+| Top-k | `0` disables filtering; positive values limit the candidate pool. |
+| Keep tokens | `-1` retains the entire initial prompt; `0` remains the app's default. |
+| Repetition penalty | Strictly positive; `1` is neutral. Positive values smaller than the slider step remain valid typed input. |
+| Repeat and DRY windows | Nonnegative in the pinned request schema; `0` disables the corresponding window. `-1` is not advertised as a context-sized repeat window. |
+| Idle sleep | `-1` disables sleep; positive seconds enable it. `0` is rejected by the supported launch parser. |
+| Context size | `0` uses the model context; explicit positive sizes start at `512` under the existing app policy. This minimum is not an upstream llama.cpp limit. |
+| Batch and microbatch | An explicit microbatch cannot exceed an explicit batch. Inherited settings retain their runtime-default markers instead of being clamped against stale raw placeholders. |
+
+Guided edits and command imports reject values that would otherwise be silently changed on save, including fractional integer settings. Projects preserve context `0` and Keep `-1`. Benchmark imports validate the final batch pair, using a known destination runtime default when only microbatch is imported; an unknown default is reported as an omission rather than guessed.
+
+Existing advanced numeric overrides are displayed as stored and are not rewritten by opening or blurring the editor. Editing a request option also clears competing aliases, so a hidden canonical Mirostat or completion-token key cannot override the visible edit. Slider increments do not impose a rounding requirement on typed values.
+
+These rules were checked against the pinned [request schema](https://github.com/ggml-org/llama.cpp/blob/fa6769818708afd9807b22183ccda112fd563427/tools/server/server-schema.cpp), [sampler validation](https://github.com/ggml-org/llama.cpp/blob/fa6769818708afd9807b22183ccda112fd563427/common/sampling.cpp), and [launch argument parser](https://github.com/ggml-org/llama.cpp/blob/fa6769818708afd9807b22183ccda112fd563427/common/arg.cpp).
+
+
 ## Options removed or renamed upstream
 
 Saved `server_args` survive a runtime upgrade, so an argument a newer build no longer accepts stops the server before it becomes ready, with `error: invalid argument: <flag>` as the first log line. Value editors offer the documented values for `--load-mode`, which the runtime help lists as prose rather than in its signature.

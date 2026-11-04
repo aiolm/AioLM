@@ -1,5 +1,5 @@
 import { memo, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { runtimeHelpImport, runtimeHelpResolve, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import { inNumericRange, runtimeHelpImport, runtimeHelpResolve, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -23,13 +23,14 @@ function textual(option: OptionSchemaDefinition): boolean {
 /** Parses typed text by the option's documented kind; unknown kinds stay text. */
 function parseValue(option: OptionSchemaDefinition, text: string): { ok: true; value: unknown } | { ok: false; jsonNumber?: boolean } {
   const kind = kindOf(option);
+  const range = supported(option.range);
   if (kind === 'integer') {
     const value = Number(text);
-    return /^\s*-?\d+\s*$/.test(text) && Number.isSafeInteger(value) ? { ok: true, value } : { ok: false };
+    return /^\s*-?\d+\s*$/.test(text) && Number.isSafeInteger(value) && (!range || inNumericRange(value, range)) ? { ok: true, value } : { ok: false };
   }
   if (kind === 'number') {
     const value = Number(text);
-    return text.trim() !== '' && Number.isFinite(value) ? { ok: true, value } : { ok: false };
+    return text.trim() !== '' && Number.isFinite(value) && (!range || inNumericRange(value, range)) ? { ok: true, value } : { ok: false };
   }
   if (kind === 'json') {
     try {
@@ -104,15 +105,17 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
   if (choices.length > 0) {
     // Choices keep their documented JSON type by position, never via String().
     const index = choices.findIndex(choice => JSON.stringify(choice) === JSON.stringify(value));
+    const unlisted = value !== undefined && index < 0;
     return (
       <CustomSelect
         ariaLabel={label}
         ariaDescribedBy={describedByIds}
-        ariaInvalid={ariaInvalid}
-        value={index < 0 ? '' : String(index)}
+        ariaInvalid={unlisted || ariaInvalid}
+        value={unlisted ? 'saved' : index < 0 ? '' : String(index)}
         disabled={disabled}
         options={[
           { value: '', label: emptyMeans === 'inherit' ? copy.inherit : copy.value },
+          ...(unlisted ? [{ value: 'saved', label: sensitive ? '•••' : display(value) || '""', disabled: true }] : []),
           ...choices.map((choice, position) => ({ value: String(position), label: display(choice) })),
         ]}
         onChange={selected => onValue(selected === '' ? undefined : choices[Number(selected)])}
@@ -206,8 +209,14 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const range = supported(option.sensitive) === true ? undefined : supported(option.range);
   const minimum = typeof range?.min === 'number' && Number.isFinite(range.min) ? range.min : undefined;
   const maximum = typeof range?.max === 'number' && Number.isFinite(range.max) ? range.max : undefined;
-  const bounds = minimum !== undefined && maximum !== undefined ? `${minimum}–${maximum}`
-    : minimum !== undefined ? `≥ ${minimum}` : maximum !== undefined ? `≤ ${maximum}` : undefined;
+  const interval = minimum !== undefined && maximum !== undefined
+    ? (range?.min_exclusive || range?.max_exclusive
+      ? `${range.min_exclusive ? '(' : '['}${minimum}, ${maximum}${range.max_exclusive ? ')' : ']'}`
+      : `${minimum}–${maximum}`)
+    : minimum !== undefined ? `${range?.min_exclusive ? '>' : '≥'} ${minimum}`
+      : maximum !== undefined ? `${range?.max_exclusive ? '<' : '≤'} ${maximum}` : undefined;
+  const sentinels = range?.sentinel_values?.length ? `{${range.sentinel_values.join(', ')}}` : undefined;
+  const bounds = [interval, sentinels].filter(Boolean).join(' ∪ ') || undefined;
   const rangeHint = bounds === undefined ? null : <p id={rangeId} className="app-section-hint">{copy.field_range}: {bounds}</p>;
   const describedBy = [option.help ? helpId : undefined, bounds === undefined ? undefined : rangeId].filter(Boolean).join(' ') || undefined;
   const name = optionName(option);
