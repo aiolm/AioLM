@@ -1,5 +1,5 @@
 import { invoke, isNativeRuntimeAvailable } from "./transport.ts";
-import { loadPreferences } from "../config/preferences";
+import { loadPreferences } from "../config/preferences.ts";
 
 /** Where personal instructions and skills come from: AioLM's data folder or the shared `~/.agents`. */
 export type PersonalizationSource = "aiolm" | "agents";

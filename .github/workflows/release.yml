@@ -738,19 +738,22 @@ jobs:
           body: |
             ## What's changed
 
-            - Single-file GGUF benchmark runs collect the complete weights SHA-256 before timing,
-              allowing the website to match exact Hugging Face catalog files by hash and size.
-              Unavailable hashes remain unknown; historical measurements are not rewritten.
-            - Native runtime provenance records a bundle's declared backend only when its version
-              and the selected server executable's SHA-256 match the manifest.
-            - Native readiness verifies configured model aliases and routes through the advertised
-              ID. GPU assignments require matching native launch evidence, not saved device choices.
-            - Failed history keeps its saved display label without inventing export provenance;
-              unavailable configuration import explains why it is disabled in all four languages.
-            - Streaming completion accepts null error metadata, and serving history replay supports
-              valid large grids within the journal budget without increasing publication limits.
-
-            Token counts, automatic GPU placement and absent provenance are not inferred.
+            - Downloaded models can check for updates and show an Update action only when changes
+              are available. Unchanged files are reused; only changed or added files are downloaded.
+              Updates are file-based: a changed single GGUF file must be downloaded in full.
+            - The existing Manage runtimes action opens the complete inference engine inventory,
+              regardless of the selected engine. Returning preserves the unsaved model settings.
+              Korean labels distinguish inference engines, installed runtimes, deselection and deletion.
+            - Shared and AioLM-specific AGENTS.md instructions can be enabled independently,
+              including using both sources or neither, while preserving skill and per-turn context.
+            - Chat status distinguishes prompt processing (prefill) from token generation (decode).
+            - Sampling and loading controls follow each engine's supported bounds, choices and
+              sentinel values without discarding inherited settings or saved advanced overrides.
+            - Conversation save failures offer retry actions; unreadable attachments and ready
+              model snapshot manifests are preserved when recovery or verification is interrupted.
+            - Model setup guidance connects empty chat and the model library to discovery.
+              Download completion and runtime operations retain their owners across navigation,
+              and model folder changes remain tied to successful persistence.
 
             ## Packages and verification
 

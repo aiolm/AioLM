@@ -209,12 +209,13 @@ describe("ModelsPanel CSS cascade", () => {
 
     await screen.findByText("kept.gguf");
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
-    const retryButton = await screen.findByRole("button", { name: "Retry" });
+    await screen.findByText("scan failed");
+    const retryButton = screen.getByRole("button", { name: "Retry" });
     expect(screen.getByText("kept.gguf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Rescan" })).not.toBeInTheDocument();
     fireEvent.click(retryButton);
     expect(await screen.findByRole("button", { name: "Rescan" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByText("scan failed")).not.toBeInTheDocument();
     expect(mocked.listModels).toHaveBeenCalledTimes(3);
     expect(screen.getByText("kept.gguf")).toBeInTheDocument();
   });

@@ -1,5 +1,5 @@
 import type { ThemeMode } from "./theme";
-import { type Locale } from "../i18n/i18nCatalog";
+import type { Locale } from "../i18n/i18nCatalog";
 
 export type ChatLineSpacing = "compact" | "normal" | "relaxed";
 export type AppFontFamily = "default" | "system" | "serif";

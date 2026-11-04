@@ -1025,7 +1025,11 @@ mod tests {
     fn unselected_invalid_or_oversized_instruction_files_are_ignored_without_warnings() {
         for (invalid_source, selected_source, invalid_bytes) in [
             (Source::Agents, Source::Aiolm, vec![0xff, 0xfe, 0x00]),
-            (Source::Aiolm, Source::Agents, vec![b'a'; MAX_FILE_BYTES + 1]),
+            (
+                Source::Aiolm,
+                Source::Agents,
+                vec![b'a'; MAX_FILE_BYTES + 1],
+            ),
         ] {
             let fixture = Fixture::new();
             fixture.write(invalid_source, "AGENTS.md", invalid_bytes);
@@ -1187,8 +1191,10 @@ mod tests {
             fixture.skill(Source::Agents, &folder, &folder, "d");
         }
         let last = format!("agents:skill-{MAX_SKILL_DIRECTORIES:03}");
-        assert!(load(&fixture.roots, &[Source::Agents, Source::Aiolm]).warnings[0]
-            .contains("skill folders"));
+        assert!(
+            load(&fixture.roots, &[Source::Agents, Source::Aiolm]).warnings[0]
+                .contains("skill folders")
+        );
         assert!(read_skill(&fixture.roots, &last).is_err());
         // Folders read but beyond the skill cap are refused as well.
         assert!(read_skill(&fixture.roots, "agents:skill-128").is_err());
