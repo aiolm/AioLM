@@ -7,6 +7,7 @@ import { sessionHasActivity } from '../../shared/state/sessionActivity';
 import type { ChatHistoryMessage } from './chatHistory';
 import type { DocumentAttachment, ImageAttachment } from './chatUtils';
 import { useChatSend } from './useChatSend';
+import type { ChatPhase } from './chatSendTypes';
 
 vi.mock('../../shared/api/index', () => ({
   chatStream: vi.fn(), embedText: vi.fn(), serverActivity: vi.fn(async () => undefined),
@@ -19,7 +20,7 @@ function setup(initialDocuments: DocumentAttachment[] = []) {
   return renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState('Original question');
-    const [phase, setPhase] = useState<'idle' | 'thinking' | 'streaming'>('idle');
+    const [phase, setPhase] = useState<ChatPhase>('idle');
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState(initialDocuments);
     const atBottomRef = useRef(true);
@@ -56,6 +57,7 @@ describe('chat turn lifecycle', () => {
     let sending!: Promise<void>;
     act(() => { sending = result.current.send(); });
     await waitFor(() => expect(api.embedText).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe('preparing');
     expect(sessionHasActivity('lifecycle-session')).toBe(true);
     await act(async () => { result.current.stop(); await sending; });
     expect(requestSignal?.aborted).toBe(true);

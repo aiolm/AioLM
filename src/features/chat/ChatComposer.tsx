@@ -11,6 +11,7 @@ import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import type { ChatMcpTool } from "./useChatMcpTools";
 import type { PendingToolCall } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
 import { chatReplyStateCopy } from './chatRetryCopy';
 
@@ -40,7 +41,7 @@ interface ChatComposerProps {
   disabled: boolean;
   enterToSend?: boolean;
   loadingModel?: boolean;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   onAddAttachment: () => void;
   onStop: () => void;
   aborting: boolean;
@@ -90,8 +91,8 @@ export default function ChatComposer({
     : responseState === 'tool-request' ? ct('mcpResponseIncomplete')
     : responseState === 'complete' ? ct(responseFinishReason === 'length' ? 'responseLimited' : 'responseReady') : null;
   const conversationStatus = toolCallInProgress ? ct('waitingMcpTool')
-    : phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken")
     : pendingToolCall ? ct('mcpApprovalRequired')
+    : phase !== 'idle' ? ct(phase)
     : responseStatus ? `${responseStatus} · ${msgsLength} ${ct('messages')}`
     : msgsLength === 0 ? ct('emptyConversation') : `${msgsLength} ${ct('messages')}`;
   return (

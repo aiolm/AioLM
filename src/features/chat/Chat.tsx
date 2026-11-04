@@ -12,6 +12,7 @@ import { useChatAttachments } from "./useChatAttachments";
 import { useNativeAttachmentDrop } from './useNativeAttachmentDrop';
 import { useChatMcpTools } from "./useChatMcpTools";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
@@ -51,7 +52,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   const modelSettings = useModelSettings();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
   const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
-  const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+  const [phase, setPhase] = useState<ChatPhase>("idle");
   const [input, setInput] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
   const [copiedMessage, showCopied] = useFlashMessage(1800);
@@ -403,7 +404,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             canGenerate={chatSupported && generates}
             msgs={viewMessages}
             streamingDraft={viewingLiveThread ? streamingDraft : null}
-            phase={phase}
+            phase={viewingLiveThread ? phase : 'idle'}
             copiedIndex={copied}
             compactMessages={preferences?.chat.compactMessages ?? false}
             locale={locale}

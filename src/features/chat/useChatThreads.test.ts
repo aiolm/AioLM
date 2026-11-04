@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { ChatThread, ChatWorkspace } from "./chatHistory";
 import { loadChatWorkspaceAsync, saveChatWorkspaceAsync } from "./chatHistory";
 import { useChatThreads } from "./useChatThreads";
+import type { ChatPhase } from "./chatSendTypes";
 
 const thread = (id: string, title: string, updatedAt: number): ChatThread => ({
   id, title, systemPrompt: "", createdAt: updatedAt, updatedAt,
@@ -58,11 +59,11 @@ describe("useChatThreads", () => {
     }
   });
 
-  it.each(['streaming', 'approval'] as const)('preserves the live turn owner when delayed history hydration finishes during %s', async stage => {
+  it.each(['decoding', 'approval'] as const)('preserves the live turn owner when delayed history hydration finishes during %s', async stage => {
     let resolveHydration!: (stored: ChatWorkspace) => void;
     vi.mocked(loadChatWorkspaceAsync).mockReturnValue(new Promise(resolve => { resolveHydration = resolve; }));
     let pending = stage === 'approval';
-    let phase: 'idle' | 'streaming' = stage === 'streaming' ? 'streaming' : 'idle';
+    let phase: ChatPhase = stage === 'decoding' ? 'decoding' : 'idle';
     const switched = vi.fn();
     const options = () => ({ phase, hasPendingTurn: () => pending, requireIdle: () => phase === 'idle' && !pending, onSwitchThread: switched });
     const { result, rerender } = renderHook(useChatThreads, { initialProps: options() });
@@ -87,7 +88,7 @@ describe("useChatThreads", () => {
   it('retains a preparing turn whose initial conversation is absent from the hydrated history', async () => {
     let resolveHydration!: (stored: ChatWorkspace) => void;
     vi.mocked(loadChatWorkspaceAsync).mockReturnValue(new Promise(resolve => { resolveHydration = resolve; }));
-    let phase: 'thinking' | 'idle' = 'thinking';
+    let phase: ChatPhase = 'preparing';
     const options = () => ({ phase, requireIdle: () => phase === 'idle', onSwitchThread: vi.fn() });
     const { result, rerender } = renderHook(useChatThreads, { initialProps: options() });
     const original = result.current.msgs;

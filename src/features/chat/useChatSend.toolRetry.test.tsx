@@ -8,6 +8,7 @@ import { loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type Cha
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { mcpToolDefinition, type ChatMcpTool } from "./useChatMcpTools";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 // The native call settles only when answered, cancelled or failed, the way the
 // backend answers a Stop that lands during the native approval or the tool RPC.
@@ -57,7 +58,7 @@ function setup(options: { initial?: ChatHistoryMessage[]; tools?: Tools } = {}) 
   return renderHook(({ tools }: { tools: Tools }) => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>(options.initial ?? []);
     const [input, setInput] = useState(options.initial ? "" : "Synthetic question for the lookup tool");
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);

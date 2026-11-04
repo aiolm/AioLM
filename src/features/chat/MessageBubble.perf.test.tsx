@@ -39,7 +39,7 @@ describe("MessageBubble memoization under streaming (P1-7)", () => {
         message,
         index,
         messageCount: msgs.length,
-        phase: "streaming" as const,
+        phase: index === msgs.length - 1 ? "decoding" as const : "idle" as const,
         copied: false,
         compact: false,
         locale: "en" as const,

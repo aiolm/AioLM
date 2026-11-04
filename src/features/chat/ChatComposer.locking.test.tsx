@@ -83,15 +83,16 @@ describe('composer turn locks', () => {
 
   it('distinguishes the native tool wait from its follow-up model request while keeping Stop available', () => {
     const options = props();
-    const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="thinking" toolCallInProgress /></I18nProvider>);
+    const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="preparing" toolCallInProgress /></I18nProvider>);
     expect(document.querySelector('.chat-composer-status')).toHaveTextContent('waitingMcpTool');
-    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('waitingFirstToken');
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'stop' }));
     expect(options.onStop).toHaveBeenCalledOnce();
-    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="thinking" toolCallInProgress={false} /></I18nProvider>);
-    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('waitingFirstToken');
-    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="streaming" toolCallInProgress={false} /></I18nProvider>);
-    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('generating');
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="prefill" toolCallInProgress={false} /></I18nProvider>);
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'stop' })).toBeEnabled();
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="decoding" toolCallInProgress={false} /></I18nProvider>);
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'stop' })).toBeEnabled();
   });
 });

@@ -8,6 +8,7 @@ import { createTestStore } from "../../testing/appStore";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 vi.mock("../../shared/api/index", () => ({
   chatStream: vi.fn(),
@@ -24,7 +25,7 @@ function setup(overrides: Partial<Options> = {}) {
   return renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState("Hello");
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);
@@ -123,24 +124,40 @@ describe("request-scoped response metrics", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    { reasoning: "Reasoning before the final answer" },
-    { tool_calls: [{ index: 0, id: "call-progress", name: "lookup", arguments: "{" }] },
-  ])("leaves first-token waiting when a reasoning or tool token arrives", async delta => {
-    const stream = controlledStream();
-    const { result } = setup();
-    act(() => { void result.current.send(); });
-    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
-    stream.emit({ usage: { prompt_tokens: 12 } });
-    expect(result.current.phase).toBe("thinking");
-    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
-    now = 1200;
-    stream.emit(delta);
-    expect(result.current.phase).toBe("streaming");
-    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBe(200);
-    act(() => result.current.stop());
-    await waitFor(() => expect(result.current.phase).toBe("idle"));
-    expect(result.current.pendingToolCall).toBeNull();
+  it.each([true, false])("tracks first output independently of text streaming (%s)", async streamResponses => {
+    const preferences = defaultPreferences();
+    preferences.chat.streamResponses = streamResponses;
+    const firstOutputs: api.ChatDelta[] = [
+      { content: "Answer" },
+      { reasoning: "Reasoning before the final answer" },
+      { tool_calls: [{ index: 0, name: "lookup" }] },
+      { tool_calls: [{ index: 0, arguments: "{" }] },
+    ];
+    for (const delta of firstOutputs) {
+      now = 1000;
+      const stream = controlledStream();
+      const { result, unmount } = setup({ preferences });
+      act(() => { void result.current.send(); });
+      await waitFor(() => expect(result.current.phase).toBe("prefill"));
+      stream.emit({});
+      stream.emit({ content: "", reasoning: "", tool_calls: [{ index: 0, id: "call-progress", name: "", arguments: "" }] });
+      stream.emit({ usage: { prompt_tokens: 12 }, timings: { prompt_n: 12 }, metrics: { generation_time_ms: 0 } });
+      expect(result.current.phase).toBe("prefill");
+      expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
+      now = 1200;
+      stream.emit(delta);
+      expect(result.current.phase).toBe("decoding");
+      if (!streamResponses) expect(result.current.streamingDraft).toMatchObject({ content: "", reasoning: "" });
+      now = 1400;
+      stream.emit(delta);
+      stream.emit({ usage: { completion_tokens: 2 } });
+      expect(result.current.phase).toBe("decoding");
+      expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBe(200);
+      act(() => result.current.stop());
+      await waitFor(() => expect(result.current.phase).toBe("idle"));
+      expect(result.current.pendingToolCall).toBeNull();
+      unmount();
+    }
   });
 
   it("separates preparation and TTFT from server PP/TG durations and updates only the draft", async () => {
@@ -180,11 +197,14 @@ describe("request-scoped response metrics", () => {
     const { result } = setup({ preferences });
     act(() => { void result.current.send(); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe("prefill");
     now = 1200;
     stream.emit({ content: "Buffered answer", usage: { completion_tokens: 4 } });
+    expect(result.current.phase).toBe("decoding");
     expect(result.current.streamingDraft).toMatchObject({ content: "", reasoning: "", metrics: { tg: { tokens: 4 } } });
     await stream.finish("Buffered answer");
     expect(result.current.msgs.at(-1)).toMatchObject({ content: "Buffered answer", metrics: { tg: { tokens: 4 } } });
+    expect(result.current.phase).toBe("idle");
   });
 
   it("retains vLLM's final telemetry frame after the finish reason and persists decode metrics", async () => {
@@ -243,9 +263,16 @@ describe("request-scoped response metrics", () => {
     now = 3000;
     act(() => { void result.current.send(true); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledTimes(2));
+    expect(result.current.phase).toBe("prefill");
+    stream.emit({ reasoning: "Late output from the old request", usage: { completion_tokens: 99 } });
+    expect(result.current.phase).toBe("prefill");
+    expect(result.current.streamingDraft).toMatchObject({ content: "", reasoning: "" });
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
     now = 3100;
     retry.emit({ content: "Fresh answer" });
+    expect(result.current.phase).toBe("decoding");
     await retry.finish("Fresh answer");
+    expect(result.current.phase).toBe("idle");
     expect(result.current.msgs).toHaveLength(2);
     expect(result.current.msgs.at(-1)).toMatchObject({
       content: "Fresh answer", metrics: { pp: {}, tg: {}, firstTokenMs: 100, requestMs: 100 },
@@ -276,16 +303,20 @@ describe("request-scoped response metrics", () => {
     vi.mocked(api.serverActivity).mockImplementationOnce(() => new Promise<void>((resolve) => { wake = resolve; }));
     const { result } = setup();
     act(() => { void result.current.send(); });
+    expect(result.current.phase).toBe("preparing");
     expect(sessionHasActivity("metrics-session")).toBe(true);
     expect(result.current.streamingDraft).toBeNull();
     act(() => result.current.stop());
     await act(async () => wake());
     expect(api.chatStream).not.toHaveBeenCalled();
     expect(result.current.msgs).toEqual([]);
+    expect(result.current.phase).toBe("idle");
     expect(sessionHasActivity("metrics-session")).toBe(false);
   });
 
   it("replaces tool-request metrics on follow-up while retaining the original session and settings", async () => {
+    let finishTool!: (result: unknown) => void;
+    vi.mocked(api.mcpCallTool).mockImplementationOnce(() => new Promise(resolve => { finishTool = resolve; }));
     const store = createTestStore({ temperature: 0.3 });
     const stream = controlledStream();
     const { result, rerender } = setup({
@@ -297,10 +328,13 @@ describe("request-scoped response metrics", () => {
     });
     act(() => { void result.current.send(); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe("prefill");
     now = 1100;
     stream.emit({ tool_calls: [{ index: 0, id: "call-1", name: "lookup", arguments: "{}" }], timings: { predicted_n: 10, predicted_ms: 100 } });
+    expect(result.current.phase).toBe("decoding");
     await stream.finish("");
     expect(result.current.pendingToolCall).not.toBeNull();
+    expect(result.current.phase).toBe("idle");
     expect(result.current.msgs.at(-1)?.metrics).toMatchObject({ tg: { tokens: 10 }, firstTokenMs: 100 });
     expect(sessionHasActivity("metrics-session")).toBe(true);
     store.cfg!.temperature = 0.9;
@@ -308,14 +342,27 @@ describe("request-scoped response metrics", () => {
     now = 5000;
     const followup = controlledStream();
     act(() => { void result.current.approvePendingTool(); });
+    await waitFor(() => expect(api.mcpCallTool).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe("preparing");
+    expect(api.chatStream).toHaveBeenCalledOnce();
+    await act(async () => { finishTool({ content: "Tool result" }); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledTimes(2));
+    expect(result.current.phase).toBe("prefill");
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
+    stream.emit({ content: "Stale tool request output" });
+    expect(result.current.phase).toBe("prefill");
+    expect(result.current.streamingDraft?.content).toBe("");
+    followup.emit({ usage: { prompt_tokens: 40 } });
+    expect(result.current.phase).toBe("prefill");
     expect(api.chatStream).toHaveBeenLastCalledWith(
       "http://127.0.0.1:8080", "test-key", "model.gguf", expect.any(Array),
       expect.objectContaining({ temperature: 0.3 }), expect.any(Function), expect.any(AbortSignal),
     );
     now = 5200;
     followup.emit({ content: "Final answer", timings: { predicted_n: 2, predicted_ms: 200 } });
+    expect(result.current.phase).toBe("decoding");
     await followup.finish("Final answer");
+    expect(result.current.phase).toBe("idle");
     expect(result.current.msgs).toHaveLength(2);
     expect(result.current.msgs.at(-1)?.metrics).toMatchObject({
       pp: {}, tg: { tokens: 2, durationMs: 200, tokensPerSecond: 10 }, preparationMs: 0, firstTokenMs: 200, requestMs: 200,

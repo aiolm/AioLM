@@ -32,8 +32,9 @@ it('shows the latest response limit in the composer without replacing active gen
   const view = render(<I18nProvider initialLocale="en"><ChatComposer {...props} /></I18nProvider>);
   expect(screen.getByRole('status')).toHaveTextContent('Output token limit reached');
   expect(screen.getByRole('status')).not.toHaveTextContent('Response complete');
-  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} phase="thinking" /></I18nProvider>);
-  expect(screen.getByRole('status')).toHaveTextContent('Waiting for the first token');
+  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} phase="prefill" /></I18nProvider>);
+  expect(screen.getByRole('status')).not.toHaveTextContent('Output token limit reached');
+  expect(screen.getByRole('button', { name: 'Stop generation' })).toBeEnabled();
   view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseFinishReason="stop" /></I18nProvider>);
   expect(screen.getByRole('status')).toHaveTextContent('Response complete');
   view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseState="failed" /></I18nProvider>);

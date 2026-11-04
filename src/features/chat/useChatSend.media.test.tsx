@@ -6,6 +6,7 @@ import { createTestStore } from '../../testing/appStore';
 import { createChatThread, type ChatHistoryMessage } from './chatHistory';
 import type { ImageAttachment } from './chatTypes';
 import { useChatSend } from './useChatSend';
+import type { ChatPhase } from './chatSendTypes';
 
 vi.mock('../../shared/api/index', () => ({
   chatStream: vi.fn(async () => 'Answer'), serverActivity: vi.fn(async () => undefined),
@@ -22,7 +23,7 @@ function setup(attachments: ImageAttachment[], preprocessing = { audioSessionId:
   return renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState('Summarize');
-    const [phase, setPhase] = useState<'idle' | 'thinking' | 'streaming'>('idle');
+    const [phase, setPhase] = useState<ChatPhase>('idle');
     const atBottomRef = useRef(true);
     const send = useChatSend({ store, engine: answering, mediaPreprocessing: preprocessing,
       baseUrl: 'http://127.0.0.1:18080', apiKey: 'synthetic', model: 'answer', sessionId: 'answer-session',
@@ -70,7 +71,7 @@ describe('chat preprocessing on the selected answering session', () => {
     const { result } = setup([audio]);
     let pending!: Promise<void>;
     await act(async () => { pending = result.current.send(); });
-    expect(result.current.phase).toBe('thinking');
+    expect(result.current.phase).toBe('preparing');
     await act(async () => { result.current.stop(); finish({ text: 'Late result', sessionId: 'speech', model: 'whisper' }); await pending; });
     expect(api.chatStream).not.toHaveBeenCalled();
     expect(result.current.msgs).toEqual([]);

@@ -4,12 +4,13 @@ import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { trackInitialRead } from "../../shared/ui/initialLayout";
 import { displayChatTitle } from './chatThreadTitle';
+import type { ChatPhase } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
 
 interface UseChatThreadsOptions {
   defaultThreadTitle?: string;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   /** Read after rendering: MCP approval keeps a turn alive while its stream is idle. */
   hasPendingTurn?: () => boolean;
   /** True (and proceeds) only when the panel is idle; otherwise surfaces an error and blocks the action. */

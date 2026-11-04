@@ -7,6 +7,7 @@ import { createTestStore } from "../../testing/appStore";
 import { loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type ChatThread } from "./chatHistory";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 // The native call settles only when cancelled or failed, the way the backend
 // answers a Stop that lands during the native approval prompt or the tool RPC.
@@ -49,7 +50,7 @@ function setup(options: { initial?: ChatHistoryMessage[]; input?: string; images
   return renderHook(({ session }: { session: Session }) => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>(options.initial ?? []);
     const [input, setInput] = useState(options.input ?? "Synthetic question");
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const [attachments, setAttachments] = useState<ImageAttachment[]>(options.images ?? []);
     const [documents, setDocuments] = useState<DocumentAttachment[]>(options.documents ?? []);
     const atBottomRef = useRef(true);

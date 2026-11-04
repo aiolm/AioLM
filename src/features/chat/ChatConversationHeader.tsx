@@ -1,6 +1,7 @@
 import ModelName from '../../shared/ui/ModelName';
 import { useEffect, useRef } from "react";
 import type { ChatThread } from "./chatHistory";
+import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
@@ -14,7 +15,7 @@ interface ChatConversationHeaderProps {
   setThreadPanelOpen: (updater: (value: boolean) => boolean) => void;
   activeThread: ChatThread | undefined;
   activeProjectName: string | null;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   targetBusy?: boolean;
   onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt" | "mediaBeforeText">>) => void;
   sessionLabel: string;

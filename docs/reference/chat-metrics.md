@@ -34,16 +34,36 @@ The response also shows these details:
 PP/TG durations and rates use server phase measurements. Preparation and client
 request timing do not enter those calculations.
 
-Partial responses retain measurements on Stop or a connection failure. An empty
-cancelled response is removed. Retrying starts fresh measurements. An MCP request
+Live generation status is separate from the measured PP/TG rows:
+
+- **Preparing request** covers local send preparation, including server wake-up,
+  media preparation, personalization and document retrieval.
+- **Input processing (Prefill / PP) · waiting for the first token** begins when
+  the chat request starts. It includes transport and server queue time: the chat
+  API does not provide a separate event proving when server-side prefill starts.
+- **Output generation (Decode / TG)** begins on the first nonempty answer,
+  reasoning, or tool name/arguments. Empty role frames and statistics alone do
+  not establish generated output. Disabling streamed text buffers the answer,
+  not the generation status; Decode remains visible while output is buffered.
+
+The composer and active empty assistant bubble use the same phase labels.
+Preparation appears only in the composer, not on the previous reply. Historical,
+completed and interrupted replies never acquire the current request's progress.
+The expandable thinking-process section contains actual reasoning output; it
+does not indicate that input processing is still running.
+
+Partial responses retain measurements on Stop or a connection failure. A reply
+stopped before any output remains marked interrupted with its retry context.
+Retrying starts fresh measurements. An MCP request
 keeps its measurements while awaiting approval; its follow-up replaces them with
 the final answer request's measurements, without adding tool execution or approval
 wait time. The turn continues to use its original session and settings snapshot.
 
 The composer status distinguishes an MCP approval request, native tool execution
 (including its OS approval wait), a failed request, an interrupted response, and
-a completed response. Once a tool returns, the follow-up model request resumes
-the first-token or generation status. Stop remains available during execution.
+a completed response. Once a tool returns, the follow-up model request starts a
+new Prefill/first-token wait before Decode. Stop remains available during tool
+execution and each in-flight model phase.
 A saved assistant request with `finish_reason: tool_calls` is incomplete after
 reload; opening its history does not approve or execute the tool. A saved user
 message without an assistant response shows only the message count. A token-limited response

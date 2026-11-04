@@ -9,6 +9,7 @@ import { requestProfileFromApplication } from '../model-settings/profileEditor';
 import { createChatThread, type ChatHistoryMessage } from './chatHistory';
 import type { DocumentAttachment, ImageAttachment } from './chatUtils';
 import { useChatSend } from './useChatSend';
+import type { ChatPhase } from './chatSendTypes';
 
 vi.mock('../../shared/api/index', () => ({ chatStream: vi.fn(async () => 'Response'), serverActivity: vi.fn(async () => undefined) }));
 
@@ -28,7 +29,7 @@ function setup(overrides: Partial<Options> = {}) {
   return renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState('Hello');
-    const [phase, setPhase] = useState<'idle' | 'thinking' | 'streaming'>('idle');
+    const [phase, setPhase] = useState<ChatPhase>('idle');
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);

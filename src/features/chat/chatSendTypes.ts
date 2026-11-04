@@ -5,6 +5,8 @@ import type { ResponseMetrics } from "../../shared/lib/metrics";
 import type { TurnPersonalization } from "./chatPersonalization";
 import type { ChatRetryTool } from "./chatHistory";
 
+export type ChatPhase = "idle" | "preparing" | "prefill" | "decoding";
+
 export interface FailedRequest {
   text: string;
   images: ImageAttachment[];

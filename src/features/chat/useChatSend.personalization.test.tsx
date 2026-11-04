@@ -8,6 +8,7 @@ import { createTestStore } from "../../testing/appStore";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 vi.mock("../../shared/api/index", () => ({
   chatStream: vi.fn(),
@@ -50,7 +51,7 @@ function setup(options: { input?: string; selected?: string[]; ctxSize?: number;
   const hook = renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState(options.input ?? "Hello");
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);
@@ -286,6 +287,7 @@ describe("chat personalization", () => {
     let sending!: Promise<void>;
     act(() => { sending = result.current.send(); });
     await waitFor(() => expect(loadMock).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe("preparing");
     act(() => result.current.stop());
     await act(async () => { resolveLoad(context()); await sending; });
     expect(readMock).not.toHaveBeenCalled();
@@ -303,6 +305,7 @@ describe("chat personalization", () => {
     let sending!: Promise<void>;
     act(() => { sending = result.current.send(); });
     await waitFor(() => expect(readMock).toHaveBeenCalledOnce());
+    expect(result.current.phase).toBe("preparing");
     act(() => result.current.stop());
     await act(async () => { resolveRead({ skill: pdf, content: "BODY" }); await sending; });
     expect(streamMock).toHaveBeenCalledOnce();

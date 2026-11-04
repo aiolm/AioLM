@@ -2,6 +2,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import type { RefObject } from "react";
 import type * as api from "../../shared/api/types";
 import type { ChatHistoryMessage } from "./chatHistory";
+import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
@@ -23,7 +24,7 @@ interface ChatMessageLogProps {
   canGenerate: boolean;
   msgs: ChatHistoryMessage[];
   streamingDraft: { content: string; reasoning: string; metrics?: ResponseMetrics } | null;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   copiedIndex: number | null;
   compactMessages: boolean;
   locale: Locale;
@@ -102,13 +103,15 @@ export default function ChatMessageLog({
         </div>
       )}
 
+      {/* Local preparation retains the previous reply; only show bubble progress
+          once the request has installed its new assistant placeholder. */}
       {msgs.map((message, index) => (
         <MessageBubble
           key={`${message.role}-${index}`}
           message={streamingDraft && index === msgs.length - 1 && message.role === "assistant" ? { ...message, ...streamingDraft } : message}
           index={index}
           messageCount={msgs.length}
-          phase={phase}
+          phase={index === msgs.length - 1 && phase !== 'preparing' ? phase : 'idle'}
           copied={copiedIndex === index}
           compact={compactMessages}
           locale={locale}

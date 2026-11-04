@@ -2,6 +2,7 @@ import ModelName from '../../shared/ui/ModelName';
 import MediaPreview from './MediaPreview';
 import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
+import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
@@ -16,7 +17,7 @@ interface MessageBubbleProps {
   message: ChatHistoryMessage;
   index: number;
   messageCount: number;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   copied: boolean;
   compact: boolean;
   locale: Locale;
@@ -38,6 +39,8 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
   const isUser = message.role === "user";
   const replyState = chatReplyStateCopy[locale];
   const withoutOutput = !message.content && !message.reasoning;
+  const activeReply = !isUser && index === messageCount - 1 && phase !== 'idle'
+    && !message.interrupted && !message.failed && !message.finishReason && !message.toolRound;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} px-1`}>
       <div
@@ -71,7 +74,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser
           ? <ChatMarkdown source={message.content} />
-          : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
+          : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (activeReply ? <span className="animate-pulse ui-color-faint" role="status">{text(phase)}</span> : "")}</div>}
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{withoutOutput ? replyState.stoppedEmpty : text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{withoutOutput ? replyState.failedEmpty : text("partialFailed")}</div>}
         {!isUser && message.toolRound && <div className="mt-2 text-xs ui-color-warning" role="status">{message.toolRound === 'failed' ? replyState.toolFailed : replyState.toolCancelled}</div>}

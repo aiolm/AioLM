@@ -6,6 +6,7 @@ import { createTestStore } from "../../testing/appStore";
 import { CHAT_WORKSPACE_CLEAR_EVENT, type ChatHistoryMessage } from "./chatHistory";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 // The native call only settles when it is cancelled, the way the backend
 // answers a Stop that lands during the approval prompt or the tool RPC.
@@ -33,7 +34,7 @@ function setup() {
   return renderHook(() => {
     const [msgs, setMsgs] = useState<ChatHistoryMessage[]>([]);
     const [input, setInput] = useState("Hello");
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);
@@ -96,6 +97,7 @@ describe("MCP tool call cancellation", () => {
   it("Stop cancels the native call it started and does not continue the turn", async () => {
     const { result, approving, callId } = await startToolCall();
     expect(result.current.toolCallInProgress).toBe(true);
+    expect(result.current.phase).toBe("preparing");
     await act(async () => { result.current.stop(); await approving; });
     expect(result.current.toolCallInProgress).toBe(false);
     expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);

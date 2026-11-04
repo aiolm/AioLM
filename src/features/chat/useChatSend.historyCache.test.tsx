@@ -7,6 +7,7 @@ import { CHAT_WORKSPACE_CLEAR_EVENT, createChatThread, type ChatHistoryMessage, 
 import type { ImageAttachment } from "./chatTypes";
 import { toChatMessage } from "./chatSendHelpers";
 import { useChatSend } from "./useChatSend";
+import type { ChatPhase } from "./chatSendTypes";
 
 const conversion = vi.hoisted(() => ({
   calls: [] as Array<{ message: unknown; mediaBeforeText: boolean }>,
@@ -51,7 +52,7 @@ interface SetupProps {
 function setup(messages: ChatHistoryMessage[], thread = createChatThread(1, "cache-thread"), sessionId = "cache-session", input = "Current question") {
   const store = createTestStore();
   return renderHook(({ messages: currentMessages, thread: currentThread, sessionId: currentSessionId, input: currentInput }: SetupProps) => {
-    const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
+    const [phase, setPhase] = useState<ChatPhase>("idle");
     const atBottomRef = useRef(true);
     const setMsgs = vi.fn() as unknown as Dispatch<SetStateAction<ChatHistoryMessage[]>>;
     const setInput = vi.fn();

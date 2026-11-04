@@ -7,7 +7,7 @@ import {
 import type { ChatCitation, ChatHistoryMessage } from "./chatHistory";
 import { loadDocumentVectors, saveDocumentVectors } from "./documentIndex";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes";
+import type { ChatPhase, PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
 
@@ -116,14 +116,16 @@ export function createStreamDeltaHandler(options: {
   streamRef: { current: StreamAccumulator };
   metricsRef: { current: RequestMetricsAccumulator };
   streamResponses: boolean;
-  setPhase: (phase: "streaming") => void;
+  setPhase: (phase: ChatPhase) => void;
   scheduleAssistantRender: () => void;
 }) {
   const { streamRef, metricsRef, streamResponses, setPhase, scheduleAssistantRender } = options;
   return (delta: api.ChatDelta) => {
     const generated = delta.content || delta.reasoning || delta.tool_calls?.some((tool) => tool.name || tool.arguments);
-    if (generated && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
-    if (generated && streamResponses) setPhase("streaming");
+    if (generated && metricsRef.current.firstTokenAt === undefined) {
+      metricsRef.current.firstTokenAt = performance.now();
+      setPhase("decoding");
+    }
     if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
     if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
     if (delta.metrics) metricsRef.current.serverMetrics = { ...metricsRef.current.serverMetrics, ...delta.metrics };

@@ -11,7 +11,7 @@ import { chatContextBudget } from './providerChatContext';
 import type { AppPreferences } from "../../shared/config/preferences";
 import { buildResponseMetrics } from "../../shared/lib/metrics";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { FailedRequest, PendingToolCall, RequestMetricsAccumulator, StreamingDraft } from "./chatSendTypes";
+import type { ChatPhase, FailedRequest, PendingToolCall, RequestMetricsAccumulator, StreamingDraft } from "./chatSendTypes";
 import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage, type StreamAccumulator } from "./chatSendHelpers";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
 import { notifyCompletion } from "../../shared/lib/notifications";
@@ -115,8 +115,8 @@ interface UseChatSendOptions {
   mcpEntryByFunctionName: Map<string, ChatMcpTool>;
   mcpDefinitions: api.ChatToolDefinition[];
   atBottomRef: MutableRefObject<boolean>;
-  phase: "idle" | "thinking" | "streaming";
-  setPhase: Dispatch<SetStateAction<"idle" | "thinking" | "streaming">>;
+  phase: ChatPhase;
+  setPhase: Dispatch<SetStateAction<ChatPhase>>;
   /** Skills picked in the composer for the next message. */
   selectedSkillIds?: string[];
   /** Clears the picker once a message carrying its selection is accepted. */
@@ -346,7 +346,7 @@ export function useChatSend({
     ctrlRef.current = controller;
     // Preparation can await server wake-up and document embeddings. Lock the
     // composer immediately and let Stop cancel before generation starts.
-    setPhase("thinking");
+    setPhase("preparing");
     setError(null);
     streamRef.current = { assistant: "", reasoning: "", toolCalls: [] };
     cancelScheduledRender();
@@ -462,10 +462,13 @@ export function useChatSend({
       };
       const streamResponses = preferences?.chat.streamResponses ?? true;
       streamResponsesRef.current = streamResponses;
-      const handleDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase: () => setPhase("streaming"), scheduleAssistantRender });
-      const onDelta = (delta: api.ChatDelta) => { if (isCurrent()) handleDelta(delta); };
+      const handleDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase, scheduleAssistantRender });
+      const onDelta = (delta: api.ChatDelta) => {
+        if (isCurrent() && !controller.signal.aborted && ctrlRef.current === controller) handleDelta(delta);
+      };
       metricsRef.current.requestStartedAt = performance.now();
       setStreamingDraft({ content: "", reasoning: "", metrics: snapshotMetrics(metricsRef.current.requestStartedAt) });
+      setPhase("prefill");
       const full = await api.chatStream(turn.baseUrl, turn.apiKey, turn.model, bounded.messages, sampling, onDelta, controller.signal);
       if (!isCurrent()) return;
       const responseMetrics = snapshotMetrics();
@@ -488,7 +491,7 @@ export function useChatSend({
           // Reading a listed SKILL.md is read-only, so it runs without the MCP approval step.
           skillReadsRef.current += 1;
           if (skillReadsRef.current > MAX_SKILL_READS_PER_RESPONSE) throw new Error(pt("skillReadLimit", { limit: MAX_SKILL_READS_PER_RESPONSE }));
-          setPhase("thinking");
+          setPhase("preparing");
           const answer = await answerSkillToolCall(toolCall, turn.personalization);
           controller.signal.throwIfAborted();
           const followup: api.ChatMessage[] = [
@@ -588,7 +591,7 @@ export function useChatSend({
     setPendingToolCall(null);
     setToolCallInProgress(true);
     setError(null);
-    setPhase("thinking");
+    setPhase("preparing");
     const controller = new AbortController();
     ctrlRef.current = controller;
     // Stop (or leaving the chat) cancels the native call too: its approval

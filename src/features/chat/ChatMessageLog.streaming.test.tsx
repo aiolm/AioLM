@@ -205,10 +205,8 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     await waitFor(() => expect(mocked.chatStream).toHaveBeenCalled());
     act(() => stream.emit("Hello "));
 
-    // Wait for the first streaming tick to land, then start measuring: this
-    // excludes the one-time idle->thinking->streaming phase transitions (which
-    // legitimately touch every bubble's `phase` prop) and isolates the
-    // per-rAF-tick re-renders the review flagged.
+    // Start measuring after the first output lands to isolate steady-state
+    // streaming updates from the request's phase transitions.
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello"));
     bubbleRenderSpy.mockClear();
 

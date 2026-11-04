@@ -5,6 +5,7 @@ import { activeProjectId, PROJECTS_CHANGED_EVENT, readProjects, type ProjectPres
 import type { ChatWorkspace } from "./chatHistory";
 import type { DocumentAttachment } from "./chatUtils";
 import { projectChatBindingCopy, projectDocumentBindingError } from "./projectChatBindingCopy";
+import type { ChatPhase } from "./chatSendTypes";
 
 const MAX_AUTOMATIC_DOCUMENTS = 4;
 
@@ -15,7 +16,7 @@ interface Options {
   setDocuments: Dispatch<SetStateAction<DocumentAttachment[]>>;
   setSelectedTools: (toolIds: string[]) => void;
   composerRevision: number;
-  phase: "idle" | "thinking" | "streaming";
+  phase: ChatPhase;
   hasPendingTurn: boolean;
   locale: Locale;
 }

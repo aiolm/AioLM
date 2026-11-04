@@ -9,6 +9,7 @@ import { createChatThread, type ChatWorkspace } from "./chatHistory";
 import type { DocumentAttachment } from "./chatUtils";
 import { useProjectChatBinding } from "./useProjectChatBinding";
 import { projectChatBindingCopy } from "./projectChatBindingCopy";
+import type { ChatPhase } from "./chatSendTypes";
 
 vi.mock("../../shared/api/index", () => ({ readDocumentBinding: vi.fn() }));
 
@@ -25,7 +26,7 @@ function project(id: string, documentCount = 1): ProjectPreset {
     [`${id}-tool`]), id };
 }
 
-type Props = { phase: "idle" | "thinking" | "streaming"; hasPendingTurn: boolean; composerRevision: number };
+type Props = { phase: ChatPhase; hasPendingTurn: boolean; composerRevision: number };
 
 function setup(initialDocuments: DocumentAttachment[] = [], initialProps: Partial<Props> = {}, locale: Locale = "en", savedWorkspace?: ChatWorkspace) {
   const documentWrites = vi.fn();
@@ -149,7 +150,7 @@ describe("active project chat binding", () => {
     const pending = deferred<string>();
     vi.mocked(readDocumentBinding).mockImplementationOnce(() => pending.promise);
     const { result, rerender } = setup();
-    rerender({ phase: "thinking", hasPendingTurn: false, composerRevision: 0 });
+    rerender({ phase: "prefill", hasPendingTurn: false, composerRevision: 0 });
     await act(async () => pending.resolve("Arrived during generation"));
     expect(result.current.documents).toEqual([]);
     rerender({ phase: "idle", hasPendingTurn: false, composerRevision: 0 });
@@ -250,7 +251,7 @@ describe("active project chat binding", () => {
         thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'Keep my own instructions' } : thread) }));
       result.current.setTools(['user-selected-tool']);
     });
-    rerender({ phase: 'thinking', hasPendingTurn: false, composerRevision: 0 });
+    rerender({ phase: 'preparing', hasPendingTurn: false, composerRevision: 0 });
     rerender({ phase: 'idle', hasPendingTurn: false, composerRevision: 1 });
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
     act(() => result.current.retryDocuments());
