@@ -48,6 +48,28 @@ describe("conversation deletion leaves nothing behind", () => {
     expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
     expect(fresh.threads[0].messages).toEqual([]);
   });
+
+  it("reports a retained legacy copy while still erasing the other conversation and document stores", async () => {
+    saveChatWorkspace(workspace("current", "Current conversation"));
+    const legacy = JSON.stringify(workspace("legacy", "Retained legacy conversation"));
+    localStorage.setItem(LEGACY_KEY, legacy);
+    const documentKey = INDEX_PREFIX + "synthetic";
+    localStorage.setItem(documentKey, "Synthetic document text");
+    const remove = Storage.prototype.removeItem;
+    const failure = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (this: Storage, key: string) {
+      if (key === LEGACY_KEY) throw new Error("Synthetic legacy deletion failure");
+      remove.call(this, key);
+    });
+    try {
+      await expect(clearChatWorkspace(async () => { localStorage.removeItem(documentKey); }))
+        .rejects.toThrow("Synthetic legacy deletion failure");
+      expect(localStorage.getItem(LEGACY_KEY)).toBe(legacy);
+      expect(localStorage.getItem(CURRENT_KEY)).toBeNull();
+      expect(localStorage.getItem(documentKey)).toBeNull();
+    } finally {
+      failure.mockRestore();
+    }
+  });
 });
 
 describe("orphaned document embeddings", () => {

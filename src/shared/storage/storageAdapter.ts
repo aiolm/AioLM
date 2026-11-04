@@ -35,22 +35,26 @@ async function idbGet<T>(key: string): Promise<T | null> {
 
 async function idbPut<T>(key: string, value: T): Promise<void> {
   const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).put(value, key);
-    transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error("Storage write failed")); };
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error("Storage write failed"));
+    });
+  } finally { db.close(); }
 }
 
 async function idbRemove(key: string): Promise<void> {
   const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).delete(key);
-    transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error("Storage delete failed")); };
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).delete(key);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error("Storage delete failed"));
+    });
+  } finally { db.close(); }
 }
 
 export const storageAdapter: StorageAdapter = {
@@ -66,11 +70,18 @@ export const storageAdapter: StorageAdapter = {
   async set<T>(key: string, value: T): Promise<void> {
     try { await idbPut(key, value); return; } catch { /* fallback below */ }
     const storage = localStorageSafe();
-    if (storage) storage.setItem(key, JSON.stringify(value));
+    if (!storage) throw new Error("No writable storage is available");
+    storage.setItem(key, JSON.stringify(value));
   },
   async remove(key: string): Promise<void> {
-    try { await idbRemove(key); } catch { /* fallback below */ }
-    try { localStorageSafe()?.removeItem(key); } catch { /* optional */ }
+    const results = await Promise.allSettled([
+      typeof indexedDB === "undefined" ? Promise.resolve() : idbRemove(key),
+      Promise.resolve().then(() => {
+        if (typeof window !== "undefined") window.localStorage.removeItem(key);
+      }),
+    ]);
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   },
 };
 

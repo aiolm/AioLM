@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ChatThread, ChatWorkspace } from "./chatHistory";
-import { loadChatWorkspaceAsync } from "./chatHistory";
+import { loadChatWorkspaceAsync, saveChatWorkspaceAsync } from "./chatHistory";
 import { useChatThreads } from "./useChatThreads";
 
 const thread = (id: string, title: string, updatedAt: number): ChatThread => ({
@@ -17,11 +17,31 @@ vi.mock("./chatHistory", async (importOriginal) => ({
   ...await importOriginal<typeof import("./chatHistory")>(),
   loadChatWorkspace: () => workspace,
   loadChatWorkspaceAsync: vi.fn(async () => workspace),
-  saveChatWorkspaceAsync: async () => "local",
+  saveChatWorkspaceAsync: vi.fn(async () => "local"),
 }));
 
 describe("useChatThreads", () => {
-  beforeEach(() => vi.mocked(loadChatWorkspaceAsync).mockResolvedValue(workspace));
+  beforeEach(() => {
+    vi.mocked(loadChatWorkspaceAsync).mockResolvedValue(workspace);
+    vi.mocked(saveChatWorkspaceAsync).mockReset().mockResolvedValue("local");
+  });
+
+  it("keeps unsaved messages available and retries saving the current workspace", async () => {
+    vi.mocked(saveChatWorkspaceAsync).mockResolvedValue("unavailable");
+    const { result } = renderHook(useChatThreads, { initialProps: {
+      phase: "idle" as const, requireIdle: () => true, onSwitchThread: () => undefined,
+    } });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      result.current.setMsgs([...result.current.msgs, { role: "assistant", content: "Unsaved synthetic reply" }]);
+    });
+    expect(result.current.saveFailed).toBe(true);
+    expect(result.current.viewMessages.at(-1)?.content).toBe("Unsaved synthetic reply");
+    vi.mocked(saveChatWorkspaceAsync).mockResolvedValue("native");
+    await act(async () => { result.current.retrySave(); });
+    expect(result.current.saveFailed).toBe(false);
+    expect(result.current.workspace.threads[0].messages.at(-1)?.content).toBe("Unsaved synthetic reply");
+  });
 
   it('hydrates an unchanged workspace without serializing the existing conversations', async () => {
     const stringify = vi.spyOn(JSON, 'stringify');

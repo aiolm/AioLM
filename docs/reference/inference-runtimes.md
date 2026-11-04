@@ -46,7 +46,7 @@ Metal launches currently bind one local device. Its KV dtype choices are `auto`,
 
 ## Complete model snapshots
 
-Discovery can download GGUF files or complete data snapshots for Python engines. A snapshot is pinned to an immutable Hugging Face commit and contains config, tokenizer/processor, safetensors weights and associated data files. Download progress includes every file, resumes verified completed files and writes an incomplete manifest until the entire snapshot is verified. Python/pickle payloads and remote model code are not downloaded for execution.
+Discovery can download GGUF files or complete data snapshots for Python engines. A snapshot is pinned to an immutable Hugging Face commit and contains config, tokenizer/processor, safetensors weights and associated data files. Download progress includes every file and resumes verified completed files. New or incomplete snapshots keep an incomplete manifest until the entire snapshot is verified. Re-verifying an already complete, matching snapshot preserves its ready state if cancelled; detected missing, corrupt or invalid loading files mark it incomplete before any transfer or staging changes. Python/pickle payloads and remote model code are not downloaded for execution.
 
 Standard split GGUF files such as `model-00001-of-00033.gguf` appear as one download choice with their combined size and part count. One operation resolves every part from the same immutable revision, reports combined progress and returns the first shard as the launch entrypoint. Cancellation preserves completed files for retry; incomplete repository shard sets are rejected before transfer. The physical GGUF parts remain separate for loaders that support split models.
 

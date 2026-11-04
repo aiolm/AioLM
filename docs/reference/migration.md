@@ -30,6 +30,12 @@ Some data lives outside this folder:
 
 Conversations are kept with the existing limits: the newest 100 conversations, each with its last 100 messages. Message text, reasoning and system prompts are cut at 16 KiB, and an image whose data URL exceeds 512 KiB is not kept. A conversation past the limit is removed from the data folder.
 
+If conversation changes cannot be saved, Chat keeps them in the current session and displays a **Retry saving** action. Check available storage space and permissions, then retry before closing AioLM. The warning clears only after a successful save; changes that have not been saved are not guaranteed to survive a restart.
+
+A conversation whose stored image cannot be read is skipped with a load warning instead of being loaded with an empty image. Its original JSON and attachments remain untouched. Restore the attachment or its read permissions and reopen Chat to recover it. Deleting a single conversation also refuses unreadable or unrecognized data; the explicit **Delete all conversation data** action can still remove it.
+
+**Delete all conversation data** attempts removal from the native conversation folder, every supported browser conversation store and the document index. A failed conversation-store removal is reported as a failure, not success, even if other stores were cleared. Check the reported error and retry; a failed operation can leave a partially cleared workspace.
+
 ## Backing up and moving your data
 
 To back up your data, quit AioLM, stop any server started with `aiolm-cli server start`, and copy the whole data folder. The `downloads` folder only holds unfinished downloads and does not need to be kept. To restore, quit AioLM and copy the backup back to the same location.

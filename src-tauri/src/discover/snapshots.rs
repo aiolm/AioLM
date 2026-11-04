@@ -335,12 +335,25 @@ pub fn installed_snapshots(
     Ok(artifacts)
 }
 fn destination(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    checked_destination(root, relative, true)
+}
+
+/// Re-verification must not create directories before the ready manifest has
+/// been invalidated. Existing parents still receive the same link checks.
+fn checked_destination(
+    root: &Path,
+    relative: &str,
+    create_missing: bool,
+) -> Result<PathBuf, String> {
     safe_file(relative)?;
     let parts: Vec<_> = relative.split('/').collect();
     let mut parent = root.to_path_buf();
     for part in &parts[..parts.len() - 1] {
         parent.push(part);
         if !parent.exists() {
+            if !create_missing {
+                continue;
+            }
             fs::create_dir(&parent).map_err(|error| error.to_string())?;
         }
         let canonical = parent.canonicalize().map_err(|error| error.to_string())?;
@@ -475,54 +488,99 @@ pub async fn download_snapshot(
         files,
         complete: false,
     };
+    download_snapshot_files(
+        &snapshot,
+        &mut manifest,
+        cancel,
+        |file, phase, received, total| emit_progress(&app, repo, file, phase, received, total),
+    )
+    .await
+}
+
+/// Keep metadata resolution and the app event adapter outside the install loop,
+/// so local re-verification exercises the same path without a model or network.
+async fn download_snapshot_files<F>(
+    snapshot: &Path,
+    manifest: &mut SnapshotManifest,
+    cancel: &AtomicBool,
+    mut progress: F,
+) -> Result<crate::providers::artifacts::ModelArtifact, String>
+where
+    F: FnMut(&str, &str, u64, u64),
+{
     let total = manifest
         .files
         .iter()
         .try_fold(0u64, |size, file| size.checked_add(file.size))
         .ok_or("snapshot size overflow")?;
     let mut completed = 0u64;
-    emit_progress(&app, repo, SNAPSHOT_MANIFEST, "downloading", 0, total);
+    progress(SNAPSHOT_MANIFEST, "downloading", 0, total);
     let manifest_path = snapshot.join(SNAPSHOT_MANIFEST);
+    let mut previously_complete = false;
     if let Some(previous) = read_snapshot_manifest(&manifest_path)? {
-        if previous.repository != repo
-            || previous.revision != revision
+        if previous.repository != manifest.repository
+            || previous.revision != manifest.revision
             || previous.files != manifest.files
         {
             return Err("existing snapshot manifest differs from the repository".into());
         }
+        previously_complete = previous.complete;
     }
-    crate::config::atomic_write(
-        &manifest_path,
-        &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
-    )?;
+    if !previously_complete {
+        crate::config::atomic_write(
+            &manifest_path,
+            &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        )?;
+    }
+    let mut invalidate = || -> Result<(), String> {
+        if previously_complete {
+            crate::config::atomic_write(
+                &manifest_path,
+                &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+            )?;
+            previously_complete = false;
+        }
+        Ok(())
+    };
     for file in &manifest.files {
         if cancel.load(Ordering::Acquire) {
             return Err(DOWNLOAD_CANCELLED.into());
         }
-        let target = destination(&snapshot, &file.path)?;
-        // A resumed download re-verifies what an earlier attempt finished.
-        if verify_existing(&target, file, cancel, |read| {
-            emit_progress(
-                &app,
-                repo,
-                &file.path,
-                "downloading",
-                completed + read,
-                total,
-            )
+        let target = match checked_destination(snapshot, &file.path, false) {
+            Ok(target) => target,
+            Err(error) => {
+                invalidate()?;
+                return Err(error);
+            }
+        };
+        // A resumed download re-verifies without changing a ready manifest.
+        match verify_existing(&target, file, cancel, |read| {
+            progress(&file.path, "downloading", completed + read, total)
         })
-        .await?
+        .await
         {
-            completed += file.size;
-            emit_progress(&app, repo, &file.path, "downloading", completed, total);
-            continue;
+            Ok(true) => {
+                completed += file.size;
+                progress(&file.path, "downloading", completed, total);
+                continue;
+            }
+            Ok(false) => invalidate()?,
+            Err(error) => {
+                // Cancellation is not evidence that existing data is bad.
+                if error != DOWNLOAD_CANCELLED {
+                    invalidate()?;
+                }
+                return Err(error);
+            }
         }
+        // Persist incomplete state before creating parents or staging data.
+        let target = destination(snapshot, &file.path)?;
         let mut url =
             reqwest::Url::parse("https://huggingface.co").map_err(|error| error.to_string())?;
         url.path_segments_mut()
             .map_err(|_| "invalid hub URL")?
-            .extend(repo.split('/'))
-            .extend(["resolve", revision.as_str()])
+            .extend(manifest.repository.split('/'))
+            .extend(["resolve", manifest.revision.as_str()])
             .extend(file.path.split('/'));
         let response = tokio::select! { _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()), response = download_client()?.get(url).send() => response.map_err(|error| error.to_string())? };
         validate_response_url(&response)?;
@@ -547,7 +605,7 @@ pub async fn download_snapshot(
                 received = received.saturating_add(chunk.len() as u64);
                 if received > file.size { return Err(format!("snapshot file exceeds declared size: {}", file.path)); }
                 hash.update(&chunk); output.write_all(&chunk).await.map_err(|error| error.to_string())?;
-                if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL { emit_progress(&app, repo, &file.path, "downloading", completed + received, total); last_progress = std::time::Instant::now(); }
+                if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL { progress(&file.path, "downloading", completed + received, total); last_progress = std::time::Instant::now(); }
             }
             if received != file.size { return Err(format!("snapshot file is truncated: {}", file.path)); }
             if expected_sha256(file.oid.as_deref()).is_some_and(|expected| format!("{:x}", hash.finalize()) != expected) { return Err(format!("snapshot checksum mismatch: {}", file.path)); }
@@ -565,14 +623,15 @@ pub async fn download_snapshot(
             return Err(error);
         }
         completed += received;
-        emit_progress(&app, repo, &file.path, "downloading", completed, total);
+        progress(&file.path, "downloading", completed, total);
     }
     // An index can reference a shard absent from the repository listing. Do
     // not publish completion until the downloaded loading metadata agrees.
-    let artifact = crate::providers::artifacts::inspect_snapshot(&snapshot);
+    let artifact = crate::providers::artifacts::inspect_snapshot(snapshot);
     if !artifact.missing.is_empty()
         || artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown
     {
+        invalidate()?;
         return Err(format!(
             "snapshot loading files are incomplete or invalid: {}",
             artifact.missing.join(", ")
@@ -586,8 +645,8 @@ pub async fn download_snapshot(
         &manifest_path,
         &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
     )?;
-    emit_progress(&app, repo, SNAPSHOT_MANIFEST, "complete", completed, total);
-    Ok(crate::providers::artifacts::inspect_snapshot(&snapshot))
+    progress(SNAPSHOT_MANIFEST, "complete", completed, total);
+    Ok(crate::providers::artifacts::inspect_snapshot(snapshot))
 }
 pub(super) async fn wait_cancelled(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
@@ -649,6 +708,122 @@ mod tests {
         fs::write(directory.join("tokenizer.json"), b"{}").unwrap();
         fs::write(directory.join(SNAPSHOT_MANIFEST), manifest).unwrap();
         directory
+    }
+
+    fn repeat_snapshot_fixture(root: &Path) -> (PathBuf, SnapshotManifest) {
+        let revision = "a".repeat(40);
+        let snapshot = write_manifest_snapshot(
+            root,
+            &revision,
+            &manifest_with_unknown("owner/model", &revision, None, None),
+        );
+        let mut manifest = read_snapshot_manifest(&snapshot.join(SNAPSHOT_MANIFEST))
+            .unwrap()
+            .unwrap();
+        for file in &mut manifest.files {
+            let bytes = fs::read(snapshot.join(&file.path)).unwrap();
+            file.size = bytes.len() as u64;
+            if file.path == "model.safetensors" {
+                file.oid = Some(format!("{:x}", Sha256::digest(&bytes)));
+            }
+        }
+        fs::write(
+            snapshot.join(SNAPSHOT_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        // The repository plan starts incomplete; the persisted install is ready.
+        manifest.complete = false;
+        (snapshot, manifest)
+    }
+
+    #[tokio::test]
+    async fn repeat_download_cancellation_preserves_ready_manifest() {
+        for cancellation_file in [SNAPSHOT_MANIFEST, "model.safetensors", "tokenizer.json"] {
+            let root = temporary("repeat-cancel");
+            let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
+            let manifest_path = snapshot.join(SNAPSHOT_MANIFEST);
+            let original = fs::read(&manifest_path).unwrap();
+            let cancel = AtomicBool::new(false);
+            assert_eq!(
+                download_snapshot_files(&snapshot, &mut manifest, &cancel, |file, _, _, _| {
+                    if file == cancellation_file {
+                        cancel.store(true, Ordering::Release);
+                    }
+                })
+                .await
+                .unwrap_err(),
+                DOWNLOAD_CANCELLED
+            );
+            assert_eq!(fs::read(&manifest_path).unwrap(), original);
+            let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
+            assert_eq!(installed.len(), 1);
+            assert!(
+                installed[0].ready_files(),
+                "{cancellation_file}: {installed:?}"
+            );
+            assert_eq!(fs::read(snapshot.join("model.safetensors")).unwrap(), b"x");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn corrupt_repeat_download_is_incomplete_even_when_cancelled_after_hashing() {
+        let root = temporary("repeat-corrupt-cancel");
+        let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
+        fs::write(snapshot.join("model.safetensors"), b"z").unwrap();
+        let cancel = AtomicBool::new(false);
+        let error = download_snapshot_files(&snapshot, &mut manifest, &cancel, |file, _, _, _| {
+            if file == "model.safetensors" {
+                cancel.store(true, Ordering::Release);
+            }
+        })
+        .await
+        .unwrap_err();
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(error.contains("failed verification"), "{error}");
+        assert!(
+            !read_snapshot_manifest(&snapshot.join(SNAPSHOT_MANIFEST))
+                .unwrap()
+                .unwrap()
+                .complete
+        );
+        let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
+        assert_eq!(installed.len(), 1);
+        assert!(installed[0].incomplete);
+        assert!(!installed[0].ready_files());
+        assert_eq!(fs::read(snapshot.join("model.safetensors")).unwrap(), b"z");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn new_and_incomplete_downloads_stay_incomplete_on_cancellation() {
+        for existing_manifest in [false, true] {
+            let root = temporary("repeat-incomplete-cancel");
+            let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
+            let manifest_path = snapshot.join(SNAPSHOT_MANIFEST);
+            if existing_manifest {
+                fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            } else {
+                fs::remove_file(&manifest_path).unwrap();
+            }
+            assert_eq!(
+                download_snapshot_files(
+                    &snapshot,
+                    &mut manifest,
+                    &AtomicBool::new(true),
+                    |_, _, _, _| {},
+                )
+                .await
+                .unwrap_err(),
+                DOWNLOAD_CANCELLED
+            );
+            let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
+            assert_eq!(installed.len(), 1);
+            assert!(installed[0].incomplete);
+            assert!(!installed[0].ready_files());
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     fn deep_unknown_value(depth: usize) -> String {

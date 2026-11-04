@@ -125,7 +125,7 @@ fn read_thread(folder: &Path) -> Result<Option<StoredThread>, String> {
             thread.version
         ));
     }
-    restore_images(&mut thread.messages, folder);
+    restore_images(&mut thread.messages, folder)?;
     Ok(Some(thread))
 }
 
@@ -205,7 +205,19 @@ fn import_unlocked_with_limits(
 
 pub(crate) fn delete(root: &Path, id: &str) -> Result<(), String> {
     let _guard = lock();
-    remove_folder(&root.join(folder_name(id)))
+    let folder = root.join(folder_name(id));
+    match read_thread(&folder)? {
+        Some(thread) if thread.id == id => remove_folder(&folder),
+        Some(_) => Err("cannot delete a conversation whose id does not match".into()),
+        None => match fs::symlink_metadata(&folder) {
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("cannot read {}: {error}", folder.display())),
+            Ok(_) => Err(format!(
+                "cannot delete {}: no conversation file",
+                folder.display()
+            )),
+        },
+    }
 }
 
 /// Removes every conversation, including folders that could not be read.
@@ -347,32 +359,32 @@ impl Write for BoundedWriter {
     }
 }
 
-fn restore_images(messages: &mut [Value], folder: &Path) {
+fn restore_images(messages: &mut [Value], folder: &Path) -> Result<(), String> {
     for image in messages.iter_mut().flat_map(images_mut) {
         let Some(object) = image.as_object_mut() else {
             continue;
         };
-        let Some(file) = object.remove("file") else {
+        let Some(file) = object.get("file") else {
             continue;
         };
-        let media_type = object.remove("mediaType");
-        let data_url = match (
-            file.as_str().and_then(attachment_name),
-            media_type
-                .as_ref()
-                .and_then(Value::as_str)
-                .filter(|value| valid_media_type(value)),
-        ) {
-            (Some(name), Some(media_type)) => {
-                read_bounded(&folder.join(ATTACHMENTS).join(name), MAX_IMAGE_BYTES)
-                    .map(|bytes| format!("data:{media_type};base64,{}", STANDARD.encode(bytes)))
-                    .unwrap_or_default()
-            }
-            // A missing or unusable image shows as one that was not kept.
-            _ => String::new(),
-        };
+        let file = file
+            .as_str()
+            .ok_or("a stored conversation image has an invalid attachment path")?;
+        let name = attachment_name(file)
+            .ok_or_else(|| format!("invalid conversation image attachment path: {file}"))?;
+        let media_type = object
+            .get("mediaType")
+            .and_then(Value::as_str)
+            .filter(|value| valid_media_type(value))
+            .ok_or_else(|| format!("invalid media type for conversation image {file}"))?;
+        let bytes = read_bounded(&folder.join(ATTACHMENTS).join(name), MAX_IMAGE_BYTES)
+            .map_err(|error| format!("cannot read conversation image {file}: {error}"))?;
+        let data_url = format!("data:{media_type};base64,{}", STANDARD.encode(bytes));
+        object.remove("file");
+        object.remove("mediaType");
         object.insert("dataUrl".into(), Value::String(data_url));
     }
+    Ok(())
 }
 
 fn images_mut(message: &mut Value) -> impl Iterator<Item = &mut Value> {
@@ -599,6 +611,218 @@ mod tests {
         assert_eq!(loaded.threads.len(), 1);
         assert_eq!(loaded.threads[0]["messages"], messages);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_stored_attachment_skips_conversation_and_preserves_files() {
+        let root = fixture();
+        save(
+            &root,
+            thread(
+                "thread-1",
+                json!([{
+                    "role": "user",
+                    "content": "Keep both images",
+                    "images": [
+                        {"name": "map.png", "dataUrl": png(b"map")},
+                        {"name": "photo.png", "dataUrl": png(b"photo")}
+                    ]
+                }]),
+            ),
+        )
+        .unwrap();
+        save(&root, thread("healthy", json!([]))).unwrap();
+        let folder = root.join("thread-1");
+        let thread_path = folder.join(THREAD_FILE);
+        let original_json = fs::read(&thread_path).unwrap();
+        let original = stored(&root, "thread-1");
+        let map_path = folder.join(
+            original["messages"][0]["images"][0]["file"]
+                .as_str()
+                .unwrap(),
+        );
+        let photo_file = original["messages"][0]["images"][1]["file"]
+            .as_str()
+            .unwrap();
+        let photo_path = folder.join(photo_file);
+        let moved_photo = photo_path.with_extension("moved");
+        fs::rename(&photo_path, &moved_photo).unwrap();
+
+        let loaded = load(&root).unwrap();
+        assert_eq!(loaded.threads.len(), 1);
+        assert_eq!(loaded.threads[0]["id"], "healthy");
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains("thread-1"));
+        assert!(loaded.warnings[0].contains(photo_file));
+        assert!(read_thread(&folder).is_err());
+        let error = delete(&root, "thread-1").unwrap_err();
+        assert!(error.contains(photo_file));
+        for thread in loaded.threads {
+            save(&root, thread).unwrap();
+        }
+        assert_eq!(fs::read(&thread_path).unwrap(), original_json);
+        assert_eq!(fs::read(&map_path).unwrap(), b"map");
+        assert_eq!(fs::read(&moved_photo).unwrap(), b"photo");
+        assert!(!photo_path.exists());
+
+        fs::rename(&moved_photo, &photo_path).unwrap();
+        let recovered = load(&root).unwrap();
+        assert!(recovered.warnings.is_empty());
+        let restored = recovered
+            .threads
+            .iter()
+            .find(|thread| thread["id"] == "thread-1")
+            .unwrap();
+        assert_eq!(restored["messages"][0]["images"][0]["dataUrl"], png(b"map"));
+        assert_eq!(
+            restored["messages"][0]["images"][1]["dataUrl"],
+            png(b"photo")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_stored_attachment_skips_conversation_and_preserves_files() {
+        let root = fixture();
+        save(
+            &root,
+            thread(
+                "thread-1",
+                json!([{
+                    "role": "user",
+                    "content": "Keep this image",
+                    "images": [{"name": "map.png", "dataUrl": png(b"map")}]
+                }]),
+            ),
+        )
+        .unwrap();
+        let folder = root.join("thread-1");
+        let thread_path = folder.join(THREAD_FILE);
+        let original_json = fs::read(&thread_path).unwrap();
+        let original = stored(&root, "thread-1");
+        let file = original["messages"][0]["images"][0]["file"]
+            .as_str()
+            .unwrap();
+        let image_path = folder.join(file);
+        let moved_image = image_path.with_extension("moved");
+        fs::rename(&image_path, &moved_image).unwrap();
+        // A directory in place of the file fails even when tests run as root.
+        fs::create_dir(&image_path).unwrap();
+
+        let loaded = load(&root).unwrap();
+        assert!(loaded.threads.is_empty());
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains("thread-1"));
+        assert!(loaded.warnings[0].contains(file));
+        assert!(read_thread(&folder).is_err());
+        assert!(delete(&root, "thread-1").is_err());
+        assert_eq!(fs::read(&thread_path).unwrap(), original_json);
+        assert_eq!(fs::read(&moved_image).unwrap(), b"map");
+        assert!(image_path.is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_stored_attachment_skips_conversation_and_preserves_files() {
+        let root = fixture();
+        save(
+            &root,
+            thread(
+                "thread-1",
+                json!([{
+                    "role": "user",
+                    "content": "Keep this image",
+                    "images": [{"name": "map.png", "dataUrl": png(b"map")}]
+                }]),
+            ),
+        )
+        .unwrap();
+        let folder = root.join("thread-1");
+        let thread_path = folder.join(THREAD_FILE);
+        let original_json = fs::read(&thread_path).unwrap();
+        let original = stored(&root, "thread-1");
+        let file = original["messages"][0]["images"][0]["file"]
+            .as_str()
+            .unwrap();
+        let image_path = folder.join(file);
+        // Extend sparsely so exercising the production limit needs no big fixture.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&image_path)
+            .unwrap()
+            .set_len(MAX_IMAGE_BYTES + 1)
+            .unwrap();
+
+        let loaded = load(&root).unwrap();
+        assert!(loaded.threads.is_empty());
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains(file));
+        assert!(loaded.warnings[0].contains(&format!("larger than {MAX_IMAGE_BYTES} bytes")));
+        assert!(read_thread(&folder).is_err());
+        assert!(delete(&root, "thread-1").is_err());
+        assert_eq!(fs::read(&thread_path).unwrap(), original_json);
+        assert_eq!(
+            fs::metadata(&image_path).unwrap().len(),
+            MAX_IMAGE_BYTES + 1
+        );
+        let mut image = fs::File::open(&image_path).unwrap();
+        let mut prefix = [0; 3];
+        image.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"map");
+        let mut buffer = [0; 8192];
+        loop {
+            let count = image.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            assert!(buffer[..count].iter().all(|&byte| byte == 0));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_preserves_unknown_conversation_data_but_clear_removes_it() {
+        let root = fixture();
+        for id in [
+            "missing-thread",
+            "broken-thread",
+            "newer-thread",
+            "wrong-id",
+        ] {
+            fs::create_dir(root.join(id)).unwrap();
+            fs::write(root.join(id).join("notes"), b"keep me").unwrap();
+        }
+        fs::write(root.join("broken-thread").join(THREAD_FILE), b"{not json").unwrap();
+        let newer = br#"{"version":2,"id":"newer-thread"}"#;
+        fs::write(root.join("newer-thread").join(THREAD_FILE), newer).unwrap();
+        let wrong_id = br#"{"version":1,"id":"another-id"}"#;
+        fs::write(root.join("wrong-id").join(THREAD_FILE), wrong_id).unwrap();
+
+        for id in [
+            "missing-thread",
+            "broken-thread",
+            "newer-thread",
+            "wrong-id",
+        ] {
+            assert!(delete(&root, id).is_err(), "{id}");
+            assert_eq!(fs::read(root.join(id).join("notes")).unwrap(), b"keep me");
+        }
+        assert_eq!(
+            fs::read(root.join("broken-thread").join(THREAD_FILE)).unwrap(),
+            b"{not json"
+        );
+        assert_eq!(
+            fs::read(root.join("newer-thread").join(THREAD_FILE)).unwrap(),
+            newer
+        );
+        assert_eq!(
+            fs::read(root.join("wrong-id").join(THREAD_FILE)).unwrap(),
+            wrong_id
+        );
+        assert!(!root.join("missing-thread").join(THREAD_FILE).exists());
+        delete(&root, "absent").unwrap();
+        clear(&root).unwrap();
+        assert!(!root.exists());
     }
 
     #[test]

@@ -420,19 +420,16 @@ async function writeIndexedWorkspace(workspace: ChatWorkspace): Promise<void> {
 }
 
 async function deleteIndexedWorkspace(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
   const db = await openChatDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(CHAT_STORE, "readwrite");
-    transaction.objectStore(CHAT_STORE).delete(CHAT_RECORD_KEY);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error ?? new Error("IndexedDB delete failed."));
-    };
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(CHAT_STORE, "readwrite");
+      transaction.objectStore(CHAT_STORE).delete(CHAT_RECORD_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB delete failed."));
+    });
+  } finally { db.close(); }
 }
 
 export function titleFromMessage(message: string): string {
@@ -513,14 +510,16 @@ export function clearChatWorkspace(clearRelatedData?: () => Promise<void>): Prom
       // Reads can migrate browser data and saves may already be queued. They
       // must settle before deletion, so none can restore an older copy later.
       await Promise.allSettled([...historyOperations]);
-      await clearBrowserConversations();
-      if (isNativeRuntimeAvailable()) {
-        await inNativeQueue(async () => {
+      const results = await Promise.allSettled([
+        clearBrowserConversations(),
+        isNativeRuntimeAvailable() ? inNativeQueue(async () => {
           await invoke("conversations_clear");
           nativeWritten = new Map();
-        });
-      }
-      await clearRelatedData?.();
+        }) : Promise.resolve(),
+        Promise.resolve().then(() => clearRelatedData?.()),
+      ]);
+      const failure = results.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
       const fresh = defaultChatWorkspace();
       clearingWorkspace = false;
       notifyWorkspaceClear({ state: "cleared", workspace: fresh });
@@ -538,23 +537,15 @@ export function clearChatWorkspace(clearRelatedData?: () => Promise<void>): Prom
 }
 
 async function clearBrowserConversations(): Promise<void> {
-  const storage = browserStorage();
-  try {
-    storage?.removeItem?.(CHAT_WORKSPACE_KEY);
-  } catch {
-    // Continue; the remaining copies still need clearing.
-  }
-  dropLegacyChatWorkspace(storage);
-  try {
-    await storageAdapter.remove(CHAT_WORKSPACE_KEY);
-  } catch {
-    // The adapter is optional; the dedicated database is cleared below.
-  }
-  try {
-    await deleteIndexedWorkspace();
-  } catch {
-    // No IndexedDB copy to clear.
-  }
+  const results = await Promise.allSettled([
+    Promise.resolve().then(() => {
+      if (typeof window !== "undefined") window.localStorage.removeItem(LEGACY_CHAT_WORKSPACE_KEY);
+    }),
+    storageAdapter.remove(CHAT_WORKSPACE_KEY),
+    deleteIndexedWorkspace(),
+  ]);
+  const failure = results.find(result => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
 }
 
 export function loadChatWorkspace(storage: ChatStorage | null = browserStorage()): ChatWorkspace {
@@ -634,7 +625,14 @@ export function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPe
         await writeIndexedWorkspace(safe);
         return "indexeddb";
       } catch {
-        return browserStorage() ? "local" : "unavailable";
+        try {
+          const storage = browserStorage();
+          if (!storage) return "unavailable";
+          storage.setItem(CHAT_WORKSPACE_KEY, JSON.stringify(safe));
+          return "local";
+        } catch {
+          return "unavailable";
+        }
       }
     }
   })());
@@ -716,12 +714,12 @@ async function moveBrowserConversations(): Promise<void> {
     }
     if (readActiveThreadId() === null) writeActiveThreadId(browser.activeThreadId);
   }
+  await clearBrowserConversations();
   try {
     storage?.setItem(NATIVE_STORAGE_KEY, "native");
   } catch {
     // Importing again finds every conversation already stored.
   }
-  await clearBrowserConversations();
 }
 
 async function saveNativeWorkspace(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {

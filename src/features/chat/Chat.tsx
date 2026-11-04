@@ -44,6 +44,7 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import PanelFeedback from '../../shared/ui/PanelFeedback';
 import { displayChatTitle } from './chatThreadTitle';
 import { executionText } from '../../shared/i18n/executionI18n';
+import { chatPersistenceCopy } from './chatPersistenceCopy';
 
 export default function ChatPanel({ store, preferences, onOpenModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -137,6 +138,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, active = t
 
   const {
     workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    saveFailed, retrySave,
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
@@ -423,6 +425,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, active = t
           />
 
           <PanelFeedback>
+            {saveFailed && <FeedbackBanner tone="error" action={{ label: chatPersistenceCopy[locale].retry, onClick: retrySave }}>{chatPersistenceCopy[locale].failed}</FeedbackBanner>}
             {mcpError && <FeedbackBanner tone="error">{mcpError}</FeedbackBanner>}
             {projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
             {projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}

@@ -50,6 +50,8 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const [threadPanelOpen, setThreadPanelOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ChatThread | null>(null);
   const [clearingWorkspace, setClearingWorkspace] = useState(isChatWorkspaceClearing);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [saveAttempt, setSaveAttempt] = useState(0);
   const hydratedRef = useRef(false);
   const initialWorkspaceRef = useRef(workspace);
   const initialMsgsRef = useRef(msgs);
@@ -124,6 +126,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
         setMsgs(thread.messages);
         setPendingDelete(null);
         setClearingWorkspace(false);
+        setSaveFailed(false);
       } else {
         setClearingWorkspace(false);
         // A failed erase keeps any recoverable data visible and resumes reads.
@@ -136,8 +139,15 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   }, []);
 
   useEffect(() => {
-    if (hydratedRef.current && !isChatWorkspaceClearing()) void saveChatWorkspaceAsync(workspace);
-  }, [workspace]);
+    let cancelled = false;
+    if (hydratedRef.current && !isChatWorkspaceClearing()) {
+      void saveChatWorkspaceAsync(workspace).then(
+        result => { if (!cancelled && !isChatWorkspaceClearing()) setSaveFailed(result === "unavailable"); },
+        () => { if (!cancelled && !isChatWorkspaceClearing()) setSaveFailed(true); },
+      );
+    }
+    return () => { cancelled = true; };
+  }, [workspace, saveAttempt]);
 
   useEffect(() => {
     if (phase !== "idle" || clearingWorkspace) return;
@@ -250,6 +260,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
 
   return {
     workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    saveFailed, retrySave: () => setSaveAttempt(attempt => attempt + 1),
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
