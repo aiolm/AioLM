@@ -932,7 +932,8 @@ mod tests {
         let shared = b"\xEF\xBB\xBFShared rules.\r\n";
         fixture.write(Source::Agents, "AGENTS.md", shared);
         fixture.write(Source::Aiolm, "AGENTS.md", "AioLM rules.");
-        let cases: &[(&[Source], &[(Source, &str)])] = &[
+        type InstructionCase<'a> = (&'a [Source], &'a [(Source, &'a str)]);
+        let cases: &[InstructionCase<'_>] = &[
             (&[], &[]),
             (&[Source::Agents], &[(Source::Agents, "Shared rules.\r\n")]),
             (&[Source::Aiolm], &[(Source::Aiolm, "AioLM rules.")]),

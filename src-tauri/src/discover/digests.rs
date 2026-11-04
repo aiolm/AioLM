@@ -53,7 +53,7 @@ fn matches_hex(actual: &[u8], expected: &str) -> bool {
     actual.len() * 2 == expected.len()
         && actual
             .iter()
-            .zip(expected.as_bytes().chunks_exact(2))
+            .zip(expected.as_bytes().as_chunks::<2>().0)
             .all(|(byte, hex)| {
                 HEX[(byte >> 4) as usize] == hex[0].to_ascii_lowercase()
                     && HEX[(byte & 15) as usize] == hex[1].to_ascii_lowercase()
