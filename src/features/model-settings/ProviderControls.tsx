@@ -76,7 +76,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
       </label>)}
       {inventoryState === 'ready' && !entries.length && <p className="app-section-hint">{flowCopy.noRuntimes}</p>}
       {selected && !entries.some(item => item.id === selected) && <p className="app-section-hint">{selected}</p>}
-      {selected && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => selectRuntime()}>{copy.reset}</button>}
+      {selected && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => selectRuntime()}>{copy.clearSelection}</button>}
     </fieldset>
     {description?.availability.supported === false && <FeedbackBanner tone="warning">{copy.unsupported} {description.availability.detail}</FeedbackBanner>}
     {inventoryState === 'loading' && <p role="status">{copy.loading}</p>}
