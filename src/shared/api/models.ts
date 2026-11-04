@@ -8,6 +8,35 @@ import type { ModelArtifact } from './providers.ts';
 export const hfInstalledSnapshots = (repoId: string, modelsDir: string) =>
   invoke<ModelArtifact[]>('hf_installed_snapshots', { repoId, modelsDir });
 
+export interface ModelUpdateStatus {
+  path: string;
+  supported: boolean;
+  repository?: string;
+  current_revision?: string;
+  latest_revision?: string;
+  update_available: boolean;
+  changed_files: number;
+  removed_files: number;
+  download_bytes: number;
+  reused_bytes: number;
+  error?: string;
+}
+
+export interface ModelUpdateResult {
+  path: string;
+  revision: string;
+  downloaded_bytes: number;
+  reused_bytes: number;
+  updated_files: number;
+  removed_files: number;
+}
+
+export const hfCheckModelUpdates = (paths: string[], modelsDir: string) =>
+  invoke<ModelUpdateStatus[]>('hf_check_model_updates', { paths, modelsDir });
+
+export const hfUpdateModel = (path: string, modelsDir: string, expectedRevision: string) =>
+  invoke<ModelUpdateResult>('hf_update_model', { path, modelsDir, expectedRevision });
+
 /**
  * Orders the Hugging Face model listing can be ranked in. These are the
  * `sort` values that API accepts; it answers HTTP 400 for anything else, and

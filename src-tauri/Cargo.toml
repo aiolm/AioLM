@@ -142,6 +142,7 @@ flate2 = "1"
 tar = "0.4"
 pdf-extract = "0.12"
 sha2 = "0.10"
+sha1 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 rfd = "0.15"
 libc = "0.2"

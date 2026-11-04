@@ -56,6 +56,45 @@ pub(crate) async fn hf_download_snapshot(
     discover::download_snapshot(app, &repo_id, &root, &state.discover_cancel).await
 }
 
+#[tauri::command]
+pub(crate) async fn hf_check_model_updates(
+    paths: Vec<String>,
+    models_dir: String,
+) -> Result<Vec<discover::ModelUpdateStatus>, String> {
+    let root = if models_dir.trim().is_empty() {
+        config::load_result()?.models_dir
+    } else {
+        models_dir
+    };
+    // A read-only check must never reset or share an active transfer's cancel flag.
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    discover::check_model_updates(&paths, &root, &cancel).await
+}
+
+#[tauri::command]
+pub(crate) async fn hf_update_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    models_dir: String,
+    expected_revision: String,
+) -> Result<discover::ModelUpdateResult, String> {
+    let _operation = begin_download(&state)?;
+    let root = if models_dir.trim().is_empty() {
+        config::load_result()?.models_dir
+    } else {
+        models_dir
+    };
+    discover::update_model(
+        app,
+        &path,
+        &root,
+        &expected_revision,
+        &state.discover_cancel,
+    )
+    .await
+}
+
 /// Open only validated Hugging Face repositories in the system browser.
 #[tauri::command]
 pub(crate) async fn hf_open_model_card(repo_id: String) -> Result<(), String> {

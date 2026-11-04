@@ -33,12 +33,17 @@ import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/Model
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { modelActions } from '../../shared/i18n/modelActions';
+import { modelUpdatesCopy } from './modelUpdatesCopy';
+import { useModelUpdates, type ModelUpdateCatalog } from './useModelUpdates';
+import { formatBytes } from '../discover/discoverUtils';
+import { getTaskSnapshot } from '../../shared/state/taskRegistry';
+import { MODEL_DOWNLOAD_TASK_ID } from '../../shared/state/modelDownloadTask';
 
 
 /** `sessions` comes from a parent that already holds the detailed session
  * subscription; without it the panel subscribes itself. `children` render the
  * parent's loaded-model controls between the page heading and the library. */
-export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, onModels, compact = false, active = true, sessions: providedSessions, children }: { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onDiscoverModels?: () => void; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; children?: ReactNode }) {
+export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, onModels, compact = false, active = true, sessions: providedSessions, sessionsReady: providedSessionsReady = false, children }: { store: AppStore; onSelectModel?: (model: api.GgufModel) => Promise<void>; onDiscoverModels?: () => void; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean; sessions?: api.SessionStatus[]; sessionsReady?: boolean; children?: ReactNode }) {
   const { t, locale } = useI18n();
   useSyncExternalStore(subscribeRuntimeCatalog, runtimeCatalogSnapshot, runtimeCatalogSnapshot);
   const copy = executionText[locale];
@@ -47,6 +52,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   const selectedProvider = api.providerOf(cfg ?? {});
   const selectedRuntime = cfg?.active_runtime ?? '';
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
+  const [updateCatalog, setUpdateCatalog] = useState<ModelUpdateCatalog | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanTruncated, setScanTruncated] = useState(false);
@@ -69,13 +75,24 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   const requestedScanDirRef = useRef("");
   const performedScanRef = useRef<{ request: number; scan: () => Promise<void> } | null>(null);
   const [ownSessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const [ownSessionsReady, setOwnSessionsReady] = useState(false);
   const sessions = providedSessions ?? ownSessions;
   const modelSettings = useModelSettings();
+  const updatesCopy = modelUpdatesCopy[locale];
+  const sessionsReady = providedSessions ? providedSessionsReady : ownSessionsReady;
+  const updateBlocked = store.busy || scanning || folderAction !== 'idle' || !sessionsReady || !['stopped', 'failed', 'crashed'].includes(store.status.state)
+    || sessions.some(session => isServerBusy(session.state));
+  const modelUpdates = useModelUpdates({ active, directory: dir, catalog: updateCatalog, blocked: updateBlocked });
+
+  useEffect(() => {
+    if (!active) setOwnSessionsReady(false);
+  }, [active]);
 
   useSessionPolling({
     active: active && !providedSessions && api.isNativeRuntimeAvailable(),
     details: true,
-    onData: setSessions,
+    onData: data => { setSessions(data); setOwnSessionsReady(true); },
+    onError: () => setOwnSessionsReady(false),
   });
 
   const scan = useCallback(async () => {
@@ -83,6 +100,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
     pendingScan.current = null;
     const generation = nextScanGeneration(scanGeneration.current);
     scanGeneration.current = generation;
+    setUpdateCatalog(null);
     if (!dir.trim()) {
       setScanError(t("ui.modelsSetDirFirst"));
       setModels(null);
@@ -100,6 +118,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
       setModels(result.models);
       onModels?.(result.models);
       setScanTruncated(result.truncated);
+      setUpdateCatalog({ directory: dir, paths: result.models.map(model => model.path) });
     } catch (error) {
       if (!isCurrentScan(generation, scanGeneration.current)) return;
       setScanError(error instanceof Error ? error.message : String(error));
@@ -113,6 +132,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
 
   const cancelScan = useCallback(() => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
+    setUpdateCatalog(null);
     if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
     pendingScan.current?.cancel();
     pendingScan.current = null;
@@ -195,7 +215,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
 
   const selectModel = async (model: api.GgufModel) => {
-    if (model.shards?.missing.length) return;
+    if (modelUpdates.busy || model.shards?.missing.length) return;
     try {
       if (onSelectModel) { await onSelectModel(model); return; }
       await store.updateConfig({ active_model: model.path });
@@ -206,7 +226,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   };
 
   const setProjector = async (model: api.GgufModel) => {
-    if (model.shards?.missing.length) return;
+    if (modelUpdates.busy || model.shards?.missing.length) return;
     if (!projectorChangeAllowed(store.status.state)) {
       notify(t("ui.stopBeforeProjector"));
       return;
@@ -220,7 +240,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   };
 
   const browse = async () => {
-    if (folderInFlight.current) return;
+    if (modelUpdates.busy || folderInFlight.current) return;
     folderInFlight.current = true;
     setFolderAction('choosing');
     setFolderError(null);
@@ -246,6 +266,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   };
 
   const performSelectAndStart = async (model: api.GgufModel) => {
+    if (getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && (task.state === 'running' || task.state === 'cancelling'))) return;
     const switching = serverRunning && liveModel !== model.path;
     try {
       const next = await store.updateConfig({ active_model: model.path });
@@ -258,7 +279,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   };
 
   const selectAndStart = async (model: api.GgufModel) => {
-    if (model.shards?.missing.length) return;
+    if (modelUpdates.busy || model.shards?.missing.length) return;
     const switching = serverRunning && liveModel !== model.path;
     if (switching && shouldConfirmDestructive()) {
       setPendingConfirm({
@@ -283,12 +304,13 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   };
 
   const removeModel = async (model: api.GgufModel) => {
-    if (serverRunning || isModelLoaded(model)) {
+    if (modelUpdates.busy || serverRunning || isModelLoaded(model)) {
       notify(t("ui.stopBeforeDelete"));
       return;
     }
     const remove = async () => {
       setPendingConfirm(null);
+      if (getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && (task.state === 'running' || task.state === 'cancelling'))) return;
       if (pendingDeletions.current.has(model.path)) return;
       pendingDeletions.current.add(model.path);
       try {
@@ -322,6 +344,8 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
       <PanelFeedback>
         {folderError && <FeedbackBanner tone="error" onDismiss={() => setFolderError(null)}>{folderError}</FeedbackBanner>}
         {!scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
+        {modelUpdates.lookupError && <FeedbackBanner tone="error" title={updatesCopy.lookupFailed} action={{ label: t('panel.retry'), onClick: modelUpdates.refresh }}>{normalizeDisplayText(modelUpdates.lookupError)}</FeedbackBanner>}
+        {modelUpdates.updateError && <FeedbackBanner tone="error" title={updatesCopy.updateFailed} action={{ label: t('panel.retry'), onClick: modelUpdates.refresh }}>{normalizeDisplayText(modelUpdates.updateError)}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {folderSaved && (
           <FeedbackBanner tone="info" onDismiss={() => setFolderSaved(false)}>
@@ -347,7 +371,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
           placeholder="models"
         />
         <div className="models-folder-buttons">
-        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={scanning || folderAction !== 'idle'} className="app-button app-button--secondary shrink-0">{folderAction === 'saving' ? copy.saving : folderAction === 'choosing' ? t('status.working') : t("panel.browse")}</button>
+        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={modelUpdates.busy || scanning || folderAction !== 'idle'} className="app-button app-button--secondary shrink-0">{folderAction === 'saving' ? copy.saving : folderAction === 'choosing' ? t('status.working') : t("panel.browse")}</button>
         </div>
       </div>
       </div>
@@ -388,8 +412,10 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
         <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
         <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
+        <button type="button" data-icon="refresh" onClick={modelUpdates.refresh} disabled={!active || !updateCatalog || scanning || modelUpdates.checking || modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{modelUpdates.checking ? updatesCopy.checking : updatesCopy.check}</button>
       </div>
+      <p className="mb-2 text-xs ui-color-muted">{updatesCopy.incremental}</p>
 
       {runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
         if (modelSettings && cfg) modelSettings.open({ target: { kind: 'default' }, config: cfg, section: 'runtime' });
@@ -413,7 +439,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
           models.length === 0 ? <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
           ><div className="app-empty-actions">
             {onDiscoverModels && <button type="button" className="app-button app-button--primary min-w-0 max-w-full" onClick={onDiscoverModels}>{modelActions(locale).find}</button>}
-            <button type="button" className="app-button app-button--secondary min-w-0 max-w-full" onClick={() => void browse()} disabled={folderAction !== 'idle'}>{t("panel.chooseFolder")}</button>
+            <button type="button" className="app-button app-button--secondary min-w-0 max-w-full" onClick={() => void browse()} disabled={modelUpdates.busy || folderAction !== 'idle'}>{t("panel.chooseFolder")}</button>
           </div></EmptyState>
             : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={t("ui.modelsVisionHiddenBody")}
               action={{ label: t(hasModelFilters ? "ui.modelsClearAndShowVision" : "ui.modelsShowVision"), onClick: () => { clearModelFilters(); setShowVision(true); } }} />
@@ -425,6 +451,8 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
           const incomplete = !!model.shards?.missing.length;
           const running = isModelLoaded(model);
           const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
+          const updateStatus = modelUpdates.statuses[model.path];
+          const canUpdate = !!updateStatus?.supported && !updateStatus.error && updateStatus.update_available && !!updateStatus.latest_revision;
           return (
             <div
               key={model.path}
@@ -440,7 +468,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
                 // dialog, which is where starting and stopping are decided. Gating
                 // it on the server made every card dead for the length of a VRAM
                 // load, while the header opened the same dialog throughout.
-                disabled={incomplete}
+                disabled={incomplete || modelUpdates.busy}
                 onClick={() => void selectModel(model)}
                 className="models-model-name app-list-row__action flex-col items-start"
 
@@ -452,13 +480,20 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
               <div className="models-model-actions">
                 {model.is_vision && <Badge>{t("ui.visionTag")}</Badge>}
                 {running && <StatusBadge label={copy.running} tone="success" />}
-                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {canUpdate && <button type="button" data-icon="refresh" onClick={() => void modelUpdates.update(model.path)} disabled={updateBlocked || modelUpdates.busy || incomplete || scanning} title={!sessionsReady ? updatesCopy.sessionsPending : updateBlocked ? updatesCopy.stopFirst : updatesCopy.incremental} aria-label={`${updatesCopy.update}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0">{updatesCopy.update}</button>}
+                {modelUpdates.updating === model.path && <span role="status" className="text-xs ui-color-muted">{updatesCopy.updating}</span>}
+                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={modelUpdates.busy || incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={modelUpdates.busy || incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
-              <code className="models-model-path">{normalizeDisplayPath(model.path)}</code>
+              <div className="models-model-path">
+                <code>{normalizeDisplayPath(model.path)}</code>
+                {updateStatus?.supported && updateStatus.error ? <FeedbackBanner tone="error" className="relative z-[2]" title={updatesCopy.lookupFailed} action={{ label: t('panel.retry'), onClick: modelUpdates.refresh }}>{normalizeDisplayText(updateStatus.error)}</FeedbackBanner>
+                  : updateStatus?.supported ? <p className="text-xs ui-color-muted">{updateStatus.update_available ? `${updatesCopy.available} · ${updatesCopy.download}: ${formatBytes(updateStatus.download_bytes)} · ${updatesCopy.reuse}: ${formatBytes(updateStatus.reused_bytes)}` : updatesCopy.current}</p>
+                    : updateStatus ? <p className="text-xs ui-color-muted">{updatesCopy.unsupported}{updateStatus.error ? `: ${normalizeDisplayText(updateStatus.error)}` : ''}</p> : null}
+              </div>
               <div className="models-file-actions">
                   <button type="button" data-icon="copy" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
-                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={(running || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
+                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={modelUpdates.busy || running || store.busy || serverRunning} title={(running || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
               </div>
             </div>
           );

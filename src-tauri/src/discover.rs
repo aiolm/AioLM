@@ -1,5 +1,7 @@
 // Hugging Face Discover/search/download support.
+mod digests;
 mod snapshots;
+mod updates;
 use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,6 +16,7 @@ use std::sync::{
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncWriteExt, BufWriter};
+pub use updates::{check_model_updates, update_model, ModelUpdateResult, ModelUpdateStatus};
 use uuid::Uuid;
 
 const HF_API: &str = "https://huggingface.co/api";
@@ -136,13 +139,13 @@ fn deserialize_gated<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
     })
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 struct ApiLfs {
     #[serde(default)]
     oid: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 struct ApiTreeEntry {
     path: String,
     #[serde(default)]
@@ -918,7 +921,9 @@ where
         // Keep the writer inside this scope so errors close it before the
         // staging file is removed, including on Windows.
         let mut output = BufWriter::with_capacity(DOWNLOAD_BUFFER_BYTES, output);
-        let mut hasher = Sha256::new();
+        let mut hasher = expected
+            .map(|oid| digests::FileDigest::new(oid, total))
+            .transpose()?;
         let mut updates = tokio::time::interval(DOWNLOAD_UPDATE_INTERVAL);
         updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut reported = 0_u64;
@@ -949,7 +954,9 @@ where
                 .write_all(&chunk)
                 .await
                 .map_err(|error| format!("cannot write model download: {error}"))?;
-            hasher.update(&chunk);
+            if let Some(hasher) = &mut hasher {
+                hasher.update(&chunk);
+            }
         }
         output
             .flush()
@@ -960,12 +967,8 @@ where
                 "model download ended at {received} bytes; expected {total}"
             ));
         }
-        if let Some(expected) = expected {
-            if format!("{:x}", hasher.finalize()) != expected {
-                return Err(
-                    "downloaded model checksum does not match Hugging Face metadata".into(),
-                );
-            }
+        if hasher.is_some_and(|hasher| !hasher.matches()) {
+            return Err("downloaded model checksum does not match Hugging Face metadata".into());
         }
         if cancel.load(Ordering::Acquire) {
             return Err(DOWNLOAD_CANCELLED.to_string());
@@ -1063,7 +1066,7 @@ pub async fn download(
     // Both plans use the same verified revision. Release its full tree before
     // transferring loading assets or model bytes instead of fetching it again.
     drop(entries);
-    if let Some(plan) = companions {
+    if let Some(plan) = &companions {
         let target = target_path(models_dir, repo_id, file_path)?;
         snapshots::download_gguf_companions(
             &app,
@@ -1072,7 +1075,7 @@ pub async fn download(
             target
                 .parent()
                 .ok_or("model has no destination directory")?,
-            &plan,
+            plan,
             &cancel,
         )
         .await?;
@@ -1100,6 +1103,27 @@ pub async fn download(
     downloaded.size_bytes = completed;
     if include_companions {
         snapshots::validate_gguf_companions(Path::new(&downloaded.path))?;
+    }
+    // Metadata is written only for digest-proven files. Older repositories
+    // without digests still download, but never gain ownership by size alone.
+    if plan
+        .iter()
+        .all(|file| digests::valid_oid(file.oid.as_deref()))
+        && companions.as_ref().is_none_or(|files| {
+            files
+                .iter()
+                .all(|file| digests::valid_oid(file.oid.as_deref()))
+        })
+    {
+        updates::record_gguf_manifest(
+            Path::new(&downloaded.path),
+            repo_id,
+            &revision,
+            &plan,
+            companions.as_deref(),
+            &cancel,
+        )
+        .await?;
     }
     emit_progress(
         &app,
@@ -1132,7 +1156,6 @@ where
     if total > MAX_MODEL_BYTES {
         return Err("model file exceeds the 512 GiB safety limit".into());
     }
-    let expected = expected_sha256(file.oid.as_deref());
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("model destination must not be a symbolic link".into());
@@ -1141,26 +1164,20 @@ where
             return Err("model destination is not a regular file".into());
         }
         Ok(metadata) => {
-            if let Some(expected) = expected.as_deref() {
-                if metadata.len() != total {
-                    return Err(
-                        "a different model already exists at the download destination".into(),
-                    );
-                }
-                let actual = hash_existing_file(&target, total, cancel, |read| {
-                    progress("downloading", read, total);
-                })
-                .await?;
-                if actual == expected {
-                    note_download(&target, repo_id, file_path);
-                    return Ok(DownloadedModel {
-                        repo_id: repo_id.to_owned(),
-                        file_path: file_path.to_owned(),
-                        path: target.to_string_lossy().into_owned(),
-                        size_bytes: total,
-                    });
-                }
-                return Err("a different model already exists at the download destination".into());
+            if digests::valid_oid(file.oid.as_deref()) {
+                let identity = crate::providers::artifacts::SnapshotFile {
+                    path: file.path.clone(),
+                    size: total,
+                    oid: file.oid.clone(),
+                };
+                digests::verify_file_digest(&target, &identity, cancel).await?;
+                note_download(&target, repo_id, file_path);
+                return Ok(DownloadedModel {
+                    repo_id: repo_id.to_owned(),
+                    file_path: file_path.to_owned(),
+                    path: target.to_string_lossy().into_owned(),
+                    size_bytes: total,
+                });
             }
             if metadata.len() == total {
                 // The repository published no digest, so a file of the same
@@ -1209,7 +1226,9 @@ where
         response,
         &part,
         response_total,
-        expected.as_deref(),
+        file.oid
+            .as_deref()
+            .filter(|oid| digests::valid_oid(Some(oid))),
         cancel,
         &mut progress,
     )
@@ -1465,7 +1484,7 @@ mod tests {
             response,
             &part,
             100,
-            Some("unused digest"),
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
             &AtomicBool::new(false),
             |_, _, _| {},
         )
@@ -1494,7 +1513,7 @@ mod tests {
                 response,
                 &part,
                 100,
-                Some("unused digest"),
+                Some("0000000000000000000000000000000000000000000000000000000000000000"),
                 &cancel,
                 |phase, received, total| updates.push((phase, received, total)),
             ),

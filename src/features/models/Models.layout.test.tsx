@@ -6,6 +6,7 @@ import type { AppStore } from "../../shared/state/store";
 import { I18nProvider, type Locale } from "../../shared/i18n/i18n";
 import "../../styles/app.css";
 import * as api from "../../shared/api/index";
+import type * as ModelApi from "../../shared/api/models";
 import { createTestStore } from "../../testing/appStore";
 import ModelsPanel from "./Models";
 import { panelText } from "../../shared/i18n/panelI18n";
@@ -23,6 +24,11 @@ vi.mock("../../shared/api/index", async importOriginal => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
   serverStatus: vi.fn(async () => ({ state: 'stopped' })),
+}));
+
+vi.mock("../../shared/api/models", async importOriginal => ({
+  ...await importOriginal<typeof ModelApi>(),
+  hfCheckModelUpdates: vi.fn(async () => []),
 }));
 
 const cfg = {

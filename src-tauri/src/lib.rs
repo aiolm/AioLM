@@ -245,6 +245,8 @@ pub fn run() {
             commands::discover::hf_cancel_download,
             commands::discover::hf_installed_files,
             commands::discover::hf_installed_snapshots,
+            commands::discover::hf_check_model_updates,
+            commands::discover::hf_update_model,
             commands::mcp::mcp_list_servers,
             commands::mcp::mcp_save_server,
             commands::mcp::mcp_remove_server,

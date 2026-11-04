@@ -1,5 +1,5 @@
 import { registeredProviderIds, modelLoadable, modelSelectable, providerOf } from '../../shared/api/providers';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import type { ViewId } from '../../shared/types/navigation';
@@ -21,11 +21,15 @@ export default function ModelWorkspace({ store, onSelectModel, onNavigate, activ
   // One detailed subscription serves the loaded-model controls and the
   // library's loaded markers; it pauses with the page like every other consumer.
   const [poll, setPoll] = useState<SessionPoll>({ sessions: [] });
+  const [sessionsReady, setSessionsReady] = useState(false);
+  useEffect(() => {
+    if (!active) setSessionsReady(false);
+  }, [active]);
   const refreshSessions = useSessionPolling({
     active: active && api.isNativeRuntimeAvailable(),
     details: true,
-    onData: sessions => setPoll({ sessions }),
-    onError: cause => setPoll(current => ({ sessions: current.sessions, error: cause })),
+    onData: sessions => { setPoll({ sessions }); setSessionsReady(true); },
+    onError: cause => { setPoll(current => ({ sessions: current.sessions, error: cause })); setSessionsReady(false); },
   });
   const select = async (model: GgufModel) => {
     if (!store.cfg || model.shards?.missing.length) return;
@@ -43,7 +47,7 @@ export default function ModelWorkspace({ store, onSelectModel, onNavigate, activ
   };
   return <div className="model-workspace">
     {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
-    <div className="model-workspace-library"><ModelsPanel store={store} onSelectModel={select} onDiscoverModels={() => onNavigate('discover')} compact active={active} sessions={poll.sessions}>
+    <div className="model-workspace-library"><ModelsPanel store={store} onSelectModel={select} onDiscoverModels={() => onNavigate('discover')} compact active={active} sessions={poll.sessions} sessionsReady={sessionsReady}>
       <LoadedModels store={store} poll={poll} refresh={refreshSessions} />
     </ModelsPanel></div>
   </div>;

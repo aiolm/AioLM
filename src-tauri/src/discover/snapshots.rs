@@ -1,4 +1,5 @@
-//! Immutable Hugging Face snapshots with complete manifests and LFS checksums.
+//! Hugging Face snapshots with stable local identities and verified manifests.
+use super::digests::{verify_file_digest_with_progress, FileDigest};
 use super::*;
 use crate::providers::artifacts::{SnapshotFile, SnapshotManifest, SNAPSHOT_MANIFEST};
 
@@ -20,12 +21,30 @@ fn reserved_device_name(part: &str) -> bool {
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.as_bytes()[3].is_ascii_digit())
 }
-fn safe_file(path: &str) -> Result<(), String> {
+pub(super) fn safe_file(path: &str) -> Result<(), String> {
     if path.ends_with(['/', '.', ' ']) || path.split('/').any(reserved_device_name) {
         return Err("unsafe snapshot path".into());
     }
     validate_repo_path(&format!("{path}.gguf"))
 }
+
+/// Upstream data must never overlap the app's ownership and update metadata.
+fn safe_data_file(path: &str) -> Result<(), String> {
+    safe_file(path)?;
+    if path.split('/').any(|part| {
+        part.eq_ignore_ascii_case(SNAPSHOT_MANIFEST)
+            || part
+                .get(..".aiolm-".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".aiolm-"))
+            || part
+                .get(part.len().saturating_sub(".aiolm-update.json".len())..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".aiolm-update.json"))
+    }) {
+        return Err("repository file conflicts with AioLM metadata".into());
+    }
+    Ok(())
+}
+
 fn accepted(path: &str) -> bool {
     path.ends_with(".safetensors")
         || path.ends_with(".json")
@@ -50,8 +69,8 @@ pub(super) fn gguf_companion_plan(
     gguf: &str,
 ) -> Result<Vec<SnapshotFile>, String> {
     validate_repo_path(gguf)?;
-    if is_mmproj(gguf) || shard_group(gguf.rsplit('/').next().unwrap_or(gguf)).is_some() {
-        return Err("GGUF companions require a single model file".into());
+    if is_mmproj(gguf) {
+        return Err("GGUF companions require model weights, not a projector".into());
     }
     let parent = gguf
         .rsplit_once('/')
@@ -79,7 +98,7 @@ pub(super) fn gguf_companion_plan(
         {
             continue;
         }
-        safe_file(&entry.path)?;
+        safe_data_file(&entry.path)?;
         if entry.size > 512 * 1024 * 1024
             || (name == "config.json" && entry.size > MAX_API_RESPONSE_BYTES as u64)
         {
@@ -162,7 +181,7 @@ pub(super) async fn download_gguf_companions(
             response,
             &temporary,
             file.size,
-            expected_sha256(file.oid.as_deref()).as_deref(),
+            file.oid.as_deref(),
             cancel,
             |phase, received, _| {
                 emit_progress(app, repo, &file.path, phase, completed + received, total)
@@ -209,13 +228,13 @@ pub(super) fn validate_gguf_companions(path: &Path) -> Result<(), String> {
 
 /// The production download plan rejects snapshots that cannot become a local
 /// root model, before creating an ownership manifest or downloading weights.
-fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFile>, String> {
+pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFile>, String> {
     let mut paths = std::collections::HashSet::new();
     let files: Vec<SnapshotFile> = entries
         .into_iter()
         .filter(|entry| entry.entry_type == "file" && accepted(&entry.path))
         .map(|entry| {
-            safe_file(&entry.path)?;
+            safe_data_file(&entry.path)?;
             if !paths.insert(entry.path.to_ascii_lowercase()) {
                 return Err("snapshot has colliding file paths".into());
             }
@@ -327,7 +346,9 @@ pub fn installed_snapshots(
         let Some(manifest) = read_snapshot_manifest(&entry.path().join(SNAPSHOT_MANIFEST))? else {
             continue;
         };
-        if manifest.repository == repo && manifest.revision == revision {
+        // The directory is a stable local identity; an in-place update changes
+        // the resolved revision in its manifest without moving the directory.
+        if manifest.repository == repo {
             artifacts.push(crate::providers::artifacts::inspect_snapshot(&entry.path()));
         }
     }
@@ -340,7 +361,7 @@ fn destination(root: &Path, relative: &str) -> Result<PathBuf, String> {
 
 /// Re-verification must not create directories before the ready manifest has
 /// been invalidated. Existing parents still receive the same link checks.
-fn checked_destination(
+pub(super) fn checked_destination(
     root: &Path,
     relative: &str,
     create_missing: bool,
@@ -427,7 +448,7 @@ pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManif
 }
 
 /// Accept a file already at a snapshot destination only when it is a regular
-/// file of the declared size and, for LFS files, of the published digest.
+/// file of the declared size and, when published, of the SHA256 or Git blob digest.
 /// Anything else is reported, never replaced. `Ok(false)` means it is absent.
 async fn verify_existing<F: FnMut(u64)>(
     target: &Path,
@@ -451,16 +472,43 @@ async fn verify_existing<F: FnMut(u64)>(
             file.path
         ));
     }
-    let Some(expected) = expected_sha256(file.oid.as_deref()) else {
-        return Ok(true);
-    };
-    if hash_existing_file(target, file.size, cancel, progress).await? != expected {
-        return Err(format!(
-            "existing snapshot file failed verification: {}",
-            file.path
-        ));
+    if file.oid.is_some() {
+        verify_file_digest_with_progress(target, file, cancel, progress)
+            .await
+            .map_err(|error| {
+                if error == DOWNLOAD_CANCELLED {
+                    error
+                } else {
+                    format!(
+                        "existing snapshot file failed verification: {}: {error}",
+                        file.path
+                    )
+                }
+            })?;
     }
     Ok(true)
+}
+
+/// Prefer a ready install at this revision, even when its stable folder names
+/// the revision it was originally installed from before an in-place update.
+fn snapshot_directory(library: &Path, repo: &str, revision: &str) -> Result<PathBuf, String> {
+    for artifact in installed_snapshots(&library.to_string_lossy(), repo)? {
+        if artifact.ownership == "app"
+            && artifact.ready_files()
+            && artifact.format != crate::providers::artifacts::ArtifactFormat::Unknown
+            && artifact.repository.as_deref() == Some(repo)
+            && artifact.revision.as_deref() == Some(revision)
+        {
+            return Ok(PathBuf::from(artifact.path));
+        }
+    }
+    Ok(destination(
+        library,
+        &format!("hf/{repo}/snapshots/{revision}/{SNAPSHOT_MANIFEST}"),
+    )?
+    .parent()
+    .ok_or("invalid snapshot directory")?
+    .to_path_buf())
 }
 
 pub async fn download_snapshot(
@@ -474,13 +522,7 @@ pub async fn download_snapshot(
     let entries = repository_tree(repo, &revision, cancel).await?;
     let files = plan_snapshot(entries)?;
     let library = models_root(models_dir)?;
-    let snapshot = destination(
-        &library,
-        &format!("hf/{repo}/snapshots/{revision}/{SNAPSHOT_MANIFEST}"),
-    )?
-    .parent()
-    .ok_or("invalid snapshot directory")?
-    .to_path_buf();
+    let snapshot = snapshot_directory(&library, repo, &revision)?;
     let mut manifest = SnapshotManifest {
         format: 1,
         repository: repo.into(),
@@ -592,10 +634,14 @@ where
             ));
         }
         let temporary = temporary_download_path(&target)?;
+        let mut hash = file
+            .oid
+            .as_deref()
+            .map(|oid| FileDigest::new(oid, file.size))
+            .transpose()?;
         let mut output = create_staging_file(&temporary).await?;
         let mut stream = response.bytes_stream();
         let mut received = 0u64;
-        let mut hash = Sha256::new();
         let mut last_progress = std::time::Instant::now();
         let result = async {
             loop {
@@ -604,11 +650,12 @@ where
                 let chunk = chunk.map_err(|error| error.to_string())?;
                 received = received.saturating_add(chunk.len() as u64);
                 if received > file.size { return Err(format!("snapshot file exceeds declared size: {}", file.path)); }
-                hash.update(&chunk); output.write_all(&chunk).await.map_err(|error| error.to_string())?;
+                if let Some(hash) = &mut hash { hash.update(&chunk); }
+                output.write_all(&chunk).await.map_err(|error| error.to_string())?;
                 if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL { progress(&file.path, "downloading", completed + received, total); last_progress = std::time::Instant::now(); }
             }
             if received != file.size { return Err(format!("snapshot file is truncated: {}", file.path)); }
-            if expected_sha256(file.oid.as_deref()).is_some_and(|expected| format!("{:x}", hash.finalize()) != expected) { return Err(format!("snapshot checksum mismatch: {}", file.path)); }
+            if hash.is_some_and(|hash| !hash.matches()) { return Err(format!("snapshot checksum mismatch: {}", file.path)); }
             output.sync_all().await.map_err(|error| error.to_string())?;
             Ok::<(), String>(())
         }.await;
@@ -735,6 +782,105 @@ mod tests {
         // The repository plan starts incomplete; the persisted install is ready.
         manifest.complete = false;
         (snapshot, manifest)
+    }
+
+    #[tokio::test]
+    async fn updated_snapshot_keeps_its_folder_and_repeat_download_reuses_it() {
+        let root = temporary("stable-revision").canonicalize().unwrap();
+        let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
+        let original_revision = manifest.revision.clone();
+        let latest = "b".repeat(40);
+        manifest.revision = latest.clone();
+        manifest.complete = true;
+        fs::write(
+            snapshot.join(SNAPSHOT_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].path, snapshot.to_string_lossy());
+        assert_eq!(installed[0].revision.as_deref(), Some(latest.as_str()));
+        assert!(installed[0].ready_files());
+        assert_eq!(
+            snapshot.file_name().unwrap().to_string_lossy(),
+            original_revision
+        );
+
+        let selected = snapshot_directory(&root, "owner/model", &latest).unwrap();
+        assert_eq!(selected, snapshot);
+        manifest.complete = false;
+        let artifact = download_snapshot_files(
+            &selected,
+            &mut manifest,
+            &AtomicBool::new(false),
+            |_, _, _, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(artifact.path, installed[0].path);
+        assert_eq!(artifact.revision.as_deref(), Some(latest.as_str()));
+        assert!(artifact.ready_files());
+        assert!(!snapshot.parent().unwrap().join(latest).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repeat_download_does_not_reuse_or_mutate_unrelated_snapshot_directories() {
+        let root = temporary("snapshot-selection").canonicalize().unwrap();
+        let latest = "b".repeat(40);
+        let mut original_manifests = Vec::new();
+        for (folder, repository, complete) in [
+            ("a".repeat(40), "another/model", true),
+            ("c".repeat(40), "owner/model", false),
+            ("not-a-hex-folder".into(), "owner/model", true),
+        ] {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&manifest_with_unknown(repository, &latest, None, None))
+                    .unwrap();
+            value["complete"] = complete.into();
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let directory = write_manifest_snapshot(&root, &folder, &bytes);
+            original_manifests.push((directory, bytes));
+        }
+        let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
+        assert_eq!(installed.len(), 1);
+        assert!(installed[0].incomplete);
+        let selected = snapshot_directory(&root, "owner/model", &latest).unwrap();
+        assert_eq!(
+            selected,
+            root.join("hf/owner/model/snapshots").join(&latest)
+        );
+        for (directory, bytes) in original_manifests {
+            assert_eq!(fs::read(directory.join(SNAPSHOT_MANIFEST)).unwrap(), bytes);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn resumed_git_blob_is_verified_but_missing_legacy_oid_stays_size_only() {
+        let root = temporary("git-blob");
+        let target = root.join("config.json");
+        fs::write(&target, b"hello\n").unwrap();
+        let mut file = SnapshotFile {
+            path: "config.json".into(),
+            size: 6,
+            oid: Some("ce013625030ba8dba906f756967f9e9ca394464a".into()),
+        };
+        let cancel = AtomicBool::new(false);
+        assert!(verify_existing(&target, &file, &cancel, |_| {})
+            .await
+            .unwrap());
+        fs::write(&target, b"world\n").unwrap();
+        assert!(verify_existing(&target, &file, &cancel, |_| {})
+            .await
+            .is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"world\n");
+        file.oid = None;
+        assert!(verify_existing(&target, &file, &cancel, |_| {})
+            .await
+            .unwrap());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -914,7 +1060,25 @@ mod tests {
         )
         .unwrap();
         assert!(local.iter().all(|file| file.path.starts_with("Q4/")));
-        assert!(gguf_companion_plan(&entries, "model-00001-of-00002.gguf").is_err());
+        assert!(gguf_companion_plan(&entries, "model-00001-of-00002.gguf").is_ok());
+        let sharded = gguf_companion_plan(
+            &tree(&[
+                "Q4/model-00001-of-00002.gguf",
+                "Q4/model-00002-of-00002.gguf",
+                "Q4/config.json",
+                "Q4/tokenizer.json",
+                "elsewhere/config.json",
+            ]),
+            "Q4/model-00001-of-00002.gguf",
+        )
+        .unwrap();
+        assert_eq!(
+            sharded
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Q4/config.json", "Q4/tokenizer.json"]
+        );
     }
 
     #[test]
@@ -965,6 +1129,48 @@ mod tests {
             "tokenizer.json"
         ]))
         .is_ok());
+    }
+
+    #[test]
+    fn repository_plans_reject_reserved_metadata_without_restricting_local_destinations() {
+        for path in [
+            SNAPSHOT_MANIFEST,
+            ".AIOLM-staging.json",
+            "weights.AIOLM-UPDATE.json",
+            ".aiolm-staging/config.json",
+            "sub/weights.aiolm-update.json",
+        ] {
+            assert!(
+                plan_snapshot(tree(&[
+                    "config.json",
+                    "model.safetensors",
+                    "tokenizer.json",
+                    path
+                ]))
+                .is_err(),
+                "{path}"
+            );
+            // Companion plans only select files in the same directory.
+            if !path.contains('/') {
+                assert!(
+                    gguf_companion_plan(
+                        &tree(&["config.json", "tokenizer.json", path]),
+                        "model.gguf"
+                    )
+                    .is_err(),
+                    "{path}"
+                );
+            }
+        }
+        assert!(gguf_companion_plan(
+            &tree(&[
+                ".aiolm-staging/config.json",
+                ".aiolm-staging/tokenizer.json"
+            ]),
+            ".aiolm-staging/model.gguf",
+        )
+        .is_err());
+        assert!(safe_file(SNAPSHOT_MANIFEST).is_ok());
     }
 
     #[test]
@@ -1164,7 +1370,7 @@ mod tests {
         );
         let nonmatching_revision_root = root.join("nonmatching-revision");
         let directory_revision = "f".repeat(40);
-        write_manifest_snapshot(
+        let stable_directory = write_manifest_snapshot(
             &nonmatching_revision_root,
             &directory_revision,
             &manifest_with_unknown("owner/model", &"0".repeat(40), Some("1e999"), None),
@@ -1179,9 +1385,12 @@ mod tests {
         let nonmatching_revision =
             installed_snapshots(nonmatching_revision_root.to_str().unwrap(), "owner/model")
                 .unwrap();
-        if !nonmatching_revision.is_empty() {
+        let ordinary = crate::providers::artifacts::inspect_snapshot(
+            &stable_directory.canonicalize().unwrap(),
+        );
+        if nonmatching_revision.as_slice() != [ordinary] {
             mismatches.push(format!(
-                "nonmatching-revision: expected skip, installed={nonmatching_revision:?}"
+                "stable-directory-revision: expected ordinary inspection, installed={nonmatching_revision:?}"
             ));
         }
         fs::remove_dir_all(root).unwrap();
@@ -1365,7 +1574,7 @@ mod tests {
         let unverifiable = SnapshotFile {
             path: "config.json".into(),
             size: 5,
-            oid: Some("a".repeat(40)),
+            oid: None,
         };
         assert!(verify_existing(&target, &unverifiable, &idle, |_| {})
             .await
