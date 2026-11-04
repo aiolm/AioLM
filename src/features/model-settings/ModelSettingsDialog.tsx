@@ -1,7 +1,7 @@
 import ModelName from '../../shared/ui/ModelName';
 import ModelBadges, { unknownFormat } from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
-import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { executionConfig, executionSettings, serverSettingsChanged, type ExecutionSettings } from '../../shared/config/executionSettings';
 import { withManualOverrides } from '../../shared/config/tuningDefaults';
@@ -14,7 +14,6 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import Badge from '../../shared/ui/Badge';
 import Switch from '../../shared/ui/Switch';
-import { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import TabNav from '../../shared/ui/TabNav';
 import { previewExecution } from '../models/modelExecutionState';
 import { useServerOptions } from '../tuning/useServerOptions';
@@ -54,8 +53,7 @@ export interface ModelSettingsDialogProps {
   onApply: (cfg: api.AppConfig, intent: 'save' | 'start', profiles: ProfileEditorResult) => Promise<void>;
   onProfileCommit: (cfg: api.AppConfig, edit: ProfileEditorResult, applyTarget: boolean) => Promise<ProfileCommitResult>;
   onReloadProfile: (modelPath: string) => Promise<ProfileCommitResult>;
-  onClose: () => void; onManageRuntimes?: (draft?: api.AppConfig) => void;
-  renderRuntimeManager?: (request: { config: api.AppConfig; revision: number; active: boolean; onBusyChange: (busy: boolean) => void }) => ReactNode;
+  onClose: () => void; onManageRuntimes?: () => void;
   busy?: boolean; liveState?: string;
   preflightState?: 'checking' | 'cancelling';
   liveConfig?: api.AppConfig;
@@ -110,7 +108,7 @@ const modalityLabel: Record<Locale, Record<string, string>> = {
 };
 
 /** A target-scoped editor. No configuration or model-profile writes happen on preview. */
-export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onProfileCommit, onReloadProfile, onClose, onManageRuntimes, renderRuntimeManager,
+export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onProfileCommit, onReloadProfile, onClose, onManageRuntimes,
   busy = false, liveState, liveConfig, initialApplication, liveApplication, sessionId = 'default', executionNotice, onCancelStart, onStop, requireModelSelection = false, preflightState }: ModelSettingsDialogProps) {
   const { t, locale } = useI18n();
   const copy = modelSettingsCopy[locale];
@@ -182,9 +180,6 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [resourcesLoaded, setResourcesLoaded] = useState(false);
   const [resourceError, setResourceError] = useState('');
   const [resourceRevision, setResourceRevision] = useState(0);
-  const [managerRequest, setManagerRequest] = useState<{ config: api.AppConfig; revision: number } | null>(null);
-  const [managerOpen, setManagerOpen] = useState(false);
-  const [managerBusy, setManagerBusy] = useState(false);
   const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -281,20 +276,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     focusStepHeading();
   };
   const manageRuntimes = () => {
-    if (disabled || managerBusy) return;
-    if (!renderRuntimeManager) { onManageRuntimes?.(structuredClone(cfg)); return; }
-    const previous = document.activeElement;
-    setManagerRequest(previous => ({ config: structuredClone(cfg), revision: (previous?.revision ?? 0) + 1 }));
-    setManagerOpen(true);
-    window.requestAnimationFrame(() => {
-      if (document.activeElement === previous || document.activeElement === document.body) heading.current?.focus();
-    });
-  };
-  const closeRuntimeManager = () => {
-    if (managerBusy || disabled) return;
-    setManagerOpen(false); setResourceRevision(value => value + 1);
-    setFlow(previous => ({ ...previous, step: 'runtime' }));
-    focusStepHeading();
+    if (disabled || pending || confirmSave) return;
+    onManageRuntimes?.();
   };
   const running = liveState === 'running' && (mode === 'default' || mode === 'session');
   // This target holds a server process right now, loading one, or shutting one
@@ -538,7 +521,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       if (event.shiftKey && (document.activeElement === first || document.activeElement === heading.current)) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }}
-    onCancel={event => { event.preventDefault(); if (!disabled && !managerBusy) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else if (managerOpen) closeRuntimeManager(); else guarded(onClose); } }}>
+    onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell" ref={shell} onFocus={event => {
         if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
@@ -560,10 +543,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           revealFocused(outer, target);
         });
       }}>
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{managerOpen ? copy.manageRuntime : copy.title}</h2>{!managerOpen && step === 'options' && <><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></>}</div>
-          <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled || managerBusy} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></header>
-        <div hidden={managerOpen} inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={`${api.providerDisplayName(provider)} · ${runtimeSelection || flowCopy.choose}`} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
-        <div hidden={managerOpen} className={`model-settings-layout${step !== 'options' ? ' model-settings-layout--setup' : ''}`} inert={!!pending || confirmSave || disabled}>
+        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2>{step === 'options' && <><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></>}</div>
+          <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>
+        </header>
+        <div inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={`${api.providerDisplayName(provider)} · ${runtimeSelection || flowCopy.choose}`} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
+        <div className={`model-settings-layout${step !== 'options' ? ' model-settings-layout--setup' : ''}`} inert={!!pending || confirmSave || disabled}>
           {step === 'options' && <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />}
           <div className="model-settings-content">
@@ -577,7 +561,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <div className="model-settings-runtime-selection" hidden={step !== 'runtime'}>
               {!runtimeSelection && <FeedbackBanner tone="info">{runSetupGapMessage('runtime', locale)}</FeedbackBanner>}
               <ProviderRuntimeControl cfg={cfg} disabled={disabled} onProvider={chooseProvider} onChange={change} onReady={setProviderReady} revision={resourceRevision} />
-              {(renderRuntimeManager || onManageRuntimes) && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" disabled={disabled} onClick={manageRuntimes}>{copy.manageRuntime}</button>}
+              {onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" disabled={disabled} onClick={manageRuntimes}>{copy.manageRuntime}</button>}
               {runtimeSelected && runtimeKnown && runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               </div>
@@ -616,7 +600,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
             {!external && <div hidden={section !== 'runtime'} className="model-settings-fields">
-              <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{(renderRuntimeManager || onManageRuntimes) && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={manageRuntimes}>{copy.manageRuntime}</button>}</div>
+              <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={manageRuntimes}>{copy.manageRuntime}</button>}</div>
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} draftDevice={cfg.spec_draft_device} onDraftDeviceChange={spec_draft_device => change({ spec_draft_device })} onInvalid={setFieldInvalid} />}
             </div>}
@@ -645,11 +629,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             </div>
           </div>
         </div>
-        {managerRequest && renderRuntimeManager && <section className="model-settings-runtime-manager" hidden={!managerOpen}>
-          <div className="model-settings-manager-actions"><button type="button" className="app-button app-button--secondary" disabled={disabled || managerBusy} onClick={closeRuntimeManager}>{flowCopy.backRuntime}</button></div>
-          <ActivePanelContext.Provider value={managerOpen && open}><Suspense fallback={<p role="status">{t('extra.loading')}</p>}>{renderRuntimeManager({ ...managerRequest, active: managerOpen && open, onBusyChange: setManagerBusy })}</Suspense></ActivePanelContext.Provider>
-        </section>}
-        <footer className="model-settings-footer" hidden={managerOpen}>
+        <footer className="model-settings-footer">
           <div className="model-settings-footer-summary" tabIndex={0}>
             {preflightState && <p className="app-section-hint" role="status">{preflightState === 'checking' ? copy.preflightChecking : copy.preflightCancelling}</p>}
             {providerOptionsPending && <p className="app-section-hint" role="status">{copy.checkingOptions}</p>}
@@ -667,7 +647,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
                   {gap === 'model' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => showSection('model')}>{executionCopy.needModelAction}</button>}
                   {gap === 'runtime' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => navigateStep('runtime')}>{executionCopy.needRuntimeAction}</button>}
-                  {gap === 'runtimeMissing' && (renderRuntimeManager || onManageRuntimes) && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="settings" onClick={manageRuntimes}>{executionCopy.manageRuntime}</button>}
+                  {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="settings" onClick={manageRuntimes}>{executionCopy.manageRuntime}</button>}
                 </li>)}
               </ul></FeedbackBanner>}</div>
             {step === 'options' && (!external || supportedInputs !== '—') && <div className="model-settings-footer-bar">

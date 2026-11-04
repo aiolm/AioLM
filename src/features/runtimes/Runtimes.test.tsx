@@ -1209,6 +1209,9 @@ describe('neutral inference engine inventory', () => {
     expect(screen.queryByRole('button', { name: 'Install isolated environment' })).not.toBeInTheDocument();
     view.rerender(panel({ active: true, engineRequest: { provider: 'vllm', revision: 2 } }));
     expect(await screen.findByRole('button', { name: 'Install isolated environment' })).toBeVisible();
+    view.rerender(panel({ active: true, engineRequest: { revision: 3 } }));
+    expect(screen.getByRole('button', { name: 'Add inference engine' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Install isolated environment' })).not.toBeInTheDocument();
     expect(mocked.rtList).not.toHaveBeenCalled();
   });
 
@@ -1221,6 +1224,8 @@ describe('neutral inference engine inventory', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled());
     view.rerender(panel({ active: false, engineRequest: request }));
     view.rerender(panel({ active: true, engineRequest: request }));
+    expect(screen.getByRole('heading', { name: 'vLLM' })).toBeVisible();
+    view.rerender(panel({ active: true, engineRequest: { revision: 2 } }));
     expect(screen.getByRole('heading', { name: 'vLLM' })).toBeVisible();
     await act(async () => finish());
     expect(await screen.findByRole('button', { name: 'Add inference engine' })).toBeVisible();

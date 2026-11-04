@@ -30,6 +30,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ProviderId } from '../../shared/api/providers';
 import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 import { notifyRuntimeInventoryChanged, useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
+import { useModelSettings } from '../model-settings/modelSettingsContext';
+import { settingsFlowCopy } from '../model-settings/settingsFlowCopy';
 
 export type { BackendRow } from "./runtimesHelpers";
 
@@ -40,15 +42,15 @@ function BackIcon() {
   return <svg aria-hidden="true" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 6 10l6 6" /></svg>;
 }
 
-/** Opens on a neutral inventory of every adapter. Browsing an adapter does
- * not change execution selection; only an explicit request (a model's
- * "manage runtimes" action) opens one adapter directly, and ordinary
- * navigation back to this page returns to the inventory. */
-export default function RuntimesPanel({ store, active = true, onOpenProfiles, engineRequest, onBusyChange }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; engineRequest?: { provider: ProviderId; revision: number }; onBusyChange?: (busy: boolean) => void }) {
+/** Opens on the full engine inventory. An explicit request without a provider
+ * restores that inventory even if the page is already showing an engine.
+ * Provider-specific requests remain independent of execution selection. */
+export default function RuntimesPanel({ store, active = true, onOpenProfiles, engineRequest, onBusyChange }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; engineRequest?: { provider?: ProviderId; revision: number }; onBusyChange?: (busy: boolean) => void }) {
   const { t, locale } = useI18n();
   const copy = adapterCatalogCopy[locale];
+  const modelSettings = useModelSettings();
   const addHeadingId = useId();
-  const [view, setView] = useState<View>(() => engineRequest ? { kind: 'adapter', id: engineRequest.provider } : { kind: 'inventory' });
+  const [view, setView] = useState<View>(() => engineRequest?.provider ? { kind: 'adapter', id: engineRequest.provider } : { kind: 'inventory' });
   const handledRequest = useRef(engineRequest?.revision);
   const wasActive = useRef(active);
   const pendingInventoryReturn = useRef(false);
@@ -89,9 +91,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
     return () => { current = false; };
   }, [active, providerRevision, inventoryRevision]);
 
-  // An explicit engine request opens that adapter; returning to the page by
-  // ordinary navigation shows the inventory again. Neither interrupts an
-  // operation in progress: a pending request is applied once it finishes.
+  // Explicit requests may target one engine or the whole inventory. Ordinary
+  // return navigation also shows the inventory; requests wait for owned work.
   useEffect(() => {
     const returned = active && !wasActive.current;
     wasActive.current = active;
@@ -100,7 +101,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
     if (engineRequest && engineRequest.revision !== handledRequest.current) {
       handledRequest.current = engineRequest.revision;
       pendingInventoryReturn.current = false;
-      setView({ kind: 'adapter', id: engineRequest.provider });
+      setView(engineRequest.provider ? { kind: 'adapter', id: engineRequest.provider } : { kind: 'inventory' });
     } else if (pendingInventoryReturn.current) {
       pendingInventoryReturn.current = false;
       setView(current => (current.kind === 'adapter' ? { kind: 'inventory' } : current));
@@ -150,6 +151,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
           <p className="app-page-description">{t("ui.runtimesIntro")}</p>
         </div>
         <div className="app-page-actions">
+          {modelSettings?.suspended && <button type="button" className="app-button app-button--secondary" disabled={operationBusy} onClick={modelSettings.resume}>{settingsFlowCopy[locale].backSettings}</button>}
           {llama && rt.bundleBusy
             ? <LocalTaskCancelButton taskId="runtime-operation" pending={rt.cancelBusy} onClick={() => void rt.cancelInstall()} disabled={rt.cancelBusy} className="app-button app-button--danger shrink-0"><StableLabel value={rt.cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></LocalTaskCancelButton>
             : <button type="button" onClick={() => { if (llama) void rt.refresh(true); else setProviderRevision(value => value + 1); }} disabled={rt.runtimeBusy || providerBusy || adapterBusy} className="app-button app-button--secondary shrink-0 runtime-refresh">

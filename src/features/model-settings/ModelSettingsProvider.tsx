@@ -16,13 +16,12 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
-import { modelSettingsContext as Context, type ModelSettingsRequest } from './modelSettingsContext';
+import { MANAGE_MODEL_RUNTIMES, modelSettingsContext as Context, type ModelSettingsRequest } from './modelSettingsContext';
 
 export { MANAGE_MODEL_RUNTIMES, useModelSettings } from './modelSettingsContext';
 export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from './modelSettingsContext';
 
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
-const RuntimesPanel = lazy(() => import('../runtimes/Runtimes'));
 
 interface LaunchCancellation { editorKey: number; cancel: () => void }
 
@@ -428,6 +427,10 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       preflightState={preflightState ?? undefined}
       onCancelStart={preflightState ? cancelPreflight : launching?.editorKey === editor.key ? launching.cancel : undefined} onStop={stopTarget}
-      renderRuntimeManager={({ config, revision, active, onBusyChange }) => <RuntimesPanel store={store} active={active} engineRequest={{ provider: providerOf(config), revision }} onBusyChange={onBusyChange} />} /></Suspense>}
+      onManageRuntimes={() => {
+        if (lock.current) return;
+        const event = new Event(MANAGE_MODEL_RUNTIMES, { cancelable: true });
+        if (window.dispatchEvent(event)) setSuspended(true);
+      }} /></Suspense>}
   </Context.Provider>;
 }

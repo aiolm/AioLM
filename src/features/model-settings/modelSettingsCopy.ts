@@ -53,7 +53,7 @@ const ko: Copy = {
   discardTitle: '편집 중인 변경을 버릴까요?', discardBody: '선택한 프로필의 변경 사항이 아직 저장되지 않았습니다.', discard: '변경 버리기', keep: '계속 편집', pending: '저장 중…',
   benchmarkControlled: '벤치마크는 엔진 실행 설정을 그대로 사용합니다. 요청 설정은 공통 API 측정 조건에서 결정하며 저장된 채팅 프롬프트와 요청 값은 변경하지 않습니다.',
   benchmarkRequest: '공통 벤치마크 요청이 이 값을 결정합니다. 프로필 값은 보존되며, 이전 재정의를 제거하려면 명시적으로 지워 주세요.',
-  selectRuntime: '런타임 선택', manageRuntime: '런타임 관리', missingRuntime: '선택한 런타임은 아직 사용할 준비가 되지 않았습니다. 설정은 저장할 수 있지만 실행 전에 런타임 관리에서 상태를 확인하고 필요하면 설치하세요.',
+  selectRuntime: '런타임 선택', manageRuntime: '추론 엔진 관리', missingRuntime: '선택한 런타임은 아직 사용할 준비가 되지 않았습니다. 설정은 저장할 수 있지만 실행 전에 추론 엔진 관리에서 상태를 확인하고 필요하면 설치하세요.',
   reset: '런타임 기본값으로 초기화', preset: '프리셋 불러오기', balanced: '균형', cpu: 'CPU', maxGpu: '최대 GPU', tuningProfile: '모델 튜닝 프로필 불러오기',
   checkingOptions: '런타임 옵션 확인 중…', invalid: '잘못 입력된 항목을 수정한 뒤 적용하세요.', rawArgs: '추가 서버 인자 (한 줄에 하나)', rawChat: '추가 요청 JSON',
   projector: '비전 프로젝터', draftModel: '초안 모델', none: '없음', addLora: 'LoRA 파일 추가', scale: '배율', enabled: '사용', remove: '제거',

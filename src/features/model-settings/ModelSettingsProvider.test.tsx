@@ -8,7 +8,7 @@ import { executionConfig, executionSettings, settingsForSession } from '../../sh
 import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
-import { MANAGE_MODEL_RUNTIMES, ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
+import { ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
 import { applySettingsProfile, captureProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
 import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
@@ -24,7 +24,6 @@ vi.mock('./ModelSettingsDialog', () => ({ default: (props: ModelSettingsDialogPr
   mocks.renders += 1;
   return <div data-testid="settings-dialog" />;
 } }));
-vi.mock('../runtimes/Runtimes', () => ({ default: ({ engineRequest }: { engineRequest: { provider: string } }) => <p>Inline runtime manager: {engineRequest.provider}</p> }));
 vi.mock('../../shared/i18n/i18n', () => ({ useI18n: () => ({ locale: mocks.locale, t: (key: string) => key }) }));
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => mocks.native,
@@ -155,20 +154,6 @@ describe('model settings target application', () => {
     expect(store.cfg?.active_model).toBe(path);
     expect(mocks.preflightLaunch).not.toHaveBeenCalled();
     expect(store.status.model).toBe('served-alias');
-  });
-  it('opens runtime management for the edited engine without persisting the draft', async () => {
-    const store = createTestStore();
-    const dialog = await open(store, { target: { kind: 'default' } });
-    const listener = vi.fn();
-    window.addEventListener(MANAGE_MODEL_RUNTIMES, listener);
-    try {
-      const manager = dialog.renderRuntimeManager?.({ config: { ...store.cfg!, active_provider: 'vllm', active_runtime: 'synthetic-metal' }, revision: 1, active: true, onBusyChange: vi.fn() });
-      await act(async () => { render(manager); });
-      expect(await screen.findByText('Inline runtime manager: vllm')).toBeVisible();
-      expect(listener).not.toHaveBeenCalled();
-      expect(context.suspended).toBe(false);
-      expect(store.updateConfig).not.toHaveBeenCalled();
-    } finally { window.removeEventListener(MANAGE_MODEL_RUNTIMES, listener); }
   });
   it('reopens a saved stopped model with its selected profile and prompt', async () => {
     const store = createTestStore();

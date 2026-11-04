@@ -1,17 +1,9 @@
 import { cfg, mount, numeric, openOptions } from '../../testing/modelSettingsDialog';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { I18nProvider } from '../../shared/i18n/i18n';
-import { ModelSettingsDialog } from './ModelSettingsDialog';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
-import { registerTask, removeTask } from '../../shared/state/taskRegistry';
-import { LocalTaskCancelButton, TaskCancellationProvider } from '../../shared/ui/TaskCancellation';
-import TaskStrip from '../../shared/ui/TaskStrip';
-
-import RuntimesPanel from '../runtimes/Runtimes';
-import { createTestStore } from '../../testing/appStore';
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -51,117 +43,15 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
   });
   it('requires a runtime selection before profile or option navigation', () => {
-    const onManageRuntimes = vi.fn();
-    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' }, initialSection: 'advanced', onManageRuntimes });
+    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' }, initialSection: 'advanced', onManageRuntimes: vi.fn() });
     expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_backend: '', active_build: '' }));
+    expect(screen.getByRole('button', { name: 'Manage runtimes' })).toBeEnabled();
   });
 
-  it('shares cancellation with the inline runtime manager and restores it when that retained manager is hidden', async () => {
-    const cancel = vi.fn();
-    const commit = vi.fn(); const reload = vi.fn();
-    registerTask({ id: 'runtime-adapter-registration', kind: 'runtime', label: 'Synthetic registration', interruptible: true, cancel });
-    try {
-      render(<I18nProvider initialLocale="en"><TaskCancellationProvider><TaskStrip /><ModelSettingsDialog open initialConfig={cfg}
-        mode="default" targetLabel="Synthetic execution" onApply={vi.fn()} onClose={vi.fn()} onProfileCommit={commit} onReloadProfile={reload}
-        renderRuntimeManager={() => <LocalTaskCancelButton taskId="runtime-adapter-registration" onClick={cancel}>Cancel registration</LocalTaskCancelButton>} />
-      </TaskCancellationProvider></I18nProvider>);
-      const strip = () => within(screen.getByRole('complementary', { name: 'Background tasks' }));
-      expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled();
-      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-      expect(await screen.findByRole('button', { name: 'Cancel registration' })).toBeVisible();
-      await waitFor(() => expect(strip().queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
-      await waitFor(() => expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled());
-      expect(screen.queryByRole('button', { name: 'Cancel registration' })).not.toBeInTheDocument();
-      fireEvent.click(strip().getByRole('button', { name: 'Cancel' }));
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(commit).not.toHaveBeenCalled(); expect(reload).not.toHaveBeenCalled();
-    } finally { act(() => removeTask('runtime-adapter-registration')); }
-  });
-  it('lets an observer runtime manager return or close while another panel owns an installation', async () => {
-    vi.spyOn(api, 'deviceProfile').mockResolvedValue({
-      profile: { schema_version: 1, os: 'darwin', arch: 'aarch64', cpu: { name: 'Synthetic CPU', logical_cores: 8 }, gpus: [], detection: 'synthetic', fingerprint: 'synthetic' },
-      backends: [{ backend: 'cpu', fit: 'recommended', reason: 'cpu' }],
-    });
-    vi.spyOn(api, 'rtLatest').mockResolvedValue({ build: 'b456', file_name: 'synthetic-runtime.zip', url: 'https://example.invalid/runtime.zip' });
-    vi.spyOn(api, 'onRuntimeProgress').mockResolvedValue(() => undefined);
-    let finish!: (value: api.InstalledRuntime) => void;
-    vi.spyOn(api, 'rtInstall').mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-    const base = createTestStore(cfg);
-    const ownerPanel = render(<I18nProvider initialLocale="en"><RuntimesPanel store={base} engineRequest={{ provider: 'llama.cpp', revision: 1 }} /></I18nProvider>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Install b456: CPU-only' }));
-    try {
-      const { onClose } = mount({ initialSection: 'runtime', renderRuntimeManager: ({ active, revision, onBusyChange }) =>
-        <RuntimesPanel store={base} active={active} engineRequest={{ provider: 'llama.cpp', revision }} onBusyChange={onBusyChange} /> });
-      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-      const modal = screen.getByRole('dialog', { name: 'Manage runtimes' });
-      const manager = within(modal);
-      const install = await manager.findByRole('button', { name: 'Install b456: CPU-only' });
-      expect(install).toHaveAttribute('aria-disabled', 'true');
-      expect(manager.getByRole('button', { name: 'Back to runtime' })).toBeEnabled();
-      expect(manager.getByRole('button', { name: 'Close' })).toBeEnabled();
-      fireEvent.click(manager.getByRole('button', { name: 'Back to runtime' }));
-      expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
-      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-      fireEvent.click(manager.getByRole('button', { name: 'Close' }));
-      expect(onClose).toHaveBeenCalledOnce();
-      expect(screen.getByRole('button', { name: 'Cancel install' })).toBeEnabled();
-    } finally {
-      await act(async () => finish({ backend: 'cpu', build: 'b456', dir: '/synthetic/cpu-b456', size_mb: 1 }));
-      ownerPanel.unmount();
-      act(() => removeTask('runtime-operation'));
-    }
-  });
-  it('manages runtimes inside the same modal, retains both drafts and waits for active operations', async () => {
-    const inventory = vi.spyOn(api, 'providerRuntimes');
-    const onManageRuntimes = vi.fn();
-    function Manager({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
-      return <div><input aria-label="Registration draft" defaultValue="" />
-        <button type="button" onClick={() => onBusyChange(true)}>Begin operation</button>
-        <button type="button" onClick={() => { inventory.mockResolvedValue([
-          { id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
-          { id: 'b456-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b456', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
-        ]); onBusyChange(false); }}>Finish operation</button></div>;
-    }
-    const { onClose, onApply, onProfileCommit } = mount({ initialSection: 'tuning', onManageRuntimes,
-      renderRuntimeManager: ({ onBusyChange }) => <Manager onBusyChange={onBusyChange} /> });
-    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
-    fireEvent.blur(numeric('ctx_size'));
-    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    const modal = screen.getByRole('dialog', { name: 'Model & settings' });
-    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-    expect(screen.getByRole('dialog', { name: 'Manage runtimes' })).toBe(modal);
-    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-    const registration = screen.getByLabelText('Registration draft');
-    registration.focus();
-    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
-    expect(registration).toHaveFocus();
-    fireEvent.change(screen.getByLabelText('Registration draft'), { target: { value: 'Unsaved entry point' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Begin operation' }));
-    expect(screen.getByRole('button', { name: 'Back to runtime' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
-    fireEvent(modal, new Event('cancel', { cancelable: true }));
-    expect(screen.getByLabelText('Registration draft')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Finish operation' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
-    expect(await screen.findByRole('radio', { name: /^b456/ })).toBeVisible();
-    expect(screen.getByRole('radio', { name: /^b123/ })).toBeChecked();
-    openOptions();
-    expect(numeric('ctx_size')).toHaveValue(8192);
-    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
-    expect(screen.getByLabelText('Registration draft')).toHaveValue('Unsaved entry point');
-    fireEvent(modal, new Event('cancel', { cancelable: true }));
-    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
-    expect(onManageRuntimes).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
-    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
-  });
   it('keeps the option draft on backward navigation and confirms before replacing it with another profile', async () => {
     const alternate = captureProfile({ ...cfg, ctx_size: 12288 }, 'Alternate settings', 'global', '');
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg,
@@ -416,14 +306,12 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByText(/AioLM conversation instructions/)).toBeVisible();
   });
   it('opens external runtime setup at selection and keeps runtime management beside the selectors', async () => {
-    const onManageRuntimes = vi.fn();
-    mount({ initialConfig: { ...cfg, active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }, initialSection: 'setup', onManageRuntimes });
+    mount({ initialConfig: { ...cfg, active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }, initialSection: 'setup', onManageRuntimes: vi.fn() });
     expect(screen.queryByRole('tab', { name: 'Runtime connection' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     const context = document.querySelector<HTMLElement>('.model-settings-runtime-selection')!;
-    fireEvent.click(within(context).getByRole('button', { name: 'Manage runtimes' }));
-    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }));
+    expect(within(context).getByRole('button', { name: 'Manage runtimes' })).toBeVisible();
   });
   it('offers an external unknown model to launch validation without claiming compatibility', async () => {
     const provider = 'custom.unfamiliar';

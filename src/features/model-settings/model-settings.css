@@ -1,6 +1,6 @@
 .model-settings-dialog { width: min(1120px, calc(100vw - 40px)); max-width: none; height: min(850px, calc(100dvh - 40px)); max-height: none; overflow: visible; }
 .model-settings-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-radius: inherit; }
-.model-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--ui-border); flex-shrink: 0; }
+.model-settings-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--ui-border); flex-shrink: 0; }
 .model-settings-header > div { min-width: 0; }
 .model-settings-header h2 { margin: 4px 0; font-size: var(--ui-text-section); font-weight: 650; outline-offset: 4px; }
 .model-settings-header p { margin: 0; color: var(--ui-muted); overflow-wrap: break-word; font-size: var(--ui-text-support); }
@@ -38,8 +38,6 @@
 .runtime-choice > span { min-width: 0; }
 .runtime-choice strong, .runtime-choice small { display: block; overflow-wrap: anywhere; }
 .runtime-choice small { margin-top: 5px; color: var(--ui-muted); }
-.model-settings-runtime-manager { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
-.model-settings-manager-actions { flex-shrink: 0; padding: 12px 24px; border-bottom: 1px solid var(--ui-border); }
 .model-settings-runtime-selection .model-settings-fields > label { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
 .model-settings-runtime-selection label > .app-custom-select-container { flex: 1; min-width: 0; }
 .model-settings-context .app-custom-select-trigger { width: 100%; }

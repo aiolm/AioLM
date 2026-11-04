@@ -6,16 +6,18 @@ const en = {
   nextProfile: 'Continue to profile', nextOptions: 'Use this profile and adjust options',
   backRuntime: 'Back to runtime', backProfile: 'Back to profile', choose: 'Not selected',
   noRuntimes: 'No runtime is registered for this engine. Add or install one in runtime management.',
+  backSettings: 'Return to model settings',
 };
 type Copy = { [K in keyof typeof en]: string };
 const ko: Copy = {
   journey: '런타임, 프로필, 옵션 설정 순서', runtime: '런타임 선택', profile: '프로필 선택', options: '옵션 조정',
-  runtimeHint: '먼저 추론 엔진과 설치된 런타임을 선택하세요.',
+  runtimeHint: '추론 엔진은 엔진의 종류, 런타임은 설치된 실행 환경입니다. 사용할 엔진과 런타임을 선택하세요.',
   profileHint: '선택한 엔진의 프로필입니다. 옵션은 선택한 런타임 빌드를 기준으로 확인합니다.',
   optionsHint: '선택한 프로필의 모델과 옵션을 조정하세요.',
   nextProfile: '프로필 선택으로', nextOptions: '이 프로필로 옵션 조정',
   backRuntime: '런타임 선택으로 돌아가기', backProfile: '프로필 선택으로 돌아가기', choose: '선택하지 않음',
-  noRuntimes: '이 엔진에 등록된 런타임이 없습니다. 런타임 관리에서 추가하거나 설치하세요.',
+  noRuntimes: '이 엔진에 등록된 런타임이 없습니다. 추론 엔진 관리에서 추가하거나 설치하세요.',
+  backSettings: '모델 설정으로 돌아가기',
 };
 const ja: Copy = {
   journey: 'ランタイム、プロファイル、オプションの設定順序', runtime: 'ランタイムを選択', profile: 'プロファイルを選択', options: 'オプションを調整',
@@ -25,6 +27,7 @@ const ja: Copy = {
   nextProfile: 'プロファイルの選択へ', nextOptions: 'このプロファイルでオプションを調整',
   backRuntime: 'ランタイムの選択に戻る', backProfile: 'プロファイルの選択に戻る', choose: '未選択',
   noRuntimes: 'このエンジンのランタイムは未登録です。ランタイム管理で追加またはインストールしてください。',
+  backSettings: 'モデル設定に戻る',
 };
 const zh: Copy = {
   journey: '运行时、预设和选项设置顺序', runtime: '选择运行时', profile: '选择预设', options: '调整选项',
@@ -34,5 +37,6 @@ const zh: Copy = {
   nextProfile: '继续选择预设', nextOptions: '使用此预设并调整选项',
   backRuntime: '返回运行时选择', backProfile: '返回预设选择', choose: '未选择',
   noRuntimes: '此引擎尚未注册运行时。请在运行时管理中添加或安装。',
+  backSettings: '返回模型设置',
 };
 export const settingsFlowCopy = { en, ko, ja, zh };

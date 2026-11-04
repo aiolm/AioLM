@@ -26,7 +26,7 @@ import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedback
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
-import { isProviderId, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
+import { providerDisplayName, providerOf } from '../shared/api/providers';
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { applyTypography } from "../shared/config/typography";
 import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
@@ -154,7 +154,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const executionCopy = executionText[locale];
   const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
-  const [runtimeEngineRequest, setRuntimeEngineRequest] = useState<{ provider: ProviderId; revision: number }>();
+  const [runtimeEngineRequest, setRuntimeEngineRequest] = useState<{ revision: number }>();
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [menuOpen, setMenuOpen] = useState(false);
   // Desktop-only rail state; the mobile drawer always shows full labels.
@@ -263,9 +263,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const navigateRef = useRef(navigate); navigateRef.current = navigate;
   useEffect(() => {
     const manage = (event: Event) => {
-      const provider = (event as CustomEvent<{ provider?: ProviderId }>).detail?.provider;
-      if (provider && isProviderId(provider)) setRuntimeEngineRequest(previous => ({ provider, revision: (previous?.revision ?? 0) + 1 }));
-      navigateRef.current('runtimes');
+      if (!navigateRef.current('runtimes')) { event.preventDefault(); return; }
+      setRuntimeEngineRequest(previous => ({ revision: (previous?.revision ?? 0) + 1 }));
     };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
     return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);

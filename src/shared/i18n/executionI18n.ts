@@ -22,7 +22,7 @@ export const executionText: Record<Locale, Copy> = {
   en,
   ko: {
     title: '모델 실행', setup: '실행 구성', setupAction: '설정 및 실행', hint: '모델을 선택하고 설정을 확인한 뒤 여기서 실행하세요.', remembered: '모델마다 마지막 설정을 기억합니다.',
-    runtime: '런타임', manageRuntime: '추론 엔진', back: '모델로 돌아가기', systemRuntime: '시스템 PATH 런타임', runtimeMissing: '이 런타임은 아직 사용할 준비가 되지 않았습니다. 런타임 관리에서 상태를 확인하고 필요하면 설치하거나 다른 런타임을 선택하세요.', runtimeError: '런타임 또는 장치 정보를 불러오지 못했습니다. 실행 전에 다시 시도하세요.',
+    runtime: '런타임', manageRuntime: '추론 엔진 관리', back: '모델로 돌아가기', systemRuntime: '시스템 PATH 런타임', runtimeMissing: '이 런타임은 아직 사용할 준비가 되지 않았습니다. 추론 엔진 관리에서 상태를 확인하고 필요하면 설치하거나 다른 런타임을 선택하세요.', runtimeError: '런타임 또는 장치 정보를 불러오지 못했습니다. 실행 전에 다시 시도하세요.',
     blockedTitle: '실행하려면 먼저', needModel: '선택된 모델이 없습니다.', needModelAction: '모델 선택',
     needModelParts: '필수 모델 파일이 없거나 다운로드가 완료되지 않았습니다. 다운로드를 마치거나 다른 모델을 선택하세요.',
     needRuntime: '선택된 런타임이 없습니다.', needRuntimeAction: '런타임 선택',
