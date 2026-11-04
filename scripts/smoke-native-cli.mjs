@@ -103,6 +103,10 @@ try {
     }
   }
   writeFileSync(join(home, "aiolm", "config.json"), JSON.stringify(selected.config));
+  const beforeStart = run("config", "get");
+  assert.match(fail("server", "start"), /select a GGUF model/);
+  assert.equal(run("server", "status").state, "stopped");
+  assert.deepEqual(run("config", "get"), beforeStart, "a refused start preserves saved configuration");
   assert.match(fail("runtime", "install", "unknown-engine"), /vllm or mlx-vlm/);
   assert.equal(run("server", "status").state, "stopped");
 

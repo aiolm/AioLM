@@ -1,5 +1,5 @@
 //! Model process IPC, shared session lifecycle operations and idle tracking.
-use super::launch::validate_launch_config_with_cancel;
+use crate::launch_validation::validate_launch_config_with_cancel;
 use crate::{config, gpu, server, session, state::AppState, tuning_defaults};
 use std::sync::{
     atomic::{AtomicBool, Ordering},

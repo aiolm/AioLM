@@ -21,6 +21,7 @@ mod inference_args;
 mod launch_jobs;
 #[cfg(any(target_os = "macos", test))]
 mod launch_path;
+mod launch_validation;
 mod mcp;
 pub mod media;
 pub mod models;
@@ -43,10 +44,10 @@ pub mod verify;
 #[cfg(windows)]
 mod window_placement;
 
-pub use commands::launch::validate_launch_config;
 pub use commands::models::{deletable_model_path, delete_owned_snapshot};
 pub use commands::providers::inspect_catalog as scan_model_catalog;
 pub use config::AppConfig;
+pub use launch_validation::validate_launch_config;
 pub use server::ErrBuf;
 
 use state::AppState;

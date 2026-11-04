@@ -176,7 +176,8 @@ pub(crate) async fn run_performance_bench(
             message: None,
         },
     );
-    let launch = super::launch::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await;
+    let launch =
+        crate::launch_validation::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await;
     let root = benchmark::data_root()?;
     let prepared = match &launch {
         Ok(_) => performance_bench::RuntimeInfo::prepare(&cfg, &request).await,

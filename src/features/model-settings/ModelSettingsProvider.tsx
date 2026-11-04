@@ -3,12 +3,12 @@ import { mergeProviderRequestSettings } from '../../shared/config/providerReques
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
-import { executionChanges, executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, settingsForSession, ExecutionConflictError } from '../../shared/config/executionSettings';
+import { executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, ExecutionConflictError } from '../../shared/config/executionSettings';
 import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 import { anySessionActivity, sessionHasActivity } from '../../shared/state/sessionActivity';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 import { useI18n } from '../../shared/i18n/i18n';
-import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ModelProfile, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
+import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, profileTargetConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ModelProfile, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
 import { ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { applyDefaultProfile, resolveProfileApplicationOrDefault, resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { applyProfile } from './profileWorkspaceState';
@@ -323,17 +323,15 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
             if (source[field] !== original[field] && source[field] !== metadata[field]) throw new Error(copy.conflict + field);
             Object.assign(metadataPatch, { [field]: metadata[field] });
           }
-          const updated = { ...settingsForSession(source, resolved), ...metadataPatch };
-          delete updated.model_profile_id;
           application = { ...application, model: resolved.active_model, settings: profileSettingsSnapshot(resolved) };
-          return { sessions: [...(latestCfg.sessions ?? []).filter(item => item.id !== id), updated], settings_profiles: mergeProfileEditor(latestCfg, { ...edit, application }, id) };
+          return profileTargetConfigPatch(latestCfg, resolved, mergeProfileEditor(latestCfg, { ...edit, application }, id), { ...source, ...metadataPatch });
         });
         saved = sessionConfig(cfg, cfg.sessions!.find(item => item.id === id)!);
       } else {
         saved = await latest.current.updateConfig(latestCfg => {
           const resolved = mergeExecutionChanges(editor.base, next, latestCfg);
           application = { ...application, model: resolved.active_model, settings: profileSettingsSnapshot(resolved) };
-          return { ...executionChanges(latestCfg, resolved), settings_profiles: mergeProfileEditor(latestCfg, { ...edit, application }, id) };
+          return profileTargetConfigPatch(latestCfg, resolved, mergeProfileEditor(latestCfg, { ...edit, application }, id), null);
         });
       }
       application = appliedProfile(saved, id) ?? { ...application, settings: profileSettingsSnapshot(saved) };

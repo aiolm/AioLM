@@ -1,5 +1,5 @@
 import { providerOf } from '../../shared/api/providers';
-import type { AppConfig } from '../../shared/api/types';
+import type { AppConfig, SessionDefinition } from '../../shared/api/types';
 import { emptyProfileLibrary, ensureProfileLibrary, profileApplicationConfig, profileTargetKey, saveSettingsProfile, type ProfileApplication, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { migrateProfileLibrary } from '../../shared/config/profileMigration';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
@@ -85,6 +85,19 @@ export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult
   next.revision = latest.revision + 1;
   next.legacy_imported = true;
   return next;
+}
+
+/** Project one target's execution and profile library into its configuration patch. */
+export function profileTargetConfigPatch(
+  current: AppConfig,
+  execution: AppConfig,
+  settingsProfiles: SettingsProfileLibrary,
+  definition: SessionDefinition | null,
+): Partial<AppConfig> {
+  if (definition === null) return { ...executionChanges(current, execution), settings_profiles: settingsProfiles };
+  const updated = settingsForSession(definition, execution);
+  delete updated.model_profile_id;
+  return { settings_profiles: settingsProfiles, sessions: [...(current.sessions ?? []).filter(item => item.id !== definition.id), updated] };
 }
 
 /** Rebase a stale library edit onto the latest saved library when it is safe.

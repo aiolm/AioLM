@@ -47,6 +47,17 @@ Linux (Ubuntu 24.04 or later, x86_64): download the DEB or AppImage from [GitHub
 
 Installers are unsigned; macOS builds are ad-hoc signed but not notarized. Each release includes SHA-256 checksums. The [installation guide](docs/guides/install.md) covers verification, first launch, updates, uninstalling and [building from source](docs/guides/install.md#build-from-source). See also the [CLI guide](docs/guides/cli.md) and [data folder and migration](docs/reference/migration.md).
 
+## Development validation
+
+Use the Node, npm and Rust versions pinned in the repository; see [build requirements](docs/guides/install.md#requirements).
+
+- `npm test` runs contract, tooling and direct-script checks, followed by the full Vitest coverage suite.
+- `npm run test:coverage` also works without prebuilt benchmark contracts: it builds the workspace package before running coverage. `test:coverage:run` is the shared internal execution step and requires that preparation.
+- `npm run test:direct` runs the explicitly ordered Node assertion scripts in separate processes and stops at the first failure. Before starting a child, it rejects unregistered, missing or duplicate entries. Add a regular `tests/direct/test-*.ts` file to both `DIRECT_TEST_SCRIPTS` in `tests/direct/run.ts` and its individual npm command; the runner harness itself is excluded from the child inventory.
+- `npm run typecheck` checks application and tooling types. `npm run build` builds the frontend; native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
+
+Vitest coverage measures the frontend sources exercised by its suite, not the separate direct Node scripts. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
+
 ## Security and privacy
 
 See [Security](docs/SECURITY.md) and [Privacy](docs/policies/privacy.md).

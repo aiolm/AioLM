@@ -6,6 +6,7 @@
 // already relied on, and the first failing script stops the run and its
 // exit code becomes the overall exit code (fail-fast, matching `&&`).
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export interface DirectTestResult {
@@ -21,6 +22,30 @@ export interface DirectTestRunSummary {
 
 export type SpawnScript = (script: string) => Pick<SpawnSyncReturns<Buffer>, "status">;
 
+export function assertDirectTestInventory(
+  registeredScripts: readonly string[],
+  directory: URL = new URL(".", import.meta.url),
+): void {
+  const files = new Set(
+    readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^test-.*[.]ts$/.test(entry.name) && entry.name !== "test-run-direct-tests.ts")
+      .map((entry) => `tests/direct/${entry.name}`),
+  );
+  const registered = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const script of registeredScripts) {
+    if (registered.has(script)) duplicates.add(script);
+    registered.add(script);
+  }
+  const unregistered = [...files].filter((script) => !registered.has(script)).sort();
+  const missing = [...registered].filter((script) => !files.has(script)).sort();
+  const lines = ["Direct test inventory mismatch"];
+  if (unregistered.length) lines.push(`Unregistered: ${unregistered.join(", ")}`);
+  if (missing.length) lines.push(`Missing: ${missing.join(", ")}`);
+  if (duplicates.size) lines.push(`Duplicate: ${[...duplicates].sort().join(", ")}`);
+  if (lines.length > 1) throw new Error(lines.join("\n"));
+}
+
 export function runDirectTests(scripts: readonly string[], spawn: SpawnScript): DirectTestRunSummary {
   const results: DirectTestResult[] = [];
   for (const script of scripts) {
@@ -34,8 +59,8 @@ export function runDirectTests(scripts: readonly string[], spawn: SpawnScript): 
   return { results, exitCode: 0, stoppedAt: null };
 }
 
-// Order matches the historical `npm test` `&&` chain (test:tuning through
-// test:models-css) so failure order and output order stay unchanged.
+// Keep the explicitly registered order stable so failure and output order
+// remain predictable; inventory validation does not discover execution order.
 export const DIRECT_TEST_SCRIPTS = [
   "tests/direct/test-tuning-validation.ts",
   "tests/direct/test-advanced-settings.ts",
@@ -57,7 +82,6 @@ export const DIRECT_TEST_SCRIPTS = [
   "tests/direct/test-lifecycle-utils.ts",
   "tests/direct/test-storage.ts",
   "tests/direct/test-i18n.ts",
-  "tests/direct/test-models-css.ts",
 ] as const;
 
 function spawnWithNode(script: string): Pick<SpawnSyncReturns<Buffer>, "status"> {
@@ -69,6 +93,12 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
+  try {
+    assertDirectTestInventory(DIRECT_TEST_SCRIPTS);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   const summary = runDirectTests(DIRECT_TEST_SCRIPTS, spawnWithNode);
   if (summary.stoppedAt) {
     console.error(`\ndirect test runner stopped after failure in ${summary.stoppedAt}`);

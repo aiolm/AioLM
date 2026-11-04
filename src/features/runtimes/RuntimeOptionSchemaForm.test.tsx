@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import RuntimeOptionSchemaForm, { maskImportReview, maskPreview } from './RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm from './RuntimeOptionSchemaForm';
+import { maskImportReview, maskPreview } from './optionPresentation';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import type { OptionSchema } from '../../shared/api/runtimeHelp';

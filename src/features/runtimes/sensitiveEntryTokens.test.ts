@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import type { CommandEntry, OptionSchemaDefinition, PositionalRole } from '../../shared/api/runtimeHelp';
 import { sensitiveEntryTokenStrings, sensitiveStaticIndices } from './sensitiveEntryTokens';
-import { maskImportReview, maskPreview } from './RuntimeOptionSchemaForm';
+import { maskImportReview, maskPreview } from './optionPresentation';
 
 const SECRET = 'synthetic-entry-amber-9152';
 const PLAIN = 'plain-token';
