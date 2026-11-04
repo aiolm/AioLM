@@ -36,6 +36,7 @@ Install or import a runtime in the desktop app, then choose its backend/build fr
 ```
 
 - `config set` rejects credential-like and unknown fields.
+- Each `config set` validates the resulting configuration before saving it. When both batch sizes are explicit, `ubatch_size` must not exceed `batch_size`; lower `ubatch_size` first when reducing both.
 - `config get` redacts credential-like values; `server_args`, `chat_options`, and `lora_adapters` require JSON values when set.
 - `models delete` accepts inactive `.gguf`/`.mmproj` files and app-owned snapshot directories inside `models_dir`. It preserves files outside the snapshot manifest and refuses active model/companion bindings.
 - `runtime device` detects local GPUs and recommended backends; `runtime probe` runs the llama-server version/help/device preflight and reports whether the optional llama-bench helper works; a missing or failing llama-bench does not fail the preflight.
