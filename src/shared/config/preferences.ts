@@ -15,6 +15,7 @@ export interface AppPreferences {
   appearance: { reduceMotion: boolean; density: "comfortable" | "compact"; fontFamily: AppFontFamily; codeFontFamily: CodeFontFamily };
   advanced: { confirmDestructiveActions: boolean };
   notifications: NotificationPreferences;
+  personalization: { instructionSources: { agents: boolean; aiolm: boolean } };
 }
 
 interface StoredPreferences { version: 1; values: AppPreferences }
@@ -29,6 +30,7 @@ export const defaultPreferences = (): AppPreferences => ({
   advanced: { confirmDestructiveActions: true },
   // Off until the user opts in, so an upgrade never starts raising OS alerts.
   notifications: { chat: false, downloads: false, benchmark: false },
+  personalization: { instructionSources: { agents: true, aiolm: true } },
 });
 
 const isLocale = (v: unknown): v is Locale => v === "ko" || v === "en" || v === "ja" || v === "zh";
@@ -60,6 +62,12 @@ export function validatePreferences(input: Partial<AppPreferences> | null | unde
     // Built field by field: preferences saved before this group existed, or a
     // hand-edited import, can only enable a category with a real boolean.
     notifications: { chat: strictBool(p.notifications?.chat, d.notifications.chat), downloads: strictBool(p.notifications?.downloads, d.notifications.downloads), benchmark: strictBool(p.notifications?.benchmark, d.notifications.benchmark) },
+    personalization: {
+      instructionSources: {
+        agents: strictBool(p.personalization?.instructionSources?.agents, d.personalization.instructionSources.agents),
+        aiolm: strictBool(p.personalization?.instructionSources?.aiolm, d.personalization.instructionSources.aiolm),
+      },
+    },
   };
 }
 

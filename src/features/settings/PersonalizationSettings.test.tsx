@@ -50,7 +50,6 @@ describe("personalization settings", () => {
     read.mockImplementation(async (source) => file(source, `${source} instructions`));
     mount();
 
-    expect(screen.getByText(/~\/\.agents\/AGENTS\.md first, then ~\/\.aiolm\/AGENTS\.md/)).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Shared agents file/ })).toBeChecked();
     await waitFor(() => expect(editor()).toHaveValue("agents instructions"));
     expect(screen.getByText(String.raw`D:\tmp\home\.agents\AGENTS.md`)).toBeInTheDocument();
@@ -82,9 +81,8 @@ describe("personalization settings", () => {
     expect(save).not.toHaveBeenCalled();
     fireEvent.click(saveButton);
 
-    expect(await screen.findByText(/Saved\. The next chat turn uses these instructions\./)).toBeInTheDocument();
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
     expect(save).toHaveBeenLastCalledWith("aiolm", "Answer briefly.\n", null);
-    expect(changed).toHaveBeenCalledTimes(1);
     expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ source: "aiolm" });
     expect(screen.queryByText("This file does not exist yet. Saving creates it.")).not.toBeInTheDocument();
 

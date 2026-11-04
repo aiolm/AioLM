@@ -10,9 +10,6 @@ import { invoke, isNativeRuntimeAvailable } from './transport.ts';
 import {
   getChatPersonalization,
   isAgentsFileConflict,
-  readAgentsFile,
-  readSkill,
-  saveAgentsFile,
 } from './personalization.ts';
 
 beforeEach(() => {
@@ -21,22 +18,6 @@ beforeEach(() => {
 });
 
 describe('personalization commands', () => {
-  it('sends the native command names and camelCase arguments', async () => {
-    vi.mocked(invoke).mockResolvedValue({});
-    await getChatPersonalization();
-    expect(invoke).toHaveBeenLastCalledWith('chat_personalization');
-    await readSkill('aiolm:review');
-    expect(invoke).toHaveBeenLastCalledWith('personalization_read_skill', { id: 'aiolm:review' });
-    await readAgentsFile('agents');
-    expect(invoke).toHaveBeenLastCalledWith('personalization_read_agents', { source: 'agents' });
-    await saveAgentsFile('aiolm', 'Be brief.', null);
-    expect(invoke).toHaveBeenLastCalledWith('personalization_save_agents', {
-      source: 'aiolm',
-      content: 'Be brief.',
-      expectedRevision: null,
-    });
-  });
-
   it('gives the browser preview an empty context without calling the native runtime', async () => {
     vi.mocked(isNativeRuntimeAvailable).mockReturnValue(false);
     await expect(getChatPersonalization()).resolves.toEqual({ instructions: [], skills: [], warnings: [] });

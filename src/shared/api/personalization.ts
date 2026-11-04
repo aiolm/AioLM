@@ -1,4 +1,5 @@
 import { invoke, isNativeRuntimeAvailable } from "./transport.ts";
+import { loadPreferences } from "../config/preferences";
 
 /** Where personal instructions and skills come from: AioLM's data folder or the shared `~/.agents`. */
 export type PersonalizationSource = "aiolm" | "agents";
@@ -23,7 +24,7 @@ export interface ChatSkill {
 }
 
 export interface ChatPersonalization {
-  /** Shared (`agents`) instructions first, then AioLM's. */
+  /** Selected shared (`agents`) instructions first, then selected AioLM instructions. */
   instructions: AgentInstructionsFile[];
   /** Metadata only; same-name skills resolve to the AioLM one. */
   skills: ChatSkill[];
@@ -44,7 +45,9 @@ const CONFLICT_PREFIX = "Save conflict:";
 /** The browser preview has no files to read, so it chats without personalization. */
 export function getChatPersonalization(): Promise<ChatPersonalization> {
   if (!isNativeRuntimeAvailable()) return Promise.resolve({ instructions: [], skills: [], warnings: [] });
-  return invoke<ChatPersonalization>("chat_personalization");
+  const selected = loadPreferences().personalization.instructionSources;
+  const instructionSources = (["agents", "aiolm"] as const).filter(source => selected[source]);
+  return invoke<ChatPersonalization>("chat_personalization", { instructionSources });
 }
 
 export const readSkill = (id: string) => invoke<SkillContent>("personalization_read_skill", { id });

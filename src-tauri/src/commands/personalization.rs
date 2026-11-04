@@ -14,8 +14,10 @@ async fn with_roots<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub(crate) async fn chat_personalization() -> Result<ChatPersonalization, String> {
-    with_roots(|roots| Ok(personalization::load(roots))).await
+pub(crate) async fn chat_personalization(
+    instruction_sources: Vec<Source>,
+) -> Result<ChatPersonalization, String> {
+    with_roots(move |roots| Ok(personalization::load(roots, &instruction_sources))).await
 }
 
 #[tauri::command]

@@ -260,7 +260,8 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         </>}
         {(normalizedQuery || section === "personalization") && <>
           <h3>{personalizationCopy.title}</h3>
-          <PersonalizationSettings editor={personalization} query={normalizedQuery} />
+          <PersonalizationSettings editor={personalization} query={normalizedQuery} instructionSources={preferences.personalization.instructionSources}
+            onInstructionSourcesChange={instructionSources => patch({ personalization: { ...preferences.personalization, instructionSources } })} />
         </>}
         {(normalizedQuery || section === "notifications") && <>
           <h3>{prefCopy.notifications}</h3>

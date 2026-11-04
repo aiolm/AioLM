@@ -46,6 +46,96 @@ describe("preferences persistence", () => {
   });
 });
 
+describe("personalization instruction source preferences", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("enables both instruction sources for clean installs and existing version 1 settings", () => {
+    expect(defaultPreferences().personalization).toEqual({ instructionSources: { agents: true, aiolm: true } });
+    expect(loadPreferences().personalization).toEqual({ instructionSources: { agents: true, aiolm: true } });
+
+    localStorage.setItem("aiolm-preferences", JSON.stringify({ version: 1, values: {
+      locale: "ja", theme: "dark",
+      chat: { enterToSend: false, streamResponses: false, compactMessages: true, lineSpacing: "relaxed" },
+    } }));
+    expect(loadPreferences()).toMatchObject({
+      locale: "ja", theme: "dark",
+      chat: { enterToSend: false, streamResponses: false, compactMessages: true, lineSpacing: "relaxed" },
+      personalization: { instructionSources: { agents: true, aiolm: true } },
+    });
+
+    const imported = importPreferences(JSON.stringify({ schemaVersion: 1, preferences: { locale: "ko", theme: "light" } }));
+    expect(imported).toMatchObject({
+      locale: "ko", theme: "light",
+      personalization: { instructionSources: { agents: true, aiolm: true } },
+    });
+  });
+
+  it.each([
+    { agents: true, aiolm: true },
+    { agents: true, aiolm: false },
+    { agents: false, aiolm: true },
+    { agents: false, aiolm: false },
+  ])("preserves agents=$agents and aiolm=$aiolm through storage and backup roundtrips", (instructionSources) => {
+    const values: AppPreferences = { ...defaultPreferences(), personalization: { instructionSources } };
+    savePreferences(values);
+    expect(loadPreferences()).toEqual(values);
+    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).version).toBe(1);
+
+    const backup = exportPreferences(loadPreferences());
+    expect(JSON.parse(backup).schemaVersion).toBe(1);
+    const imported = importPreferences(backup);
+    expect(imported).toEqual(values);
+    localStorage.clear();
+    savePreferences(imported);
+    expect(loadPreferences()).toEqual(values);
+  });
+
+  it("restores both sources when resetting preferences", () => {
+    savePreferences({ ...defaultPreferences(), personalization: { instructionSources: { agents: false, aiolm: false } } });
+    expect(resetPreferences().personalization).toEqual({ instructionSources: { agents: true, aiolm: true } });
+    expect(loadPreferences().personalization).toEqual({ instructionSources: { agents: true, aiolm: true } });
+  });
+
+  it.each([
+    { name: "absent group", personalization: undefined, expected: { agents: true, aiolm: true } },
+    { name: "null group", personalization: null, expected: { agents: true, aiolm: true } },
+    { name: "string group", personalization: "disabled", expected: { agents: true, aiolm: true } },
+    { name: "missing sources", personalization: {}, expected: { agents: true, aiolm: true } },
+    { name: "null sources", personalization: { instructionSources: null }, expected: { agents: true, aiolm: true } },
+    { name: "boolean sources", personalization: { instructionSources: false }, expected: { agents: true, aiolm: true } },
+    { name: "missing aiolm", personalization: { instructionSources: { agents: false } }, expected: { agents: false, aiolm: true } },
+    { name: "missing agents", personalization: { instructionSources: { aiolm: false } }, expected: { agents: true, aiolm: false } },
+    { name: "string agents", personalization: { instructionSources: { agents: "false", aiolm: false } }, expected: { agents: true, aiolm: false } },
+    { name: "string aiolm", personalization: { instructionSources: { agents: false, aiolm: "false" } }, expected: { agents: false, aiolm: true } },
+    { name: "numeric agents", personalization: { instructionSources: { agents: 0, aiolm: false } }, expected: { agents: true, aiolm: false } },
+    { name: "numeric aiolm", personalization: { instructionSources: { agents: false, aiolm: 0 } }, expected: { agents: false, aiolm: true } },
+    { name: "null fields", personalization: { instructionSources: { agents: null, aiolm: null } }, expected: { agents: true, aiolm: true } },
+    { name: "object fields", personalization: { instructionSources: { agents: {}, aiolm: [] } }, expected: { agents: true, aiolm: true } },
+  ])("defaults malformed $name without replacing valid false selections", ({ personalization, expected }) => {
+    const values = { personalization } as unknown as AppPreferences;
+    expect(validatePreferences(values).personalization).toEqual({ instructionSources: expected });
+
+    localStorage.setItem("aiolm-preferences", JSON.stringify({ version: 1, values }));
+    expect(loadPreferences().personalization).toEqual({ instructionSources: expected });
+    expect(importPreferences(JSON.stringify({ schemaVersion: 1, preferences: values })).personalization).toEqual({ instructionSources: expected });
+  });
+
+  it("stores and exports only source booleans, not instruction paths or contents", () => {
+    const values = {
+      ...defaultPreferences(),
+      personalization: {
+        instructionSources: { agents: false, aiolm: true, path: "/example/AGENTS.md", contents: "private instruction body" },
+        path: "/example/AGENTS.md",
+        contents: "private instruction body",
+      },
+    } as unknown as AppPreferences;
+    const expected = { instructionSources: { agents: false, aiolm: true } };
+    savePreferences(values);
+    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).values.personalization).toEqual(expected);
+    expect(JSON.parse(exportPreferences(values)).preferences.personalization).toEqual(expected);
+  });
+});
+
 describe("typography and notification preferences", () => {
   beforeEach(() => localStorage.clear());
 

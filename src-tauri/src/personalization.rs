@@ -4,10 +4,10 @@
 //! and the shared `.agents` folder in the user's home folder. Each may hold an
 //! `AGENTS.md` with standing instructions and a `skills` folder whose direct
 //! subfolders each describe one skill in `SKILL.md`. Loading only reads: the
-//! chat receives every instruction file and a catalog of skill names and
-//! descriptions, and asks for a full `SKILL.md` by id when it needs one. No
-//! skill script is ever run. Only an explicit save writes, and only the chosen
-//! root's `AGENTS.md`.
+//! chat receives selected instruction files and a catalog of skill names and
+//! descriptions from both roots, and asks for a full `SKILL.md` by id when it
+//! needs one. No skill script is ever run. Only an explicit save writes, and
+//! only the chosen root's `AGENTS.md`.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -123,18 +123,26 @@ impl Roots {
     }
 }
 
-/// Everything the chat starts with. Missing roots and files are normal and
-/// produce no warning; anything that exists but cannot be used is named in
-/// `warnings` and left out.
-pub(crate) fn load(roots: &Roots) -> ChatPersonalization {
+/// Selected instructions and all skills the chat starts with. Missing roots
+/// and files are normal and produce no warning; unusable selected instruction
+/// files and skill files are named in `warnings` and left out. Roots are always
+/// resolved for skills, even when their instructions are not selected.
+pub(crate) fn load(roots: &Roots, instruction_sources: &[Source]) -> ChatPersonalization {
     let mut warnings = Vec::new();
     let mut instructions = Vec::new();
     // Shared instructions first, then AioLM's own, so AioLM's can refine them.
     for source in [Source::Agents, Source::Aiolm] {
-        match roots
-            .get(source)
-            .and_then(|root| read_instructions(root, source))
-        {
+        let root = match roots.get(source) {
+            Ok(root) => root,
+            Err(error) => {
+                warnings.push(error);
+                continue;
+            }
+        };
+        if !instruction_sources.contains(&source) {
+            continue;
+        }
+        match read_instructions(root, source) {
             Ok(file) => instructions.push(file),
             Err(error) => warnings.push(error),
         }
@@ -880,7 +888,7 @@ mod tests {
     #[test]
     fn missing_roots_load_as_empty_without_warnings_or_side_effects() {
         let fixture = Fixture::new();
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert!(loaded.skills.is_empty());
         let sources = loaded
@@ -912,28 +920,66 @@ mod tests {
         let mut fixture = Fixture::new();
         fixture.write(Source::Aiolm, "AGENTS.md", "Use metric units.");
         fixture.roots.agents = Err("no home folder".to_string());
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.warnings, vec!["no home folder".to_string()]);
         assert_eq!(loaded.instructions.len(), 1);
         assert_eq!(loaded.instructions[0].content, "Use metric units.");
     }
 
     #[test]
-    fn both_instruction_files_load_shared_first_with_bom_removed_and_exact_revisions() {
+    fn selected_instruction_files_load_once_in_fixed_order_with_exact_revisions() {
         let fixture = Fixture::new();
         let shared = b"\xEF\xBB\xBFShared rules.\r\n";
         fixture.write(Source::Agents, "AGENTS.md", shared);
         fixture.write(Source::Aiolm, "AGENTS.md", "AioLM rules.");
-        let loaded = load(&fixture.roots);
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
-        let agents = &loaded.instructions[0];
-        assert_eq!(agents.source, Source::Agents);
-        assert!(agents.exists);
-        assert_eq!(agents.content, "Shared rules.\r\n");
-        // The revision covers the bytes on disk, mark included.
-        assert_eq!(agents.revision.as_deref(), Some(revision(shared).as_str()));
-        assert_eq!(loaded.instructions[1].source, Source::Aiolm);
-        assert_eq!(loaded.instructions[1].content, "AioLM rules.");
+        let cases: &[(&[Source], &[(Source, &str)])] = &[
+            (&[], &[]),
+            (&[Source::Agents], &[(Source::Agents, "Shared rules.\r\n")]),
+            (&[Source::Aiolm], &[(Source::Aiolm, "AioLM rules.")]),
+            (
+                &[Source::Agents, Source::Aiolm],
+                &[
+                    (Source::Agents, "Shared rules.\r\n"),
+                    (Source::Aiolm, "AioLM rules."),
+                ],
+            ),
+            (
+                &[Source::Aiolm, Source::Agents],
+                &[
+                    (Source::Agents, "Shared rules.\r\n"),
+                    (Source::Aiolm, "AioLM rules."),
+                ],
+            ),
+            (
+                &[Source::Aiolm, Source::Agents, Source::Aiolm, Source::Agents],
+                &[
+                    (Source::Agents, "Shared rules.\r\n"),
+                    (Source::Aiolm, "AioLM rules."),
+                ],
+            ),
+        ];
+        for &(sources, expected) in cases {
+            let loaded = load(&fixture.roots, sources);
+            assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+            assert_eq!(
+                loaded
+                    .instructions
+                    .iter()
+                    .map(|file| (file.source, file.content.as_str()))
+                    .collect::<Vec<_>>(),
+                expected,
+                "{sources:?}"
+            );
+            for file in &loaded.instructions {
+                assert!(file.exists);
+                // The revision covers the bytes on disk, mark included.
+                let bytes: &[u8] = match file.source {
+                    Source::Agents => shared,
+                    Source::Aiolm => b"AioLM rules.",
+                };
+                assert_eq!(file.revision.as_deref(), Some(revision(bytes).as_str()));
+            }
+        }
     }
 
     #[test]
@@ -959,7 +1005,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(Source::Agents, "AGENTS.md", vec![b'a'; MAX_FILE_BYTES + 1]);
         fixture.write(Source::Aiolm, "AGENTS.md", [0xff, 0xfe, 0x00]);
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert!(loaded.instructions.is_empty());
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
         assert!(loaded.warnings[0].contains("larger than 64 KiB"));
@@ -976,12 +1022,33 @@ mod tests {
     }
 
     #[test]
-    fn skills_are_a_sorted_metadata_catalog_and_aiolm_wins_a_shared_name() {
+    fn unselected_invalid_or_oversized_instruction_files_are_ignored_without_warnings() {
+        for (invalid_source, selected_source, invalid_bytes) in [
+            (Source::Agents, Source::Aiolm, vec![0xff, 0xfe, 0x00]),
+            (Source::Aiolm, Source::Agents, vec![b'a'; MAX_FILE_BYTES + 1]),
+        ] {
+            let fixture = Fixture::new();
+            fixture.write(invalid_source, "AGENTS.md", invalid_bytes);
+            fixture.write(selected_source, "AGENTS.md", "Selected rules.");
+            let loaded = load(&fixture.roots, &[selected_source]);
+            assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+            assert_eq!(loaded.instructions.len(), 1);
+            assert_eq!(loaded.instructions[0].source, selected_source);
+            assert_eq!(loaded.instructions[0].content, "Selected rules.");
+            let loaded = load(&fixture.roots, &[]);
+            assert!(loaded.instructions.is_empty());
+            assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        }
+    }
+
+    #[test]
+    fn skills_remain_a_sorted_catalog_with_aiolm_precedence_when_no_instructions_are_selected() {
         let fixture = Fixture::new();
         fixture.skill(Source::Agents, "review", "review", "Shared review.");
         fixture.skill(Source::Agents, "plan", "plan", "Shared planning.");
         fixture.skill(Source::Aiolm, "my-review", "review", "AioLM review.");
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[]);
+        assert!(loaded.instructions.is_empty());
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(
             names(&loaded),
@@ -1003,7 +1070,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.skill(Source::Aiolm, "a", "dup", "First.");
         fixture.skill(Source::Aiolm, "b", "dup", "Second.");
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.skills.len(), 1);
         assert_eq!(loaded.skills[0].id, "aiolm:a");
         assert_eq!(loaded.warnings.len(), 1);
@@ -1014,7 +1081,7 @@ mod tests {
     /// when the full catalog offers it, with the same metadata and the file's
     /// text.
     fn assert_read_skill_matches_catalog(fixture: &Fixture) {
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         let mut checked = 0;
         for source in [Source::Agents, Source::Aiolm] {
             let Ok(entries) = fs::read_dir(fixture.root(source).join(SKILLS_DIR)) else {
@@ -1067,7 +1134,7 @@ mod tests {
         fixture.write(Source::Agents, "skills/f-empty/README.md", "No skill here.");
         fixture.skill(Source::Agents, "#hashed", "hashed", "Hashed id.");
         assert_read_skill_matches_catalog(&fixture);
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         let offered = loaded
             .skills
             .iter()
@@ -1120,7 +1187,8 @@ mod tests {
             fixture.skill(Source::Agents, &folder, &folder, "d");
         }
         let last = format!("agents:skill-{MAX_SKILL_DIRECTORIES:03}");
-        assert!(load(&fixture.roots).warnings[0].contains("skill folders"));
+        assert!(load(&fixture.roots, &[Source::Agents, Source::Aiolm]).warnings[0]
+            .contains("skill folders"));
         assert!(read_skill(&fixture.roots, &last).is_err());
         // Folders read but beyond the skill cap are refused as well.
         assert!(read_skill(&fixture.roots, "agents:skill-128").is_err());
@@ -1175,7 +1243,7 @@ mod tests {
         fixture.write(Source::Aiolm, "skills/README.md", "not a skill folder");
         fs::create_dir_all(fixture.root(Source::Aiolm).join("skills/.system")).unwrap();
         fixture.skill(Source::Aiolm, "good", "good", "Works.");
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(names(&loaded), vec![("good", Source::Aiolm)]);
         // One warning per unusable folder; the plain file and hidden folder
         // are not skills at all.
@@ -1200,7 +1268,7 @@ mod tests {
             "---\nname: s\ndescription: d\n---\n",
         );
         fixture.skill(Source::Aiolm, "real", "real", "Real.");
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(names(&loaded), vec![("real", Source::Aiolm)]);
         for id in [
             "aiolm:group/nested",
@@ -1251,7 +1319,7 @@ mod tests {
             fixture.skill(Source::Aiolm, folder, &format!("skill-{index}"), "d");
         }
 
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.skills.len(), folders.len());
         let id_of = |name: &str| {
@@ -1278,7 +1346,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), folders.len());
         // Ids are the same on every load, and each reads its own skill.
-        let again = load(&fixture.roots);
+        let again = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         for skill in &loaded.skills {
             assert!(chat_accepts(&skill.id), "{}", skill.id);
             assert!(again.skills.iter().any(|other| other.id == skill.id));
@@ -1304,7 +1372,7 @@ mod tests {
             let name = format!("skill-{index:03}");
             fixture.skill(Source::Aiolm, &name, &name, "d");
         }
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.skills.len(), MAX_SKILLS);
         assert_eq!(loaded.warnings.len(), 1);
         assert!(loaded.warnings[0].contains("1 more were left out: skill-128."));
@@ -1487,7 +1555,7 @@ mod tests {
         // Opening a FIFO for reading would block here without the check.
         let error = read_agents(&fixture.roots, Source::Aiolm).unwrap_err();
         assert!(error.contains("not a regular file"), "{error}");
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
 
@@ -1594,7 +1662,7 @@ mod tests {
             eprintln!("skipped: symbolic links are not available here");
             return;
         }
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(names(&loaded), vec![("deploy", Source::Agents)]);
         assert_eq!(loaded.skills[0].id, "agents:deploy");
@@ -1608,7 +1676,7 @@ mod tests {
             eprintln!("skipped: symbolic file links are not available here");
             return;
         }
-        let loaded = load(&fixture.roots);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(names(&loaded), vec![("deploy", Source::Agents)]);
         assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
         assert!(loaded.warnings[0].contains("outside its skill folder"));

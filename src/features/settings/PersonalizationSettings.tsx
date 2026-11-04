@@ -7,8 +7,9 @@ import { PERSONALIZATION_CHANGED_EVENT, isAgentsFileConflict, readAgentsFile, sa
 import { useI18n } from "../../shared/i18n/i18n";
 import { personalizationText } from "../../shared/i18n/personalizationText";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import type { AppPreferences } from "../../shared/config/preferences";
 
-// Chat applies ~/.agents first and ~/.aiolm second, so the picker follows that order.
+// When both files are selected, shared instructions precede AioLM-specific ones.
 const sources: { id: PersonalizationSource; file: string }[] = [
   { id: "agents", file: "~/.agents/AGENTS.md" },
   { id: "aiolm", file: "~/.aiolm/AGENTS.md" },
@@ -72,7 +73,11 @@ export function usePersonalizationEditor() {
 
 export type PersonalizationEditor = ReturnType<typeof usePersonalizationEditor>;
 
-export default function PersonalizationSettings({ editor, query }: { editor: PersonalizationEditor; query: string }) {
+export default function PersonalizationSettings({ editor, query, instructionSources, onInstructionSourcesChange }: {
+  editor: PersonalizationEditor; query: string;
+  instructionSources: AppPreferences["personalization"]["instructionSources"];
+  onInstructionSourcesChange: (sources: AppPreferences["personalization"]["instructionSources"]) => void;
+}) {
   const { locale } = useI18n();
   const copy = personalizationText[locale];
   const native = isNativeRuntimeAvailable();
@@ -80,7 +85,7 @@ export default function PersonalizationSettings({ editor, query }: { editor: Per
   const entry = entries[source];
   const dirty = isDirty(entry);
   const [confirmReload, setConfirmReload] = useState(false);
-  const visible = !query || [copy.title, copy.intro, copy.skillsNote, copy.source, copy.editor, copy.searchTerms].join(" ").toLocaleLowerCase().includes(query);
+  const visible = !query || [copy.title, copy.intro, copy.skillsNote, copy.application, copy.applicationDesc, copy.source, copy.editor, copy.searchTerms].join(" ").toLocaleLowerCase().includes(query);
 
   // Each file is read the first time it is shown; later visits keep the draft.
   const needsLoad = visible && native && entry.file === null && entry.phase === "idle" && entry.notice === null;
@@ -88,8 +93,19 @@ export default function PersonalizationSettings({ editor, query }: { editor: Per
 
   if (!visible) return null;
   const intro = <div className="settings-copy"><p>{copy.intro}</p><p>{copy.skillsNote}</p></div>;
+  const application = <fieldset className="settings-row settings-personalization-sources">
+    <legend className="sr-only">{copy.application}</legend>
+    <div className="settings-copy" aria-hidden="true"><strong>{copy.application}</strong><p>{copy.applicationDesc}</p></div>
+    <div className="settings-personalization-choices">
+      {sources.map(({ id, file }) => <label key={id} className="settings-personalization-choice">
+        <input type="checkbox" checked={instructionSources[id]} onChange={event => onInstructionSourcesChange({ ...instructionSources, [id]: event.target.checked })} />
+        <span><span>{id === "agents" ? copy.sourceAgents : copy.sourceAiolm}</span><code>{file}</code></span>
+      </label>)}
+    </div>
+  </fieldset>;
   if (!native) return <div className="settings-personalization">
     <div className="settings-row">{intro}</div>
+    {application}
     <div className="settings-row"><div className="settings-copy"><strong>{copy.unavailableTitle}</strong><p>{copy.unavailable}</p></div></div>
   </div>;
 
@@ -104,6 +120,7 @@ export default function PersonalizationSettings({ editor, query }: { editor: Per
 
   return <div className="settings-personalization">
     <div className="settings-row">{intro}</div>
+    {application}
     <fieldset className="settings-row settings-personalization-sources">
       <legend className="sr-only">{copy.source}</legend>
       <div className="settings-copy" aria-hidden="true"><strong>{copy.source}</strong><p>{copy.sourceDesc}</p></div>
