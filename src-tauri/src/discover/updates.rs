@@ -43,6 +43,7 @@ impl TrackedFile {
     fn snapshot_file(&self) -> SnapshotFile {
         SnapshotFile {
             path: self.local.clone(),
+            remote_path: (self.remote != self.local).then(|| self.remote.clone()),
             size: self.size,
             oid: self.oid.clone(),
         }
@@ -65,6 +66,7 @@ struct Installed {
     metadata: PathBuf,
     repository: String,
     revision: Option<String>,
+    selected_file: Option<String>,
     files: Vec<TrackedFile>,
     gguf: Option<(String, bool)>,
     // Metadata is compared again immediately before commit, including absence.
@@ -216,7 +218,7 @@ fn load_installed(
     let target = safe_destination(&library, &relative)?;
     let metadata = fs::symlink_metadata(&target).map_err(|error| error.to_string())?;
     if metadata.is_dir() {
-        let manifest = read_snapshot_manifest(&target.join(SNAPSHOT_MANIFEST))?
+        let mut manifest = read_snapshot_manifest(&target.join(SNAPSHOT_MANIFEST))?
             .ok_or("model folder has no app snapshot ownership manifest")?;
         if !manifest.complete {
             return Err("incomplete snapshots must be resumed, not updated".into());
@@ -233,11 +235,18 @@ fn load_installed(
         {
             return Err("snapshot is not in the app-owned library tree".into());
         }
+        // Older selected manifests may name another member of the same index.
+        // Normalize metadata only; the stable installed root remains untouched.
+        if let Some(canonical) = manifest.selected_entrypoint() {
+            if manifest.selected_file.as_deref() != Some(canonical) {
+                manifest.selected_file = Some(canonical.to_owned());
+            }
+        }
         let files = manifest
             .files
             .into_iter()
             .map(|file| TrackedFile {
-                remote: file.path.clone(),
+                remote: file.remote_path.unwrap_or_else(|| file.path.clone()),
                 local: file.path,
                 size: file.size,
                 oid: file.oid,
@@ -252,6 +261,7 @@ fn load_installed(
             metadata,
             repository: manifest.repository,
             revision: Some(manifest.revision),
+            selected_file: manifest.selected_file,
             files,
             gguf: None,
             previous_metadata,
@@ -312,6 +322,7 @@ fn load_installed(
             metadata,
             repository: manifest.repository,
             revision: Some(manifest.revision),
+            selected_file: None,
             files: manifest.files,
             gguf: Some((manifest.entrypoint, manifest.companions)),
             previous_metadata,
@@ -365,13 +376,22 @@ fn load_installed(
         metadata,
         repository: receipt.repository,
         revision: None,
+        selected_file: None,
         files,
         gguf: Some((receipt.artifact, false)),
         previous_metadata,
     })
 }
 
-fn selected_files(installed: &Installed, remote: &Remote) -> Result<Vec<TrackedFile>, String> {
+async fn selected_files(
+    installed: &Installed,
+    remote: &Remote,
+    cancel: &AtomicBool,
+) -> Result<(Option<String>, Vec<TrackedFile>), String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(DOWNLOAD_CANCELLED.into());
+    }
+    let mut selected_file = None;
     let files = if let Some((entrypoint, companions)) = &installed.gguf {
         let listed = listed_gguf_files(&installed.repository, &remote.revision, &remote.entries)?;
         // An upstream rename cannot safely be inferred from another quantization.
@@ -391,7 +411,7 @@ fn selected_files(installed: &Installed, remote: &Remote) -> Result<Vec<TrackedF
                     .into_iter()
                     .map(|file| TrackedFile {
                         local: file.path.rsplit('/').next().unwrap_or_default().into(),
-                        remote: file.path,
+                        remote: file.remote_path.unwrap_or(file.path),
                         size: file.size,
                         oid: file.oid,
                     }),
@@ -399,12 +419,26 @@ fn selected_files(installed: &Installed, remote: &Remote) -> Result<Vec<TrackedF
         }
         files
     } else {
-        // Reuse the same complete snapshot policy as initial downloads.
-        snapshots::plan_snapshot(remote.entries.clone())?
+        let snapshot_files = if let Some(selected) = &installed.selected_file {
+            let (canonical, files) = snapshots::selected_snapshot_plan(
+                &installed.repository,
+                &remote.revision,
+                &remote.entries,
+                selected,
+                cancel,
+            )
+            .await?;
+            selected_file = Some(canonical);
+            files
+        } else {
+            // Whole snapshots retain the original complete snapshot policy.
+            snapshots::plan_snapshot(remote.entries.clone())?
+        };
+        snapshot_files
             .into_iter()
             .map(|file| TrackedFile {
-                local: file.path.clone(),
-                remote: file.path,
+                remote: file.remote_path.unwrap_or_else(|| file.path.clone()),
+                local: file.path,
                 size: file.size,
                 oid: file.oid,
             })
@@ -417,7 +451,7 @@ fn selected_files(installed: &Installed, remote: &Remote) -> Result<Vec<TrackedF
     {
         return Err("repository files lack a supported content digest".into());
     }
-    Ok(files)
+    Ok((selected_file, files))
 }
 async fn plan_update(
     mut installed: Installed,
@@ -425,7 +459,8 @@ async fn plan_update(
     cancel: &AtomicBool,
     mode: PlanMode,
 ) -> Result<Plan, String> {
-    let files = selected_files(&installed, remote)?;
+    let (selected_file, files) = selected_files(&installed, remote, cancel).await?;
+    installed.selected_file = selected_file;
     let shared_companions = installed
         .gguf
         .as_ref()
@@ -567,9 +602,14 @@ async fn plan_update(
         })
     } else {
         serde_json::to_vec_pretty(&SnapshotManifest {
-            format: 1,
+            format: if installed.selected_file.is_some() {
+                2
+            } else {
+                1
+            },
             repository: installed.repository.clone(),
             revision: remote.revision.clone(),
+            selected_file: installed.selected_file.clone(),
             complete: true,
             files: files.iter().map(TrackedFile::snapshot_file).collect(),
         })
@@ -671,11 +711,16 @@ pub(super) async fn record_gguf_manifest(
         })
         .collect::<Vec<_>>();
     if let Some(companions) = companions {
-        files.extend(companions.iter().map(|file| TrackedFile {
-            local: file.path.rsplit('/').next().unwrap_or_default().into(),
-            remote: file.path.clone(),
-            size: file.size,
-            oid: file.oid.clone(),
+        files.extend(companions.iter().map(|file| {
+            TrackedFile {
+                local: file.path.rsplit('/').next().unwrap_or_default().into(),
+                remote: file
+                    .remote_path
+                    .clone()
+                    .unwrap_or_else(|| file.path.clone()),
+                size: file.size,
+                oid: file.oid.clone(),
+            }
         }));
     }
     validate_files(&files)?;

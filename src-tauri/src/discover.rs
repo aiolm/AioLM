@@ -6,7 +6,9 @@ use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub use snapshots::{download_snapshot, installed_snapshots};
-pub(crate) use snapshots::{read_snapshot_manifest, snapshot_path};
+pub(crate) use snapshots::{
+    read_snapshot_manifest, read_snapshot_manifest_for_inspection, snapshot_path,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -71,15 +73,23 @@ pub struct HfFile {
     pub companions_available: bool,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct HfSnapshotFile {
+    pub path: String,
+    pub size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oid: Option<String>,
+}
+
 /// What one listing of a repository's file tree shows Discover can offer.
 ///
-/// Both fields come from the same tree read. `has_root_safetensors` only says
-/// that root `.safetensors` weights exist, so the snapshot download is worth
-/// offering; the snapshot planner still validates the complete model before
-/// any byte is written, and neither field certifies runtime compatibility.
+/// All fields come from one tree read. Root weights enable the whole-snapshot
+/// action; safe regular Safetensors files across folders enable selection.
+/// Neither certifies completeness or runtime compatibility.
 #[derive(Serialize, Clone, Debug)]
 pub struct HfRepositoryInspection {
     pub gguf_files: Vec<HfFile>,
+    pub safetensors_files: Vec<HfSnapshotFile>,
     pub has_root_safetensors: bool,
 }
 
@@ -524,8 +534,8 @@ pub async fn search_format(
         .collect())
 }
 
-/// Read the selected repository's file tree once and report what Discover can
-/// offer from it: GGUF rows and whether root safetensors weights exist.
+/// Read the selected repository's file tree once and report its downloadable
+/// GGUF and Safetensors files, plus the separate whole-snapshot root-weight flag.
 pub async fn files(repo_id: &str) -> Result<HfRepositoryInspection, String> {
     validate_repo_id(repo_id)?;
     let entries = repository_tree(repo_id, "main", &AtomicBool::new(false)).await?;
@@ -539,6 +549,23 @@ fn inspect_repository(
 ) -> Result<HfRepositoryInspection, String> {
     Ok(HfRepositoryInspection {
         gguf_files: listed_gguf_files(repo_id, revision, entries)?,
+        safetensors_files: entries
+            .iter()
+            .filter(|entry| {
+                entry.entry_type == "file"
+                    && entry.path.ends_with(".safetensors")
+                    && snapshots::safe_data_file(&entry.path).is_ok()
+            })
+            .map(|entry| HfSnapshotFile {
+                path: entry.path.clone(),
+                size_bytes: entry.size,
+                oid: entry
+                    .lfs
+                    .as_ref()
+                    .and_then(|value| value.oid.clone())
+                    .or_else(|| entry.oid.clone()),
+            })
+            .collect(),
         has_root_safetensors: has_root_safetensors(entries),
     })
 }
@@ -1166,6 +1193,7 @@ where
         Ok(metadata) => {
             if digests::valid_oid(file.oid.as_deref()) {
                 let identity = crate::providers::artifacts::SnapshotFile {
+                    remote_path: None,
                     path: file.path.clone(),
                     size: total,
                     oid: file.oid.clone(),
@@ -1985,6 +2013,7 @@ mod tests {
         ]));
         assert!(other.gguf_files.is_empty());
         assert!(!other.has_root_safetensors);
+        assert!(other.safetensors_files.is_empty());
         // Nested weights, a directory with the extension and a different case
         // are not root weights the snapshot planner would accept.
         let nested = inspect(serde_json::json!([
@@ -1994,12 +2023,24 @@ mod tests {
             {"type":"file", "path":"MODEL.SAFETENSORS", "size":8}
         ]));
         assert!(!nested.has_root_safetensors);
+        assert_eq!(
+            nested
+                .safetensors_files
+                .iter()
+                .map(|file| (file.path.as_str(), file.size_bytes))
+                .collect::<Vec<_>>(),
+            [("sub/model.safetensors", 7)]
+        );
         let snapshot = inspect(serde_json::json!([
             {"type":"file", "path":"config.json", "size":2},
             {"type":"file", "path":"model-00001-of-00002.safetensors", "size":9}
         ]));
         assert!(snapshot.has_root_safetensors);
         assert!(snapshot.gguf_files.is_empty());
+        assert_eq!(
+            snapshot.safetensors_files[0].path,
+            "model-00001-of-00002.safetensors"
+        );
         let mixed = inspect(serde_json::json!([
             {"type":"file", "path":"model.safetensors", "size":9},
             {"type":"file", "path":"Q4/model.Q4_K_M.gguf", "size":10},
@@ -2016,6 +2057,18 @@ mod tests {
                 ("Q4/model.Q4_K_M.gguf", false),
                 ("mmproj-model-f16.gguf", true),
             ]
+        );
+        let safe_only = inspect(serde_json::json!([
+            {"type":"file", "path":"../escape.safetensors", "size":1},
+            {"type":"file", "path":"sub/CON.safetensors", "size":1},
+            {"type":"file", "path":".aiolm-secret/weight.safetensors", "size":1},
+            {"type":"file", "path":"q4/model.safetensors", "size":17, "lfs":{"oid":"sha256:abc"}}
+        ]));
+        assert_eq!(safe_only.safetensors_files.len(), 1);
+        assert_eq!(safe_only.safetensors_files[0].path, "q4/model.safetensors");
+        assert_eq!(
+            safe_only.safetensors_files[0].oid.as_deref(),
+            Some("sha256:abc")
         );
         let unsafe_entry =
             serde_json::from_value(serde_json::json!({"type":"file", "path":"../escape.gguf"}))

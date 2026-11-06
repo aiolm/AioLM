@@ -2,6 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
 import type { HfInstalledFile, HfSearchFormat, HfSortKey } from "./models.ts";
 import type { ImageAttachment, PreparedVideoFrame } from "./mediaTypes.ts";
+import type { ModelArtifact } from "./providers.ts";
 import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
@@ -28,14 +29,16 @@ export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "tre
   invoke<HfModel[]>("hf_search_models", { query, limit, sort, ...(format ? { format } : {}) });
 export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
-/** Reads the repository tree once: GGUF rows and whether root safetensors weights exist. */
+/** Reads GGUF and Safetensors choices, plus whole-snapshot availability, from one tree. */
 export const hfModelFiles = (repoId: string) => invoke<HfRepositoryInspection>("hf_model_files", { repoId });
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 /** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean) =>
   invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}) });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
-export const hfDownloadSnapshot = (repoId: string, modelsDir: string) => invoke<import('./providers').ModelArtifact>('hf_download_snapshot', { repoId, modelsDir });
+/** A selected weight includes its required model assets; omission downloads the whole snapshot. */
+export const hfDownloadSnapshot = (repoId: string, modelsDir: string, filePath?: string) =>
+  invoke<ModelArtifact>('hf_download_snapshot', { repoId, modelsDir, ...(filePath !== undefined ? { filePath } : {}) });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export interface AttachmentDropNotice {
   id: string | null;

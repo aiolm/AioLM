@@ -28,7 +28,7 @@ function listed(id: string) {
 
 /** A repository tree with GGUF files and no root safetensors weights. */
 function ggufOnly(gguf_files: api.HfFile[]): api.HfRepositoryInspection {
-  return { gguf_files, has_root_safetensors: false };
+  return { gguf_files, safetensors_files: [], has_root_safetensors: false };
 }
 
 function DirtyDraft() {
@@ -241,7 +241,7 @@ describe("Discover listing and installed files", () => {
     // Searching again clears the selection those files belonged to.
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     await waitFor(() => expect(api.hfSearchModels).toHaveBeenCalledTimes(2));
-    releaseFiles({ gguf_files: [{ path: "late.gguf", size_bytes: 1, is_mmproj: false, download_url: "" }], has_root_safetensors: true });
+    releaseFiles({ gguf_files: [{ path: "late.gguf", size_bytes: 1, is_mmproj: false, download_url: "" }], safetensors_files: [{ path: "model.safetensors", size_bytes: 1000 }], has_root_safetensors: true });
     await waitFor(() => expect(screen.getByText("Select a repository to inspect model files.")).toBeVisible());
     expect(screen.queryByText("late.gguf")).toBeNull();
     expect(screen.queryByRole("button", { name: "Download complete model folder" })).toBeNull();
@@ -518,7 +518,7 @@ describe("Discover listing and installed files", () => {
   });
 
   it("cleans snapshot busy state when its completed task row clears before the result settles", async () => {
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: "model.safetensors", size_bytes: 1000 }], has_root_safetensors: true });
     let releaseSnapshot: (value: api.ModelArtifact) => void = () => undefined;
     vi.mocked(api.hfDownloadSnapshot).mockImplementation(() => new Promise(resolve => { releaseSnapshot = resolve; }));
     const store = createTestStore();
@@ -602,7 +602,7 @@ describe("Discover listing and installed files", () => {
   });
 
   it.each(["unmounted", "replaced"] as const)("announces a committed snapshot after its originating panel is %s", async retirement => {
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: "model.safetensors", size_bytes: 1000 }], has_root_safetensors: true });
     let releaseSnapshot!: (value: api.ModelArtifact) => void;
     vi.mocked(api.hfDownloadSnapshot).mockImplementation(() => new Promise(resolve => { releaseSnapshot = resolve; }));
     const store = createTestStore();
@@ -630,7 +630,7 @@ describe("Discover listing and installed files", () => {
   });
 
   it("does not let an old snapshot completion clear a newer global download task", async () => {
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: "model.safetensors", size_bytes: 1000 }], has_root_safetensors: true });
     let releaseSnapshot: (value: Awaited<ReturnType<typeof api.hfDownloadSnapshot>>) => void = () => undefined;
     vi.mocked(api.hfDownloadSnapshot).mockImplementation(() => new Promise(resolve => { releaseSnapshot = resolve; }));
     const store = createTestStore();

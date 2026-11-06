@@ -46,6 +46,7 @@ pub(crate) async fn hf_download_snapshot(
     state: State<'_, AppState>,
     repo_id: String,
     models_dir: String,
+    file_path: Option<String>,
 ) -> Result<crate::providers::artifacts::ModelArtifact, String> {
     let _operation = begin_download(&state)?;
     let root = if models_dir.trim().is_empty() {
@@ -53,7 +54,14 @@ pub(crate) async fn hf_download_snapshot(
     } else {
         models_dir
     };
-    discover::download_snapshot(app, &repo_id, &root, &state.discover_cancel).await
+    discover::download_snapshot(
+        app,
+        &repo_id,
+        &root,
+        file_path.as_deref(),
+        &state.discover_cancel,
+    )
+    .await
 }
 
 #[tauri::command]

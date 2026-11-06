@@ -126,14 +126,21 @@ export interface HfFile {
   download_url: string;
 }
 
+export interface HfSnapshotFile {
+  path: string;
+  size_bytes: number;
+  oid?: string;
+}
+
 /**
- * One read of a repository's file tree. `has_root_safetensors` says only that
- * root safetensors weights exist, so a snapshot download is worth offering;
- * the snapshot planner still validates the model, and neither field certifies
- * runtime compatibility.
+ * One read of a repository's file tree. Safetensors choices include nested
+ * model folders; `has_root_safetensors` separately offers the whole snapshot.
+ * The snapshot planner validates dependencies; neither certifies runtime
+ * compatibility.
  */
 export interface HfRepositoryInspection {
   gguf_files: HfFile[];
+  safetensors_files: HfSnapshotFile[];
   has_root_safetensors: boolean;
 }
 

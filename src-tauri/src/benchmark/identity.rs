@@ -436,9 +436,11 @@ mod tests {
                     format: 1,
                     repository: repository.into(),
                     revision: revision.into(),
+                    selected_file: None,
                     complete,
                     files: vec![artifacts::SnapshotFile {
                         path: "model.safetensors".into(),
+                        remote_path: None,
                         size: 7,
                         oid: None,
                     }],

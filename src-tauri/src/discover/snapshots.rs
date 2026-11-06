@@ -2,6 +2,8 @@
 use super::digests::{verify_file_digest_with_progress, FileDigest};
 use super::*;
 use crate::providers::artifacts::{SnapshotFile, SnapshotManifest, SNAPSHOT_MANIFEST};
+mod selected;
+pub(super) use selected::selected_snapshot_plan;
 
 /// A manifest this downloader writes lists at most `MAX_TREE_ENTRIES` paths.
 /// Anything larger is not read into memory.
@@ -29,7 +31,7 @@ pub(super) fn safe_file(path: &str) -> Result<(), String> {
 }
 
 /// Upstream data must never overlap the app's ownership and update metadata.
-fn safe_data_file(path: &str) -> Result<(), String> {
+pub(super) fn safe_data_file(path: &str) -> Result<(), String> {
     safe_file(path)?;
     if path.split('/').any(|part| {
         part.eq_ignore_ascii_case(SNAPSHOT_MANIFEST)
@@ -108,6 +110,7 @@ pub(super) fn gguf_companion_plan(
             return Err("GGUF loading assets have colliding paths".into());
         }
         files.push(SnapshotFile {
+            remote_path: None,
             path: entry.path.clone(),
             size: entry.size,
             oid: entry
@@ -242,12 +245,18 @@ pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFi
                 return Err("snapshot file exceeds the model size limit".into());
             }
             Ok(SnapshotFile {
+                remote_path: None,
                 path: entry.path,
                 size: entry.size,
                 oid: entry.lfs.and_then(|value| value.oid).or(entry.oid),
             })
         })
         .collect::<Result<_, String>>()?;
+    validate_loading_files(&files)?;
+    Ok(files)
+}
+
+fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
     let names: std::collections::HashSet<&str> =
         files.iter().map(|file| file.path.as_str()).collect();
     let has = |name: &str| names.contains(name);
@@ -273,7 +282,7 @@ pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFi
         return Err("snapshot is missing local tokenizer assets".into());
     }
     let mut checked_groups = std::collections::HashSet::new();
-    for file in &files {
+    for file in files {
         if let Some(stem) = file.path.strip_suffix(".safetensors") {
             if let Some((prefix, count)) = stem.rsplit_once("-of-") {
                 if let Some((base, index)) = prefix.rsplit_once('-') {
@@ -304,7 +313,7 @@ pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFi
             }
         }
     }
-    Ok(files)
+    Ok(())
 }
 
 /// Only bounded, app-owned manifests inside this repository's snapshot tree
@@ -396,6 +405,21 @@ pub(crate) fn snapshot_path(directory: &Path, relative: &str) -> PathBuf {
 /// Read a snapshot ownership manifest without following a link or reading an
 /// unbounded file. `None` means there is no manifest at `path`.
 pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
+    read_snapshot_manifest_with_policy(path, false)
+}
+
+/// Readiness validates the whole JSON document, including unknown values;
+/// repository lookup keeps its forward-compatible typed metadata behavior.
+pub(crate) fn read_snapshot_manifest_for_inspection(
+    path: &Path,
+) -> Result<Option<SnapshotManifest>, String> {
+    read_snapshot_manifest_with_policy(path, true)
+}
+
+fn read_snapshot_manifest_with_policy(
+    path: &Path,
+    strict_json: bool,
+) -> Result<Option<SnapshotManifest>, String> {
     use std::io::Read;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -415,10 +439,24 @@ pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManif
     if bytes.len() as u64 > MAX_SNAPSHOT_MANIFEST_BYTES {
         return Err("snapshot manifest is not a bounded regular file".into());
     }
-    let manifest: SnapshotManifest = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("snapshot manifest is invalid: {error}"))?;
-    if manifest.format != 1 || manifest.files.len() > MAX_TREE_ENTRIES {
+    let manifest: SnapshotManifest = if strict_json {
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .and_then(serde_json::from_value::<SnapshotManifest>)
+    } else {
+        serde_json::from_slice(&bytes)
+    }
+    .map_err(|error| format!("snapshot manifest is invalid: {error}"))?;
+    if !matches!(manifest.format, 1 | 2) || manifest.files.len() > MAX_TREE_ENTRIES {
         return Err("unsupported snapshot manifest".into());
+    }
+    match (manifest.format, manifest.selected_file.is_some()) {
+        (1, false) if manifest.files.iter().all(|file| file.remote_path.is_none()) => {}
+        (2, true) => {}
+        _ => {
+            return Err(
+                "snapshot manifest format does not support its selection or path mappings".into(),
+            )
+        }
     }
     validate_repo_id(&manifest.repository)?;
     if manifest.revision.len() != 40
@@ -444,6 +482,7 @@ pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManif
     {
         return Err("snapshot manifest lists an unsafe path".into());
     }
+    selected::validate_selection(&manifest)?;
     Ok(Some(manifest))
 }
 
@@ -491,20 +530,50 @@ async fn verify_existing<F: FnMut(u64)>(
 
 /// Prefer a ready install at this revision, even when its stable folder names
 /// the revision it was originally installed from before an in-place update.
-fn snapshot_directory(library: &Path, repo: &str, revision: &str) -> Result<PathBuf, String> {
+fn snapshot_directory(
+    library: &Path,
+    repo: &str,
+    revision: &str,
+    selected: Option<&str>,
+) -> Result<PathBuf, String> {
+    let mut incomplete_selection = None;
     for artifact in installed_snapshots(&library.to_string_lossy(), repo)? {
         if artifact.ownership == "app"
-            && artifact.ready_files()
-            && artifact.format != crate::providers::artifacts::ArtifactFormat::Unknown
             && artifact.repository.as_deref() == Some(repo)
             && artifact.revision.as_deref() == Some(revision)
+            && artifact.selected_file.as_deref() == selected
         {
-            return Ok(PathBuf::from(artifact.path));
+            if artifact.ready_files()
+                && artifact.format != crate::providers::artifacts::ArtifactFormat::Unknown
+            {
+                return Ok(PathBuf::from(artifact.path));
+            }
+            // An updated selected model keeps its original directory even
+            // after a missing/corrupt file invalidates completion on retry.
+            if selected.is_some() && incomplete_selection.is_none() {
+                incomplete_selection = Some(PathBuf::from(artifact.path));
+            }
         }
     }
+    if let Some(directory) = incomplete_selection {
+        return Ok(directory);
+    }
+    // A selected install is a separate stable 160-bit namespace. Keeping a
+    // 40-hex identity preserves catalog/update ownership guards and old paths.
+    let identity = selected.map_or_else(
+        || revision.to_owned(),
+        |selected| {
+            let mut hash = Sha256::new();
+            hash.update(b"aiolm-selected-snapshot\0");
+            hash.update(revision.as_bytes());
+            hash.update(b"\0");
+            hash.update(selected.as_bytes());
+            format!("{:x}", hash.finalize())[..40].to_owned()
+        },
+    );
     Ok(destination(
         library,
-        &format!("hf/{repo}/snapshots/{revision}/{SNAPSHOT_MANIFEST}"),
+        &format!("hf/{repo}/snapshots/{identity}/{SNAPSHOT_MANIFEST}"),
     )?
     .parent()
     .ok_or("invalid snapshot directory")?
@@ -515,18 +584,26 @@ pub async fn download_snapshot(
     app: AppHandle,
     repo: &str,
     models_dir: &str,
+    file_path: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<crate::providers::artifacts::ModelArtifact, String> {
     validate_repo_id(repo)?;
     let revision = immutable_revision(repo, cancel).await?;
     let entries = repository_tree(repo, &revision, cancel).await?;
-    let files = plan_snapshot(entries)?;
+    let (selected_file, files) = if let Some(selected) = file_path {
+        let (canonical, files) =
+            selected_snapshot_plan(repo, &revision, &entries, selected, cancel).await?;
+        (Some(canonical), files)
+    } else {
+        (None, plan_snapshot(entries)?)
+    };
     let library = models_root(models_dir)?;
-    let snapshot = snapshot_directory(&library, repo, &revision)?;
+    let snapshot = snapshot_directory(&library, repo, &revision, selected_file.as_deref())?;
     let mut manifest = SnapshotManifest {
-        format: 1,
+        format: if selected_file.is_some() { 2 } else { 1 },
         repository: repo.into(),
         revision: revision.clone(),
+        selected_file,
         files,
         complete: false,
     };
@@ -562,6 +639,7 @@ where
     if let Some(previous) = read_snapshot_manifest(&manifest_path)? {
         if previous.repository != manifest.repository
             || previous.revision != manifest.revision
+            || previous.selected_entrypoint() != manifest.selected_entrypoint()
             || previous.files != manifest.files
         {
             return Err("existing snapshot manifest differs from the repository".into());
@@ -623,7 +701,7 @@ where
             .map_err(|_| "invalid hub URL")?
             .extend(manifest.repository.split('/'))
             .extend(["resolve", manifest.revision.as_str()])
-            .extend(file.path.split('/'));
+            .extend(file.remote_path.as_deref().unwrap_or(&file.path).split('/'));
         let response = tokio::select! { _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()), response = download_client()?.get(url).send() => response.map_err(|error| error.to_string())? };
         validate_response_url(&response)?;
         if !response.status().is_success() {
@@ -807,7 +885,7 @@ mod tests {
             original_revision
         );
 
-        let selected = snapshot_directory(&root, "owner/model", &latest).unwrap();
+        let selected = snapshot_directory(&root, "owner/model", &latest, None).unwrap();
         assert_eq!(selected, snapshot);
         manifest.complete = false;
         let artifact = download_snapshot_files(
@@ -846,7 +924,7 @@ mod tests {
         let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
         assert_eq!(installed.len(), 1);
         assert!(installed[0].incomplete);
-        let selected = snapshot_directory(&root, "owner/model", &latest).unwrap();
+        let selected = snapshot_directory(&root, "owner/model", &latest, None).unwrap();
         assert_eq!(
             selected,
             root.join("hf/owner/model/snapshots").join(&latest)
@@ -863,6 +941,7 @@ mod tests {
         let target = root.join("config.json");
         fs::write(&target, b"hello\n").unwrap();
         let mut file = SnapshotFile {
+            remote_path: None,
             path: "config.json".into(),
             size: 6,
             oid: Some("ce013625030ba8dba906f756967f9e9ca394464a".into()),
@@ -1215,6 +1294,7 @@ mod tests {
             })
             .collect();
             let manifest = SnapshotManifest {
+                selected_file: None,
                 format: 1,
                 repository: "owner/model".into(),
                 revision,
@@ -1445,10 +1525,12 @@ mod tests {
         let path = root.join(SNAPSHOT_MANIFEST);
         assert!(read_snapshot_manifest(&path).unwrap().is_none());
         let manifest = SnapshotManifest {
+            selected_file: None,
             format: 1,
             repository: "example/model".into(),
             revision: "0".repeat(40),
             files: vec![SnapshotFile {
+                remote_path: None,
                 path: "config.json".into(),
                 size: 2,
                 oid: None,
@@ -1462,22 +1544,26 @@ mod tests {
         );
         for files in [
             vec![SnapshotFile {
+                remote_path: None,
                 path: "../outside.json".into(),
                 size: 1,
                 oid: None,
             }],
             vec![SnapshotFile {
+                remote_path: None,
                 path: SNAPSHOT_MANIFEST.into(),
                 size: 1,
                 oid: None,
             }],
             vec![
                 SnapshotFile {
+                    remote_path: None,
                     path: "config.json".into(),
                     size: 1,
                     oid: None,
                 },
                 SnapshotFile {
+                    remote_path: None,
                     path: "CONFIG.json".into(),
                     size: 1,
                     oid: None,
@@ -1528,6 +1614,7 @@ mod tests {
         let bytes = b"synthetic weights".to_vec();
         let digest = format!("{:x}", Sha256::digest(&bytes));
         let file = SnapshotFile {
+            remote_path: None,
             path: "model.safetensors".into(),
             size: bytes.len() as u64,
             oid: Some(digest.clone()),
@@ -1572,6 +1659,7 @@ mod tests {
             .await
             .is_err());
         let unverifiable = SnapshotFile {
+            remote_path: None,
             path: "config.json".into(),
             size: 5,
             oid: None,

@@ -197,6 +197,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("config.json"), b"hello\n").unwrap();
         let file = SnapshotFile {
+            remote_path: None,
             path: "config.json".into(),
             size: 6,
             oid: Some(HELLO_GIT.into()),

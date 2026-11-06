@@ -847,10 +847,12 @@ mod tests {
             format: 1,
             repository: "example/model".into(),
             revision: "0".repeat(40),
+            selected_file: None,
             files: files
                 .iter()
                 .map(|path| SnapshotFile {
                     path: (*path).into(),
+                    remote_path: None,
                     size: 9,
                     oid: None,
                 })
@@ -929,6 +931,78 @@ mod tests {
         assert!(!clean.exists());
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(clean.ancestors().nth(5).unwrap());
+    }
+
+    #[test]
+    fn deleting_flattened_selected_snapshot_preserves_remote_paths_and_sibling_installs() {
+        use crate::providers::artifacts::{SnapshotFile, SnapshotManifest, SNAPSHOT_MANIFEST};
+        let (root, whole) = snapshot_fixture("selected-isolation");
+        let snapshots = whole.parent().unwrap();
+        let selected = snapshots.join("1".repeat(40));
+        let sibling = snapshots.join("2".repeat(40));
+        for directory in [&selected, &sibling] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join("config.json"), b"{}").unwrap();
+            fs::write(directory.join("model.safetensors"), b"selected weights").unwrap();
+        }
+        // This unlisted path looks like the original repository's location,
+        // but only the normalized local binding belongs to this install.
+        fs::create_dir_all(selected.join("nested")).unwrap();
+        fs::write(selected.join("nested/variant.safetensors"), b"user copy").unwrap();
+        let manifest = SnapshotManifest {
+            format: 2,
+            repository: "example/model".into(),
+            revision: "a".repeat(40),
+            selected_file: Some("nested/variant.safetensors".into()),
+            files: vec![
+                SnapshotFile {
+                    path: "config.json".into(),
+                    remote_path: Some("nested/config.json".into()),
+                    size: 2,
+                    oid: None,
+                },
+                SnapshotFile {
+                    path: "model.safetensors".into(),
+                    remote_path: Some("nested/variant.safetensors".into()),
+                    size: 16,
+                    oid: None,
+                },
+            ],
+            complete: true,
+        };
+        fs::write(
+            selected.join(SNAPSHOT_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let mut sibling_manifest = manifest.clone();
+        sibling_manifest.selected_file = Some("nested/another.safetensors".into());
+        sibling_manifest.files[1].remote_path = sibling_manifest.selected_file.clone();
+        let sibling_metadata = serde_json::to_vec(&sibling_manifest).unwrap();
+        fs::write(sibling.join(SNAPSHOT_MANIFEST), &sibling_metadata).unwrap();
+        let cfg = config::AppConfig {
+            models_dir: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        delete_owned_snapshot(&cfg, &selected).unwrap();
+        assert!(!selected.join("model.safetensors").exists());
+        assert!(!selected.join("config.json").exists());
+        assert!(!selected.join(SNAPSHOT_MANIFEST).exists());
+        assert_eq!(
+            fs::read(selected.join("nested/variant.safetensors")).unwrap(),
+            b"user copy"
+        );
+        assert_eq!(
+            fs::read(sibling.join("model.safetensors")).unwrap(),
+            b"selected weights"
+        );
+        assert_eq!(
+            fs::read(sibling.join(SNAPSHOT_MANIFEST)).unwrap(),
+            sibling_metadata
+        );
+        assert!(whole.join("model.safetensors").is_file());
+        assert!(whole.join(SNAPSHOT_MANIFEST).is_file());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

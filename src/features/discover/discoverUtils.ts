@@ -1,5 +1,6 @@
 import type { HfInstalledFile } from "../../shared/api/models.ts";
-import type { HfFile } from "../../shared/api/types.ts";
+import type { HfFile, HfSnapshotFile } from "../../shared/api/types.ts";
+import type { ModelArtifact } from "../../shared/api/providers.ts";
 
 const SAFE_HF_COMPONENT = /^[^<>:"|?*\u0000-\u001f]+$/;
 
@@ -68,6 +69,58 @@ export function groupHfFiles(files: readonly HfFile[]): HfFileGroup[] {
     } else {
       groups.set(key, { file: { ...file, path: key }, files: [file], sizeBytes: file.size_bytes,
         displayPath: shardTotal(file.path) ? file.path.replace(/-\d{5}-of-\d{5}(\.gguf)$/i, '$1') : file.path });
+    }
+  }
+  return [...groups.values()].map(group => ({ ...group, files: group.files.sort((a, b) => a.path.localeCompare(b.path)) }));
+}
+
+export interface HfSafetensorsGroup {
+  file: HfSnapshotFile;
+  files: HfSnapshotFile[];
+  displayPath: string;
+  sizeBytes: number;
+  shardCount: number;
+  missingParts: number;
+}
+
+type SelectedBundle = Pick<ModelArtifact, 'selected_file' | 'selected_weight_files'>;
+
+/** Whole snapshots never claim selected choices; selected metadata owns only its listed members. */
+export function selectedBundleContains(bundle: SelectedBundle, path: string): boolean {
+  return bundle.selected_file !== undefined
+    && (bundle.selected_weight_files?.includes(path) ?? bundle.selected_file === path);
+}
+
+/** Standard splits group before installation; resolved index metadata groups exact original members. */
+export function groupSafetensorsFiles(files: readonly HfSnapshotFile[], bundles: readonly SelectedBundle[] = []): HfSafetensorsGroup[] {
+  const membership = new Map<string, { canonical: string; count: number }>();
+  for (const bundle of bundles) {
+    if (!bundle.selected_file || !bundle.selected_weight_files?.length) continue;
+    const members = bundle.selected_weight_files;
+    const canonical = members.reduce((first, path) => path < first ? path : first);
+    for (const path of members) membership.set(path, { canonical, count: members.length });
+  }
+  const groups = new Map<string, HfSafetensorsGroup>();
+  for (const file of files) {
+    const match = file.path.match(/^(.+)-(\d{5})-of-(\d{5})\.safetensors$/);
+    const index = match ? Number(match[2]) : 0;
+    const total = match ? Number(match[3]) : 0;
+    const split = total > 1 && index > 0 && index <= total;
+    const resolved = membership.get(file.path);
+    const key = resolved?.canonical ?? (split ? file.path.replace(/-\d{5}-of-(\d{5})\.safetensors$/, '-00001-of-$1.safetensors') : file.path);
+    const group = groups.get(key);
+    if (group) {
+      if (group.files.some(part => part.path === file.path)) continue;
+      group.files.push(file);
+      group.sizeBytes += file.size_bytes;
+      group.missingParts = group.shardCount - group.files.length;
+      if (file.path === key) group.file = file;
+    } else {
+      groups.set(key, {
+        file: { ...file, path: key }, files: [file], sizeBytes: file.size_bytes,
+        displayPath: split ? file.path.replace(/-\d{5}-of-\d{5}(\.safetensors)$/, '$1') : key,
+        shardCount: resolved?.count ?? (split ? total : 1), missingParts: (resolved?.count ?? (split ? total : 1)) - 1,
+      });
     }
   }
   return [...groups.values()].map(group => ({ ...group, files: group.files.sort((a, b) => a.path.localeCompare(b.path)) }));

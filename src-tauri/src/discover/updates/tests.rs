@@ -113,6 +113,7 @@ impl Fixture {
             format: 1,
             repository: REPOSITORY.into(),
             revision,
+            selected_file: None,
             complete: true,
             files: blobs
                 .iter()
@@ -121,6 +122,41 @@ impl Fixture {
         };
         // Deliberately not the planner's pretty encoding: a no-op must not
         // silently rewrite an otherwise valid ownership manifest.
+        fs::write(&metadata, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        Self {
+            directory,
+            library,
+            receipts,
+            model,
+            metadata,
+        }
+    }
+
+    fn selected_snapshot(blobs: &[Blob], selected: &str) -> Self {
+        let (directory, library, receipts) = Self::directory();
+        let model = library
+            .join("hf")
+            .join(repo_directory(REPOSITORY))
+            .join("snapshots")
+            .join("c".repeat(40));
+        fs::create_dir_all(&model).unwrap();
+        let files = blobs
+            .iter()
+            .map(|blob| {
+                let local = blob.path.rsplit('/').next().unwrap();
+                fs::write(model.join(local), &blob.bytes).unwrap();
+                blob.tracked(local).snapshot_file()
+            })
+            .collect();
+        let metadata = model.join(SNAPSHOT_MANIFEST);
+        let manifest = SnapshotManifest {
+            format: 2,
+            repository: REPOSITORY.into(),
+            revision: "a".repeat(40),
+            selected_file: Some(selected.into()),
+            complete: true,
+            files,
+        };
         fs::write(&metadata, serde_json::to_vec(&manifest).unwrap()).unwrap();
         Self {
             directory,
@@ -388,6 +424,9 @@ async fn unchanged_revision_never_requests_or_rewrites_model_files_or_manifest()
     assert_eq!(result.downloaded_bytes, 0);
     assert!(server.requests().is_empty());
     assert_unchanged(&before);
+    let manifest = read_snapshot_manifest(&fixture.metadata).unwrap().unwrap();
+    assert_eq!(manifest.format, 1);
+    assert!(manifest.selected_file.is_none());
 }
 
 #[tokio::test]
@@ -428,6 +467,8 @@ async fn config_only_update_requests_only_config_and_preserves_weight_inode_and_
         NEW_CONFIG
     );
     let manifest = read_snapshot_manifest(&fixture.metadata).unwrap().unwrap();
+    assert_eq!(manifest.format, 1);
+    assert!(manifest.selected_file.is_none());
     assert_eq!(manifest.revision, "b".repeat(40));
     assert!(manifest.complete);
     assert_eq!(
@@ -439,6 +480,232 @@ async fn config_only_update_requests_only_config_and_preserves_weight_inode_and_
             .oid,
         next[0].tracked("config.json").oid
     );
+}
+
+fn selected_weights(value: f32) -> Vec<u8> {
+    let mut header = br#"{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#.to_vec();
+    header.resize(header.len().div_ceil(8) * 8, b' ');
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(&header);
+    bytes.extend_from_slice(&value.to_le_bytes());
+    bytes
+}
+
+fn nested_selected_blobs() -> Vec<Blob> {
+    vec![
+        Blob::new("variants/q4/config.json", CONFIG),
+        Blob::new("variants/q4/tokenizer.json", b"{}"),
+        Blob::new("variants/q4/model.safetensors", &selected_weights(1.0)),
+    ]
+}
+
+fn normalized_blobs(blobs: &[Blob]) -> Vec<Blob> {
+    blobs
+        .iter()
+        .map(|blob| Blob::new(blob.path.rsplit('/').next().unwrap(), &blob.bytes))
+        .collect()
+}
+
+#[test]
+fn older_indexed_update_ownership_normalizes_identity_without_relocating_user_paths() {
+    let blobs = vec![
+        Blob::new("q4/config.json", CONFIG),
+        Blob::new("q4/tokenizer.json", b"{}"),
+        Blob::new("q4/model-a.safetensors", &selected_weights(1.0)),
+        Blob::new("q4/model-b.safetensors", &selected_weights(2.0)),
+        Blob::new(
+            "q4/model.safetensors.index.json",
+            br#"{"weight_map":{"a":"model-a.safetensors","b":"model-b.safetensors"}}"#,
+        ),
+    ];
+    let fixture = Fixture::selected_snapshot(&blobs, "q4/model-b.safetensors");
+    let before = fixture.state(&normalized_blobs(&blobs));
+    let installed = fixture.installed();
+    assert_eq!(installed.path, fixture.model.to_str().unwrap());
+    assert_eq!(installed.root, fixture.model);
+    assert_eq!(
+        installed.selected_file.as_deref(),
+        Some("q4/model-a.safetensors")
+    );
+    assert_eq!(installed.files.len(), 5);
+    assert!(installed
+        .files
+        .iter()
+        .all(|file| file.remote == format!("q4/{}", file.local)));
+    assert_eq!(
+        installed.revision.as_deref(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_unchanged(&before);
+    // User config/session references remain valid: preparing update ownership
+    // neither moves the old member-b directory nor creates the canonical one.
+    assert_eq!(
+        fs::read_dir(fixture.model.parent().unwrap())
+            .unwrap()
+            .count(),
+        1
+    );
+    let persisted = read_snapshot_manifest(&fixture.metadata).unwrap().unwrap();
+    assert_eq!(
+        persisted.selected_file.as_deref(),
+        Some("q4/model-b.safetensors")
+    );
+}
+
+#[tokio::test]
+async fn selected_nested_update_preserves_source_paths_and_excludes_other_models() {
+    let old = nested_selected_blobs();
+    let selected = "variants/q4/model.safetensors";
+    let fixture = Fixture::selected_snapshot(&old, selected);
+    let original_path = fixture.model.clone();
+    let tokenizer_before = FileState::read(&fixture.root().join("tokenizer.json"));
+    let installed = fixture.installed();
+    assert_eq!(installed.selected_file.as_deref(), Some(selected));
+    assert!(installed
+        .files
+        .iter()
+        .all(|file| { file.remote == format!("variants/q4/{}", file.local) }));
+    let mut next = old.clone();
+    next[0] = Blob::new("variants/q4/config.json", NEW_CONFIG);
+    next[2] = Blob::new(selected, &selected_weights(2.0));
+    // Valid independent choices must not become part of this model update.
+    next.extend([
+        Blob::new("variants/q4/alternative.safetensors", b"alternative"),
+        Blob::new("variants/q8/config.json", CONFIG),
+        Blob::new("variants/q8/tokenizer.json", b"{}"),
+        Blob::new("variants/q8/model.safetensors", b"other variant"),
+    ]);
+    next.extend(snapshot_blobs());
+    let cancel = AtomicBool::new(false);
+    let plan = plan_update(installed, &remote(&next, 'b'), &cancel, PlanMode::Apply)
+        .await
+        .unwrap();
+    assert_eq!(changed_names(&plan), ["config.json", "model.safetensors"]);
+    assert!(plan.removed.is_empty());
+    assert_eq!(plan.files.len(), 3);
+    let server = Loopback::start(&next).await;
+    let result = apply_plan(plan, &cancel, |_, _, _| {}, &server.source)
+        .await
+        .unwrap();
+    let mut requests = server.requests();
+    requests.sort_unstable();
+    assert_eq!(
+        requests,
+        ["/variants/q4/config.json", "/variants/q4/model.safetensors"]
+    );
+    assert_eq!(result.path, original_path.to_str().unwrap());
+    assert_eq!(result.updated_files, 2);
+    assert_eq!(
+        FileState::read(&fixture.root().join("tokenizer.json")),
+        tokenizer_before
+    );
+    assert_eq!(
+        fs::read(fixture.root().join("model.safetensors")).unwrap(),
+        selected_weights(2.0)
+    );
+    assert!(!fixture.root().join("alternative.safetensors").exists());
+    assert!(!fixture.root().join("variants").exists());
+    let manifest = read_snapshot_manifest(&fixture.metadata).unwrap().unwrap();
+    assert_eq!(manifest.format, 2);
+    assert_eq!(manifest.selected_file.as_deref(), Some(selected));
+    assert_eq!(manifest.revision, "b".repeat(40));
+    assert_eq!(manifest.files.len(), 3);
+    assert!(manifest.files.iter().all(|file| {
+        file.remote_path.as_deref() == Some(format!("variants/q4/{}", file.path).as_str())
+    }));
+    // Reopen persisted metadata: the next update must retain this same scope.
+    let reopened = fixture.installed();
+    assert_eq!(reopened.selected_file.as_deref(), Some(selected));
+    let unchanged = plan_update(reopened, &remote(&next, 'b'), &cancel, PlanMode::Apply)
+        .await
+        .unwrap();
+    assert!(unchanged.changed.is_empty());
+    assert!(unchanged.removed.is_empty());
+}
+
+#[tokio::test]
+async fn removed_selected_entrypoint_never_falls_back_to_a_whole_snapshot() {
+    let old = nested_selected_blobs();
+    let fixture = Fixture::selected_snapshot(&old, "variants/q4/model.safetensors");
+    let before = fixture.state(&normalized_blobs(&old));
+    let mut next = old[..2].to_vec();
+    next.push(Blob::new(
+        "variants/q4/alternative.safetensors",
+        b"alternative",
+    ));
+    next.extend(snapshot_blobs());
+    assert!(plan_update(
+        fixture.installed(),
+        &remote(&next, 'b'),
+        &AtomicBool::new(false),
+        PlanMode::Apply,
+    )
+    .await
+    .is_err());
+    assert_unchanged(&before);
+}
+
+#[tokio::test]
+async fn selected_nested_cancellation_and_digest_failure_do_not_publish_or_change_scope() {
+    for cancellation in [true, false] {
+        let old = nested_selected_blobs();
+        let selected = "variants/q4/model.safetensors";
+        let fixture = Fixture::selected_snapshot(&old, selected);
+        let before = fixture.state(&normalized_blobs(&old));
+        let mut next = old.clone();
+        next[2] = Blob::new(selected, &selected_weights(2.0));
+        next.push(Blob::new(
+            "variants/q4/alternative.safetensors",
+            b"alternative",
+        ));
+        next.extend(snapshot_blobs());
+        let cancel = AtomicBool::new(false);
+        let plan = plan_update(
+            fixture.installed(),
+            &remote(&next, 'b'),
+            &cancel,
+            PlanMode::Apply,
+        )
+        .await
+        .unwrap();
+        let mut replies = HashMap::new();
+        replies.insert(
+            format!("/{selected}"),
+            if cancellation {
+                Reply::ok(&next[2].bytes)
+            } else {
+                Reply::ok(&vec![b'x'; next[2].bytes.len()])
+            },
+        );
+        let server = Loopback::replies(replies).await;
+        let error = apply_plan(
+            plan,
+            &cancel,
+            |_, received, _| {
+                if cancellation && received > 0 {
+                    cancel.store(true, Ordering::Release);
+                }
+            },
+            &server.source,
+        )
+        .await
+        .unwrap_err();
+        if cancellation {
+            assert_eq!(error, DOWNLOAD_CANCELLED);
+        } else {
+            assert!(
+                error.contains("digest") || error.contains("checksum"),
+                "{error}"
+            );
+        }
+        assert_eq!(server.requests(), [format!("/{selected}")]);
+        assert_unchanged(&before);
+        let manifest = read_snapshot_manifest(&fixture.metadata).unwrap().unwrap();
+        assert_eq!(manifest.format, 2);
+        assert_eq!(fixture.installed().selected_file.as_deref(), Some(selected));
+        assert!(!fixture.root().join("alternative.safetensors").exists());
+        assert!(!fixture.root().join("variants").exists());
+    }
 }
 
 #[tokio::test]

@@ -21,7 +21,7 @@ vi.mock("../../shared/api/index", async (importOriginal) => ({
 
 /** A repository tree with GGUF files and no root safetensors weights. */
 function ggufOnly(gguf_files: api.HfFile[]): api.HfRepositoryInspection {
-  return { gguf_files, has_root_safetensors: false };
+  return { gguf_files, safetensors_files: [], has_root_safetensors: false };
 }
 
 
@@ -166,7 +166,7 @@ describe('Discover runtime journeys', () => {
     vi.mocked(api.hfSearchModels).mockResolvedValue([repo]);
     // Root safetensors weights in the actual tree make the snapshot download
     // available; GGUF journeys below replace this with their own tree.
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: 'model.safetensors', size_bytes: 1000 }], has_root_safetensors: true });
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(snapshot);
   });
   afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
@@ -477,6 +477,7 @@ describe('Discover across every repository format', () => {
 
   const mixed: api.HfRepositoryInspection = {
     gguf_files: [{ path: 'model.Q4_K_M.gguf', size_bytes: 10, is_mmproj: false, download_url: '' }],
+    safetensors_files: [{ path: 'model.safetensors', size_bytes: 1000 }],
     has_root_safetensors: true,
   };
 
@@ -500,7 +501,7 @@ describe('Discover across every repository format', () => {
 
   it('keeps a repository without GGUF or root safetensors searchable with its model card and no in-app download', async () => {
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ ...repo, pipeline_tag: 'feature-extraction' }]);
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: false });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [], has_root_safetensors: false });
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-runtime' });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
@@ -532,7 +533,7 @@ describe('Discover across every repository format', () => {
   });
 
   it('downloads a snapshot reachable from the default listing without choosing an engine', async () => {
-    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], has_root_safetensors: true });
+    vi.mocked(api.hfModelFiles).mockResolvedValue({ gguf_files: [], safetensors_files: [{ path: 'model.safetensors', size_bytes: 1000 }], has_root_safetensors: true });
     const store = createTestStore({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime' });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
@@ -563,7 +564,7 @@ describe('Discover across every repository format', () => {
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ ...repo, id: 'owner/first' }, { ...repo, id: 'owner/second' }]);
     vi.mocked(api.hfModelFiles)
       .mockReturnValueOnce(new Promise(resolve => { releaseFirst = resolve; }))
-      .mockResolvedValueOnce({ gguf_files: [], has_root_safetensors: false });
+      .mockResolvedValueOnce({ gguf_files: [], safetensors_files: [], has_root_safetensors: false });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/first/ }));
     fireEvent.click(screen.getByRole('button', { name: /owner\/second/ }));

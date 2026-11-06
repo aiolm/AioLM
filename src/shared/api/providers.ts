@@ -27,6 +27,10 @@ export interface ModelArtifact {
   role: 'model' | 'projector' | 'embedding'; size_bytes: number; file_count: number;
   architectures: string[]; model_type?: string; quantization?: string; modalities: Modalities;
   missing: string[]; incomplete: boolean; revision?: string; repository?: string;
+  /** Canonical repository-relative selected weight entrypoint; absent for whole snapshots. */
+  selected_file?: string;
+  /** Sorted original weight paths in this selected bundle, including planned missing shards. */
+  selected_weight_files?: string[];
   ownership: 'app' | 'hf-cache' | 'external'; notes: string[];
 }
 export interface ModelCompatibility {

@@ -1131,6 +1131,8 @@ mod tests {
             incomplete: false,
             revision: None,
             repository: None,
+            selected_file: None,
+            selected_weight_files: None,
             ownership: "external",
             notes: Vec::new(),
         }

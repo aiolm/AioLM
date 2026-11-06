@@ -4,7 +4,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { firstShard, formatBytes, formatSpeedBps, groupHfFiles, isMmprojPath, markInstalled, quantLabel, shardTotal, validateHfRepoId, type HfFileGroup } from "./discoverUtils";
+import { firstShard, formatBytes, formatSpeedBps, groupHfFiles, groupSafetensorsFiles, isMmprojPath, markInstalled, quantLabel, selectedBundleContains, shardTotal, validateHfRepoId, type HfFileGroup, type HfSafetensorsGroup } from "./discoverUtils";
 import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from "../../shared/state/modelDownloadTask";
 import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from "../../shared/state/taskRegistry";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
@@ -62,6 +62,7 @@ type TransferCancel = () => Promise<void> | void;
 interface TransferOrigin {
   repo: string;
   file: string;
+  inspectionGeneration: number;
   destination: string;
   provider: api.ProviderId;
   runtime: string;
@@ -94,7 +95,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const modelCopy = modelActions(locale);
   // A finished download names only the artifact. The engine and runtime are
   // taken from the configuration current when the user chooses to configure it.
-  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean; repo: string; destination: string } | null>(null);
+  const [downloadedChoice, setDownloadedChoice] = useState<({ path: string; projector: boolean; repo: string; destination: string } & Pick<api.ModelArtifact, 'selected_file' | 'selected_weight_files'>) | null>(null);
   const guard = useDraftGuard();
   const latestStore = useRef(store); latestStore.current = store;
 
@@ -155,12 +156,14 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const inspected = selected && inspection?.repo === selected.id ? inspection : null;
   const files = inspected && format !== 'safetensors' && format !== 'mlx' ? inspected.gguf_files : null;
   const snapshotCandidate = !!inspected && format !== 'gguf' && inspected.has_root_safetensors;
-  const noInAppDownload = !!inspected && !files?.length && !snapshotCandidate;
+  const safetensorsFiles = inspected && format !== 'gguf' ? inspected.safetensors_files : null;
+  const hasSnapshotChoices = snapshotCandidate || !!safetensorsFiles?.length;
+  const noInAppDownload = !!inspected && !files?.length && !hasSnapshotChoices;
   // The header names only formats found in the repository's files; neither
   // the search filter nor a task tag is evidence of how weights are stored.
   const fileFormats = inspected ? [
     ...(inspected.gguf_files.length > 0 ? ['GGUF'] : []),
-    ...(inspected.has_root_safetensors ? ['Safetensors'] : []),
+    ...(inspected.safetensors_files.length > 0 ? ['Safetensors'] : []),
   ] : [];
 
   // An empty query is a listing, not a mistake: the panel opens on the catalog
@@ -278,7 +281,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   useEffect(() => {
     let retired = false;
     setSnapshots(null);
-    if (!selected || !snapshotCandidate) { setCheckingSnapshots(false); return; }
+    if (!selected || !hasSnapshotChoices) { setCheckingSnapshots(false); return; }
     const repo = selected.id;
     setCheckingSnapshots(true);
     void api.hfInstalledSnapshots(repo, modelsDir).then(artifacts => {
@@ -287,7 +290,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       if (!retired) setCheckingSnapshots(false);
     });
     return () => { retired = true; };
-  }, [selected, snapshotCandidate, modelsDir, installedRevision]);
+  }, [selected, hasSnapshotChoices, modelsDir, installedRevision]);
 
   const transferActive = () => getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && ['running', 'cancelling'].includes(task.state));
   const currentTransferTask = () => getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
@@ -305,11 +308,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   };
   const ownsCurrentRepository = (origin: TransferOrigin): boolean => {
     const current = latestTransferContext.current;
-    return ownsTransferOrigin(origin) && !!current && current.repo === origin.repo && current.destination === origin.destination;
+    return ownsTransferOrigin(origin) && origin.inspectionGeneration === inspectGeneration.current
+      && !!current && current.repo === origin.repo && current.destination === origin.destination;
   };
   const ownsCurrentDownload = (origin: TransferOrigin) => {
     const current = latestTransferContext.current;
     return ownsTransferOrigin(origin) && !!current
+      && origin.inspectionGeneration === inspectGeneration.current
       && current.repo === origin.repo
       && current.destination === origin.destination
       && current.provider === origin.provider
@@ -329,6 +334,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const origin: TransferOrigin = {
       repo: repoId,
       file: file.path,
+      inspectionGeneration: inspectGeneration.current,
       destination,
       ...execution,
       activeModel: store.cfg.active_model,
@@ -465,16 +471,19 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     }
   };
 
-  const downloadSnapshot = async () => {
+  const downloadSnapshot = async (group?: HfSafetensorsGroup) => {
     if (!selected || !store.cfg || transferActive()) return;
     if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state) || latestStore.current.busy) {
       setError(t('ui.stopBeforeDownload')); return;
     }
     const repo = selected.id;
     const destination = store.cfg.models_dir;
+    const selectedFile = group?.file.path;
+    const transferFile = selectedFile ?? repo;
     const origin: TransferOrigin = {
       repo,
-      file: repo,
+      file: transferFile,
+      inspectionGeneration: inspectGeneration.current,
       destination,
       provider: api.providerOf(store.cfg),
       runtime: store.cfg.active_runtime ?? '',
@@ -486,28 +495,30 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       disposed: false,
     };
     setDownloadedChoice(null);
-    setDownloading(repo); setError(null); setNotice(null);
+    setDownloading(transferFile); setError(null); setNotice(null);
     transferOrigin.current = origin;
     const cancelDownload = () => api.hfCancelDownload();
     origin.taskCancel = cancelDownload;
-    registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: repo, phase: 'starting',
+    registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: group?.displayPath ?? repo, phase: 'starting',
       received: 0, total: 0, interruptible: true, cancel: cancelDownload });
     try {
-      const artifact = await api.hfDownloadSnapshot(repo, destination);
+      const artifact = selectedFile
+        ? await api.hfDownloadSnapshot(repo, destination, selectedFile)
+        : await api.hfDownloadSnapshot(repo, destination);
       invalidateModelCatalog(); finishTransferTask(cancelDownload, 'completed');
       if (canUpdateTransferPanel(origin)) setInstalledRevision(revision => revision + 1);
-      if (ownsCurrentRepository(origin)) {
-        setDownloadedChoice({ path: artifact.path, projector: false, repo, destination });
-        setNotice({ message: t('ui.downloadedModel', { file: repo }), repo, destination });
+      const matchesSelection = selectedFile ? selectedBundleContains(artifact, selectedFile) : artifact.selected_file === undefined;
+      if (ownsCurrentRepository(origin) && matchesSelection && !artifact.incomplete && artifact.missing.length === 0) {
+        setDownloadedChoice({ path: artifact.path, projector: false, repo, destination,
+          selected_file: artifact.selected_file, selected_weight_files: artifact.selected_weight_files });
+        setNotice({ message: t('ui.downloadedModel', { file: group?.displayPath ?? repo }), repo, destination });
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       if (ownsTransferTask(cancelDownload)) {
         finishTransferTask(cancelDownload, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
-        if (ownsCurrentDownload(origin)) {
-          if (message !== 'model download cancelled') setError(message);
-          setInstalledRevision(revision => revision + 1);
-        }
+        if (canUpdateTransferPanel(origin)) setInstalledRevision(revision => revision + 1);
+        if (message !== 'model download cancelled' && ownsCurrentDownload(origin)) setError(message);
       }
     } finally {
       if (canUpdateTransferPanel(origin)) setDownloading(null);
@@ -522,7 +533,9 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   // and a download started on a guess would collide at activation.
   const checkingInstalled = !!selected && !!files && files.length > 0 && lookup?.state !== "ready" && !installedUnknown;
   const repoSnapshots = snapshots?.repo === selected?.id && snapshots?.destination === modelsDir ? snapshots.artifacts : [];
-  const installedSnapshot = repoSnapshots.find(artifact => !artifact.incomplete && artifact.missing.length === 0);
+  const wholeSnapshots = repoSnapshots.filter(artifact => artifact.selected_file === undefined);
+  const installedSnapshot = wholeSnapshots.find(artifact => !artifact.incomplete && artifact.missing.length === 0);
+  const currentDownloadedChoice = downloadedChoice?.repo === selected?.id && downloadedChoice?.destination === modelsDir ? downloadedChoice : null;
 
   // Configuration starts from the engine and runtime that are configured right
   // now; the model settings editor then reports compatibility and owns any
@@ -552,7 +565,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     <div className="app-page-scroll discover-panel relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex min-w-0 flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="app-page-title" >{providerCopy[locale].discoverTitle}</h2>
+          <h1 className="app-page-title">{providerCopy[locale].discoverTitle}</h1>
           <p className="app-page-description" >{providerCopy[locale].discoverDescription}</p>
         </div>
         <div className="app-card app-card--tight text-right text-xs ui-color-faint">
@@ -562,21 +575,20 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); void runSearch(query, sort); }} className="discover-toolbar" aria-busy={searching || loadingFiles || downloading !== null}>
-        <label className="discover-toolbar-field">{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
-          options={[{ value: 'all' as ArtifactFormat, label: providerCopy[locale].allFormats }, ...FILTER_OPTIONS]}
-          disabled={downloadBusy}
-          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]); setDownloadedChoice(null); setNotice(null); opened.current = ''; }} /></label>
         <label className="discover-toolbar-field discover-toolbar-search" htmlFor="discover-search">{t("extra.search")}
           <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={providerCopy[locale].discoverPlaceholder} className="app-input" />
         </label>
         <label className="discover-toolbar-field">{t("ui.discoverSort")}
           <CustomSelect ariaLabel={t("ui.discoverSort")} value={sort} options={SORT_KEYS.map((key) => ({ value: key, label: t(SORT_LABELS[key]) }))} onChange={changeSort} />
         </label>
+        <label className="discover-toolbar-field">{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
+          options={[{ value: 'all' as ArtifactFormat, label: providerCopy[locale].allFormats }, ...FILTER_OPTIONS]}
+          disabled={downloadBusy}
+          onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value); setSelected(null); setInspection(null); setLoadingFiles(false); setResults([]); setDownloadedChoice(null); setNotice(null); opened.current = ''; }} /></label>
         <button type="submit" disabled={searching} className="app-button app-button--primary shrink-0 ui-min-width-120px" ><StableLabel value={searching ? t("panel.scanning") : t("panel.searchModels")} labels={[t("panel.scanning"), t("panel.searchModels")]} /></button>
       </form>
 
       <PanelFeedback>
-        {downloadedChoice?.repo === selected?.id && downloadedChoice?.destination === modelsDir && <FeedbackBanner tone="info" action={{ label: modelCopy.configure, onClick: () => configureDownloaded(downloadedChoice) }}>{downloadedChoice.path.split(/[\\/]/).pop()}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice?.repo === selected?.id && notice?.destination === modelsDir && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice.message}</FeedbackBanner>}
       </PanelFeedback>
@@ -597,34 +609,30 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           </div>
         </div>
       )}
+      {currentDownloadedChoice && !currentDownloadedChoice.selected_file && <div className="discover-download-complete">
+        <p className="min-w-0 app-text-wrap">{currentDownloadedChoice.path.split(/[\\/]/).pop()}</p>
+        <button type="button" className="app-button app-button--primary" data-icon="settings" onClick={() => configureDownloaded(currentDownloadedChoice)}>{modelCopy.configure}</button>
+      </div>}
 
-      <div className="discover-columns grid min-h-0 flex-1 gap-3 ">
-        <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>
+      <div className="discover-columns grid min-h-0 flex-1 gap-4">
+        <section className="discover-results min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>
           <div className="sticky top-0 z-10 border-b px-4 py-2.5 text-xs font-semibold ui-border-color-border ui-background-surface-muted ui-color-faint" >{t("extra.searchResults")} {results.length ? `(${results.length})` : ""}</div>
           {searching && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.searching")}</div>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed ui-color-faint" >{listed ? t("ui.discoverNoResults") : t("ui.searchHint")}</div>}
           <div role="list" className="space-y-1.5 p-2">
             {results.map((model) => (
               <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={`app-list-row block w-full${selected?.id === model.id ? " is-selected" : ""}`}>
-                <div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={model.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges mode="compact" model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
+                <div className="flex min-w-0 items-center gap-2"><ModelIcon model={model.id} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges mode="compact" model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums ui-color-faint" ><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <Badge tone="warning">{t("panel.gated")}</Badge>}</div>
               </button></div>
             ))}
           </div>
         </section>
 
-        <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
+        <section className="discover-detail min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{providerCopy[locale].discoverSelect}</div>}
           {selected && <>
-            {snapshotCandidate && <><button type="button" className="app-button app-button--primary m-3" disabled={downloadBusy || store.busy || checkingSnapshots}
-              onClick={() => void downloadSnapshot()}>{repoSnapshots.some(artifact => artifact.incomplete) ? modelCopy.retry : providerCopy[locale].snapshot}</button>
-              {installedSnapshot && <Badge tone="neutral">{t('ui.discoverInstalled')}</Badge>}
-              {installedSnapshot && <button type="button" className="app-button app-button--ghost" onClick={() => configureDownloaded({ path: installedSnapshot.path, projector: false })}>{modelCopy.configure}</button>}
-              {repoSnapshots.some(artifact => artifact.incomplete || artifact.missing.length > 0) && <p role="status" className="px-3 text-xs ui-color-warning">{providerCopy[locale].files}</p>}</>}
-            {files?.some(file => file.companions_available) && <div className="p-3 text-xs ui-color-muted"><p>{providerCopy[locale].ggufPrerequisites}</p>
-              <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={includeCompanions} disabled={downloadBusy} onChange={event => setIncludeCompanions(event.target.checked)} />{providerCopy[locale].ggufCompanions}</label>
-            </div>}
-            <div className="border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={selected.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges mode="detail" model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
+            <div className="discover-repository border-b px-4 py-3 ui-border-color-border ui-background-surface-muted"><div className="flex min-w-0 items-center gap-2"><ModelIcon model={selected.id} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges mode="detail" model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
               {validateHfRepoId(selected.id) && <a
                 className="mt-2 inline-flex items-center gap-1 text-xs font-medium underline underline-offset-4 ui-color-accent"
                 href={`https://huggingface.co/${selected.id}`} target="_blank" rel="noopener noreferrer"
@@ -636,8 +644,55 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
                   });
                 }}
               >{t("ui.discoverModelCard")}<span aria-hidden="true">↗</span></a>}{fileFormats.length > 0 && <div className="mt-1 text-xs ui-color-faint" >{providerCopy[locale].formats} · {fileFormats.join(' · ')}</div>}{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
+            {files?.some(file => file.companions_available) && <div className="p-3 text-xs ui-color-muted"><p>{providerCopy[locale].ggufPrerequisites}</p>
+              <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={includeCompanions} disabled={downloadBusy} onChange={event => setIncludeCompanions(event.target.checked)} />{providerCopy[locale].ggufCompanions}</label>
+            </div>}
+            {snapshotCandidate && <><button type="button" className="app-button app-button--primary m-3" disabled={downloadBusy || store.busy || checkingSnapshots}
+              onClick={() => void downloadSnapshot()}>{wholeSnapshots.some(artifact => artifact.incomplete) ? modelCopy.retry : providerCopy[locale].snapshot}</button>
+              {installedSnapshot && <Badge tone="neutral">{t('ui.discoverInstalled')}</Badge>}
+              {installedSnapshot && <button type="button" className="app-button app-button--ghost" onClick={() => configureDownloaded({ path: installedSnapshot.path, projector: false })}>{modelCopy.configure}</button>}
+              {wholeSnapshots.some(artifact => artifact.incomplete || artifact.missing.length > 0) && <p role="status" className="px-3 text-xs ui-color-warning">{providerCopy[locale].files}</p>}</>}
             {loadingFiles && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.readingFiles")}</div>}
             {!loadingFiles && noInAppDownload && <div className="p-6 text-center text-xs ui-color-faint" role="status">{providerCopy[locale].noInAppDownload}</div>}
+            {!loadingFiles && safetensorsFiles && safetensorsFiles.length > 0 && <>
+              <p className="px-3 py-2 text-xs ui-color-muted">{providerCopy[locale].safetensorsBundle}</p>
+              <div role="list" className="space-y-1.5 p-2">
+                {groupSafetensorsFiles(safetensorsFiles, currentDownloadedChoice ? [...repoSnapshots, currentDownloadedChoice] : repoSnapshots).map(group => {
+                  const path = group.file.path;
+                  const matchingSnapshots = repoSnapshots.filter(artifact => selectedBundleContains(artifact, path));
+                  const present = matchingSnapshots.find(artifact => !artifact.incomplete && artifact.missing.length === 0);
+                  const completed = currentDownloadedChoice && selectedBundleContains(currentDownloadedChoice, path) ? currentDownloadedChoice : null;
+                  const readyPath = present?.path ?? completed?.path;
+                  const incomplete = matchingSnapshots.some(artifact => artifact.incomplete || artifact.missing.length > 0);
+                  const activeDownload = downloading === path && transferOrigin.current?.repo === selected.id;
+                  const displayPath = normalizeDisplayPath(group.displayPath);
+                  const canDownload = ['stopped', 'failed', 'crashed'].includes(store.status.state);
+                  const action = readyPath ? t('ui.discoverInstalled') : activeDownload ? t('extra.downloading') : incomplete ? modelCopy.retry : t('extra.download');
+                  return <div key={path} role="listitem" className="app-list-row flex min-w-0 flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex-[1_1_12rem]">
+                      <div className="app-text-wrap text-sm font-medium ui-color-ink" title={displayPath}>{displayPath}</div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs ui-color-faint">
+                        <span>{formatBytes(group.sizeBytes)}</span><span>Safetensors</span>
+                        {group.shardCount > 1 && <Badge>{t('ui.modelShards', { count: group.shardCount })}</Badge>}
+                        {group.missingParts > 0 && <Badge tone="warning">{t('ui.modelShardsMissing', { count: group.missingParts, total: group.shardCount })}</Badge>}
+                        {group.files.some(part => part.oid) && <span>{t('ui.checksumMetadata')}</span>}
+                      </div>
+                      {incomplete && !readyPath && <p role="status" className="mt-1 text-xs ui-color-warning">{providerCopy[locale].files}</p>}
+                    </div>
+                    <div className="flex max-w-full flex-wrap items-center gap-2">
+                      <button type="button" className="app-button app-button--primary app-button--sm shrink-0"
+                        disabled={downloadBusy || store.busy || checkingSnapshots || !!readyPath || group.missingParts > 0}
+                        aria-disabled={!canDownload ? 'true' : undefined}
+                        title={readyPath ? t('ui.discoverInstalledAt', { path: normalizeDisplayPath(readyPath) }) : !canDownload ? t('ui.stopBeforeDownload') : undefined}
+                        aria-label={`${action}: ${displayPath}`} onClick={() => void downloadSnapshot(group)}>{action}</button>
+                      {readyPath && <button type="button" className="app-button app-button--ghost app-button--sm"
+                        aria-label={`${modelCopy.configure}: ${displayPath}`}
+                        onClick={() => configureDownloaded({ path: readyPath, projector: false })}>{modelCopy.configure}</button>}
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </>}
             {!loadingFiles && files && files.length > 0 && <div role="list" className="space-y-1.5 p-2">
               {groupHfFiles(files).map((group) => {
                 const { file } = group;

@@ -1704,7 +1704,7 @@ fn model_bindings(
                 }
             }
             let metadata = fs::metadata(path).ok();
-            models.push(super::artifacts::ModelArtifact { path:model.path, name:model.name, format:super::artifacts::ArtifactFormat::Unknown, role:super::artifacts::ArtifactRole::Model, size_bytes:0, file_count:usize::from(metadata.is_some()), architectures:vec![], model_type:None, quantization:None, has_tokenizer:false, has_processor:false, has_chat_template:false, modalities:Modalities::default(), missing:if metadata.is_some() { vec![] } else { vec!["registered model binding is missing".into()] }, incomplete:false, revision:None, repository:None, ownership:"external", notes:vec!["Opaque adapter model binding; weight size is unknown. Loader/tasks/inputs are checked by the model-specific probe.".into()] });
+            models.push(super::artifacts::ModelArtifact { path:model.path, name:model.name, format:super::artifacts::ArtifactFormat::Unknown, role:super::artifacts::ArtifactRole::Model, size_bytes:0, file_count:usize::from(metadata.is_some()), architectures:vec![], model_type:None, quantization:None, has_tokenizer:false, has_processor:false, has_chat_template:false, modalities:Modalities::default(), missing:if metadata.is_some() { vec![] } else { vec!["registered model binding is missing".into()] }, incomplete:false, revision:None, repository:None, selected_file:None, selected_weight_files:None, ownership:"external", notes:vec!["Opaque adapter model binding; weight size is unknown. Loader/tasks/inputs are checked by the model-specific probe.".into()] });
         }
     }
     models

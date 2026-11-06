@@ -588,8 +588,10 @@ mod tests {
             format: 1,
             repository: "synthetic/model".into(),
             revision: "a".repeat(40),
+            selected_file: None,
             files: vec![SnapshotFile {
                 path: "config.json".into(),
+                remote_path: None,
                 size: config.len() as u64,
                 oid: None,
             }],
