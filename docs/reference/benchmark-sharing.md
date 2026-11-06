@@ -29,18 +29,22 @@ deletion.
 
 ## Versioned public contracts
 
-`@aiolm/benchmark-contracts` 0.10.0 accepts legacy schema1/2 snapshots unchanged
-and schema3 `openai-chat-serving@1` snapshots through the same `/v1` API.
+`@aiolm/benchmark-contracts` 0.11.0 accepts legacy schema1/2 snapshots and
+schema3 cap-based `openai-chat-serving@1` unchanged through the same `/v1` API,
+and adds fixed-output `openai-chat-serving@2` with per-request count evidence.
 Schema3 identifies inputs by exact UTF-8 byte count and SHA-256, not token
 length. Its runtime identity has six nullable fields and permits any safe
 engine name, including an unknown name. Model format is independent of engine.
 
 Serving measurements preserve observed content and reasoning bytes separately.
-First-output timings and end-to-end batch time are client observations; optional
-engine-reported token/cache counters remain unknown when absent. Output B/s and
-reported tok/s are derived from end-to-end time, not decode timing. Zero duration
-or a non-finite derived rate produces an unavailable rate. Repeated measurements
-use per-metric median/min/max/sample count; missing observations are not zero.
+First-output timings and end-to-end batch time are client observations.
+Method `@2` requires the exact selected output count for every request and
+retains those reported counts in launch-slot order; prompt/cache counts may
+remain unknown. Historical `@1` keeps optional token/cache counters. Output B/s
+and reported tok/s use end-to-end time, not decode-only timing. Zero duration or
+a non-finite rate stays unavailable. Repeated measurements use per-metric
+median/min/max/sample count; missing observations are not zero. Fixed and cap
+methods remain separate comparison scopes.
 
 Schema3 settings are bounded, typed public facts with explicit target, scope,
 unit and semantic role. Host snapshots are marked `aiolm_host`; attached or

@@ -6,12 +6,12 @@
 
 AioLM (All-in-One LM) is a desktop GUI adapter for Windows, macOS and Linux, not an inference engine. It finds, runs and compares local language models through llama.cpp, vLLM on Linux or Apple Silicon macOS (via vllm-metal), MLX on Apple Silicon macOS, and other connected engines serving an OpenAI-compatible API. See [inference runtimes](docs/reference/inference-runtimes.md) for platform and model-format details.
 
-All connected text-streaming engines use the same API benchmark (`openai-chat-serving@1`), history, exports, sharing and management. Timing and output bytes are client-observed; token and cache counters are engine-reported and may remain unknown. Inputs are UTF-8 bytes, not tokens; the output-token request cap is not a forced output length. Launch profiles are preserved and cache is measured as configured, not guaranteed cold. Defaults are 4096/16384 input bytes, output cap 128, concurrency 1/2/4, one repetition, warmup enabled and optional usage requests disabled. See [benchmarks](docs/reference/benchmarks.md).
+Fixed-output benchmarks (`openai-chat-serving@2`) require an engine that can control output length and report streamed completion-token counts. Every request must report exactly the selected output count; early endings or unverifiable counts fail instead of producing a successful measurement. Choices are 1k/4k/8k/16k/32k/64k/128k/200k, with 1k=1024. Defaults are 4096/16384 input UTF-8 bytes, 1k output tokens, concurrency 1/2/4, one repetition and warmup enabled. Launch profiles and context are preserved; large targets require enough model context per slot. Historical cap-based `@1` results keep their original meaning, history, exports and sharing. See [benchmarks](docs/reference/benchmarks.md).
 
 ## Features
 
 - Hugging Face model search across all repository formats, sorted by Trending by default, with optional GGUF, safetensors and MLX filters
-- In-app downloads of GGUF files and complete safetensors snapshots, with a local model library and safe deletion
+- In-app GGUF and HF/MLX safetensors downloads, with per-model weight selection, required loading files, a local model library and safe deletion
 - Managed llama.cpp runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO), portable runtime archives and llama.cpp PR builds with provenance review
 - Settings profiles per engine, resource estimates before loading, and multimodal inputs where the model and engine support them
 - Loaded-model management with start/stop, settings and runtime logs in the model library
@@ -23,11 +23,34 @@ All connected text-streaming engines use the same API benchmark (`openai-chat-se
 - Update notification at startup and verified installer updates from Settings
 - A headless CLI
 
-Search shows every repository, but in-app downloads handle only GGUF files and complete safetensors snapshots. A repository in another format stays visible with its model card; an external engine may still be able to run it. Search results do not select or favor an inference engine.
+Search shows every repository. In-app downloads support GGUF files and complete HF/MLX safetensors model bundles: choose a weight file to include its required config, tokenizer and split parts without installing other weight variants. Whole-repository data snapshots remain available for repositories with root safetensors weights. Other formats stay visible with their model card; an external engine may still be able to run them. Search results do not select or favor an inference engine.
 
 Loading a model makes it available to internal chat. To use loaded models from other applications, start **API server** from the sidebar and copy its URL, key and model ID. See [API server and model lifecycle](docs/guides/local-api.md).
 
 To connect another engine, open **Inference engines → Add inference engine → Find automatically**, choose a model and **Connect**. AioLM registers the engine only after a real chat and streaming check. See [external engine connections](docs/reference/automatic-engine-connections.md).
+
+## Workspace
+
+The sidebar gives everyday use and model operations the same navigation depth:
+
+| Group | Screens |
+| --- | --- |
+| Workspace | Chat, Projects |
+| Model operations | Library, Discover, Inference engines, Benchmark |
+| Integrations | API server, MCP servers |
+| App | Settings |
+
+Collapse the desktop sidebar to an icon rail, or use the navigation drawer in a narrow window. Open panels keep their drafts when changing screens, theme, density or fonts.
+
+Workspace colors retain the original Orchid Periwinkle palette: pale sky-to-lilac navigation in light mode, softer periwinkle surfaces in dark mode, and pastel cyan-blue primary actions with dark labels. Brand gradients are limited to navigation and primary actions. Input boundaries, keyboard focus and success/warning/error states remain distinct.
+
+The chat header aligns with the message canvas. The answering model and runtime sit below the title; the session picker and Conversation settings share one control row, which moves below the title in narrow conversations.
+
+The topbar controls default execution. The always-visible session selector in the chat header chooses the session that answers that conversation; choosing a worker does not change the default target. Retrieval and audio/video preprocessing are in **Conversation settings**. Attachments and selected tools/skills appear above the input, with attachment/tool/skill controls and Send/Stop below it.
+
+Model settings use **Choose runtime → Choose profile → Adjust options**. Downloading or previewing a model does not start it; saving a profile and starting execution remain separate actions. Projects likewise separate saving a preset from applying its saved settings.
+
+Theme and font controls are in **Settings → Appearance**; density is in **General**. Compact density reduces row spacing and control padding without shrinking touch targets. Personalization separates instruction-file application from the file being edited. Benchmark input-size and concurrency rows summarize the selected values; technical environment details and advanced request options start collapsed. History and copy stay in the result toolbar, while **Export and manage** contains export, profile creation and deletion.
 
 ## Install
 
@@ -54,9 +77,11 @@ Use the Node, npm and Rust versions pinned in the repository; see [build require
 - `npm test` runs contract, tooling and direct-script checks, followed by the full Vitest coverage suite.
 - `npm run test:coverage` also works without prebuilt benchmark contracts: it builds the workspace package before running coverage. `test:coverage:run` is the shared internal execution step and requires that preparation.
 - `npm run test:direct` runs the explicitly ordered Node assertion scripts in separate processes and stops at the first failure. Before starting a child, it rejects unregistered, missing or duplicate entries. Add a regular `tests/direct/test-*.ts` file to both `DIRECT_TEST_SCRIPTS` in `tests/direct/run.ts` and its individual npm command; the runner harness itself is excluded from the child inventory.
-- `npm run typecheck` checks application and tooling types. `npm run build` builds the frontend; native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
+- `npm run typecheck` checks application and tooling types. For UI changes, also run `npm run test:ui` and `npm run test:i18n`, then `npm run build` for the frontend. Native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
 
 Vitest coverage measures the frontend sources exercised by its suite, not the separate direct Node scripts. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
+
+Desktop window chrome uses one theme-aware title strip above startup, setup and the workspace. macOS retains its native traffic lights over the strip; Windows/Linux draw caption buttons only when native frame removal succeeds. The strip stays interactive inside modal settings, nested confirmations and the navigation drawer, with space reserved above their content. The frame follows Light, Dark and System without pinning System to the last resolved color; Linux delegates System to the desktop portal and GTK session policy. Closing still follows the native close request and close-to-tray setting. Browser previews do not display window controls.
 
 ## Security and privacy
 

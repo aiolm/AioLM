@@ -28,6 +28,10 @@ expanded details kept.
 
 This flow needs no JSON files or probe programs.
 
+The progress indicator identifies the operation that failed: discovery,
+inspection or connection verification. A failed rediscovery does not discard an
+already inspected candidate and its model selection.
+
 ## What a connection checks
 
 - Discovery looks at your own processes, their listening ports and limited
@@ -151,8 +155,23 @@ replace streaming or selected-model checks.
 Normal chat requests add `stream_options.include_usage` automatically only when
 this declaration is true. Unknown or false support leaves that optional field
 out, while an explicit user-supplied `stream_options` value takes precedence.
-The benchmark's optional usage checkbox is an explicit request independent of
-this capability declaration.
+Fixed-output benchmarks always request usage and require it to be reported.
+
+`capabilities.fixed_output` is an optional, explicit opt-in naming the request
+field the engine honors to generate exactly `max_tokens` tokens:
+`"ignore_eos"` (sent as `true`) or `"min_tokens"` (sent as the same target as
+`max_tokens`). The probe is rejected unless `stream_usage_supported` is `true`
+and the manifest declares a `request` option with that key: a `flag` or
+`toggle` for `ignore_eos`, or an `integer` without `choices` whose ordinary range
+accepts every value from 1 through 204800 for `min_tokens`. Out-of-range
+`sentinel_values` cannot fill gaps in that interval. A model without the
+`generate` task does not offer it. Missing means unsupported: AioLM never infers this control from an
+engine name, its help output or automatic API verification, and automatic
+connections leave it absent. The declaration only lets the benchmark send the
+field; every request must still report exactly the requested completion-token
+count, and an early stop, overrun or missing count fails the run. Built-in
+llama.cpp sessions use `ignore_eos`, built-in vLLM 0.4.0 or later uses
+`min_tokens`, and vllm-metal and mlx-vlm have no fixed-output control.
 
 
 Streaming verification and benchmarks require a blank-line-terminated
@@ -190,9 +209,10 @@ or the helper, remove the registration and register again.
 ### Limits
 
 A registered engine is used for chat, projects, document search, MCP tools and
-the API server to the extent its probe reports. Common API-serving benchmark
-admission does not require engine-specific tokenization or cache-reset APIs;
-the adapter catalog identifies this method as `openai-chat-serving@1`.
+the API server to the extent its probe reports. Fixed-output benchmark admission
+requires a declared output control and streamed completion-token reporting.
+The catalog advertises `openai-chat-serving@2` only when declared; generated
+automatic connections without that declaration remain unsupported for benchmarking.
 Numerical verification against a CPU reference and portable runtime archives
 remain unavailable for external engines. Unknown public identity, model format,
 or compute attribution is not replaced with a built-in engine identity.

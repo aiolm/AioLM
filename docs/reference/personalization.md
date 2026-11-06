@@ -22,13 +22,15 @@ configured chat context need to be reduced or the context increased before sendi
 
 ## Editing instructions
 
-Under **File to edit**, choose the shared or AioLM instructions file and edit its
-text. This editing selection is independent of which files apply to chat. Each
-file keeps its own draft while switching between them or changing application
-choices. **Save** writes only the editor's selected file, creating a missing file
-on explicit save. **Reload** reads its current contents and asks before discarding
-a draft. If another program changes the file after it was loaded, saving fails
-and keeps the draft so the external edit is not overwritten.
+Under **File to edit**, choose the shared or AioLM instructions file with the
+editor radio options. These are separate from the application checkboxes above.
+The editor shows the selected file's path and revision before its text and
+Save/Reload actions. Each file keeps its own draft while switching files,
+application choices, settings tabs or search. **Save** writes only the editor's
+selected file, creating a missing file on explicit save. **Reload** reads its
+current contents and asks before discarding a draft. If another program changes
+the file after it was loaded, saving fails and keeps the draft so the external
+edit is not overwritten.
 
 The source application choices are included in preference backups. Resetting all
 app preferences enables both sources again. Neither backup nor reset changes the

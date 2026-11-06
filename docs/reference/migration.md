@@ -62,12 +62,10 @@ Upgrades keep your existing settings:
 
 ### 0.3.5 benchmark records
 
-New measurements use one `openai-chat-serving@1` workload for every connected
-streaming text-chat engine. They write local journal schema2 and publish
-schema3 with exact UTF-8 input bytes/hashes, client-observed text/reasoning
-timings and nullable reported token/cache counts. Engine launch settings are
-preserved; the workload no longer forces context, parallel capacity or cold
-caches. Optional usage and warmup are explicit conditions.
+Version 0.3.5 introduced the `openai-chat-serving@1` cap-based workload for
+connected streaming text-chat engines. These local schema2/public schema3
+records retain exact UTF-8 input bytes/hashes, observed text/reasoning timings,
+optional usage, as-configured cache and their original request cap.
 
 Existing local schema1 journals and frozen schema1/2 publication bytes remain
 unchanged, including IDs, hashes and receipts. Their original token/PP/TG/TTFT/
@@ -76,11 +74,33 @@ Profile imports now choose and confirm a checked destination schema and retain
 existing user-edited imports for the same source/destination. No model paths,
 GPU IDs, installations or connections are restored from public settings.
 
+### Fixed-output measurements
+
+New runs use `openai-chat-serving@2`, with engine output-length control and an
+exact reported completion count for every request. The eight targets are
+1k/4k/8k/16k/32k/64k/128k/200k, where k=1024. Unsupported controls or unverifiable
+counts fail instead of falling back to `@1`. Per-request count arrays are
+retained for replay/publication. Local serving schema2 and public schema3 stay
+in use; the method version distinguishes fixed output from historical caps.
+Existing `@1` payloads, journals, checksums and receipts are never rewritten.
+The website defaults to the new fixed-output scope and keeps `@1` explicit.
+
+
 Back up before downgrading: older releases may not understand local schema2
 journals or newly declared adapter metadata. Do not rewrite journals or frozen
 publication requests to make an older release accept them.
 
 Journal replay preserves recorded floating-point timings exactly across restarts.
+
+### Selected Safetensors model downloads
+
+Existing whole-repository snapshot manifests remain format 1 and are not
+rewritten. Selecting a weight file or shard group creates a separate install
+with a format-2 manifest recording its selection and original remote paths.
+Updates and deletion preserve that install's scope and stable model path.
+Format-1-only releases cannot manage these new selected installs as whole
+snapshots. Use a release that understands format 2 to resume or update them;
+do not relabel the manifest or remove its ownership metadata.
 
 ## Going back to an older release
 
