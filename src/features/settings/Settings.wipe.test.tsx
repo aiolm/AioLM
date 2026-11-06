@@ -146,7 +146,7 @@ it.each(['preparation', 'streaming', 'approval', 'tool-running'] as const)('canc
   if (stage === 'approval' || stage === 'tool-running') {
     fireEvent.click(screen.getByText('MCP tools'));
     fireEvent.click(screen.getByRole('button', { name: 'Load MCP tools' }));
-    await screen.findByText('Synthetic tools · echo');
+    await screen.findByLabelText('Synthetic tools · echo');
   }
   await send('Old active turn');
   if (stage === 'preparation') await waitFor(() => expect(api.serverActivity).toHaveBeenCalled());

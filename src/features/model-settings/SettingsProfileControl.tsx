@@ -233,9 +233,9 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
   if (!active) return null;
 
   const draftActions = <>
-    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || resetDisabled} aria-describedby={`${labelId}-reset-hint`} onClick={() => { const changed = onReset(); if (changed === undefined) return; setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
+    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="reset" disabled={mutationLocked || resetDisabled} aria-describedby={`${labelId}-reset-hint`} onClick={() => { const changed = onReset(); if (changed === undefined) return; setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
     {saveAction}
-    <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+    <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="add" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
   </>;
   const banner = <div className={`settings-profile-banner settings-profile-banner--${state}${bannerTarget ? ' settings-profile-banner--compact' : ` app-card app-card--tight${state === 'working' ? ' app-card--warning' : ''}`}`}>
       <span className="settings-profile-state-dot" aria-hidden="true" />
@@ -245,7 +245,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
           disabled={mutationLocked || blocked} options={items.map(item => ({ value: item.id, label: `${copy[item.scope]} · ${item.name}${bannerTarget && state === 'working' && item.id === active.id ? ` · ${copy.editing}` : ''}` }))}
           onChange={id => { if (id !== active.id) void run(() => onApply(id), () => setPreviewId(null)); }} />}
         {draftActions}
-        {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
+        {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="back" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
       </div>
     </div>;
 
@@ -301,13 +301,13 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
           </div>
           <div className="settings-profile-buttons">
             {selectionOnly && !preview && draftActions}
-            {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
+            {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="back" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
             {preview && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={closePreview}>{copy.closePreview}</button>}
             {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), closePreview)}>{copy.apply}</button>}
             {detailItem && detailItem.scope !== 'preset' && <>
               {!isDefault(detailItem) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(() => onSetDefault(detailItem.id))}>{copy.setDefault}</button>}
-              <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={event => openAction({ kind: 'rename', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.rename}</button>
-              <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || isDefault(detailItem)} aria-describedby={isDefault(detailItem) ? `${detailId}-delete-hint` : undefined} onClick={event => openAction({ kind: 'delete', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.remove}</button>
+              <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="edit" disabled={mutationLocked} onClick={event => openAction({ kind: 'rename', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.rename}</button>
+              <button type="button" className="app-button app-button--ghost app-button--danger app-button--sm" data-icon="delete" disabled={mutationLocked || isDefault(detailItem)} aria-describedby={isDefault(detailItem) ? `${detailId}-delete-hint` : undefined} onClick={event => openAction({ kind: 'delete', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.remove}</button>
             </>}
           </div>
         </div>

@@ -52,13 +52,13 @@ const ProjectsPanel = lazy(() => import("../features/projects/Projects"));
 const SettingsPanel = lazy(() => import("../features/settings/Settings"));
 const navigationEntries = navigationGroups.flatMap(group => group.items);
 
-function PanelLoading() {
+function PanelLoading({ title }: { title: string }) {
   const { t } = useI18n();
-  return <div className="app-page-scroll panel-loading" role="status" aria-label={t("extra.loading")}><span className="panel-spinner" aria-hidden="true" /></div>;
+  return <div className="app-page-scroll panel-loading" role="status" aria-label={t("extra.loading")}><h1 className="sr-only">{title}</h1><span className="panel-spinner" aria-hidden="true" /></div>;
 }
 
-function LazyPanel({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<PanelLoading />}><InitialSurface>{children}</InitialSurface></Suspense>;
+function LazyPanel({ children, title }: { children: React.ReactNode; title: string }) {
+  return <Suspense fallback={<PanelLoading title={title} />}><InitialSurface>{children}</InitialSurface></Suspense>;
 }
 
 /** A task blocks a tab change only while it is active and registered as
@@ -86,7 +86,7 @@ function AppContent() {
   const baseStore = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
   const { t } = useI18n();
   if (baseStore.bootState === 'loading') return <SurfaceLoading />;
-  if (baseStore.bootState === 'error') return <div className="app-runtime-empty"><EmptyState title={t('error.attention')} description={baseStore.bootError ?? t('error.wrong')} action={{ label: t('common.retry'), onClick: () => { void baseStore.loadConfig().catch(() => undefined); } }} /></div>;
+  if (baseStore.bootState === 'error') return <div className="app-runtime-empty"><EmptyState headingLevel={1} title={t('error.attention')} description={baseStore.bootError ?? t('error.wrong')} action={{ label: t('common.retry'), onClick: () => { void baseStore.loadConfig().catch(() => undefined); } }} /></div>;
   return <InitializedApp preferences={preferences} setPreferences={setPreferences} baseStore={baseStore} />;
 }
 
@@ -125,7 +125,7 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
     if (setupError) {
       // No wizard edits exist yet. A user-requested reload creates a fresh
       // document module map instead of relying on a cached failed import.
-      return <div className="app-runtime-empty" role="alert"><EmptyState title={t('error.attention')} description={normalizeDisplayText(setupError.message)} action={{ label: t('common.retry'), onClick: () => window.location.reload() }} /></div>;
+      return <div className="app-runtime-empty" role="alert"><EmptyState headingLevel={1} title={t('error.attention')} description={normalizeDisplayText(setupError.message)} action={{ label: t('common.retry'), onClick: () => window.location.reload() }} /></div>;
     }
     if (!setupModule) return <SurfaceLoading />;
     const Onboarding = setupModule.default;
@@ -280,7 +280,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
   };
 
-  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
+  const labelFor = (id: ViewId) => id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
   const liveModelName = useModelName(liveModel);
@@ -292,16 +292,16 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // In the collapsed rail the labels stay in the accessibility tree (visually
   // hidden by CSS) and surface as tooltips, so every destination keeps its name.
   const navigation = (rail: boolean) => <nav aria-label={t("app.primary")} className="aiolm-navigation">
-    {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
+    {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group" data-navigation-group={group.id}>
       <h2>{copy[group.id]}</h2>
-      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" title={rail ? labelFor(item.id) : undefined} onClick={() => navigate(item.id)}>
+      {group.items.map(item => <button key={item.id} type="button" data-view-target={item.id} aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" title={rail ? labelFor(item.id) : undefined} onClick={() => navigate(item.id)}>
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
       </button>)}
     </section>)}
   </nav>;
   const sidebarToggleLabel = sidebarCollapsed ? copy.expandSidebar : copy.collapseSidebar;
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
-    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(navigationEntries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(navigationEntries.find(item => item.id === id)!.label)}><LazyPanel title={labelFor(id)}>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
   return <PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
@@ -315,8 +315,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     </dialog>
     <div className="app-main-column">
       <header className="aiolm-header">
-        <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
+        <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span className="aiolm-location">{title}</span></div>
+        <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}>
+          <span className="aiolm-context-scope">{modelCopy.defaultScope}</span>
+          <button type="button" className="app-button app-button--ghost aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span></button>
+          <button type="button" className="app-button app-button--ghost aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button>
+        </div>
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
@@ -332,8 +336,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <PanelFeedbackOutlet />
         </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
-          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onDiscoverModels={() => { navigate('discover'); }} />)}
-          {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
+          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><h1 className="sr-only">{labelFor("chat")}</h1><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onDiscoverModels={() => { navigate('discover'); }} />)}
+          {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading title={labelFor("projects")} />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} />)}

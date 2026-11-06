@@ -30,6 +30,7 @@ export function resolveTheme(mode: ThemeMode): ResolvedTheme {
 export function applyTheme(mode: ThemeMode): ResolvedTheme {
   const resolved = resolveTheme(mode);
   if (typeof document !== "undefined") {
+    document.documentElement.dataset.themeMode = mode;
     document.documentElement.dataset.theme = resolved;
     document.documentElement.style.colorScheme = resolved;
   }

@@ -60,7 +60,7 @@ export default function RuntimeBackendRow({
       <div className="runtime-group__header">
         <div className="runtime-group__identity">
           <div className="runtime-group__title">
-            <h3 id={`runtime-${row.backend}`}>{backendName}</h3>
+            <h4 id={`runtime-${row.backend}`} className="runtime-group__name">{backendName}</h4>
             {fit && <span className={`runtime-group__fit is-${fit}`}>{fitLabelOf(locale, fit)}</span>}
             {row.installed.length > 0 || row.busy ? <StatusBadge className={`runtime-group__state is-${state.tone}`} label={state.label} tone={state.tone} /> : null}
           </div>

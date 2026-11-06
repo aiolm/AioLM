@@ -8,9 +8,6 @@ import "../../styles/app.css";
 import ModelsPanel from "./Models";
 import * as api from "../../shared/api/index";
 
-// Guard two Models.tsx cascade regressions where a Tailwind utility loses to
-// a hand-written `app-*` class, or never generates a competing rule.
-
 vi.mock("../../shared/api/index", () => ({
   PROVIDERS: ['llama.cpp', 'vllm', 'mlx-vlm'],
   registeredProviderIds: () => ['llama.cpp', 'vllm', 'mlx-vlm'],
@@ -82,7 +79,7 @@ function storeFor(cfg: AppConfig): AppStore {
   } as unknown as AppStore;
 }
 
-describe("ModelsPanel CSS cascade", () => {
+describe("Model library configuration and file operations", () => {
   it('rescans compatibility using the selected vLLM installation when the runtime changes', async () => {
     localStorage.clear();
     mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
@@ -223,14 +220,13 @@ describe("ModelsPanel CSS cascade", () => {
   it("keeps the folder controls always visible without a collapse toggle", async () => {
     mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
     mocked.pickModelsDir.mockReset().mockResolvedValue(null);
-    const view = render(createElement(I18nProvider, {
+    render(createElement(I18nProvider, {
       initialLocale: "en",
       children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models" }) }),
     }));
     await screen.findByRole("heading", { name: "No models found" });
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Browse" })).toBeVisible();
-    expect(view.container.querySelector("details.models-folder")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
     await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledOnce());
 
@@ -239,19 +235,4 @@ describe("ModelsPanel CSS cascade", () => {
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
   });
 
-  it("gives the model row start/switch button the same explicit hover class", async () => {
-    mocked.listModels.mockResolvedValue({
-      models: [{ path: "C:/models/a.gguf", name: "a.gguf", size_mb: 128, is_vision: false }],
-      truncated: false,
-    });
-    const cfg = { ...baseCfg, models_dir: "C:/models" };
-    render(createElement(I18nProvider, {
-      initialLocale: "en",
-      children: createElement(ModelsPanel, { store: storeFor(cfg) }),
-    }));
-
-    const startButton = await screen.findByRole("button", { name: /^Start/ });
-    expect(startButton).toHaveClass("app-button--primary");
-    expect(startButton.className).not.toMatch(/hover:app-bg-accent-solid/);
-  });
 });

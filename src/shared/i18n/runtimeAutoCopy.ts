@@ -16,6 +16,7 @@ export const runtimeAutoCopy = {
     cancel: '취소', cancelled: '작업을 취소했습니다.', failure: '연결을 확인하지 못했습니다.', retryHint: '확인되지 않은 항목은 연결 완료로 저장하지 않습니다. 다른 항목을 선택하거나 다시 시도하세요.',
     ready: '연결이 확인되었습니다.', saved: '이 모델의 텍스트 응답과 스트리밍을 확인하고 연결 정보를 앱에 저장했습니다. 별도 설정 파일을 만들 필요가 없습니다.',
     limits: '이 검사는 이미지·음성·영상·도구 호출의 지원이나 내용 품질을 확인하지 않습니다.', details: '확인 정보', selectAgain: '다른 항목 연결',
+    progress: '연결 진행 단계', stepFind: '찾기 또는 폴더 선택', stepCheck: '후보 검사', stepModel: '모델 지정', stepVerify: '실제 연결 검증', stepDone: '완료',
   },
   en: {
     title: 'Connect an external inference engine',
@@ -32,6 +33,7 @@ export const runtimeAutoCopy = {
     cancel: 'Cancel', cancelled: 'The operation was cancelled.', failure: 'The connection could not be verified.', retryHint: 'An unverified item is not saved as connected. Choose another item or try again.',
     ready: 'Connection verified.', saved: 'Text responses and streaming worked with this model. Connection details were saved in the app; you do not need to create a settings file.',
     limits: 'This check does not verify image, audio, video, tool use, or response quality.', details: 'Verification details', selectAgain: 'Connect another item',
+    progress: 'Connection progress', stepFind: 'Find or choose a folder', stepCheck: 'Inspect a candidate', stepModel: 'Select the model', stepVerify: 'Verify the connection', stepDone: 'done',
   },
   ja: {
     title: '外部推論エンジンに接続',
@@ -48,6 +50,7 @@ export const runtimeAutoCopy = {
     cancel: 'キャンセル', cancelled: '操作をキャンセルしました。', failure: '接続を確認できませんでした。', retryHint: '未確認の項目は接続済みとして保存しません。別の項目を選ぶか、再試行してください。',
     ready: '接続を確認しました。', saved: 'このモデルのテキスト応答とストリーミングを確認し、接続情報をアプリに保存しました。設定ファイルを作る必要はありません。',
     limits: 'この検査は画像・音声・動画・ツール利用の対応や応答の品質を確認するものではありません。', details: '確認情報', selectAgain: '別の項目に接続',
+    progress: '接続の進行状況', stepFind: '検索またはフォルダー選択', stepCheck: '候補を検査', stepModel: 'モデルを指定', stepVerify: '実際の接続を検証', stepDone: '完了',
   },
   zh: {
     title: '连接外部推理引擎',
@@ -64,5 +67,6 @@ export const runtimeAutoCopy = {
     cancel: '取消', cancelled: '操作已取消。', failure: '无法验证连接。', retryHint: '未验证的项目不会保存为已连接。请选择其他项目或重试。',
     ready: '连接已验证。', saved: '已验证此模型的文本响应和流式传输，并将连接信息保存在应用中。无需创建设置文件。',
     limits: '此检查不验证图像、音频、视频、工具调用的支持情况或回答质量。', details: '验证详情', selectAgain: '连接其他项目',
+    progress: '连接进度', stepFind: '查找或选择文件夹', stepCheck: '检查候选项', stepModel: '指定模型', stepVerify: '验证实际连接', stepDone: '已完成',
   },
 } satisfies Record<Locale, Record<string, string>>;

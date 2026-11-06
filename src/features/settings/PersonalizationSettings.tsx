@@ -92,21 +92,25 @@ export default function PersonalizationSettings({ editor, query, instructionSour
   useEffect(() => { if (needsLoad) void load(source); }, [needsLoad, load, source]);
 
   if (!visible) return null;
-  const intro = <div className="settings-copy"><p>{copy.intro}</p><p>{copy.skillsNote}</p></div>;
-  const application = <fieldset className="settings-row settings-personalization-sources">
-    <legend className="sr-only">{copy.application}</legend>
-    <div className="settings-copy" aria-hidden="true"><strong>{copy.application}</strong><p>{copy.applicationDesc}</p></div>
-    <div className="settings-personalization-choices">
-      {sources.map(({ id, file }) => <label key={id} className="settings-personalization-choice">
+  const intro = <div className="settings-personalization-intro"><p>{copy.intro}</p><p>{copy.skillsNote}</p></div>;
+  // Applying a file and choosing which file to edit are separate decisions.
+  const application = <fieldset className="settings-subsection" data-setting="" aria-describedby="settings-personalization-apply-description">
+    <legend className="settings-subsection-title">{copy.application}</legend>
+    <p id="settings-personalization-apply-description" className="settings-subsection-hint">{copy.applicationDesc}</p>
+    <div className="settings-personalization-checks">
+      {sources.map(({ id, file }) => <label key={id} className="settings-personalization-check">
         <input type="checkbox" checked={instructionSources[id]} onChange={event => onInstructionSourcesChange({ ...instructionSources, [id]: event.target.checked })} />
         <span><span>{id === "agents" ? copy.sourceAgents : copy.sourceAiolm}</span><code>{file}</code></span>
       </label>)}
     </div>
   </fieldset>;
   if (!native) return <div className="settings-personalization">
-    <div className="settings-row">{intro}</div>
+    {intro}
     {application}
-    <div className="settings-row"><div className="settings-copy"><strong>{copy.unavailableTitle}</strong><p>{copy.unavailable}</p></div></div>
+    <div className="settings-subsection" data-setting="">
+      <h3 className="settings-subsection-title">{copy.source}</h3>
+      <div className="settings-note"><strong>{copy.unavailableTitle}</strong><p>{copy.unavailable}</p></div>
+    </div>
   </div>;
 
   const busy = entry.phase !== "idle";
@@ -119,48 +123,53 @@ export default function PersonalizationSettings({ editor, query, instructionSour
   }[entry.notice];
 
   return <div className="settings-personalization">
-    <div className="settings-row">{intro}</div>
+    {intro}
     {application}
-    <fieldset className="settings-row settings-personalization-sources">
-      <legend className="sr-only">{copy.source}</legend>
-      <div className="settings-copy" aria-hidden="true"><strong>{copy.source}</strong><p>{copy.sourceDesc}</p></div>
-      <div className="settings-personalization-choices">
-        {sources.map(({ id, file }) => {
-          const label = id === "agents" ? copy.sourceAgents : copy.sourceAiolm;
-          return <label key={id} className="settings-personalization-choice">
-            <input type="radio" name="settings-personalization-source" value={id} checked={source === id} onChange={() => setSource(id)} />
-            <span><span className="settings-personalization-choice-name">{label}{isDirty(entries[id]) && <span className="settings-personalization-dirty" title={copy.unsaved}><span aria-hidden="true"> •</span><span className="sr-only">{`, ${copy.unsaved}`}</span></span>}</span><code>{file}</code></span>
-          </label>;
-        })}
-      </div>
-    </fieldset>
-    <form className="settings-row settings-personalization-editor" aria-busy={busy || undefined} onSubmit={(event) => { event.preventDefault(); void save(source); }}>
-      <div className="settings-personalization-meta">
-        <label htmlFor="settings-personalization-text">{copy.editor}</label>
-        {entry.phase === "loading" && <StatusBadge role="status" label={copy.loading} tone="neutral" />}
-        {entry.phase === "saving" && <StatusBadge role="status" label={copy.saving} tone="info" />}
-        {!busy && dirty && <StatusBadge label={copy.unsaved} tone="warning" />}
-      </div>
-      {entry.file && <p className="settings-personalization-path">{copy.path}: <code>{normalizeDisplayPath(entry.file.path)}</code></p>}
-      {entry.file && !entry.file.exists && <p className="settings-personalization-hint">{copy.missing}</p>}
-      <p id="settings-personalization-help" className="settings-personalization-hint">{copy.editorHelp}</p>
-      <textarea
-        id="settings-personalization-text"
-        name="content"
-        className="app-textarea settings-personalization-textarea"
-        aria-describedby="settings-personalization-help"
-        rows={14}
-        spellCheck={false}
-        value={entry.draft}
-        readOnly={busy || entry.file === null}
-        onChange={(event) => edit(source, event.target.value)}
-      />
-      <div className="settings-personalization-actions">
-        <button type="submit" className="app-button app-button--primary" data-icon="save" disabled={busy || !dirty}>{entry.phase === "saving" ? copy.saving : copy.save}</button>
-        <button type="button" className="app-button app-button--secondary" data-icon="refresh" disabled={busy} onClick={reload}>{copy.reload}</button>
-      </div>
-      {notice && <FeedbackBanner tone={notice.tone} className="settings-personalization-feedback">{entry.detail ? `${notice.message} ${normalizeDisplayText(entry.detail)}` : notice.message}</FeedbackBanner>}
-    </form>
+    <div className="settings-subsection" data-setting="">
+      <fieldset className="settings-personalization-files" aria-describedby="settings-personalization-source-description">
+        <legend className="settings-subsection-title">{copy.source}</legend>
+        <p id="settings-personalization-source-description" className="settings-subsection-hint">{copy.sourceDesc}</p>
+        <div className="settings-personalization-choices">
+          {sources.map(({ id, file }) => {
+            const label = id === "agents" ? copy.sourceAgents : copy.sourceAiolm;
+            return <label key={id} className="settings-personalization-choice">
+              <input type="radio" name="settings-personalization-source" value={id} checked={source === id} onChange={() => setSource(id)} />
+              <span><span className="settings-personalization-choice-name">{label}{isDirty(entries[id]) && <span className="settings-personalization-dirty" title={copy.unsaved}><span aria-hidden="true"> •</span><span className="sr-only">{`, ${copy.unsaved}`}</span></span>}</span><code>{file}</code></span>
+            </label>;
+          })}
+        </div>
+      </fieldset>
+      <form className="settings-personalization-editor" aria-busy={busy || undefined} onSubmit={(event) => { event.preventDefault(); void save(source); }}>
+        <div className="settings-personalization-file">
+          <p className="settings-personalization-path">{copy.path}: {entry.file ? <code>{normalizeDisplayPath(entry.file.path)}</code> : <code>{sources.find(item => item.id === source)!.file}</code>}</p>
+          <div className="settings-personalization-state">
+            {entry.phase === "loading" && <StatusBadge role="status" label={copy.loading} tone="neutral" />}
+            {entry.phase === "saving" && <StatusBadge role="status" label={copy.saving} tone="info" />}
+            {!busy && dirty && <StatusBadge label={copy.unsaved} tone="warning" />}
+            {!busy && !dirty && entry.file?.exists && <StatusBadge label={copy.saved} tone="neutral" />}
+          </div>
+          {entry.file && !entry.file.exists && <p className="settings-personalization-hint">{copy.missing}</p>}
+        </div>
+        {notice && <FeedbackBanner tone={notice.tone}>{entry.detail ? `${notice.message} ${normalizeDisplayText(entry.detail)}` : notice.message}</FeedbackBanner>}
+        <label className="settings-personalization-label" htmlFor="settings-personalization-text">{copy.editor}</label>
+        <p id="settings-personalization-help" className="settings-personalization-hint">{copy.editorHelp}</p>
+        <textarea
+          id="settings-personalization-text"
+          name="content"
+          className="app-textarea settings-personalization-textarea"
+          aria-describedby="settings-personalization-help"
+          rows={14}
+          spellCheck={false}
+          value={entry.draft}
+          readOnly={busy || entry.file === null}
+          onChange={(event) => edit(source, event.target.value)}
+        />
+        <div className="settings-personalization-actions">
+          <button type="submit" className="app-button app-button--primary" data-icon="save" disabled={busy || !dirty}>{entry.phase === "saving" ? copy.saving : copy.save}</button>
+          <button type="button" className="app-button app-button--secondary" data-icon="refresh" disabled={busy} onClick={reload}>{copy.reload}</button>
+        </div>
+      </form>
+    </div>
     <ConfirmDialog
       open={confirmReload}
       title={copy.reloadConfirmTitle}

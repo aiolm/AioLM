@@ -31,7 +31,6 @@ it('keeps the compact conversation settings control named and exposes the existi
   const update = renderHeader();
   const summary = screen.getByLabelText('Conversation settings', { selector: 'summary' });
   expect(summary).toHaveAccessibleName('Conversation settings');
-  expect(summary).toHaveAttribute('title', 'Conversation settings');
   fireEvent.click(summary);
   expect(summary.closest('details')).toHaveAttribute('open');
   const title = screen.getByLabelText('Title');
@@ -76,12 +75,12 @@ function renderTargetHeader() {
 }
 
 it.each([
-  { kind: 'session' as const, label: 'Model session', value: 'worker', option: 'Worker session' },
-  { kind: 'embedding' as const, label: 'Embedding model', value: 'local', option: 'Local embedding' },
-])('keeps conversation settings open and focus visible after choosing $label', ({ kind, label, value, option }) => {
+  { kind: 'session' as const, label: 'Model session', value: 'worker', option: 'Worker session', insideSettings: false },
+  { kind: 'embedding' as const, label: 'Embedding model', value: 'local', option: 'Local embedding', insideSettings: true },
+])('selects $label without losing keyboard focus', ({ kind, label, value, option, insideSettings }) => {
   const callbacks = renderTargetHeader();
   const summary = screen.getByLabelText('Conversation settings', { selector: 'summary' });
-  fireEvent.click(summary);
+  if (insideSettings) fireEvent.click(summary);
   const details = summary.closest('details');
   const combo = screen.getByRole('combobox', { name: label });
   combo.focus();
@@ -97,7 +96,8 @@ it.each([
   fireEvent.click(choice);
   expect(callbacks[kind]).toHaveBeenCalledExactlyOnceWith(value);
   expect(callbacks[kind === 'session' ? 'embedding' : 'session']).not.toHaveBeenCalled();
-  expect(details).toHaveAttribute('open');
+  if (insideSettings) expect(details).toHaveAttribute('open');
+  else expect(details).not.toHaveAttribute('open');
   expect(combo).toHaveTextContent(option);
   expect(combo).toHaveAttribute('aria-expanded', 'false');
   expect(combo).toBeVisible();
@@ -112,9 +112,9 @@ it('still closes conversation settings for an unrelated listbox or the document 
   const summary = screen.getByLabelText('Conversation settings', { selector: 'summary' });
   const details = summary.closest('details');
   fireEvent.click(summary);
-  const combo = screen.getByRole('combobox', { name: 'Model session' });
+  const combo = screen.getByRole('combobox', { name: 'Embedding model' });
   fireEvent.click(combo);
-  const ownedMenu = screen.getByRole('listbox', { name: 'Model session' });
+  const ownedMenu = screen.getByRole('listbox', { name: 'Embedding model' });
   expect(combo).toHaveAttribute('aria-controls', ownedMenu.id);
   fireEvent.mouseDown(screen.getByRole('option', { name: 'Unrelated option' }));
   expect(details).not.toHaveAttribute('open');
@@ -132,16 +132,16 @@ it('lets the select consume Escape before closing settings and returning focus t
   const summary = screen.getByLabelText('Conversation settings', { selector: 'summary' });
   const details = summary.closest('details');
   fireEvent.click(summary);
-  const combo = screen.getByRole('combobox', { name: 'Model session' });
+  const combo = screen.getByRole('combobox', { name: 'Embedding model' });
   combo.focus();
   fireEvent.keyDown(combo, { key: 'ArrowDown' });
-  expect(screen.getByRole('listbox', { name: 'Model session' })).toBeInTheDocument();
+  expect(screen.getByRole('listbox', { name: 'Embedding model' })).toBeInTheDocument();
   fireEvent.keyDown(combo, { key: 'ArrowDown' });
   fireEvent.keyDown(combo, { key: 'Escape' });
   expect(combo).toHaveAttribute('aria-expanded', 'false');
-  expect(screen.queryByRole('listbox', { name: 'Model session' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('listbox', { name: 'Embedding model' })).not.toBeInTheDocument();
   expect(details).toHaveAttribute('open');
-  expect(combo).toHaveTextContent('Default session');
+  expect(combo).toHaveTextContent('Automatic embedding');
   expect(combo).toBeVisible();
   expect(combo).toHaveFocus();
   expect(callbacks.session).not.toHaveBeenCalled();

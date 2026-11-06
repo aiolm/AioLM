@@ -46,7 +46,7 @@ export default function TuningReasoningSection({
   const effortDefault = settingDefaultLabel('reasoning_effort', runtime.options, runtime.verified, locale, { selected: cfg.reasoning_effort === 'default', compact: true });
   const budgetMessageDefault = settingDefaultLabel('reasoning_budget_message', runtime.options, runtime.verified, locale);
   return (
-    <section className="tuning-section tuning-section--reasoning min-w-0 app-card">
+    <section className="tuning-section tuning-section--reasoning min-w-0">
       <p className="mb-4 text-xs text-muted">{t("extra.reasoningDescription")}</p>
       <div className="grid gap-4 app-form-grid">
         <div className="flex min-w-0 flex-col gap-1.5">

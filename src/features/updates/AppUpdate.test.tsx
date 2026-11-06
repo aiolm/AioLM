@@ -86,9 +86,17 @@ describe("application update surfaces", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Download and install" }));
     await waitFor(() => expect(install).toHaveBeenCalledExactlyOnceWith("1.1.0"));
     expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
+    act(() => emit({ phase: "downloading", downloaded: 25, total: null }));
+    expect(screen.getByRole("progressbar", { name: "Update download progress" })).not.toHaveAttribute("value");
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
     act(() => emit({ phase: "downloading", downloaded: 25, total: 100 }));
     expect(screen.getByRole("progressbar", { name: "Update download progress" })).toHaveAttribute("value", "25");
     expect(screen.getByText("25%")).toBeVisible();
+    act(() => emit({ phase: "verifying", downloaded: 100, total: 100 }));
+    expect(screen.getByRole("status")).toHaveTextContent("Verifying download…");
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
     await act(async () => { finish(); });
     expect(screen.getByText("Installer opened. Follow its instructions to finish updating.")).toBeVisible();
   });

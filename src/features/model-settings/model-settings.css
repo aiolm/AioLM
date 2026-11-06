@@ -1,155 +1,253 @@
-.model-settings-dialog { width: min(1120px, calc(100vw - 40px)); max-width: none; height: min(850px, calc(100dvh - 40px)); max-height: none; overflow: visible; }
+/* Model & settings editor: one top context (target, model, steps), a 184px
+   option navigation beside the editor, and a footer that keeps the estimate and
+   blocking reasons apart from the actions. */
+.model-settings-dialog { width: min(1040px, calc(100vw - 32px)); max-width: none; height: min(880px, calc(100dvh - 32px - var(--app-window-chrome-height, 0px))); max-height: none; overflow: visible; }
 .model-settings-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-radius: inherit; }
-.model-settings-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--ui-border); flex-shrink: 0; }
-.model-settings-header > div { min-width: 0; }
-.model-settings-header h2 { margin: 4px 0; font-size: var(--ui-text-section); font-weight: 650; outline-offset: 4px; }
-.model-settings-header p { margin: 0; color: var(--ui-muted); overflow-wrap: break-word; font-size: var(--ui-text-support); }
-.model-settings-layout { display: grid; grid-template-columns: max(190px, 12em) minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
-.model-settings-layout--setup { grid-template-columns: minmax(0, 1fr); }
-.model-settings-flow { padding: 10px 24px; border-bottom: 1px solid var(--ui-border); }
-.model-settings-flow ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; list-style: none; margin: 0; padding: 0; }
-.model-settings-flow li { min-width: 0; }
-.model-settings-flow button { display: flex; gap: 8px; align-items: center; width: 100%; height: 100%; padding: 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-panel); color: inherit; text-align: start; cursor: pointer; }
-.model-settings-flow button[aria-current="step"] { border-color: currentColor; background: var(--ui-surface-muted); }
-.model-settings-flow button:disabled { opacity: 0.5; cursor: default; }
-.model-settings-flow button > span:last-child { min-width: 0; }
-.model-settings-flow strong, .model-settings-flow small { display: block; overflow-wrap: anywhere; }
-.model-settings-flow strong { font-size: var(--ui-text-support); }
-.model-settings-flow small { color: var(--ui-muted); font-size: var(--ui-text-caption); max-height: 2lh; overflow: auto; }
-.model-settings-step-number { flex: 0 0 auto; font-weight: 650; }
 .model-settings-shell [hidden] { display: none !important; }
-.settings-profile-selected-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-.model-settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 16px 12px; border-right: 1px solid var(--ui-border); overflow-y: auto; }
-.model-settings-nav .app-tab { flex-shrink: 0; text-align: start; white-space: normal; }
+/* Header, steps and editor; the footer is a separate region below it. */
+.model-settings-main { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+
+/* Top context */
+.model-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 24px 12px; flex-shrink: 0; }
+.model-settings-heading { display: grid; flex: 1 1 auto; gap: 4px; min-width: 0; }
+.model-settings-header h2 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 650; line-height: 1.35; outline-offset: 4px; }
+.model-settings-header p { margin: 0; overflow-wrap: break-word; }
+.model-settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 550; }
+.model-settings-target > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-settings-heading .model-badges { margin-block: 0; }
+/* In wide windows the publisher and badge summary share one row; the full list stays below. */
+@media (min-width: 721px) {
+  .model-settings-heading .model-information--detail:has(> .model-publishers) { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 12px; }
+  .model-settings-heading .model-information--detail > .model-publishers { margin-block: 0; }
+  .model-settings-heading .model-information--detail > .model-metadata-details { grid-column: 1 / -1; }
+}
+.model-settings-header .model-metadata-fields { max-block-size: min(10rem, 18dvh); }
+.model-settings-flow { flex-shrink: 0; padding: 0 24px 12px; border-bottom: 1px solid var(--ui-border); }
+.model-settings-flow ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.model-settings-flow li { min-width: 0; }
+.model-settings-flow button { display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; min-height: var(--ui-control); padding: 6px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-panel); color: var(--ui-ink); text-align: start; cursor: pointer; }
+.model-settings-flow button:hover:not(:disabled) { background: var(--ui-input-hover); }
+.model-settings-flow button[aria-current="step"] { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.model-settings-flow button:disabled { color: var(--ui-faint); cursor: not-allowed; }
+.model-settings-flow button > span:last-child { min-width: 0; }
+.model-settings-step-number { display: inline-grid; flex: 0 0 22px; place-items: center; width: 22px; height: 22px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-pill); font-size: var(--ui-text-caption); font-weight: 650; font-variant-numeric: tabular-nums; }
+.model-settings-flow button[aria-current="step"] .model-settings-step-number { border-color: var(--ui-primary-fill); background: var(--ui-primary-fill); color: var(--ui-on-primary); }
+.model-settings-flow strong, .model-settings-flow small { display: block; }
+.model-settings-flow strong { font-size: var(--ui-text-support); font-weight: 600; overflow-wrap: anywhere; }
+.model-settings-flow small { overflow: hidden; color: var(--ui-muted); font-size: var(--ui-text-caption); text-overflow: ellipsis; white-space: nowrap; }
+.model-settings-flow button:disabled small { color: var(--ui-faint); }
+
+/* Editor area */
+.model-settings-layout { display: grid; grid-template-columns: 184px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.model-settings-layout--setup { grid-template-columns: minmax(0, 1fr); }
+.model-settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; border-right: 1px solid var(--ui-border); background: var(--ui-panel); overflow-y: auto; }
+.model-settings-nav .app-tab { flex-shrink: 0; justify-content: flex-start; width: 100%; text-align: start; white-space: normal; }
+.model-settings-nav .app-tab[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--ui-accent); }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
-/* The header names the model; only the one-column narrow layout repeats it here. */
+/* The scrolling layout repeats the model beside the profile after the header leaves view. */
 .model-settings-context-model { display: none; }
-/* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
-.model-settings-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 28px; scroll-padding-block: 1em; overscroll-behavior: contain; }
-.model-settings-runtime-selection { min-width: 0; margin-block-end: 6px; }
-.model-settings-runtime-selection > .model-settings-fields { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); align-items: start; gap: 20px; }
-.runtime-choice-group { display: grid; align-content: start; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.runtime-choice-group legend { margin-bottom: 10px; font-weight: 650; }
-.runtime-choice-group .runtime-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; padding: 14px; border: 1px solid var(--ui-border); border-radius: 8px; cursor: pointer; }
-.runtime-choice.is-selected { border-color: var(--ui-ink); background: var(--ui-surface-muted); }
-.runtime-choice:has(input:disabled) { cursor: default; color: var(--ui-muted); }
-.runtime-choice input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--ui-ink); }
-.runtime-choice > span { min-width: 0; }
-.runtime-choice strong, .runtime-choice small { display: block; overflow-wrap: anywhere; }
-.runtime-choice small { margin-top: 5px; color: var(--ui-muted); }
-.model-settings-runtime-selection .model-settings-fields > label { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
-.model-settings-runtime-selection label > .app-custom-select-container { flex: 1; min-width: 0; }
 .model-settings-context .app-custom-select-trigger { width: 100%; }
-.model-settings-context .app-custom-select-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model-settings-runtime-selection .feedback-banner { grid-column: 1 / -1; }
+.model-settings-context .app-custom-select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-settings-context .settings-profile-banner { margin: 0; }
 .model-settings-context .settings-profile-banner--compact { flex-wrap: nowrap; gap: 8px; }
-.settings-profile-banner--compact .settings-profile-banner-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.settings-profile-banner--compact .settings-profile-banner-text { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .model-settings-context .settings-profile-banner > .settings-profile-buttons { flex: 1; padding: 0; }
 .model-settings-context .settings-profile-picker { max-width: none; }
-.model-settings-body .settings-profile-editor { margin-top: 0; }
+.settings-profile-selected-name { flex: 1; min-width: 0; color: var(--ui-ink); font-weight: 600; overflow-wrap: anywhere; }
+/* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
+.model-settings-body { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px 32px; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 1em; }
 .model-settings-body [hidden] { display: none !important; }
+.model-settings-body > h3 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; outline-offset: 4px; }
+.model-settings-body > h3 + .app-section-hint { margin: 4px 0 16px; }
+.model-settings-body .settings-profile-editor { margin-top: 0; }
+
+/* Runtime step */
+.model-settings-runtime-selection { display: grid; gap: 12px; min-width: 0; }
+.model-settings-runtime-selection > .app-button { justify-self: start; }
+.model-settings-runtime-selection > .model-settings-fields { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: start; gap: 24px; }
+.model-settings-runtime-selection .model-settings-fields > label { flex-direction: row; align-items: center; gap: 8px; }
+.model-settings-runtime-selection label > .app-custom-select-container { flex: 1; min-width: 0; }
+.runtime-choice-group > .app-button { justify-self: start; }
+.runtime-choice-group { display: grid; align-content: start; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.runtime-choice-group legend { margin-bottom: 8px; padding: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; }
+.runtime-choice-group .runtime-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-panel); font-size: var(--ui-text); cursor: pointer; }
+.runtime-choice-group .runtime-choice:hover:not(:has(input:disabled)) { background: var(--ui-row-hover); }
+.runtime-choice-group .runtime-choice.is-selected { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.runtime-choice:has(input:disabled) { color: var(--ui-faint); cursor: not-allowed; }
+.runtime-choice:has(input:focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.runtime-choice input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--ui-accent); }
+.runtime-choice > span { min-width: 0; }
+.runtime-choice strong, .runtime-choice small { display: block; overflow-wrap: anywhere; }
+.runtime-choice strong { font-weight: 600; }
+.runtime-choice small { margin-top: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); }
+.model-settings-runtime-selection .feedback-banner { grid-column: 1 / -1; }
+
+/* Shared form language for every option tab */
 .model-settings-fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.model-settings-fields label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: var(--ui-text-support); }
-.model-settings-fields h3 { font-size: var(--ui-text-group); font-weight: 650; }
-.model-settings-section-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-.model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.model-settings-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 20px; font-size: var(--ui-text-support); }
-.model-settings-models { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.model-settings-models button { display: flex; justify-content: space-between; align-items: center; width: 100%; font-size: var(--ui-text-support); }
-.model-settings-models button > span:first-child { min-width: 0; }
-.model-settings-models strong { display: block; font-size: var(--ui-text-support); overflow-wrap: anywhere; }
-.model-settings-models small { display: block; margin-top: 5px; color: var(--ui-muted); }
+.model-settings-fields label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); }
+.model-settings-fields h3 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; }
+.model-settings-fields h4 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 650; }
+.model-settings-fields fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.model-settings-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+.model-settings-grid > div { display: grid; align-content: start; gap: 4px; min-width: 0; }
+.model-settings-grid .app-section-hint { margin: 0; }
+.model-settings-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 24px; font-size: var(--ui-text-support); }
+.model-settings-segmented { display: inline-flex; flex-wrap: wrap; align-self: flex-start; gap: 2px; padding: 2px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-input); }
+.model-settings-segmented > .app-button:not([aria-pressed="true"]) { border-color: transparent; background: transparent; }
+.model-settings-segmented > .app-button:not([aria-pressed="true"]):hover:not(:disabled) { background: var(--ui-input-hover); }
+.model-settings-scope { margin-bottom: 16px; }
+.model-settings-profile-status { display: grid; gap: 4px; margin-block: 0 16px; color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.model-settings-profile-status p { margin: 0; }
+.model-settings-prompt { display: grid; gap: 6px; margin-bottom: 24px; }
+.model-settings-prompt > label { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
+
+/* Model tab */
+.model-settings-models { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); list-style: none; }
+.model-settings-models:empty { display: none; }
+.model-settings-models button { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: var(--ui-text-support); text-align: start; }
+.model-settings-models button > span:first-child { flex: 1 1 auto; min-width: 0; }
+.model-settings-models strong { display: flex; align-items: center; gap: 6px; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 600; overflow-wrap: anywhere; }
+.model-settings-models small { display: block; margin-top: 4px; color: var(--ui-muted); font-size: var(--ui-text-caption); }
+/* Publisher and badge summary share one line in wide windows so each row stays scannable. */
+@media (min-width: 721px) {
+  .model-settings-models .model-information--compact:has(> .model-publishers) { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 12px; margin-top: 4px; }
+  .model-settings-models .model-information--compact > .model-publishers { margin-block: 0; }
+}
+.model-settings-models button:disabled strong, .model-settings-models button:disabled small { color: var(--ui-faint); }
+
+/* GPU placement */
 .model-settings-gpus { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.model-settings-fields .model-settings-gpu { flex-direction: row; gap: 9px; align-items: flex-start; }
+.model-settings-gpus:empty { display: none; }
+.model-settings-fields .model-settings-gpu { flex-direction: row; align-items: flex-start; gap: 8px; border-color: var(--ui-border); }
+.model-settings-gpu input { margin-top: 3px; accent-color: var(--ui-accent); }
 .model-settings-gpu small { display: block; margin-top: 4px; color: var(--ui-muted); }
-.model-settings-scope { margin-bottom: 18px; }
-.model-settings-lora { display: grid; grid-template-columns: minmax(0, 1fr) auto 90px auto; align-items: center; gap: 12px; }
+
+/* Adapters */
+.model-settings-lora { display: grid; grid-template-columns: minmax(0, 1fr) auto 96px auto; align-items: center; gap: 12px; }
+.model-settings-lora strong { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--ui-text-support); overflow-wrap: anywhere; }
 .model-settings-lora-toggle, .model-settings-option-toggle { display: flex; align-items: center; gap: 8px; }
-.model-settings-lora strong { font-size: var(--ui-text-support); overflow-wrap: anywhere; }
-.model-settings-options summary { cursor: pointer; font-size: var(--ui-text-support); }
-.model-settings-options details > p { margin: 12px 0; }
-.model-settings-option { margin-bottom: 8px; }
-.model-settings-option > details[open] > summary { margin-bottom: 10px; }
-.model-settings-option > .app-section-hint { margin: 8px 0 0; }
+.model-settings-fields > .app-button { align-self: flex-start; }
+
+/* Runtime-reported options (guided editor) */
+.model-settings-options { display: grid; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
+.model-settings-options > p { margin: 0; padding: 12px; }
+.model-settings-options > * + * { border-top: 1px solid var(--ui-border); }
+.model-settings-option { min-width: 0; padding: 12px; }
+.model-settings-option summary { color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; }
+.model-settings-option summary code { font-family: var(--font-mono); font-weight: 600; }
+.model-settings-option > details[open] > summary { margin-bottom: 8px; }
+.model-settings-option > .app-section-hint { margin: 6px 0 0; }
+/* One runtime value per row; a full-width box would read as a paragraph field. */
+.model-settings-option label > .app-input, .model-settings-option label > .app-custom-select-container { max-inline-size: 32rem; }
 .model-settings-option-format, .model-settings-option-default { display: block; margin-top: 4px; }
 .model-settings-option > details:not([open]) + p .model-settings-option-format { display: none; }
-.model-settings-footer { display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow: hidden; }
+
+/* Command import, help review and argument previews */
+.model-settings-paste { display: grid; gap: 6px; margin-bottom: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
+.model-settings-paste > label { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
+.model-settings-paste > .app-section-hint { margin: 0; }
+.model-settings-paste-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.model-settings-command-import { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
+.model-settings-tools { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
+.model-settings-tools > summary { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; cursor: pointer; }
+.model-settings-tools[open] > summary { margin-bottom: 12px; }
+.model-settings-provider-option { display: grid; gap: 6px; min-width: 0; }
+.model-settings-provider-option small { color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 400; }
+.model-settings-provider-option .app-section-hint { margin: 0; }
+.model-settings-body pre { max-height: 240px; margin: 0; padding: 8px 12px; overflow: auto; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); white-space: pre-wrap; overflow-wrap: anywhere; }
+.model-settings-dialog .schema-option-filter { display: grid; gap: 6px; }
+.model-settings-dialog .schema-option-filter > legend { margin-bottom: 8px; padding: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; }
+.model-settings-dialog .schema-option { display: grid; gap: 6px; min-width: 0; }
+.model-settings-dialog .schema-option small { color: var(--ui-muted); font-size: var(--ui-text-caption); }
+.model-settings-dialog .schema-option > legend { padding: 0; }
+
+/* Tuning tabs: one form surface with bordered sub-groups, not cards in cards. */
+.model-settings-body .tuning-subgroup > .app-section-title { font-size: var(--ui-text-group); font-weight: 650; }
+.model-settings-body .tuning-disclosure > summary { color: var(--ui-ink); font-weight: 600; }
+
+/* Footer: estimate and blocking reasons first, the next action beside them. */
+.model-settings-footer { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: flex-end; gap: 12px 24px; padding: 12px 24px 16px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); }
 /* Notices and estimates may scroll; the target's launch/cancel action stays visible. */
-.model-settings-footer-summary { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.model-settings-footer-summary { display: grid; flex: 1 1 360px; align-content: start; gap: 8px; min-width: 0; max-height: min(240px, 30dvh); overflow: auto; overscroll-behavior: contain; }
+.model-settings-footer-summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
 /* With only the always-rendered notices container and no notice, skip the empty scroller in keyboard order. */
 .model-settings-footer-summary:has(> .model-settings-notices:only-child:empty) { display: none; }
-.model-settings-notices { display: grid; gap: 8px; font-size: var(--ui-text-support); color: var(--ui-muted); margin-bottom: 12px; line-height: 1.5; }
+.model-settings-footer-summary > p { margin: 0; }
+.model-settings-notices { display: grid; gap: 8px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .model-settings-notices:empty { display: none; }
-.model-settings-blocked { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.model-settings-blocked { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
 .model-settings-blocked li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.model-settings-footer-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; }
+.model-settings-footer-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 24px; padding-top: 8px; border-top: 1px solid var(--ui-border); color: var(--ui-muted); font-size: var(--ui-text-support); }
+.model-settings-notices:empty + .model-settings-footer-bar, .model-settings-footer-summary > .model-settings-footer-bar:first-child { padding-top: 0; border-top: 0; }
 .model-settings-footer-bar > .resource-estimate { flex: 1 1 360px; }
-.model-settings-actions { display: flex; flex-shrink: 0; gap: 9px; justify-content: flex-end; flex-wrap: wrap; margin-top: 10px; margin-inline-start: auto; }
+.model-settings-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; justify-content: flex-end; gap: 8px; margin-inline-start: auto; }
 .model-settings-actions:empty { display: none; }
 .model-settings-overlays { position: static; }
+
 @media (max-width: 720px) {
-  .model-settings-flow { padding: 8px; }
+  .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px - var(--app-window-chrome-height, 0px)); }
+  .model-settings-header { padding: 12px 16px 8px; }
+  .model-settings-flow { padding: 0 16px 8px; }
   .model-settings-flow ol { gap: 4px; }
-  .model-settings-flow button { align-items: flex-start; gap: 4px; padding: 6px; }
-  .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
-  .model-settings-header { padding: 15px 16px 12px; }
-  .model-settings-layout { display: flex; flex-direction: column; }
-  .model-settings-nav { flex-direction: row; flex-shrink: 0; overflow-x: auto; overflow-y: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--ui-border); }
-  .model-settings-nav .app-tab { flex-shrink: 0; white-space: nowrap; }
+  .model-settings-flow button { align-items: flex-start; gap: 6px; padding: 6px 8px; }
+  .model-settings-step-number { flex-basis: 20px; width: 20px; height: 20px; }
+  .model-settings-flow small { display: -webkit-box; overflow-wrap: anywhere; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .model-settings-body { padding: 16px; }
-  .model-settings-content { flex: 1; }
   .model-settings-context { padding: 8px 16px; }
-  .model-settings-runtime-selection > .model-settings-fields { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .model-settings-runtime-selection > .model-settings-fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .model-settings-context .settings-profile-picker,
   .model-settings-context .settings-profile-selected-name { flex-basis: 100%; }
   .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
-  .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }
-  .model-settings-footer { padding: 12px 16px; }
-  .model-settings-actions { align-self: stretch; margin-inline-start: 0; }
+  .model-settings-lora { grid-template-columns: minmax(0, 1fr) 88px; }
+  /* One scrollable tab row leaves room for the profile and fields. Individual
+     labels keep their full width; keyboard focus reveals an offscreen tab. */
+  .model-settings-layout { display: flex; flex-direction: column; }
+  .model-settings-nav { flex-direction: row; flex-wrap: nowrap; flex-shrink: 0; gap: 4px; padding: 8px 16px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--ui-border); scrollbar-width: thin; }
+  .model-settings-nav .app-tab { width: auto; white-space: nowrap; }
+  .model-settings-nav .app-tab[aria-selected="true"] { box-shadow: inset 0 -2px 0 var(--ui-accent); }
+  .model-settings-footer { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; padding: 8px 16px 12px; }
+  .model-settings-footer-summary { flex-basis: auto; }
+  .model-settings-actions { margin-inline-start: 0; }
   .model-settings-actions > button { flex: 1 1 120px; }
 }
-@media (max-height: 650px) {
-  .model-settings-header { padding-block: 8px; }
-  /* Expanded metadata must not displace the editor below its clipped parent.
-     Scroll the information independently while keeping Close in reach. */
-  .model-settings-header > div { max-height: 25dvh; overflow-y: auto; overscroll-behavior: contain; }
-  .model-settings-header .model-metadata-fields { max-block-size: none; overflow: visible; }
-  .model-settings-header .model-badges { max-height: 60px; overflow: auto; }
-  /* Native title bars reduce the minimum window's usable height. Keep wrapped
-     profile actions and setup notices scrollable without consuming the editor. */
-  .model-settings-context { padding-block: 8px; max-height: min(120px, 40%); overflow-y: auto; }
-  .model-settings-footer { padding-block: 8px; max-height: 20%; }
+/* Phone widths list the three steps one per row, so each summary has the full width. */
+@media (max-width: 480px) {
+  .model-settings-flow ol { grid-template-columns: minmax(0, 1fr); }
+  .model-settings-flow button { align-items: center; }
+  .model-settings-flow button > span:last-child { display: flex; flex: 1; align-items: baseline; gap: 8px; }
+  .model-settings-flow strong { flex: none; }
+  .model-settings-flow small { display: block; min-width: 0; white-space: nowrap; }
 }
-/* At the native minimum window (360x488 CSS px) the fixed header, steps,
-   profile bar, tabs and footer left the options editor 52-63px, and the model
-   metadata, profile buttons and resource notice each sat in its own clipped
-   scroller. Narrow short windows scroll the dialog as one column instead: the
-   model and steps scroll with the editor; the tab row and the profile bar stay
-   pinned above it and the footer's notices and launch action below it. The
-   dialog publishes the tab row height (--model-settings-tabs). */
-@media (max-width: 720px) and (max-height: 650px) {
-  /* The dialog keeps a focused control clear of the pinned bands (ModelSettingsDialog). */
-  .model-settings-shell { overflow-y: auto; overscroll-behavior: contain; }
-  .model-settings-header > div, .model-settings-header .model-badges, .model-settings-context { max-height: none; overflow: visible; }
+/* Narrow windows, and any window too short for a pinned header, steps and
+   footer to leave the editor usable, scroll the header, steps, tabs, profile
+   bar and editor as one region instead of nesting clipped scrollers. The
+   footer stays a separate region below it, so its notices and launch action
+   never cover a field; ModelSettingsDialog keeps a focused control inside the
+   region. */
+@media (max-width: 720px), (max-height: 800px) {
+  .model-settings-main { overflow-y: auto; overscroll-behavior: contain; }
+  .model-settings-header .model-metadata-fields { max-block-size: none; overflow: visible; }
   .model-settings-layout, .model-settings-content, .model-settings-body { flex: none; min-height: auto; overflow: visible; }
-  .model-settings-nav { position: sticky; top: 0; z-index: 1; background: var(--ui-panel); }
-  .model-settings-context { position: sticky; top: var(--model-settings-tabs, 0px); z-index: 1; }
   /* The profile name shares its row with the actions when they fit. */
   .model-settings-context .settings-profile-selected-name { flex: 1 1 10em; }
-  /* The header scrolls away when the options step opens; the pinned profile
-     bar keeps naming the selected model (full path in its title). */
+  /* The header scrolls away when the options step opens; the profile bar
+     names the selected model (full path in its title). */
   .model-settings-context-model { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 4px; color: var(--ui-muted); font-size: var(--ui-text-support); }
   .model-settings-context-model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model-settings-footer { position: sticky; bottom: 0; z-index: 1; max-height: 35%; }
+  /* Long notices scroll inside the footer so the editor keeps most of the height. */
+  .model-settings-footer-summary { max-height: min(120px, 22dvh); }
 }
-.model-settings-profile-status { display: grid; gap: 0.25rem; margin-block: 0.6rem 1.1rem; font-size: var(--ui-text-support); color: var(--ui-muted); overflow-wrap: anywhere; }
-.model-settings-profile-status p { margin: 0; }
-.model-settings-prompt { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
-
-/* Applying a published command line. Sits ahead of the option list it fills in. */
-.model-settings-paste { display: grid; gap: 4px; padding-bottom: 16px; margin-bottom: 4px; border-bottom: 1px solid var(--ui-border); }
-.model-settings-paste > label { font-weight: 600; }
-.model-settings-paste textarea { margin-top: 4px; }
-.model-settings-paste-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 4px; }
+@media (max-height: 640px) {
+  .model-settings-dialog { height: calc(100dvh - 32px - var(--app-window-chrome-height, 0px)); }
+  .model-settings-header { padding-block: 8px; }
+  .model-settings-flow { padding-bottom: 8px; }
+  .model-settings-footer { padding-block: 8px; }
+}
+/* A short wide window keeps the tab column beside the editor, in view while
+   the editor scrolls; it covers nothing because it has its own column. */
+@media (min-width: 721px) and (max-height: 800px) {
+  .model-settings-nav { position: sticky; top: 0; align-self: start; border-right: 0; }
+  .model-settings-nav + .model-settings-content { border-left: 1px solid var(--ui-border); }
+}

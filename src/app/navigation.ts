@@ -2,18 +2,16 @@ import type { UnifiedKey } from '../shared/i18n/i18nUnified';
 import type { Locale } from '../shared/i18n/i18nCatalog';
 import type { ViewId } from '../shared/types/navigation';
 export type { ViewId } from '../shared/types/navigation';
-type GroupId = 'workspace' | 'models' | 'execution' | 'integrations' | 'tools';
+type GroupId = 'workspace' | 'execution' | 'integrations' | 'tools';
 interface NavigationItem { id: ViewId; label: UnifiedKey; icon: string }
 export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
  { id: 'workspace', items: [
   { id: 'chat', label: 'tab.chat', icon: 'M5 4h14v12H9l-4 4V4Z M9 8h6M9 12h4' },
   { id: 'projects', label: 'section.projects', icon: 'M3 7h7l2-3h9v16H3V7Z M3 9h18' },
  ] },
- { id: 'models', items: [
+ { id: 'execution', items: [
   { id: 'models', label: 'section.library', icon: 'm12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5M3 16l9 5 9-5' },
   { id: 'discover', label: 'section.discover', icon: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z' },
- ] },
- { id: 'execution', items: [
   { id: 'runtimes', label: 'section.runtimes', icon: 'M6 6h12v12H6V6Z M9 1v5M15 1v5M9 18v5M15 18v5M1 9h5M1 15h5M18 9h5M18 15h5' },
   { id: 'benchmark', label: 'section.benchmark', icon: 'M4 3v17h17M8 16v-5M13 16V7M18 16V4' },
  ] },
@@ -26,8 +24,8 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
  ] },
 ];
 export const navigationText: Record<Locale, Record<GroupId | 'openMenu' | 'closeMenu' | 'collapseSidebar' | 'expandSidebar' | 'local', string>> = {
- en: { workspace: 'Workspace', models: 'Models', execution: 'Run & optimize', integrations: 'Integrations', tools: 'Tools', openMenu: 'Open navigation', closeMenu: 'Close navigation', collapseSidebar: 'Collapse sidebar', expandSidebar: 'Expand sidebar', local: 'Your local AI workspace' },
- ko: { workspace: '작업 공간', models: '모델 관리', execution: '실행·성능', integrations: '외부 연동', tools: '공통 도구', openMenu: '메뉴 열기', closeMenu: '메뉴 닫기', collapseSidebar: '사이드바 접기', expandSidebar: '사이드바 펼치기', local: '나의 로컬 AI 작업 공간' },
- ja: { workspace: 'ワークスペース', models: 'モデル管理', execution: '実行・最適化', integrations: '外部連携', tools: 'ツール', openMenu: 'メニューを開く', closeMenu: 'メニューを閉じる', collapseSidebar: 'サイドバーを折りたたむ', expandSidebar: 'サイドバーを展開', local: 'ローカル AI ワークスペース' },
- zh: { workspace: '工作空间', models: '模型管理', execution: '运行与优化', integrations: '外部集成', tools: '工具', openMenu: '打开菜单', closeMenu: '关闭菜单', collapseSidebar: '收起侧边栏', expandSidebar: '展开侧边栏', local: '本地 AI 工作空间' },
+ en: { workspace: 'Workspace', execution: 'Model operations', integrations: 'Integrations', tools: 'App', openMenu: 'Open navigation', closeMenu: 'Close navigation', collapseSidebar: 'Collapse sidebar', expandSidebar: 'Expand sidebar', local: 'Your local AI workspace' },
+ ko: { workspace: '작업 공간', execution: '모델 운영', integrations: '연동', tools: '앱', openMenu: '메뉴 열기', closeMenu: '메뉴 닫기', collapseSidebar: '사이드바 접기', expandSidebar: '사이드바 펼치기', local: '나의 로컬 AI 작업 공간' },
+ ja: { workspace: 'ワークスペース', execution: 'モデル運用', integrations: '外部連携', tools: 'アプリ', openMenu: 'メニューを開く', closeMenu: 'メニューを閉じる', collapseSidebar: 'サイドバーを折りたたむ', expandSidebar: 'サイドバーを展開', local: 'ローカル AI ワークスペース' },
+ zh: { workspace: '工作空间', execution: '模型管理', integrations: '集成', tools: '应用', openMenu: '打开菜单', closeMenu: '关闭菜单', collapseSidebar: '收起侧边栏', expandSidebar: '展开侧边栏', local: '本地 AI 工作空间' },
 };

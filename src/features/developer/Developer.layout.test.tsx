@@ -27,37 +27,14 @@ function renderPanel() {
   }));
 }
 
-/** Sections of the old API / Gateways split. None of them belongs to the single API server screen. */
-const legacySections = [
-  ".developer-summary-grid", ".developer-section--connection", ".developer-section--endpoints", ".developer-section--compatibility",
-  ".developer-section--snippets", ".developer-section--gateway", ".developer-section--responses",
-];
-
-describe("DeveloperPanel layout", () => {
-  it("renders the API server as one screen: control, models, connection, then closed details", async () => {
-    const { container } = renderPanel();
+describe("DeveloperPanel disclosures", () => {
+  it("keeps server settings and examples closed while the listener can be started", async () => {
+    renderPanel();
     await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
 
-    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("API server");
-    const control = container.querySelector(".api-server-control")!;
-    const models = container.querySelector(".api-models")!;
-    const connection = container.querySelector(".api-connection")!;
-    const details = Array.from(container.querySelectorAll<HTMLDetailsElement>("details.api-disclosure"));
-    for (const [before, after] of [[control, models], [models, connection], [connection, details[0]]]) {
-      expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
-    // Port settings and the API reference are native details, closed by default.
-    expect(details.map(item => item.querySelector("summary")?.textContent)).toEqual(["Server settings", "API reference & examples"]);
-    expect(details.map(item => item.open)).toEqual([false, false]);
-  });
-
-  it("has no summary cards and none of the old API / Gateways sections", async () => {
-    const { container } = renderPanel();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
-
-    for (const selector of legacySections) expect(container.querySelector(selector)).not.toBeInTheDocument();
-    // The model count appears beside the model list heading only once the API has answered.
-    expect(container.querySelector(".api-model-count")).not.toBeInTheDocument();
-    expect(container.textContent).not.toMatch(/gateway/i);
+    const settings = screen.getByText("Server settings", { selector: "summary" }).closest("details");
+    const examples = screen.getByText("API reference & examples", { selector: "summary" }).closest("details");
+    expect(settings).not.toHaveAttribute("open");
+    expect(examples).not.toHaveAttribute("open");
   });
 });

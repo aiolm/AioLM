@@ -36,8 +36,8 @@ export default function PullRequestProvenance({ t, locale = 'en', preview, backe
     "no-head-ref": "prAdvisoryNoHeadRef",
   };
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-ink">{t("ui.prConfirmBody", { pr: preview.pull_request })}</p>
+    <div className="runtime-provenance">
+      <p>{t("ui.prConfirmBody", { pr: preview.pull_request })}</p>
       {/* Defensive: a preview from an older backend carries no advisories, and
           a crashed dialog would be a worse failure than a missing warning. */}
       {(preview.advisories ?? []).map((advisory) => (
@@ -45,19 +45,19 @@ export default function PullRequestProvenance({ t, locale = 'en', preview, backe
           {normalizeDisplayText(advisory === "fork" ? t("ui.prForkWarning", { repository: preview.repository }) : t(`ui.${advisoryText[advisory] ?? "prAdvisoryUnknown"}`, { advisory }))}
         </FeedbackBanner>
       ))}
-      <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+      <dl className="runtime-provenance__facts">
         {rows.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted">{label}</dt>
-            <dd className="min-w-0 break-all font-mono text-ink">{normalizeDisplayText(value)}</dd>
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{normalizeDisplayText(value)}</dd>
           </div>
         ))}
       </dl>
       {/* L5: say exactly what the build produces, so "build this PR" is not an
           open-ended promise. Mirrors SOURCE_BUILD_TARGETS in runtime.rs. */}
-      <div className="app-card app-card--muted app-card--tight">
-        <p className="text-xs font-medium text-ink">{t("ui.prBuildPlanTitle")}</p>
-        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted">
+      <div className="runtime-provenance__plan">
+        <p className="runtime-provenance__plan-title">{t("ui.prBuildPlanTitle")}</p>
+        <ul>
           <li>{t("ui.prBuildPlanTargets")}</li>
           <li>{t("ui.prBuildPlanWebui")}</li>
           <li>{t("ui.prBuildPlanOffline")}</li>
@@ -70,15 +70,15 @@ export default function PullRequestProvenance({ t, locale = 'en', preview, backe
             name: normalizeDisplayText(preview.artifact.name),
             size: formatBytes(preview.artifact.bytes),
           })}
-          <span className="mt-1 block break-all font-mono text-xs">SHA-256: {preview.artifact.sha256}</span>
+          <span className="runtime-provenance__digest">SHA-256: {preview.artifact.sha256}</span>
         </FeedbackBanner>
       ) : (
         <FeedbackBanner tone="info">{t("ui.prLocalBuildRequired")}</FeedbackBanner>
       )}
       {preview.artifact_error && <FeedbackBanner tone="warning">{t("ui.prArtifactLookupFailed", { error: normalizeDisplayText(preview.artifact_error) })}</FeedbackBanner>}
-      <p className="text-xs text-muted">{t("ui.prReplaceNote", { pr: preview.pull_request, backend })}</p>
+      <p className="app-section-hint">{t("ui.prReplaceNote", { pr: preview.pull_request, backend })}</p>
       {backend === "rocm" && <FeedbackBanner tone="warning">{t("ui.prRocmLocalOnly")}</FeedbackBanner>}
-      <p className="text-xs text-muted">{t("ui.prIntegrityNote")}</p>
+      <p className="app-section-hint">{t("ui.prIntegrityNote")}</p>
     </div>
   );
 }

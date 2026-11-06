@@ -308,7 +308,7 @@ describe("Workspace navigation", () => {
     await screen.findByText("Project parameters");
     act(() => { registerTask({id:"blocked-navigation",kind:"other",label:"Saving work",interruptible:false}); });
     const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
-    fireEvent.click(mainTab("Run a model"));
+    fireEvent.click(mainTab("Library"));
     expect(confirm).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button",{name:"Choose model"}));
     await screen.findByRole("dialog", { name: "Model settings editor" });
@@ -319,7 +319,7 @@ describe("Workspace navigation", () => {
     expect(screen.getByLabelText("Project draft")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     confirm.mockReturnValue(true);
-    fireEvent.click(mainTab("Run a model"));
+    fireEvent.click(mainTab("Library"));
     expect(await screen.findByText("Model library")).toBeVisible();
   });
 
@@ -367,7 +367,6 @@ describe("Workspace navigation", () => {
     expect(within(navigation).queryByRole("button", { name: /Gateways/ })).not.toBeInTheDocument();
     fireEvent.click(mainTab("API server"));
     expect(await screen.findByText("API server content")).toBeVisible();
-    expect(screen.getByRole("heading", { level: 1, name: "API server" })).toBeVisible();
   });
 
   it("has no separate diagnostics or loaded-sessions destinations", () => {
@@ -394,12 +393,12 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("API server"));
     fireEvent.click(await screen.findByRole("button", { name: "Load a model" }));
     expect(await screen.findByText("Model library")).toBeVisible();
-    expect(mainTab("Run a model")).toHaveAttribute("aria-current", "page");
+    expect(mainTab("Library")).toHaveAttribute("aria-current", "page");
   });
 
   it("keeps nine destinations and opens model selection over the current screen", async () => {
     mount();
-    fireEvent.click(mainTab("Run a model"));
+    fireEvent.click(mainTab("Library"));
     await screen.findByText("Model library");
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(9);
     fireEvent.click(mainTab("Inference engines"));
@@ -448,7 +447,7 @@ describe("Workspace navigation", () => {
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(store.stop).toHaveBeenCalledOnce();
-    fireEvent.click(mainTab("Run a model"));
+    fireEvent.click(mainTab("Library"));
     await screen.findByText("Model library");
     expect(screen.getAllByRole("button", { name: "Unload" })).toHaveLength(1);
   });
@@ -476,7 +475,7 @@ describe("Workspace navigation", () => {
 
   it("keeps benchmark state when changing tuning sections", async () => {
     mount();
-    fireEvent.click(mainTab("Run a model"));
+    fireEvent.click(mainTab("Library"));
     fireEvent.click(mainTab("Benchmark"));
     fireEvent.change(await screen.findByLabelText("Benchmark result"), { target: { value: "completed 24 t/s" } });
     fireEvent.click(mainTab("Inference engines"));

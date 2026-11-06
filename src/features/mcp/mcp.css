@@ -1,0 +1,53 @@
+/* MCP: server list beside one definition → tools → approval → result column. */
+.mcp-page { height: 100%; min-height: 0; }
+.mcp-security-note { margin-bottom: 16px; }
+.mcp-workspace { display: grid; gap: 16px; align-items: start; }
+.mcp-heading { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
+.mcp-hint { margin: 2px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
+
+.mcp-servers { display: grid; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
+.mcp-servers__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding-inline: 4px; }
+.mcp-server-list { display: grid; align-content: start; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+.mcp-server-row { display: flex; align-items: center; gap: 4px; padding: 2px; }
+.mcp-server-row__select { flex-direction: column; align-items: flex-start; gap: 4px; min-height: 38px; }
+.mcp-server-row__name { color: var(--ui-ink); font-size: var(--ui-text); font-weight: 550; line-height: 1.4; overflow-wrap: anywhere; }
+
+.mcp-detail { display: grid; gap: 16px; min-width: 0; }
+.mcp-section { display: grid; gap: 16px; }
+.mcp-section .app-section-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.mcp-section__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
+.mcp-section__header > div:first-child { flex: 1 1 18rem; min-width: 0; }
+.mcp-enabled { display: flex; align-items: center; gap: 8px; color: var(--ui-ink); font-size: var(--ui-text-support); }
+.mcp-field { display: grid; gap: 4px; min-width: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
+.mcp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 16px; border-top: 1px solid var(--ui-border); }
+.mcp-actions > button { margin-inline-start: auto; }
+.mcp-command-preview { flex: 1 1 16rem; min-width: 0; padding: 6px 10px; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-muted); font-family: var(--font-mono); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: anywhere; }
+/* Approval is a workspace policy and stays editable without a selected server. */
+.mcp-policy { display: grid; grid-template-columns: auto minmax(0, 16rem); justify-content: start; align-items: center; gap: 4px 12px; color: var(--ui-muted); font-size: var(--ui-text-support); }
+
+/* Tools are rows of the tools card, not boxes inside it; the selected row keeps
+   the shared selected fill while its call form is open. */
+.mcp-tool-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.mcp-tool { display: grid; gap: 12px; padding: 12px; }
+.mcp-tool__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
+.mcp-tool__head > div { flex: 1 1 14rem; }
+.mcp-tool__name { color: var(--ui-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); font-weight: 600; overflow-wrap: anywhere; }
+.mcp-call { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
+.mcp-schema > summary { width: fit-content; color: var(--ui-muted); font-size: var(--ui-text-support); cursor: pointer; }
+.mcp-schema > .mcp-code { margin-top: 8px; }
+
+.mcp-code { margin: 0; max-height: 10rem; overflow: auto; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-code--tall { max-height: 16rem; }
+.mcp-button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mcp-running { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding-block: 12px; }
+.mcp-running__label { min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+/* Approval and progress take focus programmatically; keyboard focus still shows a ring. */
+.mcp-focus-target:focus:not(:focus-visible) { outline: none; }
+
+@container workspace (max-width: 719px) {
+  .mcp-server-list { max-height: 200px; }
+}
+@container workspace (max-width: 479px) {
+  .mcp-policy { grid-template-columns: minmax(0, 1fr); }
+  .mcp-actions > button { margin-inline-start: 0; }
+}

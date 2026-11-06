@@ -92,7 +92,7 @@ try {
   await click(".setup-form button[type=submit]");
   await waitFor(() => script("return !!document.querySelector('.aiolm-sidebar nav');"), "workspace after native onboarding save");
   assert.equal(JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).onboarding_completed, true);
-  const settings = ".aiolm-sidebar .aiolm-nav-group:last-child button:last-child";
+  const settings = '.aiolm-sidebar button[data-view-target="settings"]';
   await click(settings);
   await click("#settings-tab-server");
   await click("#settings-close-to-tray");

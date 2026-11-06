@@ -49,8 +49,7 @@ export default function ChatThreadSidebar({
     >
       <div className="flex items-center gap-2 pb-3">
         <div className="min-w-0 flex-1">
-          <div className="app-eyebrow ui-color-faint" >{ct("conversations")}</div>
-          <div className="mt-0.5 text-xs tabular-nums ui-color-faint" >{threadCount} {ct("conversations")}</div>
+          <h2 className="chat-thread-heading">{ct("conversations")} <span className="text-xs tabular-nums ui-color-muted">{threadCount}</span></h2>
         </div>
         <button type="button" onClick={onNewThread} className="app-button app-button--primary app-button--sm">{ct("newChat")}</button>
         {onClose && (
@@ -94,7 +93,7 @@ export default function ChatThreadSidebar({
               aria-label={displayChatTitle(thread.title, ct('newConversation'))}
               aria-current={thread.id === activeThreadId ? "true" : undefined}
             >
-              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={displayChatTitle(thread.title, ct('newConversation'))}>{chatTitlePreview(displayChatTitle(thread.title, ct('newConversation')))}</span>
+              <span className="chat-thread-title text-sm font-medium ui-color-ink" title={displayChatTitle(thread.title, ct('newConversation'))}>{chatTitlePreview(displayChatTitle(thread.title, ct('newConversation')))}</span>
             </button>
               <span className="mt-0.5 block px-2.5 text-xs tabular-nums ui-color-faint" >{thread.messages.length ? `${thread.messages.length} ${ct("messages")}` : ct("empty")}</span>
             </div>

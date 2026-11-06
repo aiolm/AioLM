@@ -1,5 +1,5 @@
 import ModelName from '../../shared/ui/ModelName';
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { ChatThread } from "./chatHistory";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
@@ -26,14 +26,16 @@ interface ChatConversationHeaderProps {
   onSelectSession: (id: string) => void;
   ct: (key: ChatTextKey) => string;
   embedding?: { label: string; hint: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void };
+  mediaControls?: ReactNode;
 }
 
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, activeProjectName, phase, onUpdateThread,
-  sessionLabel, sessionOptions, selectedSessionId, model, runtimeConfig, onSelectSession, ct, embedding, targetBusy = false,
+  sessionLabel, sessionOptions, selectedSessionId, model, runtimeConfig, onSelectSession, ct, embedding, mediaControls, targetBusy = false,
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const title = displayChatTitle(activeThread?.title, ct('newConversation'));
   const headingTitle = activeProjectName ? `${title} · ${activeProjectName}` : title;
 
@@ -52,13 +54,34 @@ export default function ChatConversationHeader({
       }
       details.open = false;
     };
+    const details = detailsRef.current;
+    const popover = popoverRef.current;
+    const scroller = details?.closest<HTMLElement>(".app-page-scroll");
+    const fitPopover = () => {
+      if (!details?.open || !popover) return;
+      // Expanded task activity can reduce the workspace without a window resize.
+      const bottom = Math.min(window.innerHeight, scroller?.getBoundingClientRect().bottom ?? window.innerHeight);
+      const available = Math.max(0, bottom - popover.getBoundingClientRect().top - 8);
+      popover.style.setProperty("--chat-settings-available-height", `${available}px`);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitPopover);
+    observer?.observe(scroller ?? document.documentElement);
+    details?.addEventListener("toggle", fitPopover);
+    scroller?.addEventListener("scroll", fitPopover, { passive: true });
+    window.addEventListener("resize", fitPopover);
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      details?.removeEventListener("toggle", fitPopover);
+      scroller?.removeEventListener("scroll", fitPopover);
+      window.removeEventListener("resize", fitPopover);
+      observer?.disconnect();
+    };
   }, []);
 
   return (
-    <div className="chat-conversation-heading">
-      <div className="flex min-w-0 items-center gap-2">
+    <header className="chat-conversation-heading">
+      <div className="chat-heading-title">
         <button
           id="chat-thread-toggle-button"
           type="button"
@@ -71,12 +94,19 @@ export default function ChatConversationHeader({
         </button>
         {/* Keep long conversation titles to one line so the controls stay visible. */}
         <div className="chat-conversation-title">
-          <h2 title={headingTitle} aria-label={headingTitle} className="text-sm font-semibold ui-color-ink" >{chatTitlePreview(headingTitle)}</h2>
+          <h1 title={headingTitle} aria-label={headingTitle} className="chat-page-title">{chatTitlePreview(title)}</h1>
+          {activeProjectName && <p className="chat-project-name" title={activeProjectName}>{activeProjectName}</p>}
+          {(model || runtimeConfig) && <div className="chat-answer-context">
+            {model && <span className="chat-answer-model" title={normalizeDisplayPath(model)}><ModelIcon model={model} /><span><ModelName model={model} /></span></span>}
+            {runtimeConfig && <span className="chat-answer-runtime"><RuntimeSelectionLabel config={runtimeConfig} /></span>}
+          </div>}
         </div>
       </div>
-      {/* No model-settings action here: the app header opens the same editor, and
-          the blocked view below offers it when the panel cannot be used at all. */}
       <div className="chat-heading-controls">
+        <div className="chat-session-target">
+          <label className="sr-only" htmlFor="chat-session-target">{sessionLabel}</label>
+          <CustomSelect id="chat-session-target" className="chat-session-picker" triggerClassName="chat-session-trigger" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, title: option.label, disabled: option.disabled }))} />
+        </div>
       <details
         ref={detailsRef}
         className="relative shrink-0"
@@ -91,22 +121,31 @@ export default function ChatConversationHeader({
       >
         <summary ref={summaryRef} className="chat-settings-summary app-button app-button--secondary app-button--sm cursor-pointer list-none"
           data-icon="settings" aria-label={ct("conversationSettings")} title={ct("conversationSettings")}>
-          <span className="chat-settings-summary-label">{ct("conversationSettings")}</span>
+          <span className="sr-only">{ct("conversationSettings")}</span>
         </summary>
-        <div className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-2rem))] app-card app-card--raised space-y-3" >
-          {/* Answering target lives here rather than in the heading row: it is
-              set once and then left alone, so it does not earn permanent space. */}
-          <div>
-            <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-session-target">{sessionLabel}</label>
-            <CustomSelect id="chat-session-target" className="chat-session-picker mt-1.5" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
-            {model && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted" title={normalizeDisplayPath(model)}><ModelIcon model={model} />{<ModelName model={model} />}</p>}
-            {runtimeConfig && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted"><RuntimeSelectionLabel config={runtimeConfig} /></p>}
-          </div>
+        <div ref={popoverRef} className="chat-settings-popover app-card app-card--raised"
+          onFocusCapture={(event) => {
+            const popup = event.currentTarget;
+            const field = event.target;
+            if (!(field instanceof HTMLElement) || !popup.contains(field)) return;
+            // Native textarea focus can reveal its caret without the whole control.
+            requestAnimationFrame(() => {
+              if (document.activeElement !== field || !popup.isConnected) return;
+              const bounds = popup.getBoundingClientRect();
+              const rect = field.getBoundingClientRect();
+              const top = bounds.top + popup.clientTop + 8;
+              const bottom = bounds.top + popup.clientTop + popup.clientHeight - 8;
+              if (rect.bottom > bottom) popup.scrollTop += rect.bottom - bottom;
+              else if (rect.top < top) popup.scrollTop += rect.top - top;
+            });
+          }}>
           {embedding && <div>
             <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-embedding-target">{embedding.label}</label>
             <CustomSelect id="chat-embedding-target" value={embedding.value} options={embedding.options} disabled={phase !== 'idle' || targetBusy} onChange={embedding.onChange} ariaDescribedBy="chat-embedding-hint" />
             <p id="chat-embedding-hint" className="mt-1.5 text-xs ui-color-muted">{embedding.hint}</p>
           </div>}
+          {mediaControls}
+          <div className="chat-conversation-fields">
           <div>
             <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-thread-title">{ct("title")}</label>
             <input
@@ -131,6 +170,8 @@ export default function ChatConversationHeader({
             />
           </div>
           <p className="text-xs leading-relaxed ui-color-faint" >{ct("savedLocallyDescription")}</p>
+          </div>
+          <div className="chat-conversation-options">
           <div>
             <label className="flex items-center gap-2 text-xs ui-color-ink" htmlFor="chat-default-system-prompt">
               <input id="chat-default-system-prompt" type="checkbox"
@@ -153,9 +194,10 @@ export default function ChatConversationHeader({
             </label>
             <p id="chat-media-before-text-hint" className="mt-1.5 text-xs ui-color-muted">{ct("mediaBeforeTextHint")}</p>
           </div>
+          </div>
         </div>
       </details>
       </div>
-    </div>
+    </header>
   );
 }

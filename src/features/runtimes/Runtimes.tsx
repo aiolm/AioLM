@@ -142,12 +142,14 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const empty = inventory.loaded && !inventory.error && inventory.runtimes.length === 0;
   const profilesLink = onOpenProfiles && <p className="runtime-profiles-link">{modelSettingsCopy[locale].title} → {modelSettingsCopy[locale].profiles} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>;
   const backButton = (disabled: boolean) => <button type="button" className="app-button app-button--ghost app-button--sm adapter-back" disabled={disabled} onClick={backToInventory}><BackIcon />{copy.back}</button>;
+  // Keep the Add action mounted in the toolbar as loading and empty guidance change.
+  const addAction = <button ref={addButton} type="button" className="app-button app-button--primary" onClick={openAdd}>{copy.add}</button>;
 
   return (
     <div className="app-page-scroll runtimes-page relative flex h-full min-h-0 flex-col">
       <header className="app-page-header">
         <div>
-          <h2 className="app-page-title">{executionText[locale].manageRuntime}</h2>
+          <h1 className="app-page-title">{executionText[locale].manageRuntime}</h1>
           <p className="app-page-description">{t("ui.runtimesIntro")}</p>
         </div>
         <div className="app-page-actions">
@@ -175,33 +177,32 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       )}
 
       {/* The inventory stays mounted so its search survives opening an adapter. */}
-      <div ref={inventoryRef} className="runtimes-main" hidden={view.kind !== 'inventory'}>
-        {inventory.error && <FeedbackBanner tone="error" className="mb-4" action={{ label: t("panel.retry"), onClick: () => setProviderRevision(value => value + 1) }}>{`${copy.loadError} ${normalizeDisplayText(inventory.error)}`}</FeedbackBanner>}
-        <section className={`app-card mb-4 adapter-add${empty ? ' adapter-add--empty' : ''}`} aria-labelledby={addHeadingId}>
-          <h3 id={addHeadingId} className="app-section-title">{copy.addTitle}</h3>
-          <p className="app-section-hint">{empty ? copy.addEmptyHint : copy.addHint}</p>
-          <ol className="adapter-journey">
-            {copy.journeySteps.map(step => <li key={step}>{step}</li>)}
-          </ol>
-          <div className="app-page-actions">
-            <button ref={addButton} type="button" className="app-button app-button--primary" onClick={openAdd}>{copy.add}</button>
-          </div>
-        </section>
-        <AdapterCatalogList catalog={inventory.catalog} runtimes={inventory.runtimes} loading={!inventory.loaded} disabled={busy} onOpen={openAdapter} />
+      <div ref={inventoryRef} className="runtimes-main runtimes-inventory" hidden={view.kind !== 'inventory'}>
+        {inventory.error && <FeedbackBanner tone="error" action={{ label: t("panel.retry"), onClick: () => setProviderRevision(value => value + 1) }}>{`${copy.loadError} ${normalizeDisplayText(inventory.error)}`}</FeedbackBanner>}
+        {empty && (
+          <section className="app-card adapter-add" aria-labelledby={addHeadingId}>
+            <h2 id={addHeadingId} className="app-section-title">{copy.addTitle}</h2>
+            <p className="app-section-hint">{copy.addEmptyHint}</p>
+            <ol className="adapter-journey" aria-label={copy.journey}>
+              {copy.journeySteps.map((step, index) => <li key={step}><span className="adapter-journey__index" aria-hidden="true">{index + 1}</span>{step}</li>)}
+            </ol>
+          </section>
+        )}
+        <AdapterCatalogList catalog={inventory.catalog} runtimes={inventory.runtimes} loading={!inventory.loaded} disabled={busy} onOpen={openAdapter} action={addAction} />
         {profilesLink}
       </div>
 
       {wizardOpened && (
-        <div className="runtimes-main" hidden={view.kind !== 'add'}>
+        <div className="runtimes-main runtimes-wizard" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
           <AutomaticRuntimeConnection key={`auto-${wizardKey}`} titleRef={wizardHeading} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy}
             onConnected={result => { notifyRuntimeInventoryChanged(); onRegistered(result.engine_id, result); }} onBusyChange={setAutoBusy} />
           <details className="runtime-advanced">
             <summary>{copy.advancedManual}</summary>
             <div className="runtime-advanced__body">
-          <EntrypointRegistration key={wizardKey} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || autoBusy}
-            onPublished={() => { setProviderRevision(value => value + 1); notifyRuntimeInventoryChanged(); }}
-            onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setWizardBusy} />
+              <EntrypointRegistration key={wizardKey} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || autoBusy}
+                onPublished={() => { setProviderRevision(value => value + 1); notifyRuntimeInventoryChanged(); }}
+                onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setWizardBusy} />
             </div>
           </details>
           <details className="runtime-advanced">
@@ -213,27 +214,21 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
         </div>
       )}
 
+      {/* Engine detail reads top to bottom: which engine, the device it runs
+          on, its backends or environments, then the quiet advanced tools. */}
       {selected && (
-        <>
+        <div className="runtimes-main runtimes-detail">
           <div className="adapter-context">
             {backButton(busy)}
-            <h3 ref={contextHeading} tabIndex={-1} className="app-section-title">{description?.engine ?? providerDisplayName(selected)}</h3>
-            {description && <p className="app-section-hint">{description.kind === 'external-process' ? copy.customContext : copy.builtinContext}{` · ${description.managed_variant ?? description.server}`}</p>}
+            <div className="adapter-context__identity">
+              <h2 ref={contextHeading} tabIndex={-1} className="app-section-title">{description?.engine ?? providerDisplayName(selected)}</h2>
+              {description && <p className="app-section-hint">{description.kind === 'external-process' ? copy.customContext : copy.builtinContext}{` · ${description.managed_variant ?? description.server}`}</p>}
+            </div>
           </div>
           {inventory.loaded && !inventory.error && !description && isExternalProvider(selected)
             ? <FeedbackBanner tone="warning">{copy.missing}</FeedbackBanner>
-            : <div className="runtimes-layout">
-          <aside className="runtimes-aside">
-            <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
-            {llama && <div className="runtime-show-all">
-              <Switch id="runtime-show-all" checked={rt.showAll} onChange={rt.toggleShowAll} aria-describedby={!rt.showAll && hiddenCount > 0 ? "runtime-hidden-count" : undefined} />
-              <label htmlFor="runtime-show-all">{t("ui.showAllBackends")}</label>
-              {!rt.showAll && hiddenCount > 0 && <span id="runtime-hidden-count" className="runtime-hidden-count">{t("ui.hiddenBackends", { count: hiddenCount })}</span>}
-            </div>}
-            {profilesLink}
-          </aside>
-
-          <div className="runtimes-main">
+            : <>
+          <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
           {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} />}
           {llama && <>
           <PanelFeedback>
@@ -241,6 +236,12 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
             {rt.loadError && <FeedbackBanner tone="error">{`${t("ui.runtimeLookupFailed")}: ${normalizeDisplayText(rt.loadError)}`}</FeedbackBanner>}
           </PanelFeedback>
           {rt.flash && <FeedbackBanner tone="info" className="runtime-flash">{normalizeDisplayText(rt.flash)}</FeedbackBanner>}
+
+          <div className="runtime-show-all">
+            <Switch id="runtime-show-all" checked={rt.showAll} onChange={rt.toggleShowAll} aria-describedby={!rt.showAll && hiddenCount > 0 ? "runtime-hidden-count" : undefined} />
+            <label htmlFor="runtime-show-all">{t("ui.showAllBackends")}</label>
+            {!rt.showAll && hiddenCount > 0 && <span id="runtime-hidden-count" className="runtime-hidden-count">{t("ui.hiddenBackends", { count: hiddenCount })}</span>}
+          </div>
 
           <RuntimeBackendList
             t={t}
@@ -298,9 +299,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
             </div>
           </details>
           </>}
-          </div>
-          </div>}
-        </>
+          {profilesLink}
+          </>}
+        </div>
       )}
       <ConfirmDialog
         open={rt.prPreview !== null}

@@ -22,29 +22,27 @@ export default function RuntimePortableBundle({
   t, rows, bundleBusy, bundleProgress, runtimeBusy, serverRunning, onImport, onExport,
 }: Props) {
   return (
-    <section className="mb-4 app-card app-card--success" aria-labelledby="portable-runtime-heading" aria-busy={bundleBusy}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 id="portable-runtime-heading" className="app-section-title">{t("ui.portableRuntimeTitle")}</h2>
-          <p className="app-section-hint break-words">{t("ui.portableRuntimeHint")}</p>
+    <section className="app-card runtime-tool" aria-labelledby="portable-runtime-heading" aria-busy={bundleBusy}>
+      <div className="runtime-tool__header runtime-tool__header--split">
+        <div>
+          <h3 id="portable-runtime-heading" className="runtime-tool__title">{t("ui.portableRuntimeTitle")}</h3>
+          <p className="app-section-hint">{t("ui.portableRuntimeHint")}</p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <button type="button" onClick={onImport} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={bundleBusy ? t("ui.runtimeBundleWorking") : t("ui.importRuntimeBundle")} labels={[t("ui.runtimeBundleWorking"), t("ui.importRuntimeBundle")]} /></button>
-        </div>
+        <button type="button" onClick={onImport} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--secondary"><StableLabel value={bundleBusy ? t("ui.runtimeBundleWorking") : t("ui.importRuntimeBundle")} labels={[t("ui.runtimeBundleWorking"), t("ui.importRuntimeBundle")]} /></button>
       </div>
-      <div className="runtime-progress-slot mt-3">
+      <div className="runtime-progress-slot">
         {bundleBusy && bundleProgress && (
           <div>
-            <div className="mb-1 flex justify-between gap-2 text-xs text-muted">
+            <div className="runtime-progress-label">
               <span>{t(`ui.${buildPhaseLabelKey(bundleProgress.phase)}`)}</span>
-              {bundleProgress.total > 0 && <span>{formatBytes(bundleProgress.received)} / {formatBytes(bundleProgress.total)}</span>}
+              {bundleProgress.total > 0 && <span className="runtime-number">{formatBytes(bundleProgress.received)} / {formatBytes(bundleProgress.total)}</span>}
             </div>
             <ProgressBar label={t("ui.portableRuntimeTitle")} value={bundleProgress.total > 0 ? Math.round((bundleProgress.received / bundleProgress.total) * 100) : undefined} />
           </div>
         )}
       </div>
       {rows.some((row) => row.installed.length > 0) && (
-        <div className="mt-3 flex min-w-0 flex-wrap gap-2" role="group" aria-label={t("ui.exportRuntime")}>
+        <div className="runtime-tool__actions" role="group" aria-label={t("ui.exportRuntime")}>
           {rows.flatMap((row) => row.installed.map((item) => (
             <button key={row.backend + ":" + item.build} type="button" data-icon="download" onClick={() => onExport(row.backend, item.build)} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--secondary app-button--sm">
               {t("ui.exportRuntime")}: {row.backend} {formatRuntimeVersion(item.build, item.version)}

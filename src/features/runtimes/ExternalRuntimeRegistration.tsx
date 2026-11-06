@@ -1,5 +1,5 @@
 import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
@@ -43,16 +43,23 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
       finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
     } finally { operation.current = null; setBusy(false); onBusyChange(false); }
   };
-  return <section className="app-card app-card--tight mb-4">
-    <h3 className="app-section-title">{copy.title}</h3>
+  const id = useId();
+  return <section className="app-card runtime-manifest" aria-labelledby={`${id}-title`}>
+    <h3 id={`${id}-title`} className="app-section-title">{copy.title}</h3>
     <p className="app-section-hint">{copy.hint}</p>
-    <label>{copy.path}<input className="app-input" value={path} onChange={event => setPath(event.target.value)} disabled={busy || locked} /></label>
-    <div className="app-page-actions mt-3">
-      <button type="button" className="app-button app-button--secondary" disabled={busy || locked} onClick={() => void api.pickRuntimeAdapter().then(value => { if (value) setPath(value); }).catch(cause => setError(String(cause)))}>{copy.file}</button>
+    <div className="entrypoint-field">
+      <label htmlFor={`${id}-path`}>{copy.path}</label>
+      <span className="entrypoint-path">
+        <input id={`${id}-path`} className="app-input" value={path} onChange={event => setPath(event.target.value)} disabled={busy || locked}
+          autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
+        <button type="button" className="app-button app-button--secondary" disabled={busy || locked} onClick={() => void api.pickRuntimeAdapter().then(value => { if (value) setPath(value); }).catch(cause => setError(String(cause)))}>{copy.file}</button>
+      </span>
+    </div>
+    <div className="app-page-actions">
       <button type="button" className="app-button app-button--primary" disabled={busy || locked || !path.trim()} onClick={() => void register()}>{copy.register}</button>
       {busy && <LocalTaskCancelButton taskId={taskId} onClick={() => void cancel()} className="app-button app-button--danger">{t('common.cancel')}</LocalTaskCancelButton>}
     </div>
-    {locked && !busy && <p>{copy.locked}</p>}
+    {locked && !busy && <p className="app-section-hint">{copy.locked}</p>}
     {result && <p role="status">{result}</p>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </section>;

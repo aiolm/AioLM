@@ -112,27 +112,26 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
 
   return <div className="app-page-scroll developer-panel api-server-page">
     <div className="api-server-content">
-      <header className="api-page-heading"><h2>{t('section.api')}</h2><p>{copy.intro}</p></header>
-      <ol className="api-steps">{copy.steps.map((step, index) => <li key={step}><span aria-hidden="true">{index + 1}</span>{step}</li>)}</ol>
-      <PanelFeedback>
-        {apiServer.error && <FeedbackBanner tone="error" title={t('ui.apiFailedTitle')} onDismiss={apiServer.clearError}>{apiServer.error}</FeedbackBanner>}
-        {error && <FeedbackBanner tone="error" title={t('error.wrong')} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
-      </PanelFeedback>
+      <header className="api-page-heading"><h1>{t('section.api')}</h1><p>{copy.intro}</p></header>
       <section className="api-server-control">
         <div className="developer-api-status" role="status" aria-live="polite">
           <StatusBadge tone={apiPending ? 'warning' : apiRunning ? 'success' : 'neutral'} label={apiStatusLabel} />
           <p>{apiRunning ? copy.running : copy.stopped}</p>
         </div>
         <button type="button" onClick={() => void (apiRunning ? apiServer.stop() : apiServer.start())} disabled={!apiServer.checked || apiPending !== null}
-          aria-busy={apiPending !== null} className={`app-button ${apiRunning ? 'app-button--secondary' : 'app-button--primary'}`}>
+          aria-busy={apiPending !== null} data-icon={apiRunning ? 'stop' : 'play'} className={`app-button ${apiRunning ? 'app-button--secondary' : 'app-button--primary'}`}>
           <StableLabel value={apiPending ? apiStatusLabel : apiRunning ? t('ui.stopApi') : t('ui.startApi')} labels={[t('ui.startApi'), t('ui.stopApi'), ...Object.values(pendingLabels)]} />
         </button>
       </section>
+      <PanelFeedback>
+        {apiServer.error && <FeedbackBanner tone="error" title={t('ui.apiFailedTitle')} onDismiss={apiServer.clearError}>{apiServer.error}</FeedbackBanner>}
+        {error && <FeedbackBanner tone="error" title={t('error.wrong')} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
+      </PanelFeedback>
       <span className="sr-only" role="status" aria-live="polite">{copied ? t('panel.copied') : ''}</span>
 
-      <section className="api-section api-models">
+      <section className="api-section api-models" aria-labelledby="api-models-title">
         <div className="api-section-heading">
-          <h3>{copy.models}{apiRunning && modelsFetched && <Badge className="api-model-count">{models.length}</Badge>}</h3>
+          <h2 id="api-models-title">{copy.models}{apiRunning && modelsFetched && <Badge className="api-model-count">{models.length}</Badge>}</h2>
           <div className="api-inline-actions">
             {canQueryModels && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={loadingModels} data-icon="refresh" onClick={() => void refreshModels()}>{loadingModels ? t('ui.checking') : copy.refresh}</button>}
             {onNavigate && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => onNavigate('models')}>{copy.openModels}</button>}
@@ -148,8 +147,8 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
         </>}
       </section>
 
-      <section className="api-section api-connection">
-        <h3>{copy.connection}</h3><p className="api-hint">{copy.connectionHint}</p>
+      <section className="api-section api-connection" aria-labelledby="api-connection-title">
+        <h2 id="api-connection-title">{copy.connection}</h2><p className="api-hint">{copy.connectionHint}</p>
         <div className="api-format-field">
           <label htmlFor="api-connection-format">{copy.format}</label>
           <CustomSelect<ApiFormat> id="api-connection-format" ariaDescribedBy="api-format-hint" value={format} onChange={value => { setFormat(value); setCopied(null); }}

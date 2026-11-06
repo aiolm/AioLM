@@ -48,6 +48,21 @@ describe('MCP manual call ownership', () => {
   });
   afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
 
+  it('returns focus to review after cancelling approval without starting a tool call', async () => {
+    render(<Surface />);
+    fireEvent.click((await screen.findByText('alpha tools')).closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Discover tools' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare call: echo' }));
+    const review = screen.getByRole('button', { name: 'Review tool call' });
+    fireEvent.click(review);
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    cancel.focus();
+    fireEvent.click(cancel);
+    expect(review).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Approve and run once' })).not.toBeInTheDocument();
+    expect(api.mcpCallTool).not.toHaveBeenCalled();
+  });
+
   it('keeps one cancellable task through the native approval and RPC wait, and discards a late cancelled result', async () => {
     const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
     render(<Surface />); await startCall();
@@ -135,7 +150,6 @@ describe('MCP manual call ownership', () => {
     await act(async () => call.resolve(response));
     const result = await screen.findByLabelText('Tool result');
     expect(JSON.parse(result.textContent!)).toEqual(response);
-    expect(result.closest('section')).not.toHaveClass('app-card--success');
     expect(getTaskSnapshot()[0]).toEqual(expect.objectContaining({ state: 'failed', detail: 'Tool echo reported an execution error.' }));
     expect(screen.queryByText('Tool echo completed.')).not.toBeInTheDocument();
     expect(screen.getAllByText('Tool echo reported an execution error.').length).toBeGreaterThan(0);

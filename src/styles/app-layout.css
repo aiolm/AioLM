@@ -5,14 +5,13 @@
 .chat-message-log, .aiolm-navigation { scrollbar-gutter: stable; }
 /* Form columns use their own available width, including inside detail panes. */
 .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
-.app-summary-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .app-master-detail, .discover-columns { grid-template-columns: minmax(0,1fr); }
-.app-master-detail > *, .app-form-grid > *, .app-summary-grid > * { min-width: 0; }
+.app-master-detail > *, .app-form-grid > * { min-width: 0; }
 .chat-mcp-tools { min-height: auto; }
 .chat-mcp-catalog-slot { min-height: 20px; overflow: auto; }
 .chat-attachment-status-slot { min-height: 16px; }
-.chat-pending-tool-slot { position: absolute; top: 8px; right: 8px; left: 8px; z-index: 25; pointer-events: none; }
-.chat-pending-tool-slot > * { pointer-events: auto; }
+.chat-pending-tool-slot { min-width: 0; }
+.chat-pending-tool-slot:not(:empty) { margin-bottom: 12px; }
 .models-panel { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .models-model-list { flex: 0 0 auto; overflow: visible; }
 .models-status-line { overflow-wrap: break-word; white-space: normal; }

@@ -3,6 +3,7 @@ import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import Badge from "../../shared/ui/Badge";
 import { useEffect, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { ChatSkill } from "../../shared/api/personalization";
 import type * as api from "../../shared/api/types";
@@ -86,6 +87,14 @@ export default function ChatComposer({
     return () => strip.removeEventListener('toggle', closeOtherPickers, true);
   }, []);
   const controlsLocked = phase !== 'idle' || pendingToolCall !== null;
+  useEffect(() => {
+    if (!controlsLocked) return;
+    for (const picker of toolStripRef.current?.querySelectorAll<HTMLDetailsElement>('details') ?? []) {
+      const focused = picker.contains(document.activeElement);
+      picker.open = false;
+      if (focused) picker.querySelector<HTMLElement>('summary')?.focus();
+    }
+  }, [controlsLocked]);
   const responseStatus = responseState === 'failed' ? ct('requestFailed')
     : responseState === 'interrupted' ? (responseWithoutOutput ? chatReplyStateCopy[locale].stoppedEmpty : ct('interrupted'))
     : responseState === 'tool-request' ? ct('mcpResponseIncomplete')
@@ -96,10 +105,48 @@ export default function ChatComposer({
     : responseStatus ? `${responseStatus} · ${msgsLength} ${ct('messages')}`
     : msgsLength === 0 ? ct('emptyConversation') : `${msgsLength} ${ct('messages')}`;
   return (
-    <>
+    <div className="chat-composer">
+
+      <div className="chat-pending-tool-slot">
+        {pendingToolCall && <div className="chat-tool-approval app-card app-card--warning app-card--tight text-xs ui-color-warning-ink" role="alert">
+          <div className="font-semibold">{ct("mcpApprovalRequired")}</div>
+          <p className="mt-1"><span className="ui-color-ink">{normalizeDisplayText(pendingToolCall.serverName)}</span> · <code className="font-mono">{normalizeDisplayText(pendingToolCall.toolName)}</code></p>
+          <pre tabIndex={0} className="chat-tool-arguments font-mono">{normalizeDisplayText(JSON.stringify(pendingToolCall.argumentsValue, null, 2))}</pre>
+          <div className="chat-tool-approval-actions">
+            <button type="button" onClick={onApproveTool} className="app-button app-button--primary app-button--sm">{ct("approveTool")}</button>
+            <button type="button" data-icon="close" onClick={onRejectTool} className="app-button app-button--secondary app-button--sm">{ct("rejectTool")}</button>
+          </div>
+        </div>}
+      </div>
+      <PanelFeedback>
+          {contextWarning && <FeedbackBanner tone="warning" aria-label={ct("contextWarningLabel")}>{contextWarning}</FeedbackBanner>}
+      </PanelFeedback>
+      {contextSources.length > 0 && <FeedbackBanner tone="info" className="mb-2"><span className="font-medium">{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</FeedbackBanner>}
+      <div className="chat-composer-actions" ref={dropTargetRef}>
+      {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingAttachments")}>
+      <div className="chat-attachment-status-slot">
+        {attachmentStatus !== "idle" && <div className="text-xs ui-color-faint"  role="status" aria-live="polite">{attachmentStatus === "reading" ? ct("attachmentReading") : attachmentStatus === "ready" ? ct("attachmentReady") : ct("attachmentFailed")}</div>}
+      </div>
+      {attachments.length > 0 && <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={ct("pendingMedia")}>{attachments.map((image) => <div key={image.ref ?? image.dataUrl} className="flex items-start gap-1"><MediaPreview locale={locale} attachment={image} small /><button type="button" onClick={() => onRemoveAttachment(image.ref ?? image.dataUrl)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(image.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
+      {documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label={ct("pendingDocuments")}>{documents.map((document) => <div key={document.path} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">{normalizeDisplayText(document.name)}</span><button type="button" onClick={() => onRemoveDocument(document.path)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(document.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
+      </div>}
+        {selectedSkills.length > 0 && <div className="col-span-full flex flex-wrap gap-1.5" role="group" aria-label={selectedSkillsLabel}>{selectedSkills.map((skill) => <div key={skill.id} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">${normalizeDisplayText(skill.name)}</span><button type="button" onClick={() => onRemoveSkill?.(skill.id)} disabled={skillsLocked} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${removeSkillLabel}: ${normalizeDisplayText(skill.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
+        {selectedMcpTools.length > 0 && <div className="chat-selected-tools flex flex-wrap gap-1.5" role="group" aria-label={ct("mcpTools")}>
+          {selectedMcpTools.map(key => {
+            const entry = mcpCatalog.find(candidate => `${candidate.serverId}:${candidate.tool.name}` === key);
+            return <Badge key={key}>{entry ? `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.tool.name)}` : normalizeDisplayText(key)}</Badge>;
+          })}
+        </div>}
+        <textarea value={input} onChange={(event) => setInput(event.target.value)}
+          {...imeHandlers}
+          disabled={disabled || controlsLocked} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct(loadingModel ? "startingServer" : "offline") : ct(enterToSend ? "placeholder" : "placeholderNewline")} className="app-textarea min-w-0 flex-1" />
+        <div className="chat-composer-toolbar">
+          <div className="chat-composer-tools">
+        <button type="button" data-icon="add" onClick={onAddAttachment} disabled={disabled || controlsLocked || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="chat-attach-button app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}><span className="chat-attach-label">{ct("attachFile")}</span></button>
       <div className="chat-tool-strip" ref={toolStripRef}>
-      <details className="chat-mcp-tools app-card app-card--flush">
-        <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium ui-color-ink" >{ct("mcpTools")}</summary>
+      <details className="chat-mcp-tools">
+        <summary className="app-button app-button--secondary app-button--sm cursor-pointer" aria-disabled={controlsLocked}
+          onClick={event => { if (controlsLocked) event.preventDefault(); }}>{ct("mcpTools")}</summary>
         <div className="chat-mcp-expanded border-t p-3 ui-border-color-border" >
         <button type="button" data-icon="close" className="chat-mcp-close app-button app-button--secondary app-button--sm absolute right-2 top-2" onClick={event => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{ct("close")}</button>
         <div className="flex flex-wrap items-center gap-2 pr-16">
@@ -117,34 +164,12 @@ export default function ChatComposer({
 
       {skillPicker}
       </div>
-
-      <div className="chat-pending-tool-slot">
-        {pendingToolCall && <div className="app-card app-card--warning app-card--tight app-card--raised text-xs ui-color-warning-ink" role="alert"><div className="font-semibold">{ct("mcpApprovalRequired")}</div><p className="mt-1"><span className="ui-color-ink" >{normalizeDisplayText(pendingToolCall.serverName)}</span> <span className="opacity-40">·</span> <code className="rounded px-1 py-0.5 font-mono text-xs ui-background-mono-bg ui-color-mono-ink" >{normalizeDisplayText(pendingToolCall.toolName)}</code></p><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2.5 font-mono text-xs ui-background-rgb-0-0-0-18 ui-color-inherit" >{normalizeDisplayText(JSON.stringify(pendingToolCall.argumentsValue, null, 2))}</pre><div className="mt-3 flex gap-2"><button type="button" onClick={onApproveTool} className="app-button app-button--primary app-button--sm">{ct("approveTool")}</button><button type="button" data-icon="close" onClick={onRejectTool} className="app-button app-button--secondary app-button--sm">{ct("rejectTool")}</button></div></div>}
+          </div>
+        <span className="chat-composer-status text-xs tabular-nums ui-color-faint" role="status" aria-label={ct("conversation")} aria-live="polite">{conversationStatus}</span>
+        <button type="button" onClick={phase !== "idle" ? onStop : onSend} disabled={phase !== "idle" ? aborting : !canSend || pendingToolCall !== null || attachmentStatus === 'reading'} className={"chat-send-button app-button app-button--sm shrink-0 " + (phase !== "idle" ? "app-button--danger" : "app-button--primary")} data-icon={phase !== "idle" ? "stop" : "play"} title={phase !== "idle" ? ct("stop") : ct("send")} aria-label={phase !== "idle" ? ct("stop") : ct("send")}><span className="chat-send-label"><StableLabel value={phase !== "idle" ? aborting ? ct("stopping") : ct("stop") : ct("send")} labels={[ct("send"), ct("stop"), ct("stopping")]} /></span></button>
+        </div>
       </div>
 
-
-
-      <PanelFeedback>
-          {contextWarning && <FeedbackBanner tone="warning" aria-label={ct("contextWarningLabel")}>{contextWarning}</FeedbackBanner>}
-      </PanelFeedback>
-      {contextSources.length > 0 && <FeedbackBanner tone="info" className="mb-2"><span className="font-medium">{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</FeedbackBanner>}
-      <div className="chat-composer-actions" ref={dropTargetRef}>
-      {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingAttachments")}>
-      <div className="chat-attachment-status-slot">
-        {attachmentStatus !== "idle" && <div className="text-xs ui-color-faint"  role="status" aria-live="polite">{attachmentStatus === "reading" ? ct("attachmentReading") : attachmentStatus === "ready" ? ct("attachmentReady") : ct("attachmentFailed")}</div>}
-      </div>
-      {attachments.length > 0 && <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={ct("pendingMedia")}>{attachments.map((image) => <div key={image.ref ?? image.dataUrl} className="flex items-start gap-1"><MediaPreview locale={locale} attachment={image} small /><button type="button" onClick={() => onRemoveAttachment(image.ref ?? image.dataUrl)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(image.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
-      {documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label={ct("pendingDocuments")}>{documents.map((document) => <div key={document.path} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">{normalizeDisplayText(document.name)}</span><button type="button" onClick={() => onRemoveDocument(document.path)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(document.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
-      </div>}
-        {selectedSkills.length > 0 && <div className="col-span-full flex flex-wrap gap-1.5" role="group" aria-label={selectedSkillsLabel}>{selectedSkills.map((skill) => <div key={skill.id} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">${normalizeDisplayText(skill.name)}</span><button type="button" onClick={() => onRemoveSkill?.(skill.id)} disabled={skillsLocked} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${removeSkillLabel}: ${normalizeDisplayText(skill.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
-        <textarea value={input} onChange={(event) => setInput(event.target.value)}
-          {...imeHandlers}
-          disabled={disabled || controlsLocked} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct(loadingModel ? "startingServer" : "offline") : ct(enterToSend ? "placeholder" : "placeholderNewline")} className="app-textarea min-w-0 flex-1" />
-        <button type="button" data-icon="add" onClick={onAddAttachment} disabled={disabled || controlsLocked || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}>{ct("attachFile")}</button>
-        <span className="chat-composer-status text-xs tabular-nums ui-color-faint" role="status" aria-live="polite">{conversationStatus}</span>
-        <button type="button" onClick={phase !== "idle" ? onStop : onSend} disabled={phase !== "idle" ? aborting : !canSend || pendingToolCall !== null || attachmentStatus === 'reading'} className={"app-button app-button--sm shrink-0 " + (phase !== "idle" ? "app-button--danger" : "app-button--primary")} aria-label={phase !== "idle" ? ct("stop") : ct("send")}><StableLabel value={phase !== "idle" ? aborting ? ct("stopping") : ct("stop") : ct("send")} labels={[ct("send"), ct("stop"), ct("stopping")]} /></button>
-      </div>
-
-    </>
+    </div>
   );
 }

@@ -22,24 +22,22 @@ export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities
   // The probe names the binary it just ran; its raw banner stays in the probe result, not the label.
   const probedVersion = capabilities ? normalizeDisplayText(formatRecordedRuntimeVersion(capabilities.version, capabilities.build, t("ui.notReported"))) : "";
   return (
-    <section className="runtime-capabilities-card mb-4 app-card"  aria-labelledby="runtime-capabilities-heading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id="runtime-capabilities-heading" className="app-section-title">{t("section.runtimes")}</h2>
-          <p className="app-section-hint">{t("ui.probeHint")}</p>
-        </div>
+    <section className="app-card runtime-tool runtime-capabilities-card" aria-labelledby="runtime-capabilities-heading">
+      <div className="runtime-tool__header">
+        <h3 id="runtime-capabilities-heading" className="runtime-tool__title">{t("section.runtimes")}</h3>
+        <p className="app-section-hint">{t("ui.probeHint")}</p>
       </div>
-      <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
+      <p className="runtime-tool__meta">{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
       {capabilities && (
-        <div className="mt-3.5 grid gap-2.5 app-summary-grid">
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityStateText(capabilities.state, locale)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {probedVersion}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 text-xs tabular-nums ui-color-ink" >{probedVersion}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 max-h-20 overflow-auto app-text-wrap font-mono text-xs ui-color-faint" >{displayFlags || t("ui.none")}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: countRuntimeDeviceEntries(capabilities.devices) })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeBench")}</div><div className="mt-1"><StatusBadge label={capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")} tone={capabilities.bench_available ? "success" : "warning"} /></div><div className="mt-1 text-xs ui-color-faint" >llama-bench --help</div></div>
-        </div>
+        <dl className="runtime-facts">
+          <div><dt>{t("ui.probeState")}</dt><dd><StatusBadge label={capabilityStateText(capabilities.state, locale)} tone={capabilities.state === "available" ? "success" : "warning"} /><span className="runtime-facts__detail runtime-number">{capabilities.backend} · {probedVersion}</span></dd></div>
+          <div><dt>{t("ui.probeVersion")}</dt><dd className="runtime-number">{probedVersion}</dd></div>
+          <div><dt>{t("ui.probeFlags")}</dt><dd>{t("ui.flagsDiscovered", { count: capabilities.flags.length })}<span className="runtime-facts__detail runtime-facts__code">{displayFlags || t("ui.none")}</span></dd></div>
+          <div><dt>{t("ui.probeDevices")}</dt><dd>{t("ui.devicesVisible", { count: countRuntimeDeviceEntries(capabilities.devices) })}<span className="runtime-facts__detail" title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</span></dd></div>
+          <div><dt>{t("ui.probeBench")}</dt><dd><StatusBadge label={capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")} tone={capabilities.bench_available ? "success" : "warning"} /><span className="runtime-facts__detail">llama-bench --help</span></dd></div>
+        </dl>
       )}
-      {capabilities?.diagnostics.length ? <details className="mt-3"><summary className="cursor-pointer text-xs ui-color-warning" >{t("ui.diagnosticsCount", { count: capabilities.diagnostics.length })}</summary><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2 font-mono text-xs ui-background-mono-bg ui-color-faint" >{normalizeDisplayText(capabilities.diagnostics.join("\n"))}</pre></details> : null}
+      {capabilities?.diagnostics.length ? <details className="runtime-tool__diagnostics"><summary>{t("ui.diagnosticsCount", { count: capabilities.diagnostics.length })}</summary><pre className="runtime-tool__pre">{normalizeDisplayText(capabilities.diagnostics.join("\n"))}</pre></details> : null}
     </section>
   );
 }

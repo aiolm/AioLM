@@ -1,69 +1,111 @@
-/* Settings use a horizontal category strip and aligned form rows. */
-.settings-layout, .settings-header { width: 100%; max-width: 1072px; }
-.settings-header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
-.settings-header h2 { margin: 4px 0 8px; }
-.settings-header p { max-width: 65ch; color: var(--ui-muted); font-size: var(--ui-text-support); }
-.settings-save-slot { width: 80px; min-height: 24px; flex-shrink: 0; }
+.settings-layout, .settings-header { width: 100%; max-width: 880px; }
+.settings-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 24px; }
+.settings-header h1 { margin: 0 0 8px; }
+.settings-header p { max-width: 65ch; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
+.settings-save-slot { min-width: 64px; min-height: 24px; flex-shrink: 0; }
 .settings-save-slot.is-empty { visibility: hidden; }
-.settings-layout { display: flex; flex-direction: column; gap: 12px; }
-.settings-search { max-width: 440px; }
-.settings-content.is-searching > h3, .settings-content.is-searching > .settings-note, .settings-content.is-searching > .settings-danger { display: none; }
-.settings-content.is-searching:not(:has(.settings-row)), .settings-content.is-searching:has(.settings-row) + .settings-no-results { display: none; }
-.settings-no-results { color: var(--ui-muted); padding: 24px; }
-.settings-nav { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--ui-border); padding-bottom: 8px; }
+.settings-layout { display: flex; flex-direction: column; gap: 16px; }
+.settings-search { width: 100%; max-width: 440px; }
+.settings-nav { display: flex; gap: 4px; min-width: 0; overflow-x: auto; border-bottom: 1px solid var(--ui-border); padding-bottom: 8px; scrollbar-width: thin; }
 .settings-nav button { flex-shrink: 0; }
-.settings-content { min-width: 0; border: 1px solid transparent; border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
-.settings-content h3 { padding: 10px 12px; font-size: var(--ui-text-group); border-bottom: 1px solid var(--ui-border); }
-.settings-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: var(--ui-row-space) 12px; border-bottom: 1px solid var(--ui-border); }
+.settings-content { min-width: 0; }
+.settings-group { min-width: 0; }
+.settings-group-title { color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; margin: 0 0 8px; }
+.settings-content:not(.is-searching) > .settings-group > .settings-group-title { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.settings-content.is-searching > .settings-group:not(:has([data-setting])), .settings-content.is-searching .settings-note, .settings-content.is-searching .settings-danger-zone:not(:has([data-setting])) { display: none; }
+.settings-content.is-searching > .settings-group + .settings-group { margin-top: 24px; }
+.settings-content.is-searching:not(:has([data-setting])), .settings-content.is-searching:has([data-setting]) + .settings-no-results { display: none; }
+.settings-no-results { color: var(--ui-muted); font-size: var(--ui-text); padding: 24px 0; }
+.settings-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px 24px; align-items: center; padding: 16px 12px; border-bottom: 1px solid var(--ui-border); min-width: 0; }
 .settings-row:last-child { border-bottom: 0; }
-.settings-copy { min-width: 0; flex: 1 1 16rem; }
-.settings-copy label { font-size: var(--ui-text); font-weight: 550; }
-.settings-copy p, .settings-danger p, .settings-note p { color: var(--ui-muted); font-size: var(--ui-text-support); margin-top: 4px; line-height: 1.65; }
-.settings-control { display: flex; justify-content: end; min-width: 0; max-width: 100%; }
-.settings-danger, .settings-note { margin: 12px; }
-.settings-danger .app-button { margin-top: 12px; }
-.settings-wipe-slot { min-height: 48px; }
-/* Typography previews render the selected stacks directly, so they update with
-   the choice even before the document-wide properties change. */
-.settings-preview { margin: 0; padding: var(--ui-row-space) 12px; border-bottom: 1px solid var(--ui-border); }
+.settings-copy { min-width: 0; }
+.settings-copy label, .settings-copy > strong, .settings-copy h3 { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; }
+.settings-copy p, .settings-note p { color: var(--ui-muted); font-size: var(--ui-text-support); margin-top: 4px; line-height: 1.5; }
+.settings-control { display: flex; justify-content: end; min-width: 0; max-width: 320px; }
+.settings-control-stack { display: flex; flex-direction: column; align-items: end; gap: 8px; min-width: 0; }
+.settings-select { width: 200px; max-width: 100%; }
+.settings-actions, .settings-notification-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-notification-actions { max-width: 360px; }
+.settings-notification-feedback { grid-column: 1 / -1; }
+.settings-note { margin: 16px 12px; padding: 12px 16px; border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); }
+.settings-note > strong { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; }
+.settings-row-feedback { margin: 12px; }
+.settings-file-button { cursor: pointer; }
+.settings-file-button:focus-within { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.settings-danger-zone { margin-top: 24px; border: 1px solid var(--ui-border); border-inline-start: 2px solid var(--tone-error-ink); border-radius: var(--ui-radius-control); background: var(--ui-surface); }
+.settings-danger-zone > h3 { padding: 16px 12px 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; }
+.settings-row--danger .settings-copy > strong { color: var(--tone-error-ink); }
+/* Render selected font stacks directly, including before document typography applies. */
+.settings-preview { margin: 0; padding: 16px 12px; border-bottom: 1px solid var(--ui-border); }
 .settings-preview > p { max-width: 72ch; color: var(--ui-ink); font-size: var(--ui-text); }
-.settings-preview-code { margin-top: 8px; padding: 10px 12px; border-radius: var(--ui-radius-menu); font-size: var(--ui-text); line-height: 1.7; overflow-x: auto; }
-.settings-preview-code > code { font-size: .92em; white-space: pre; }
-.settings-copy > strong { font-size: var(--ui-text); font-weight: 550; }
-.settings-notification-actions { flex-wrap: wrap; align-items: center; gap: 8px; }
-.settings-notification-feedback { flex-basis: 100%; }
-/* Personalization edits whole instruction files, so the editor takes the full row width. */
-.settings-personalization-sources { margin: 0; min-inline-size: 0; }
-.settings-personalization-choices { display: flex; flex: 1 1 22rem; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.settings-personalization-choice { display: flex; flex: 1 1 14rem; align-items: start; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); cursor: pointer; }
-.settings-personalization-choice:has(input:checked) { border-color: var(--ui-focus); }
+.settings-preview-code { margin-top: 12px; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-input); color: var(--ui-ink); font-size: var(--ui-text); line-height: 1.5; overflow-x: auto; }
+.settings-preview-code > code { white-space: pre; }
+/* Checkboxes apply files to chat; the separate radio group only chooses an editor. */
+.settings-personalization { min-width: 0; }
+.settings-personalization-intro { padding: 0 12px 16px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
+.settings-personalization-intro p + p { margin-top: 8px; }
+.settings-subsection { min-inline-size: 0; margin: 0; padding: 16px 12px 24px; border: 0; border-top: 1px solid var(--ui-border); }
+.settings-subsection-title { float: left; width: 100%; padding: 0; margin: 0 0 8px; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; }
+.settings-subsection-title + * { clear: both; }
+.settings-subsection-hint, .settings-personalization-path, .settings-personalization-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: anywhere; }
+.settings-personalization-checks { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 12px; }
+.settings-personalization-check { display: flex; align-items: start; gap: 8px; min-width: 0; cursor: pointer; padding-block: 8px; }
+.settings-personalization-check > span, .settings-personalization-choice > span { display: flex; flex-direction: column; min-width: 0; font-size: var(--ui-text); }
+.settings-personalization-check code, .settings-personalization-choice code { color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.settings-personalization-check input, .settings-personalization-choice input { flex-shrink: 0; margin-top: 4px; accent-color: var(--ui-accent); width: 16px; height: 16px; }
+.settings-personalization-files { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.settings-personalization-choices { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; margin-top: 12px; }
+.settings-personalization-choice { display: flex; flex: 1 1 14rem; align-items: start; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-control); background: var(--ui-field-fill); cursor: pointer; }
+.settings-personalization-choice:has(input:checked) { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
 .settings-personalization-choice:has(input:focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
-.settings-personalization-choice input { margin-top: 4px; accent-color: var(--ui-focus); }
-.settings-personalization-choice > span { display: flex; flex-direction: column; min-width: 0; font-size: var(--ui-text); }
-.settings-personalization-choice code { color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
-.settings-personalization-editor { flex-direction: column; align-items: stretch; }
-.settings-personalization-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.settings-personalization-meta label { font-size: var(--ui-text); font-weight: 550; }
-.settings-personalization-path, .settings-personalization-hint { color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.settings-personalization-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-top: 16px; }
+.settings-personalization-file { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); }
+.settings-personalization-file > .settings-personalization-hint { width: 100%; }
+.settings-personalization-path { flex: 1 1 16rem; }
+.settings-personalization-state { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-personalization-label { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; margin-top: 8px; }
 .settings-personalization-textarea { min-height: 16rem; resize: vertical; font-family: var(--font-chat-code); white-space: pre-wrap; }
-.settings-personalization-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.app-update-settings { align-items: start; }
-.app-update-settings h4 { font-size: var(--ui-text); font-weight: 550; }
-.app-update-content { flex: 1 1 22rem; min-width: 0; font-size: var(--ui-text-support); line-height: 1.65; overflow-wrap: break-word; }
-.app-update-content > p + p { margin-top: 6px; }
-.app-update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.app-update-progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.app-update-progress progress { min-width: 0; }
-.app-update-notes { white-space: pre-wrap; max-height: 14rem; overflow: auto; margin-top: 8px; }
-.app-update-content details { margin-top: 8px; }
-.app-update-content summary { cursor: pointer; }
-
-/* Support and destructive sections keep distinct roles without a resting frame. */
-.settings-note.app-card--muted { border-color: transparent; background: var(--tone-info-gradient); color: var(--ui-ink); }
-.settings-note > strong { color: var(--tone-info-ink); }
-.settings-danger.app-card { border-color: transparent; background: var(--tone-error-gradient); }
-.settings-danger > strong { color: var(--tone-error-ink); }
+.settings-personalization-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+/* Updates expose actual operations; launching the installer is not completion. */
+.app-update { display: flex; flex-wrap: wrap; align-items: start; }
+.app-update > .settings-copy { flex: 1 1 18rem; }
+.app-update > .settings-actions { max-width: 100%; flex: 0 1 auto; justify-content: start; }
+.app-update-content { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: anywhere; }
+.app-update-versions { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.app-update-versions > div { display: flex; gap: 8px; align-items: baseline; }
+.app-update-versions dt { color: var(--ui-muted); }
+.app-update-versions dd { color: var(--ui-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.app-update-status { color: var(--ui-muted); }
+.app-update-steps { display: flex; flex-wrap: wrap; gap: 8px 16px; list-style: none; margin: 0; padding: 0; }
+.app-update-steps li { display: flex; align-items: center; gap: 6px; color: var(--ui-muted); }
+.app-update-steps li::before { content: ""; width: 8px; height: 8px; border: 1px solid var(--ui-border-strong); border-radius: 50%; }
+.app-update-steps [data-state="current"] { color: var(--ui-accent); font-weight: 600; }
+.app-update-steps [data-state="current"]::before { background: var(--ui-accent); border-color: var(--ui-accent); }
+.app-update-steps [data-state="done"]::before { content: "✓"; border: 0; color: var(--tone-success-ink); width: auto; height: auto; }
+.app-update-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.app-update-progress progress { flex: 1 1 12rem; min-width: 0; }
+.app-update-bytes { flex-basis: 100%; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.app-update-note { color: var(--ui-muted); }
+.app-update-notes { border-top: 1px solid var(--ui-border); padding-top: 12px; }
+.app-update-notes summary { cursor: pointer; color: var(--ui-ink); font-size: var(--ui-text-group); }
+.app-update-notes-body { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; overflow: auto; margin-top: 12px; }
+@container workspace (max-width: 599px) {
+  .settings-row { grid-template-columns: minmax(0,1fr); gap: 12px; }
+  .settings-row:has(> .settings-control > .app-switch) { grid-template-columns: minmax(0,1fr) auto; }
+  .settings-control { justify-content: start; max-width: 100%; }
+  .settings-select { width: 100%; }
+  .settings-control:has(.settings-select), .settings-control > .app-custom-select-container { width: 100%; }
+  .settings-control-stack { align-items: start; }
+  .settings-notification-actions { justify-content: start; }
+  .settings-danger-zone .settings-row { padding-inline: 12px; }
+}
+@media (pointer: coarse) {
+  .settings-personalization-check, .settings-personalization-choice, .settings-reset-choice { min-height: 44px; }
+  .app-update-notes summary { min-height: 44px; display: flex; align-items: center; }
+}
 @media (forced-colors: active) {
-  .settings-note.app-card--muted, .settings-danger.app-card { background: Canvas; color: CanvasText; }
-  .settings-note > strong, .settings-danger > strong { color: CanvasText; }
+  .settings-danger-zone { border-color: CanvasText; }
+  .settings-row--danger .settings-copy > strong { color: CanvasText; }
+  .settings-personalization-choice:has(input:checked) { border-color: Highlight; }
+  .app-update-steps [data-state="current"]::before { background: Highlight; border-color: Highlight; }
 }

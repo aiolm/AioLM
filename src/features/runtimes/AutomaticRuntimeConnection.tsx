@@ -15,6 +15,10 @@ import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 
 type Phase = 'finding' | 'inspecting' | 'connecting';
 
+function DoneIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3.5 8.5 3 3 6-7" /></svg>;
+}
+
 /** A discovery result is only a candidate. The backend owns launch decisions,
  * model checks and publication; the UI never manufactures a ready adapter. */
 export default function AutomaticRuntimeConnection({ locked, onConnected, onBusyChange, titleRef }: {
@@ -28,6 +32,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const id = useId();
   const taskId = `runtime-auto-${id}`;
   const [phase, setPhase] = useState<Phase | null>(null);
+  const activePhase = useRef<Phase>('finding');
   const [candidates, setCandidates] = useState<RuntimeCandidate[]>([]);
   const [selected, setSelected] = useState('');
   const [searched, setSearched] = useState(false);
@@ -35,7 +40,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const [truncated, setTruncated] = useState(false);
   const [prepared, setPrepared] = useState<PreparedRuntimeConnection | null>(null);
   const [model, setModel] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ phase: Phase; message: string } | null>(null);
   const [cancelled, setCancelled] = useState(false);
   const [result, setResult] = useState<AutomaticRuntimeResult | null>(null);
   const operation = useRef(0);
@@ -61,7 +66,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     cancellation.current = true;
     updateTask(taskId, { state: 'cancelling' });
     void runtimeAutoCancel().catch(cause => {
-      if (running.current && operation.current === own) setError(cause instanceof Error ? cause.message : String(cause));
+      if (running.current && operation.current === own) setError({ phase: activePhase.current, message: cause instanceof Error ? cause.message : String(cause) });
     });
   };
 
@@ -71,7 +76,8 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     const current = () => operation.current === own && !cancellation.current;
     running.current = true;
     cancellation.current = false;
-    setError(''); setCancelled(false); setResult(null); setPhase(nextPhase);
+    activePhase.current = nextPhase;
+    setError(null); setCancelled(false); setResult(null); setPhase(nextPhase);
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel });
     try {
       await work(current);
@@ -82,7 +88,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       if (operation.current !== own) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       if (cancellation.current) setCancelled(true);
-      else setError(message);
+      else setError({ phase: activePhase.current, message });
       finishTask(taskId, cancellation.current ? 'cancelled' : 'failed', message);
     } finally {
       if (operation.current === own) { running.current = false; setPhase(null); }
@@ -106,6 +112,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     setSearched(true); setSelected(''); setPrepared(null); setModel('');
     if (found.candidates.length === 1) {
       const candidate = found.candidates[0];
+      activePhase.current = 'inspecting';
       setSelected(candidate.id); setPhase('inspecting');
       const next = await runtimeAutoInspect(candidate);
       if (current()) applyInspection(next);
@@ -119,7 +126,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const chooseCandidate = (candidate: RuntimeCandidate) => {
     if (locked || running.current) return;
     setSelected(candidate.id); setPrepared(null); setModel('');
-    setError(''); setCancelled(false); setResult(null);
+    setError(null); setCancelled(false); setResult(null);
   };
   const connect = () => {
     if (!prepared || !model || !prepared.models.some(item => item.id === model)) return;
@@ -134,46 +141,73 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   };
   const disabled = locked || phase !== null;
   const selectedCandidate = candidates.find(candidate => candidate.id === selected);
+  // The visible journey: find → inspect a candidate → choose a model → verify.
+  // Verification is complete only once runtimeAutoConnect itself succeeded.
+  const displayedPhase = phase ?? error?.phase;
+  const stage = result ? 4
+    : displayedPhase === 'finding' ? 0
+      : displayedPhase === 'inspecting' ? 1
+        : displayedPhase === 'connecting' ? 3
+          : prepared ? (model ? 3 : 2)
+            : candidates.length > 0 ? 1 : 0;
+  const steps = [copy.stepFind, copy.stepCheck, copy.stepModel, copy.stepVerify];
 
-  return <section className="app-card mb-4" aria-labelledby={`${id}-title`}>
-    <h3 ref={titleRef} id={`${id}-title`} tabIndex={-1} className="app-section-title">{copy.title}</h3>
-    <p className="app-section-hint">{copy.intro}</p>
-    <ol className="adapter-journey" aria-label={copy.title}>
-      <li>{copy.find}</li><li>{copy.check}</li><li>{copy.chooseModel}</li><li>{copy.connect}</li>
-    </ol>
-    <div className="app-page-actions">
-      <button type="button" className="app-button app-button--primary" disabled={disabled} onClick={() => void search()}>{result ? copy.selectAgain : copy.find}</button>
-      <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void search(true)}>{copy.folder}</button>
-      {phase !== null && <LocalTaskCancelButton taskId={taskId} onClick={cancel}>{copy.cancel}</LocalTaskCancelButton>}
+  return <section className="app-card runtime-auto" aria-labelledby={`${id}-title`}>
+    <div className="runtime-auto__header">
+      <h2 ref={titleRef} id={`${id}-title`} tabIndex={-1} className="app-section-title">{copy.title}</h2>
+      <p className="app-section-hint">{copy.intro}</p>
     </div>
-    <p className="app-section-hint">{copy.folderHint}</p>
-    {phase !== null && <p role="status" aria-live="polite">{copy[phase]}</p>}
-    {searched && candidates.length === 0 && <FeedbackBanner tone="info">{copy.empty}</FeedbackBanner>}
-    {truncated && <FeedbackBanner tone="warning">{copy.limited}</FeedbackBanner>}
-    {warnings.length > 0 && <DiagnosticDetails summary={summarizeDiagnostic(warnings.join('\n'))} detail={warnings.join('\n')} />}
-    {candidates.length > 0 && <fieldset disabled={disabled} className="model-settings-fields">
-      <legend>{copy.candidates}</legend>
-      <p className="app-section-hint">{copy.candidateHint}</p>
-      {candidates.map(candidate => <label key={candidate.id} className="entrypoint-path">
-        <input type="radio" name={`${id}-candidate`} value={candidate.id} checked={selected === candidate.id}
-          onChange={() => chooseCandidate(candidate)} />
-        <span className="flex min-w-0 flex-col gap-1">{normalizeDisplayText(candidate.display_name)}
-          <small className="app-section-hint">{candidate.source === 'local_process' ? copy.running : copy.installation}{candidate.pid != null && ` · ${copy.process} ${candidate.pid}`}</small>
-          {candidate.entrypoint_path && <small className="app-section-hint break-all">{normalizeDisplayText(candidate.entrypoint_path)}</small>}
-          {candidate.endpoints.length > 0 && <small className="app-section-hint">{candidate.endpoints.map(endpoint => `${endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}`).join(', ')}</small>}
-        </span>
-      </label>)}
+    <ol className="runtime-auto-steps" aria-label={copy.progress}>
+      {steps.map((label, index) => {
+        const state = index < stage ? 'done' : index === stage ? (error ? 'failed' : 'current') : 'pending';
+        return <li key={label} data-state={state} aria-current={index === stage ? 'step' : undefined}>
+          <span className="runtime-auto-steps__index" aria-hidden="true">{state === 'done' ? <DoneIcon /> : index + 1}</span>
+          <span className="runtime-auto-steps__label">{label}</span>
+          {state === 'done' && <span className="sr-only"> · {copy.stepDone}</span>}
+        </li>;
+      })}
+    </ol>
+    {phase !== null && <p role="status" aria-live="polite" className="runtime-auto-status">{copy[phase]}</p>}
+
+    <div className="runtime-auto-stage">
       <div className="app-page-actions">
-        <button type="button" className="app-button app-button--secondary" disabled={!selectedCandidate || result !== null} onClick={() => { if (selectedCandidate) void inspect(selectedCandidate); }}>{copy.check}</button>
+        <button type="button" className={`app-button ${stage === 0 ? 'app-button--primary' : 'app-button--secondary'}`} disabled={disabled} onClick={() => void search()}>{result ? copy.selectAgain : copy.find}</button>
+        <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void search(true)}>{copy.folder}</button>
+        {phase !== null && <LocalTaskCancelButton taskId={taskId} onClick={cancel}>{copy.cancel}</LocalTaskCancelButton>}
+      </div>
+      <p className="app-section-hint">{copy.folderHint}</p>
+      {searched && candidates.length === 0 && <FeedbackBanner tone="info">{copy.empty}</FeedbackBanner>}
+      {truncated && <FeedbackBanner tone="warning">{copy.limited}</FeedbackBanner>}
+      {warnings.length > 0 && <DiagnosticDetails summary={summarizeDiagnostic(warnings.join('\n'))} detail={warnings.join('\n')} />}
+    </div>
+
+    {candidates.length > 0 && <fieldset disabled={disabled} className="runtime-auto-stage runtime-auto-candidates">
+      <legend className="runtime-auto-stage__title">{copy.candidates}</legend>
+      <p className="app-section-hint">{copy.candidateHint}</p>
+      <div className="runtime-auto-candidate-list">
+        {candidates.map(candidate => <label key={candidate.id} className="runtime-auto-candidate">
+          <input type="radio" name={`${id}-candidate`} value={candidate.id} checked={selected === candidate.id}
+            onChange={() => chooseCandidate(candidate)} />
+          <span className="runtime-auto-candidate__text">
+            <span className="runtime-auto-candidate__name">{normalizeDisplayText(candidate.display_name)}</span>
+            <small>{candidate.source === 'local_process' ? copy.running : copy.installation}{candidate.pid != null && ` · ${copy.process} ${candidate.pid}`}</small>
+            {candidate.entrypoint_path && <small className="runtime-auto-candidate__path">{normalizeDisplayText(candidate.entrypoint_path)}</small>}
+            {candidate.endpoints.length > 0 && <small>{candidate.endpoints.map(endpoint => `${endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}`).join(', ')}</small>}
+          </span>
+        </label>)}
+      </div>
+      <div className="app-page-actions">
+        <button type="button" className={`app-button ${stage === 1 ? 'app-button--primary' : 'app-button--secondary'}`} disabled={!selectedCandidate || result !== null} onClick={() => { if (selectedCandidate) void inspect(selectedCandidate); }}>{copy.check}</button>
       </div>
     </fieldset>}
-    {prepared && <form action="#" method="POST" className="model-settings-fields" onSubmit={event => { event.preventDefault(); void connect(); }}>
+
+    {prepared && <form action="#" method="POST" className="runtime-auto-stage runtime-auto-connect" onSubmit={event => { event.preventDefault(); void connect(); }}>
       <p>{prepared.kind === 'attached' ? copy.attached : copy.managed}</p>
-      <div className="flex min-w-0 flex-col gap-2">
-      <label htmlFor={`${id}-model`}>{copy.model}</label>
-      <CustomSelect id={`${id}-model`} value={model} disabled={disabled || prepared.models.length === 0}
-        options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: item.name }))]}
-        onChange={setModel} />
+      <div className="runtime-auto-field">
+        <label htmlFor={`${id}-model`}>{copy.model}</label>
+        <CustomSelect id={`${id}-model`} value={model} disabled={disabled || prepared.models.length === 0}
+          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: item.name }))]}
+          onChange={setModel} />
       </div>
       {prepared.models.length === 0 && <FeedbackBanner tone="warning">{copy.noModels}</FeedbackBanner>}
       <p className="app-section-hint">{copy.limits}</p>
@@ -182,7 +216,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       </div>
     </form>}
     {error && <FeedbackBanner tone="error" title={copy.failure}>
-      <p>{copy.retryHint}</p><DiagnosticDetails summary={summarizeDiagnostic(error)} detail={error} />
+      <p>{copy.retryHint}</p><DiagnosticDetails summary={summarizeDiagnostic(error.message)} detail={error.message} />
     </FeedbackBanner>}
     {cancelled && <FeedbackBanner tone="info">{copy.cancelled}</FeedbackBanner>}
     {result && <FeedbackBanner tone="success" title={copy.ready}>

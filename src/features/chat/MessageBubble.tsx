@@ -42,15 +42,8 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
   const activeReply = !isUser && index === messageCount - 1 && phase !== 'idle'
     && !message.interrupted && !message.failed && !message.finishReason && !message.toolRound;
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} px-1`}>
-      <div
-        className={[`relative min-w-0 text-sm leading-[1.7] ${compact ? "chat-message-compact" : ""} ${
-          isUser
-            ? "max-w-[68%] rounded-2xl rounded-br-md border px-3.5 py-2.5"
-            : "w-full px-1 py-2"
-        }`, (isUser ? ["ui-background-panel-raised","ui-border-color-border","ui-color-ink"].join(" ") : ["ui-color-ink"].join(" "))].filter(Boolean).join(" ")}
-
-      >
+    <div className={`chat-message-row flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`chat-message ${compact ? "chat-message-compact " : ""}${isUser ? "chat-message-user" : "chat-message-assistant"}`}>
         <div className="min-w-0">
         {message.role === "assistant" && message.reasoning && (
           <details className="chat-reasoning mb-2.5 app-card app-card--muted app-card--tight text-xs leading-relaxed ui-color-muted">

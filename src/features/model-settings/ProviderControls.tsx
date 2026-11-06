@@ -351,13 +351,13 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
       {managedOptions.map(option => <SchemaOptionField key={option.key} option={option} stored={values[option.key]} disabled onStore={value => update(option.key, value)} />)}
     </section>}
     {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
-    {editor === 'schema' && <><label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
+    {editor === 'schema' && <div className="model-settings-command-import"><label>{copy.import}<textarea className="app-textarea font-mono" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
     <label>{commandImportCopy[locale].syntax}<CustomSelect<api.CommandSyntax | ''> ariaLabel={commandImportCopy[locale].syntax}
       value={importSyntax} disabled={disabled}
       options={[{ value: '', label: commandImportCopy[locale].choose }, { value: 'windows', label: commandImportCopy[locale].windows }, { value: 'posix', label: commandImportCopy[locale].posix }]}
       onChange={value => { importRequest.current += 1; setImportSyntax(value); }} /></label>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button></>}
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => {
+    <div className="app-page-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button></div></div>}
+    <div className="app-page-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || runtimeNeeded} onClick={() => {
       const source = cfg;
       const request = ++previewRequest.current;
       const current = () => cfgRef.current === source && previewRequest.current === request;
@@ -366,8 +366,8 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
         setPreviewError('');
         setPreview((effective ? maskPreview(args, effective.schema, values, liveEntrySecrets()) : args).map(arg => JSON.stringify(arg)).join(' '));
       }).catch(cause => { if (current()) { setPreview(''); setPreviewError(String(cause)); } });
-    }}>{copy.preview}</button>
-    {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
+    }}>{copy.preview}</button></div>
+    {preview && <pre className="model-settings-command-preview overflow-auto whitespace-pre-wrap">{preview}</pre>}
     {previewError && <FeedbackBanner tone="error">{previewError}</FeedbackBanner>}
     {effective && <OccurrenceOrder schema={effective.schema} values={values} disabled={disabled}
       onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })} />}
@@ -392,7 +392,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
 
 function OptionTools({ collapsed, label, children }: { collapsed: boolean; label: string; children: ReactNode }) {
   return collapsed
-    ? <details><summary>{label}</summary><div className="model-settings-fields">{children}</div></details>
+    ? <details className="model-settings-tools"><summary>{label}</summary><div className="model-settings-fields">{children}</div></details>
     : <>{children}</>;
 }
 
@@ -432,7 +432,7 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
     } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
   const label = <>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small></>;
-  return <div>
+  return <div className="model-settings-provider-option">
     {selection ? <span>{label}</span> : <label htmlFor={controlId}>{label}</label>}
     {option.help && <p className="app-section-hint">{option.help}</p>}
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
@@ -441,6 +441,6 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
     {selection ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled || readOnly} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
       options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value: String(value), label: String(value) }))]} /> : option.kind.type === 'json' ? <textarea id={controlId} className="app-textarea" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
       : <input id={controlId} className="app-input" disabled={disabled || readOnly} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
-    {invalid && <span id={errorId} role="alert">{jsonNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : copy.invalid}</span>}
+    {invalid && <span id={errorId} role="alert" className="text-error">{jsonNumberError ? runtimeOptionsCopy[locale].jsonNumberRange : copy.invalid}</span>}
   </div>;
 }

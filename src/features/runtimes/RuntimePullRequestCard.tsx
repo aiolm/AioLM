@@ -28,15 +28,15 @@ export default function RuntimePullRequestCard({
   serverRunning, rows, activePrProgress, onReview,
 }: Props) {
   return (
-    <section className="mb-4 app-card app-card--warning" aria-labelledby="pull-request-runtime-heading">
-      <div>
-        <h2 id="pull-request-runtime-heading" className="app-section-title">{t("ui.installPrTitle")}</h2>
-        <p className="app-section-hint break-words">{t("ui.installPrHint")}</p>
-        <p className="app-section-hint break-words text-warning/80">{t("ui.prBackendUnsupportedHint")}</p>
+    <section className="app-card runtime-tool" aria-labelledby="pull-request-runtime-heading">
+      <div className="runtime-tool__header">
+        <h3 id="pull-request-runtime-heading" className="runtime-tool__title">{t("ui.installPrTitle")}</h3>
+        <p className="app-section-hint">{t("ui.installPrHint")}</p>
+        <p className="runtime-tool__caution">{t("ui.prBackendUnsupportedHint")}</p>
       </div>
-      <div className="mt-3.5 grid gap-3 app-form-grid items-end">
-        <label className="block text-xs text-muted">
-          <span className="mb-1 block">{t("ui.prBackendLabel")}</span>
+      <div className="runtime-tool__form">
+        <label className="runtime-tool__field">
+          <span>{t("ui.prBackendLabel")}</span>
           <CustomSelect
             value={prBackend}
             options={BACKENDS.map((backend) => {
@@ -52,20 +52,19 @@ export default function RuntimePullRequestCard({
               setPrBackend(val);
             }}
             disabled={prBusy || bundleBusy || serverRunning}
-            size="sm"
             triggerClassName="w-full"
           />
         </label>
-        <label className="block min-w-0 text-xs text-muted">
-          <span className="mb-1 block">{t("ui.prSourceLabel")}</span>
-          <input value={prSource} onChange={(event) => setPrSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onReview(); }} disabled={prBusy || bundleBusy || serverRunning} placeholder={t("ui.prSourcePlaceholder")} className="app-input mt-1" />
+        <label className="runtime-tool__field">
+          <span>{t("ui.prSourceLabel")}</span>
+          <input value={prSource} onChange={(event) => setPrSource(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onReview(); }} disabled={prBusy || bundleBusy || serverRunning} placeholder={t("ui.prSourcePlaceholder")} className="app-input" />
         </label>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={onReview} disabled={!prSource.trim() || prBusy || bundleBusy || prReviewBusy || !canBuildPrBackend(prBackend) || rows.some((row) => row.busy) || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : !canBuildPrBackend(prBackend) ? t("ui.prBackendBlocked", { backend: prBackend }) : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={prBusy ? t("ui.installingPr") : prReviewBusy ? t("ui.prResolving") : t("ui.reviewPrAction")} labels={[t("ui.installingPr"), t("ui.prResolving"), t("ui.reviewPrAction")]} /></button>
+        <div className="app-page-actions runtime-tool__actions">
+          <button type="button" onClick={onReview} disabled={!prSource.trim() || prBusy || bundleBusy || prReviewBusy || !canBuildPrBackend(prBackend) || rows.some((row) => row.busy) || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : !canBuildPrBackend(prBackend) ? t("ui.prBackendBlocked", { backend: prBackend }) : undefined} className="app-button app-button--secondary"><StableLabel value={prBusy ? t("ui.installingPr") : prReviewBusy ? t("ui.prResolving") : t("ui.reviewPrAction")} labels={[t("ui.installingPr"), t("ui.prResolving"), t("ui.reviewPrAction")]} /></button>
         </div>
       </div>
-      <div className="runtime-progress-slot mt-3">
-        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span><span>{t("ui.installingPr")}</span></div><ProgressBar label={t("ui.installingPr")} /></div>}
+      <div className="runtime-progress-slot">
+        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="runtime-progress-label"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span><span>{t("ui.installingPr")}</span></div><ProgressBar label={t("ui.installingPr")} /></div>}
       </div>
     </section>
   );

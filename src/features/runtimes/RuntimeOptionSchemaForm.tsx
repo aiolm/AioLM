@@ -640,7 +640,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
     </div>
   ));
   const navigation = (
-        <fieldset>
+        <fieldset className="schema-option-filter">
           <legend>{copy.legend}</legend>
           <label htmlFor={`${formId}-search`}>{copy.search}</label>
           <input id={`${formId}-search`} name="schema-search" className="app-input" type="search" value={search}

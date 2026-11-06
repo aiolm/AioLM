@@ -37,16 +37,43 @@ const closeToTrayText = {
   ja: { label: "閉じるときにシステムトレイへ", description: "ウィンドウを閉じるとAioLMはシステムトレイに隠れ、実行中のサーバーはそのまま動きます。トレイアイコンからウィンドウを戻すか終了できます。", failed: "システムトレイを利用できないため、設定を変更できませんでした。" },
   zh: { label: "关闭时最小化到系统托盘", description: "关闭窗口后AioLM会隐藏到系统托盘，正在运行的服务器继续运行。可通过托盘图标恢复窗口或退出。", failed: "系统托盘不可用，设置未更改。" },
 };
+// Reset and data deletion sit in their own group, away from everyday preferences.
+const dangerText = {
+  en: { title: "Reset and delete" },
+  ko: { title: "초기화 및 삭제" },
+  ja: { title: "リセットと削除" },
+  zh: { title: "重置和删除" },
+};
+
+const matches = (query: string, ...text: string[]) => !query || text.join(" ").toLocaleLowerCase().includes(query);
+
+/** A settings group; searching shows every group that still contains a matching item. */
+function Group({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  return <div className="settings-group" role="group" aria-labelledby={`settings-group-${id}`}>
+    <h2 id={`settings-group-${id}`} className="settings-group-title">{title}</h2>
+    {children}
+  </div>;
+}
 
 function Row({ id, label, description, children }: { id: string; label: string; description: string; children: ReactNode }) {
   const query = useContext(SearchContext);
-  if (query && !`${label} ${description}`.toLocaleLowerCase().includes(query)) return null;
+  if (!matches(query, label, description)) return null;
   const labelId = `${id}-label`;
   const descriptionId = `${id}-description`;
   const control = isValidElement<{ "aria-describedby"?: string; "aria-labelledby"?: string }>(children)
     ? cloneElement(children, { "aria-describedby": descriptionId, "aria-labelledby": labelId })
     : children;
-  return <div className="settings-row"><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{control}</div></div>;
+  return <div className="settings-row" data-setting=""><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{control}</div></div>;
+}
+
+/** A row whose controls are buttons that keep their own names. */
+function ActionRow({ id, label, description, danger = false, children }: { id: string; label: string; description: string; danger?: boolean; children: ReactNode }) {
+  const query = useContext(SearchContext);
+  if (!matches(query, label, description)) return null;
+  return <div className={`settings-row${danger ? " settings-row--danger" : ""}`} data-setting="">
+    <div className="settings-copy"><strong id={`${id}-label`}>{label}</strong><p id={`${id}-description`}>{description}</p></div>
+    <div className="settings-control settings-actions" role="group" aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`}>{children}</div>
+  </div>;
 }
 
 type NotificationFeedback = { tone: "success" | "warning" | "error"; message: string };
@@ -85,9 +112,9 @@ function NotificationSettings({ preferences, patch }: { preferences: AppPreferen
   // Desktop alerts on Windows need the app identity an installation registers.
   const windowsHelp = permission !== null && permission !== "unavailable" && /Windows/i.test(navigator.userAgent) ? copy.windowsHelp : null;
   const setCategory = (key: keyof NotificationPreferences, value: boolean) => patch({ notifications: { ...preferences.notifications, [key]: value } });
-  const showPermission = !query || `${copy.permission} ${copy.permissionDesc}`.toLocaleLowerCase().includes(query);
+  const showPermission = matches(query, copy.permission, copy.permissionDesc);
   return <>
-    {showPermission && <div className="settings-row settings-notification-permission">
+    {showPermission && <div className="settings-row settings-notification-permission" data-setting="">
       <div className="settings-copy">
         <strong id="settings-notification-permission-label">{copy.permission}</strong>
         <p>{copy.permissionDesc}</p>
@@ -128,7 +155,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   const [saveState, showSaved] = useFlashMessage(1800);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [wiping, setWiping] = useState(false);
-  const [wipeNotice, setWipeNotice] = useState<string | null>(null);
+  const [wipeResult, setWipeResult] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const trayCopy = closeToTrayText[locale];
   const prefCopy = preferenceText[locale];
   const personalizationCopy = personalizationText[locale];
@@ -149,15 +176,14 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
 
   const wipeConversationData = async () => {
     setWiping(true);
-    setWipeNotice(null);
+    setWipeResult(null);
     try {
       // Both stores hold readable content: the workspace keeps message text,
       // the index keeps the extracted document chunks it embedded.
       await clearChatWorkspace(clearDocumentIndex);
-      setWipeNotice(t("ui.wipeDataDone"));
-      setIoError(null);
+      setWipeResult({ tone: "success", message: t("ui.wipeDataDone") });
     } catch (error) {
-      setIoError(`${t("ui.wipeDataFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      setWipeResult({ tone: "error", message: normalizeDisplayText(`${t("ui.wipeDataFailed")}: ${error instanceof Error ? error.message : String(error)}`) });
     } finally {
       setWiping(false);
       setConfirmWipe(false);
@@ -202,9 +228,8 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     }
   };
 
-
   return <div className="app-page-scroll settings-page">
-    <div className="settings-header"><div><h2>{t("settings.title")}</h2><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined}>{saveState === "saved" ? <StatusBadge label={t("common.saved")} tone="success" /> : "—"}</span></div>
+    <div className="settings-header"><div><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined}>{saveState === "saved" ? <StatusBadge label={t("common.saved")} tone="success" /> : "—"}</span></div>
     <div className="settings-layout">
       <input type="search" className="app-input settings-search" aria-label={search.label} placeholder={search.label} value={query} onChange={event => setQuery(event.target.value)} />
       <TabNav
@@ -219,84 +244,86 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
       />
       <SearchContext.Provider value={normalizedQuery}>
       <section className={`settings-content${normalizedQuery ? " is-searching" : ""}`} role="tabpanel" id="settings-tabpanel" aria-labelledby={normalizedQuery ? undefined : `settings-tab-${section}`} aria-label={normalizedQuery ? search.label : undefined} tabIndex={-1}>
-        {(normalizedQuery || section === "general") && <>
-          <h3>{t("settings.general")}</h3>
+        {(normalizedQuery || section === "general") && <Group id="general" title={t("settings.general")}>
           <Row id="settings-language" label={t("settings.language")} description={t("settings.languageDesc")}>
-            <CustomSelect id="settings-language" value={locale} options={localeOptions} onChange={(next) => { setLocale(next); patch({ locale: next }); }} triggerClassName="w-[180px]" />
+            <CustomSelect id="settings-language" value={locale} options={localeOptions} onChange={(next) => { setLocale(next); patch({ locale: next }); }} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-density" label={t("settings.density")} description={t("settings.densityDesc")}>
-            <CustomSelect id="settings-density" value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="w-[180px]" />
+            <CustomSelect id="settings-density" value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="settings-select" />
           </Row>
           <AppUpdateSettings query={normalizedQuery} />
-        </>}
-        {(normalizedQuery || section === "appearance") && <>
-          <h3>{t("settings.appearance")}</h3>
-          <Row id="settings-reduce-motion" label={t("settings.reduceMotion")} description={t("settings.reduceMotionDesc")}>{bool("settings-reduce-motion", preferences.appearance.reduceMotion, (value) => patch({ appearance: { ...preferences.appearance, reduceMotion: value } }))}</Row>
+        </Group>}
+        {(normalizedQuery || section === "appearance") && <Group id="appearance" title={t("settings.appearance")}>
           <Row id="settings-theme" label={t("settings.theme")} description={t("settings.themeDesc")}>
-            <CustomSelect id="settings-theme" value={preferences.theme} options={[{ value: "light", label: t("theme.light") }, { value: "dark", label: t("theme.dark") }, { value: "system", label: t("theme.system") }]} onChange={(theme) => patch({ theme })} triggerClassName="w-[180px]" />
+            <CustomSelect id="settings-theme" value={preferences.theme} options={[{ value: "light", label: t("theme.light") }, { value: "dark", label: t("theme.dark") }, { value: "system", label: t("theme.system") }]} onChange={(theme) => patch({ theme })} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-font-family" label={prefCopy.appFont} description={prefCopy.appFontDesc}>
-            <CustomSelect<AppFontFamily> id="settings-font-family" value={preferences.appearance.fontFamily} options={[{ value: "default", label: prefCopy.fontDefault }, { value: "system", label: prefCopy.fontSystem }, { value: "serif", label: prefCopy.fontSerif }]} onChange={(fontFamily) => patch({ appearance: { ...preferences.appearance, fontFamily } })} triggerClassName="w-[180px]" />
+            <CustomSelect<AppFontFamily> id="settings-font-family" value={preferences.appearance.fontFamily} options={[{ value: "default", label: prefCopy.fontDefault }, { value: "system", label: prefCopy.fontSystem }, { value: "serif", label: prefCopy.fontSerif }]} onChange={(fontFamily) => patch({ appearance: { ...preferences.appearance, fontFamily } })} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-code-font" label={prefCopy.codeFont} description={prefCopy.codeFontDesc}>
-            <CustomSelect<CodeFontFamily> id="settings-code-font" value={preferences.appearance.codeFontFamily} options={[{ value: "default", label: prefCopy.codeFontDefault }, { value: "system", label: prefCopy.codeFontSystem }]} onChange={(codeFontFamily) => patch({ appearance: { ...preferences.appearance, codeFontFamily } })} triggerClassName="w-[180px]" />
+            <CustomSelect<CodeFontFamily> id="settings-code-font" value={preferences.appearance.codeFontFamily} options={[{ value: "default", label: prefCopy.codeFontDefault }, { value: "system", label: prefCopy.codeFontSystem }]} onChange={(codeFontFamily) => patch({ appearance: { ...preferences.appearance, codeFontFamily } })} triggerClassName="settings-select" />
           </Row>
           {!normalizedQuery && <figure className="settings-preview" aria-label={prefCopy.fontPreview}>
             <p style={{ fontFamily: appFontFamilyValue(preferences.appearance.fontFamily) }}>{prefCopy.fontPreviewText}</p>
             <pre className="settings-preview-code"><code style={{ fontFamily: codeFontFamilyValue(preferences.appearance.codeFontFamily) }}>{"const reply = await model.generate(prompt);\nconsole.log(reply.text); // 0O 1lI"}</code></pre>
           </figure>}
-        </>}
-        {(normalizedQuery || section === "chat") && <>
-          <h3>{t("settings.chat")}</h3>
+          <Row id="settings-reduce-motion" label={t("settings.reduceMotion")} description={t("settings.reduceMotionDesc")}>{bool("settings-reduce-motion", preferences.appearance.reduceMotion, (value) => patch({ appearance: { ...preferences.appearance, reduceMotion: value } }))}</Row>
+        </Group>}
+        {(normalizedQuery || section === "chat") && <Group id="chat" title={t("settings.chat")}>
           <Row id="settings-enter-to-send" label={t("settings.enterToSend")} description={t("settings.enterToSendDesc")}>{bool("settings-enter-to-send", preferences.chat.enterToSend, (value) => toggle("enterToSend", value))}</Row>
           <Row id="settings-stream" label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
           <Row id="settings-compact-messages" label={t("settings.compactMessages")} description={t("settings.compactMessagesDesc")}>{bool("settings-compact-messages", preferences.chat.compactMessages, (value) => toggle("compactMessages", value))}</Row>
           <Row id="settings-chat-line-spacing" label={prefCopy.lineSpacing} description={prefCopy.lineSpacingDesc}>
-            <CustomSelect<ChatLineSpacing> id="settings-chat-line-spacing" value={preferences.chat.lineSpacing} options={[{ value: "compact", label: prefCopy.lineSpacingCompact }, { value: "normal", label: prefCopy.lineSpacingNormal }, { value: "relaxed", label: prefCopy.lineSpacingRelaxed }]} onChange={(lineSpacing) => patch({ chat: { ...preferences.chat, lineSpacing } })} triggerClassName="w-[180px]" />
+            <CustomSelect<ChatLineSpacing> id="settings-chat-line-spacing" value={preferences.chat.lineSpacing} options={[{ value: "compact", label: prefCopy.lineSpacingCompact }, { value: "normal", label: prefCopy.lineSpacingNormal }, { value: "relaxed", label: prefCopy.lineSpacingRelaxed }]} onChange={(lineSpacing) => patch({ chat: { ...preferences.chat, lineSpacing } })} triggerClassName="settings-select" />
           </Row>
           {!normalizedQuery && <figure className="settings-preview" aria-label={prefCopy.lineSpacingPreview}>
             <p style={{ lineHeight: chatLineHeights[preferences.chat.lineSpacing].prose }}>{prefCopy.lineSpacingPreviewText}</p>
           </figure>}
-        </>}
-        {(normalizedQuery || section === "personalization") && <>
-          <h3>{personalizationCopy.title}</h3>
+        </Group>}
+        {(normalizedQuery || section === "personalization") && <Group id="personalization" title={personalizationCopy.title}>
           <PersonalizationSettings editor={personalization} query={normalizedQuery} instructionSources={preferences.personalization.instructionSources}
             onInstructionSourcesChange={instructionSources => patch({ personalization: { ...preferences.personalization, instructionSources } })} />
-        </>}
-        {(normalizedQuery || section === "notifications") && <>
-          <h3>{prefCopy.notifications}</h3>
+        </Group>}
+        {(normalizedQuery || section === "notifications") && <Group id="notifications" title={prefCopy.notifications}>
           <NotificationSettings preferences={preferences} patch={patch} />
-        </>}
-        {(normalizedQuery || section === "server") && <>
-          <h3>{t("settings.server")}</h3>
+        </Group>}
+        {(normalizedQuery || section === "server") && <Group id="server" title={t("settings.server")}>
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
-          {isNativeRuntimeAvailable() && <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>}
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
-            <div>
+            <div className="settings-control-stack">
               <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
-              {trayError && <FeedbackBanner tone="error" className="mt-2">{normalizeDisplayText(trayError)}</FeedbackBanner>}
+              {trayError && <FeedbackBanner tone="error">{normalizeDisplayText(trayError)}</FeedbackBanner>}
             </div>
           </Row>}
           <Row id="settings-polling" label={t("settings.polling")} description={t("settings.pollingDesc")}>
-            <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="w-[180px]" />
+            <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="settings-select" />
           </Row>
-        </>}
-        {(normalizedQuery || section === "advanced") && <>
-          <h3>{t("settings.advanced")}</h3>
+          {isNativeRuntimeAvailable() && <div className="settings-note"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>}
+        </Group>}
+        {(normalizedQuery || section === "advanced") && <Group id="advanced" title={t("settings.advanced")}>
           <Row id="settings-confirm-destructive" label={t("settings.confirmDestructive")} description={t("settings.confirmDestructiveDesc")}>{bool("settings-confirm-destructive", preferences.advanced.confirmDestructiveActions, (value) => patch({ advanced: { ...preferences.advanced, confirmDestructiveActions: value } }))}</Row>
-          <div className="settings-danger app-card app-card--tight"><strong>{t("settings.resetAction")}</strong><p>{resetCopy.resetHint}</p><button type="button" className="app-button app-button--danger" data-icon="reset" onClick={() => { setResetScope('all'); setConfirmReset(true); }}>{t("settings.resetAction")}</button></div>
-          {ioError && !normalizedQuery && <FeedbackBanner tone="error" className="m-3">{normalizeDisplayText(ioError)}</FeedbackBanner>}
-          <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("settings.backupTitle")}</strong><p>{t("settings.backupDescription")}</p><div className="mt-3 flex flex-wrap gap-2.5"><button type="button" className="app-button app-button--secondary" data-icon="upload" onClick={downloadExport}>{t("settings.export")}</button><label data-icon="upload" className="app-button app-button--secondary cursor-pointer">{t("settings.import")}
-<input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label></div></div>
-          <div className="settings-danger app-card app-card--tight"><strong>{t("ui.wipeDataTitle")}</strong><p>{t("ui.wipeDataDescription")}</p><button type="button" className="app-button app-button--danger" data-icon="delete" disabled={wiping} onClick={() => setConfirmWipe(true)}>{t("ui.wipeDataAction")}</button></div>
-          <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("settings.nativeTitle")}</strong><p>{t("settings.nativeMessage")}</p></div>
-        </>}
+          <ActionRow id="settings-backup" label={t("settings.backupTitle")} description={t("settings.backupDescription")}>
+            <button type="button" className="app-button app-button--secondary" data-icon="upload" onClick={downloadExport}>{t("settings.export")}</button>
+            <label data-icon="upload" className="app-button app-button--secondary settings-file-button">{t("settings.import")}
+              <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+            </label>
+          </ActionRow>
+          {ioError && <FeedbackBanner tone="error" className="settings-row-feedback">{normalizeDisplayText(ioError)}</FeedbackBanner>}
+          <div className="settings-danger-zone" role="group" aria-labelledby="settings-danger-title">
+            <h3 id="settings-danger-title">{dangerText[locale].title}</h3>
+            <ActionRow id="settings-reset" label={t("settings.resetAction")} description={resetCopy.resetHint} danger>
+              <button type="button" className="app-button app-button--danger" data-icon="reset" onClick={() => { setResetScope('all'); setConfirmReset(true); }}>{t("settings.resetAction")}</button>
+            </ActionRow>
+            <ActionRow id="settings-wipe" label={t("ui.wipeDataTitle")} description={t("ui.wipeDataDescription")} danger>
+              <button type="button" className="app-button app-button--danger" data-icon="delete" disabled={wiping} onClick={() => setConfirmWipe(true)}>{t("ui.wipeDataAction")}</button>
+            </ActionRow>
+            {wipeResult && <FeedbackBanner tone={wipeResult.tone} className="settings-row-feedback">{wipeResult.message}</FeedbackBanner>}
+          </div>
+          {!isNativeRuntimeAvailable() && <div className="settings-note"><strong>{t("settings.nativeTitle")}</strong><p>{t("settings.nativeMessage")}</p></div>}
+        </Group>}
       </section>
       {normalizedQuery && <p className="settings-no-results" role="status">{search.empty}</p>}
       </SearchContext.Provider>
-    </div>
-    <div className="settings-wipe-slot">
-      {wipeNotice && <FeedbackBanner tone="success">{wipeNotice}</FeedbackBanner>}
     </div>
     <ConfirmDialog
       open={confirmWipe}
@@ -310,7 +337,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     />
     <ConfirmDialog open={confirmReset} title={t("settings.resetAction")} description={<>
       <p>{resetCopy.resetHint}</p><fieldset className="grid gap-2 mt-3"><legend>{resetCopy.scope}</legend>
-        {(['all', 'chat', 'server', 'appearance', 'advanced', 'notifications'] as const).map(scope => <label key={scope} className="flex items-center gap-2">
+        {(['all', 'chat', 'server', 'appearance', 'advanced', 'notifications'] as const).map(scope => <label key={scope} className="settings-reset-choice flex items-center gap-2">
           <input type="radio" name="settings-reset-scope" value={scope} checked={resetScope === scope} onChange={() => setResetScope(scope)} />{resetCopy[scope]}
         </label>)}
       </fieldset>

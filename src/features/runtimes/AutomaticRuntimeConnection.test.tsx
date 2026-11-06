@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/runtimeAuto';
 import { pickRuntimePath } from '../../shared/api/runtimeHelp';
@@ -124,6 +124,28 @@ it('shows an inspection failure and does not offer an unverified connection', as
   expect(screen.getByRole('alert')).toHaveTextContent('No supported API was observed.');
   expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
   expect(api.runtimeAutoConnect).not.toHaveBeenCalled();
+});
+
+it('identifies a failed rediscovery without blaming the previously inspected connection', async () => {
+  show();
+  await find();
+  vi.mocked(api.runtimeAutoDiscover).mockRejectedValueOnce(new Error('Discovery is unavailable.'));
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Discovery is unavailable.');
+  const progress = screen.getByRole('list', { name: 'Connection progress' });
+  expect(within(progress).getByRole('listitem', { current: 'step' })).toHaveTextContent('Find or choose a folder');
+  // Retain the usable inspected candidate instead of discarding it after a search failure.
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+});
+
+it('identifies inspection failure when a single discovery was inspected automatically', async () => {
+  vi.mocked(api.runtimeAutoInspect).mockRejectedValueOnce(new Error('Candidate inspection failed.'));
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Candidate inspection failed.');
+  const progress = screen.getByRole('list', { name: 'Connection progress' });
+  expect(within(progress).getByRole('listitem', { current: 'step' })).toHaveTextContent('Inspect a candidate');
+  expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
 });
 
 it('requires a choice when several models are available', async () => {

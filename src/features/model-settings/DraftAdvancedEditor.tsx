@@ -59,7 +59,7 @@ const AdvancedOptionRow = memo(function AdvancedOptionRow({
   const switchId = `${idPrefix}-${option.id}-enabled`;
   // A configured option starts expanded to show its value; editing it later never collapses the row.
   const [initiallyOpen] = useState(checked);
-  return <div className="model-settings-option app-card app-card--tight"><details open={initiallyOpen}><summary><code>{option.id}</code></summary>
+  return <div className="model-settings-option"><details open={initiallyOpen}><summary><code>{option.id}</code></summary>
     {option.arity === 0
       ? <div className="model-settings-option-toggle"><Switch id={switchId} aria-describedby={describedBy} checked={checked} disabled={disabled}
           onChange={enabled => onSet(option, enabled ? [{ flag: option.id, values: [] }] : [])} /><label htmlFor={switchId}><span className="sr-only">{option.id}</span> {enabledLabel}</label></div>
@@ -128,7 +128,7 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   };
 
   return <div className="model-settings-fields">
-    <div role="group" aria-label={choice.editor}>
+    <div role="group" aria-label={choice.editor} className="model-settings-segmented">
       <button type="button" className="app-button app-button--secondary" aria-pressed={!direct} disabled={disabled || invalidFields.size > 0} onClick={() => switchMode(false)}>{choice.guided}</button>
       <button type="button" className="app-button app-button--secondary" aria-pressed={direct} disabled={disabled || invalidFields.size > 0} onClick={() => switchMode(true)}>{choice.direct}</button>
     </div>

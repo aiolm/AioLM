@@ -9,13 +9,16 @@ export default function SettingsFlowNav({ step, runtime, profile, canProfile, ca
 }) {
   const { locale } = useI18n(); const copy = settingsFlowCopy[locale];
   return <nav className="model-settings-flow" aria-label={copy.journey}>
-    <ol>{(['runtime', 'profile', 'options'] as const).map((value, index) => <li key={value}>
-      <button type="button" aria-current={step === value ? 'step' : undefined}
-        disabled={disabled || value === 'profile' && !canProfile || value === 'options' && !canOptions}
-        onClick={() => onSelect(value)}>
-        <span className="model-settings-step-number" aria-hidden="true">{index + 1}</span>
-        <span><strong>{copy[value]}</strong>{value !== 'options' && <small>{(value === 'runtime' ? runtime : canProfile ? profile : '') || copy.choose}</small>}</span>
-      </button>
-    </li>)}</ol>
+    <ol>{(['runtime', 'profile', 'options'] as const).map((value, index) => {
+      const summary = value === 'options' ? '' : (value === 'runtime' ? runtime : canProfile ? profile : '') || copy.choose;
+      return <li key={value}>
+        <button type="button" aria-current={step === value ? 'step' : undefined}
+          disabled={disabled || value === 'profile' && !canProfile || value === 'options' && !canOptions}
+          onClick={() => onSelect(value)}>
+          <span className="model-settings-step-number" aria-hidden="true">{index + 1}</span>
+          <span><strong>{copy[value]}</strong>{summary && <small title={summary}>{summary}</small>}</span>
+        </button>
+      </li>;
+    })}</ol>
   </nav>;
 }

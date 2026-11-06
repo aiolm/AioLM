@@ -40,13 +40,15 @@ function PathField({ label, value, kind, disabled, required = false, copy, onCha
 }) {
   const id = useId();
   return (
-    <span className="entrypoint-path">
+    <div className="entrypoint-field">
       <label htmlFor={id}>{label}</label>
-      <input id={id} name={label} className="app-input" value={value} disabled={disabled} required={required}
-        autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => onChange(event.target.value)} />
-      <button type="button" className="app-button app-button--secondary" disabled={disabled}
-        onClick={() => void pickRuntimePath(kind).then(path => { if (path) onChange(path); })}>{copy.choose}</button>
-    </span>
+      <span className="entrypoint-path">
+        <input id={id} name={label} className="app-input" value={value} disabled={disabled} required={required}
+          autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => onChange(event.target.value)} />
+        <button type="button" className="app-button app-button--secondary" disabled={disabled}
+          onClick={() => void pickRuntimePath(kind).then(path => { if (path) onChange(path); })}>{copy.choose}</button>
+      </span>
+    </div>
   );
 }
 
@@ -81,7 +83,7 @@ function BindingField({ label, state, optional, documented, positionalDocumented
           options={[{ value: '', label: copy.flagChoice }, ...documented.map(flag => ({ value: flag, label: flag }))]}
           onChange={flag => onChange({ ...state, flag })} />
       ) : (
-        <span>
+        <span className="entrypoint-field">
           <label htmlFor={`${id}-flag`}>{copy.flagText}</label>
           <input id={`${id}-flag`} name={`${label}-flag`} className="app-input" value={state.flag} disabled={disabled}
             autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => onChange({ ...state, flag: event.target.value })} />
@@ -323,6 +325,11 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
     <section className="app-card app-card--tight mb-4 entrypoint-registration" aria-labelledby={`${id}-title`}>
       <h3 id={`${id}-title`} ref={titleRef} tabIndex={-1} className="app-section-title">{copy.title}</h3>
       <p className="app-section-hint">{copy.hint}</p>
+      <nav aria-label={copy.steps}>
+        <ol className="entrypoint-steps">
+          {steps.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>{label}</li>)}
+        </ol>
+      </nav>
       <div hidden={step !== 0}><AdapterSetupPanel disabled={disabled} onBusyChange={setBusy} onPrepared={prepared => {
         if (pendingRegistration.current) return;
         const binding = (value: ArgBinding | null | undefined): BindingState => value?.kind === 'flag'
@@ -347,12 +354,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
         setHelpArgs(['--help']); setFound(null); setSkipHelp(false); setManifest(''); setDone(false); setError('');
         setStep(1);
       }} /></div>
-      <nav aria-label={copy.steps}>
-        <ol className="entrypoint-steps">
-          {steps.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>{label}</li>)}
-        </ol>
-      </nav>
-      {locked && !busy && <p>{copy.locked}</p>}
+      {locked && !busy && <p className="app-section-hint">{copy.locked}</p>}
       <form action="#" method="POST" onSubmit={event => event.preventDefault()}>
         {step === 0 && (
           <div className="model-settings-fields">
@@ -439,7 +441,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
                 {!current.result[1].help_complete && <FeedbackBanner tone="error">{copy.incomplete}</FeedbackBanner>}
                 <details>
                   <summary>{copy.rawHelp}</summary>
-                  <pre className="overflow-auto whitespace-pre-wrap">{[current.result[0].stdout.clean_text, current.result[0].stderr.clean_text].filter(Boolean).join('\n')}</pre>
+                  <pre className="entrypoint-raw">{[current.result[0].stdout.clean_text, current.result[0].stderr.clean_text].filter(Boolean).join('\n')}</pre>
                 </details>
               </div>
             )}
@@ -496,7 +498,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
             )}
           </div>
         )}
-        <div className="app-page-actions mt-3">
+        <div className="app-page-actions entrypoint-footer">
           {step > 0 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => { if (!pendingRegistration.current) setStep((step - 1) as Step); }}>{copy.previous}</button>}
           {step < 2 && <button type="button" className="app-button app-button--secondary" disabled={disabled || !canContinue} onClick={() => { if (!pendingRegistration.current) setStep((step + 1) as Step); }}>{copy.next}</button>}
           {step === 2 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void review()}>{copy.review}</button>}

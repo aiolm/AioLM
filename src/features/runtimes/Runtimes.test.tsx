@@ -787,6 +787,17 @@ describe('neutral inference engine inventory', () => {
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
   });
 
+  it('keeps the focused Add action usable when an empty inventory finishes loading', async () => {
+    vi.mocked(api.providerRuntimes).mockResolvedValueOnce([]);
+    render(panel());
+    const add = screen.getByRole('button', { name: 'Add inference engine' });
+    add.focus();
+    await screen.findByRole('heading', { name: 'Add an inference engine' });
+    expect(add).toHaveFocus();
+    fireEvent.click(add);
+    expect(await screen.findByRole('button', { name: 'Find automatically' })).toBeEnabled();
+  });
+
   it('refreshes a published engine without announcing success and keeps real sibling locks during help-only recovery', async () => {
     vi.mocked(runtimeHelp.entrypointHelpDiscover).mockReset().mockResolvedValue(HELP_RESULT);
     vi.mocked(runtimeHelp.entrypointManifestPreview).mockReset().mockResolvedValue(REGISTERED);

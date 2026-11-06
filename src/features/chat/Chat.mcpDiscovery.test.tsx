@@ -42,7 +42,7 @@ it.each(['success', 'failure'] as const)('retains a request error when an earlie
   const summary = screen.getByText('MCP tools');
   fireEvent.click(summary);
   fireEvent.click(screen.getByRole('button', { name: 'Load MCP tools' }));
-  await screen.findByText('Synthetic tools · echo');
+  await screen.findByLabelText('Synthetic tools · echo');
   await waitFor(() => expect(screen.getByRole('button', { name: 'Load MCP tools' })).toBeEnabled());
 
   let complete!: (value: api.McpTool[]) => void;
@@ -54,8 +54,8 @@ it.each(['success', 'failure'] as const)('retains a request error when an earlie
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
   const log = within(screen.getByRole('log', { name: 'Conversation' }));
   await log.findByText(requestError);
-  expect(document.querySelector('.chat-composer-status')).toHaveTextContent('Request failed');
-  expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('Response complete');
+  expect(screen.getByRole('status', { name: 'Conversation' })).toHaveTextContent('Request failed');
+  expect(screen.getByRole('status', { name: 'Conversation' })).not.toHaveTextContent('Response complete');
   await act(async () => {
     if (outcome === 'success') complete(tools);
     else fail(new Error('Synthetic discovery unavailable'));
@@ -63,6 +63,7 @@ it.each(['success', 'failure'] as const)('retains a request error when an earlie
   expect(log.getByText(requestError)).toBeInTheDocument();
   if (outcome === 'failure') {
     expect(screen.getByText('MCP tool discovery failed: Synthetic discovery unavailable')).toBeInTheDocument();
+    fireEvent.click(summary);
     fireEvent.click(screen.getByRole('button', { name: 'Load MCP tools' }));
     await waitFor(() => expect(screen.queryByText('MCP tool discovery failed: Synthetic discovery unavailable')).not.toBeInTheDocument());
     expect(log.getByText(requestError)).toBeInTheDocument();

@@ -66,39 +66,31 @@ export interface ModelSettingsDialogProps {
 
 const normalizeSection = (section = 'model') => ({ setup: 'runtime', gpu: 'runtime', lora: 'adapters', server: 'tuning', options: 'advanced', escape: 'advanced' }[section] ?? section);
 
-// Narrow short windows scroll the whole dialog as one column (model-settings.css).
+// Narrow or short windows scroll the header, steps and editor as one region
+// above a separate footer (model-settings.css); nothing is pinned over fields.
 const dialogScroller = (outer: HTMLElement | null) =>
   outer && getComputedStyle(outer).overflowY === 'auto' && outer.scrollHeight > outer.clientHeight ? outer : null;
-const pinnedHeight = (outer: HTMLElement) => ['.model-settings-nav', '.model-settings-context']
-  .reduce((sum, selector) => sum + (outer.querySelector(selector)?.getBoundingClientRect().height ?? 0), 0);
-// Keyboard focus in a dialog-wide scroll keeps the focused control clear of the
-// pinned bands it is not part of. The WebView's own focus scroll ignores scroll
-// margins, and a scroll padding on the dialog treated the pinned bands' own
-// controls as hidden, scrolling the editor away when they took focus.
+// Keyboard focus in a region-wide scroll keeps the focused control clear of the
+// scroll edges. The WebView's own focus scroll ignores scroll margins.
 const revealFocused = (outer: HTMLElement, target: HTMLElement) => {
   // Portalled menus bubble focus here through React but are not in this scroll.
   if (!outer.contains(target)) return;
-  const shown = (element: HTMLElement | null): element is HTMLElement => !!element && element.getClientRects().length > 0;
-  const footer = outer.querySelector<HTMLElement>('.model-settings-footer');
-  if (footer?.contains(target)) return;
-  const bands = ['.model-settings-nav', '.model-settings-context']
-    .map(selector => outer.querySelector<HTMLElement>(selector)).filter(shown);
+  // A tab column pinned beside the editor in a short wide window is always in view.
+  const tabs = target.closest<HTMLElement>('.model-settings-nav');
+  if (tabs && getComputedStyle(tabs).position === 'sticky') return;
   const box = outer.getBoundingClientRect();
   const field = target.getBoundingClientRect();
   const gap = 16;
-  const bottom = (shown(footer) ? footer.getBoundingClientRect().top : box.bottom) - gap;
-  // The model and steps come before the bands: covered by them, they scroll back into view.
-  if (bands[0] && bands[0].compareDocumentPosition(target) & Node.DOCUMENT_POSITION_PRECEDING) {
-    if (field.top < box.top || field.bottom > bands[0].getBoundingClientRect().top) outer.scrollTop += field.top - box.top - gap;
-    return;
-  }
-  const top = (bands.some(band => band.contains(target)) ? box.top : Math.max(box.top, ...bands.map(band => band.getBoundingClientRect().bottom))) + gap;
+  const top = box.top + gap;
+  const bottom = box.bottom - gap;
   if (field.top < top) outer.scrollTop -= top - field.top;
   else if (field.bottom > bottom) outer.scrollTop += Math.min(field.bottom - bottom, field.top - top);
 };
-// The dialog scroll position that puts the options panel start just under the pinned bands.
-const panelStart = (outer: HTMLElement, panel: HTMLElement) =>
-  outer.scrollTop + panel.getBoundingClientRect().top - outer.getBoundingClientRect().top - pinnedHeight(outer);
+// The region scroll position that starts the options layout (tabs, profile bar, editor) at the top.
+const layoutStart = (outer: HTMLElement) => {
+  const layout = outer.querySelector<HTMLElement>('.model-settings-layout');
+  return layout ? outer.scrollTop + layout.getBoundingClientRect().top - outer.getBoundingClientRect().top : 0;
+};
 
 const modalityLabel: Record<Locale, Record<string, string>> = {
   en: { text: 'text', image: 'image', audio: 'audio', video: 'video' },
@@ -131,6 +123,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [profileBannerTarget, setProfileBannerTarget] = useState<HTMLDivElement | null>(null);
   const latest = useRef(cfg); latest.current = cfg;
   const [requestedSection, setSection] = useState(normalizeSection(initialSection));
+  const [tabOrientation, setTabOrientation] = useState<'horizontal' | 'vertical'>('vertical');
   const sections = external
     ? (['model', 'options', 'prompt'] as const).filter(value => mode !== 'benchmark' || value !== 'prompt')
     : ['model', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const;
@@ -140,21 +133,21 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     ? 'options' : !external && requestedSection === 'prompt' ? 'sampling' : requestedSection;
   const section = sections.find(value => value === mappedSection) ?? (external ? 'options' : 'model');
   const body = useRef<HTMLDivElement>(null);
-  const shell = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const focusFrame = useRef<number | null>(null);
   useLayoutEffect(() => () => {
     if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
     focusFrame.current = null;
   }, [open]);
   // Sections are tall; arriving at one part-scrolled from the last shows its
-  // middle, which reads as a half-rendered panel. When the dialog scrolls as a
-  // whole, the panel start returns under the pinned tab row and profile bar
-  // unless it is already in view.
+  // middle, which reads as a half-rendered panel. When the header, steps and
+  // editor scroll as one region, the tabs and panel start return to the top
+  // unless they are already in view.
   const showSection = (value: string) => {
     setSection(value); body.current?.scrollTo({ top: 0 });
-    const outer = dialogScroller(shell.current); const panel = body.current;
-    if (!outer || !panel) return;
-    const start = panelStart(outer, panel);
+    const outer = dialogScroller(scroller.current);
+    if (!outer) return;
+    const start = layoutStart(outer);
     if (start < outer.scrollTop) outer.scrollTo({ top: Math.max(0, start) });
   };
   const [query, setQuery] = useState('');
@@ -229,41 +222,41 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     stepFocus.current = null;
     if (document.activeElement === request.previous || document.activeElement === document.body || document.activeElement === heading.current) flowHeading.current?.focus({ preventScroll: true });
     body.current?.scrollTo({ top: 0 });
-    // A dialog-wide scroll also starts the step from the top, with its focused
-    // heading moved just clear of the pinned footer.
-    const outer = dialogScroller(shell.current);
+    // A region-wide scroll also starts the step from the top, with its focused
+    // heading moved into view.
+    const outer = dialogScroller(scroller.current);
     if (outer) { outer.scrollTo({ top: 0 }); flowHeading.current?.scrollIntoView({ block: 'nearest' }); }
   }, [flow]);
-  // The pinned profile bar sits just below the pinned tab row; its height
-  // changes with locale and wrapping.
-  // In a dialog-wide scroll the options step opens with the model, steps and
-  // their metadata scrolled above the pinned bands (the profile bar keeps the
-  // model and profile named) and the editor starting just below them. The
-  // profile bar can still grow after this commit, so the start is kept until
-  // the dialog is scrolled some other way.
+  // In a region-wide scroll the options step opens with the header and steps
+  // scrolled away and the tabs, profile bar (which names the model and
+  // profile) and editor starting at the top. The header's model metadata can
+  // still change height after this commit, so the start is kept until the
+  // region is scrolled some other way.
   const optionsStep = step === 'options';
   useLayoutEffect(() => {
-    const outer = shell.current;
-    const tabs = outer?.querySelector<HTMLElement>('.model-settings-nav');
-    const context = outer?.querySelector<HTMLElement>('.model-settings-context');
-    if (!outer || !tabs || !context || typeof ResizeObserver === 'undefined') return;
+    const outer = scroller.current;
+    const header = outer?.querySelector<HTMLElement>('.model-settings-header');
+    const steps = outer?.querySelector<HTMLElement>('.model-settings-flow');
+    if (!optionsStep || !outer || !header || !steps || typeof ResizeObserver === 'undefined') return;
+    const syncTabOrientation = () => {
+      const tabs = outer.querySelector<HTMLElement>('.model-settings-nav');
+      if (tabs) setTabOrientation(getComputedStyle(tabs).flexDirection === 'row' ? 'horizontal' : 'vertical');
+    };
     let entryTop: number | null = null;
     const alignEntry = () => {
-      const panel = body.current;
-      if (!dialogScroller(outer) || !panel) { entryTop = null; return; }
-      outer.scrollTo({ top: Math.max(0, panelStart(outer, panel)) });
+      if (!dialogScroller(outer)) { entryTop = null; return; }
+      outer.scrollTo({ top: Math.max(0, layoutStart(outer)) });
       entryTop = outer.scrollTop;
     };
-    const publish = () => {
-      outer.style.setProperty('--model-settings-tabs', `${tabs.offsetHeight}px`);
-      if (entryTop !== null) {
-        if (outer.scrollTop === entryTop) alignEntry(); else entryTop = null;
-      }
-    };
-    if (optionsStep) alignEntry();
-    const observer = new ResizeObserver(publish);
-    observer.observe(tabs); observer.observe(context); publish();
-    return () => { observer.disconnect(); outer.style.removeProperty('--model-settings-tabs'); };
+    syncTabOrientation();
+    alignEntry();
+    const observer = new ResizeObserver(() => {
+      syncTabOrientation();
+      if (entryTop === null) return;
+      if (outer.scrollTop === entryTop) alignEntry(); else entryTop = null;
+    });
+    observer.observe(header); observer.observe(steps);
+    return () => observer.disconnect();
   }, [optionsStep]);
   const navigateStep = (next: SettingsStep) => {
     if (disabled || profileDirty || next === 'profile' && !canProfile || next === 'options' && !canOptions) return;
@@ -523,7 +516,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     }}
     onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
-      <div className="model-settings-shell" ref={shell} onFocus={event => {
+      <div className="model-settings-shell">
+      <div className="model-settings-main" ref={scroller} onFocus={event => {
         if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
         focusFrame.current = null;
         const outer = dialogScroller(event.currentTarget);
@@ -536,20 +530,20 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         const own = dialog.current;
         focusFrame.current = requestAnimationFrame(() => {
           focusFrame.current = null;
-          if (!own?.open || dialog.current !== own || shell.current !== outer
+          if (!own?.open || dialog.current !== own || scroller.current !== outer
             || !target.isConnected || document.activeElement !== target
             || target.closest('dialog') !== own || target.closest('[hidden], [inert]')
             || Array.from(document.querySelectorAll('dialog[open]')).at(-1) !== own) return;
           revealFocused(outer, target);
         });
       }}>
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2>{step === 'options' && <><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></>}</div>
+        <header className="model-settings-header"><div className="model-settings-heading"><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2>{(step === 'options' || !!cfg.active_model) && <p className="model-settings-target" title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} /><span><ModelName model={cfg.active_model} empty={copy.model} /></span></p>}{step === 'options' && <ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} />}</div>
           <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>
         </header>
         <div inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={`${api.providerDisplayName(provider)} · ${runtimeSelection || flowCopy.choose}`} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
         <div className={`model-settings-layout${step !== 'options' ? ' model-settings-layout--setup' : ''}`} inert={!!pending || confirmSave || disabled}>
           {step === 'options' && <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
-            tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />}
+            tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation={tabOrientation} className="model-settings-nav" />}
           <div className="model-settings-content">
             <div className="model-settings-context" hidden={step !== 'options'}>
               <p className="model-settings-context-model" title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} /><span><ModelName model={cfg.active_model} empty={copy.model} /></span></p>
@@ -574,7 +568,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               onApply={selectProfile}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
-              saveAction={step !== 'runtime' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
+              saveAction={step !== 'runtime' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
             <div hidden={step !== 'options'}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
             {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
@@ -604,14 +598,14 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} draftDevice={cfg.spec_draft_device} onDraftDeviceChange={spec_draft_device => change({ spec_draft_device })} onInvalid={setFieldInvalid} />}
             </div>}
-            {!benchmark && (external ? section === 'prompt' : section === 'sampling') && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea app-textarea--editable" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{external ? copy.promptScope : profileCopy.promptHint}</small></div>}
+            {!benchmark && (external ? section === 'prompt' : section === 'sampling') && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{external ? copy.promptScope : profileCopy.promptHint}</small></div>}
             <div hidden={!llama || !['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
               <div hidden={section !== 'adapters'} className="model-settings-fields">
                 {sidecar('mmproj', copy.projector, true)}{sidecar('spec_draft_model', copy.draftModel, false)}
                 <h3>LoRA</h3><p id={`${id}-lora-help`} className="app-section-hint">{help.loraPath}</p>
                 {cfg.lora_adapters.map((adapter, index) => <div key={adapter.path} className="model-settings-lora app-card app-card--tight"><strong title={normalizeDisplayPath(adapter.path)}><ModelIcon model={adapter.path} />{modelDisplayName(adapter.path)}<ModelBadges mode="compact" model={adapter.path} localPath={adapter.path} /></strong><span className="model-settings-lora-toggle"><label htmlFor={`${id}-lora-${index}-enabled`}>{copy.enabled}</label><Switch id={`${id}-lora-${index}-enabled`} aria-describedby={`${id}-lora-enabled-help`} checked={adapter.enabled} onChange={enabled => change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, enabled } : item) })} /></span>
                   <label>{copy.scale}<input className="app-input" aria-describedby={`${id}-lora-scale-help`} type="number" min="0" max="4" step="0.05" value={adapter.scale} onChange={event => { const scale = Number(event.target.value); if (Number.isFinite(scale) && scale >= 0 && scale <= 4) change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, scale } : item) }); }} /></label>
-                  <button type="button" className="app-button app-button--ghost" data-icon="delete" onClick={() => change({ lora_adapters: cfg.lora_adapters.filter((_, i) => i !== index) })}>{copy.remove}</button></div>)}
+                  <button type="button" className="app-button app-button--ghost app-button--danger app-button--sm" data-icon="delete" onClick={() => change({ lora_adapters: cfg.lora_adapters.filter((_, i) => i !== index) })}>{copy.remove}</button></div>)}
                 {cfg.lora_adapters.length > 0 && <div className="app-section-hint"><p id={`${id}-lora-enabled-help`}>{help.loraEnabled}</p><p id={`${id}-lora-scale-help`}>{help.loraScale}</p></div>}
                 <button type="button" className="app-button app-button--secondary" aria-describedby={`${id}-lora-help`} data-icon="add" onClick={() => void api.pickLoraAdapter().then(path => { if (path) change({ lora_adapters: [...latest.current.lora_adapters.filter(item => item.path !== path), { path, enabled: true, scale: 1 }] }); }).catch(cause => setError(String(cause)))}>{copy.addLora}</button>
               </div>
@@ -628,6 +622,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             </div>
             </div>
           </div>
+        </div>
         </div>
         <footer className="model-settings-footer">
           <div className="model-settings-footer-summary" tabIndex={0}>

@@ -317,61 +317,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
 
   return (
     <div className="app-page-scroll chat-page">
-      <ChatConversationHeader
-        threadPanelOpen={threadPanelOpen}
-        setThreadPanelOpen={setThreadPanelOpen}
-        activeThread={activeThread}
-        activeProjectName={activeProjectName}
-        phase={phase}
-        targetBusy={pendingToolCall !== null || startingSession}
-        onUpdateThread={updateActiveThread}
-        sessionLabel={t("ui.sessionsTitle")}
-        sessionOptions={[
-          { id: "default", label: t("ui.defaultSession") },
-          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${sessionPort(session) || "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
-        ]}
-        selectedSessionId={selectedSessionId}
-        embedding={selectedStatus.engine || availableEmbeddingSessions.length ? {
-          label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
-          options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
-            ...availableEmbeddingSessions.map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
-            ...(!['auto', 'lexical'].includes(embeddingSelection) && !availableEmbeddingSessions.some(session => session.id === embeddingSelection)
-              ? [{ value: embeddingSelection, label: `${embeddingCopy.unavailable} · ${embeddingSelection}` }] : [])],
-          onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },
-        } : undefined}
-        model={model || configuredModel}
-        runtimeConfig={selectedStatus.engine ? { ...effectiveConfig, active_provider: selectedStatus.engine.provider, active_runtime: selectedStatus.engine.runtime_id } : effectiveConfig}
-        onSelectSession={(id) => { if (requireIdle()) { setSelectedSessionId(id); skills.clearSelectedSkills(); } }}
-        ct={ct}
-      />
-
-      <details className="mb-3 rounded-lg border p-3 ui-border-color-border">
-        <summary>{mediaCopy.label}</summary>
-        <p className="my-2 text-sm">{mediaCopy.hint}</p>
-        <label className="mr-3 inline-flex items-center gap-2">
-          {mediaCopy.audio}
-          <CustomSelect value={audioSessionId} disabled={phase !== 'idle' || pendingToolCall !== null}
-            onChange={setAudioSessionId} ariaLabel={mediaCopy.audio}
-            options={[{ value: '', label: mediaCopy.native },
-              ...speechSessions.map(session => {
-                const rawModel = session.model ?? '';
-                const shortened = isModelFilePath(rawModel);
-                const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : rawModel;
-                return {
-                  value: session.id,
-                  label: `${session.name || session.id} · ${modelLabel}`,
-                  title: shortened ? normalizeDisplayPath(rawModel) : undefined,
-                };
-              }),
-              ...(audioSessionId && !speechSessions.some(session => session.id === audioSessionId)
-                ? [{ value: audioSessionId, label: `${audioSessionId} · ${t('ui.sessionStopped')}`, disabled: true }] : [])]} />
-        </label>
-        <label className="inline-flex items-center gap-2">
-          <input type="checkbox" checked={videoFrames} disabled={!visionReady || phase !== 'idle' || pendingToolCall !== null}
-            onChange={event => setVideoFrames(event.target.checked)} />
-          {mediaCopy.video}
-        </label>
-      </details>
 
       <div className="chat-layout">
         <ChatThreadSidebar
@@ -389,6 +334,62 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
         />
 
         <div className="chat-conversation">
+          <ChatConversationHeader
+            threadPanelOpen={threadPanelOpen}
+            setThreadPanelOpen={setThreadPanelOpen}
+            activeThread={activeThread}
+            activeProjectName={activeProjectName}
+            phase={phase}
+            targetBusy={pendingToolCall !== null || startingSession}
+            onUpdateThread={updateActiveThread}
+            sessionLabel={t("ui.sessionsTitle")}
+            sessionOptions={[
+              { id: "default", label: t("ui.defaultSession") },
+              ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${sessionPort(session) || "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
+            ]}
+            selectedSessionId={selectedSessionId}
+            embedding={selectedStatus.engine || availableEmbeddingSessions.length ? {
+              label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
+              options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
+                ...availableEmbeddingSessions.map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
+                ...(!['auto', 'lexical'].includes(embeddingSelection) && !availableEmbeddingSessions.some(session => session.id === embeddingSelection)
+                  ? [{ value: embeddingSelection, label: `${embeddingCopy.unavailable} · ${embeddingSelection}` }] : [])],
+              onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },
+            } : undefined}
+            model={model || configuredModel}
+            runtimeConfig={selectedStatus.engine ? { ...effectiveConfig, active_provider: selectedStatus.engine.provider, active_runtime: selectedStatus.engine.runtime_id } : effectiveConfig}
+            onSelectSession={(id) => { if (requireIdle()) { setSelectedSessionId(id); skills.clearSelectedSkills(); } }}
+            ct={ct}
+            mediaControls={
+              <fieldset className="chat-media-controls" aria-describedby="chat-media-preprocessing-hint">
+                <legend>{mediaCopy.label}</legend>
+                <p id="chat-media-preprocessing-hint" className="text-xs ui-color-muted">{mediaCopy.hint}</p>
+                <label className="chat-media-target text-xs ui-color-muted">
+                  {mediaCopy.audio}
+                  <CustomSelect value={audioSessionId} disabled={phase !== 'idle' || pendingToolCall !== null}
+                    onChange={setAudioSessionId} ariaLabel={mediaCopy.audio}
+                    options={[{ value: '', label: mediaCopy.native },
+                      ...speechSessions.map(session => {
+                        const rawModel = session.model ?? '';
+                        const shortened = isModelFilePath(rawModel);
+                        const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : rawModel;
+                        return {
+                          value: session.id,
+                          label: `${session.name || session.id} · ${modelLabel}`,
+                          title: shortened ? normalizeDisplayPath(rawModel) : undefined,
+                        };
+                      }),
+                      ...(audioSessionId && !speechSessions.some(session => session.id === audioSessionId)
+                        ? [{ value: audioSessionId, label: `${audioSessionId} · ${t('ui.sessionStopped')}`, disabled: true }] : [])]} />
+                </label>
+                <label className="chat-media-video flex items-center gap-2 text-xs ui-color-ink">
+                  <input type="checkbox" checked={videoFrames} disabled={!visionReady || phase !== 'idle' || pendingToolCall !== null}
+                    onChange={event => setVideoFrames(event.target.checked)} />
+                  {mediaCopy.video}
+                </label>
+              </fieldset>
+            }
+          />
           <ChatMessageLog
             scrollRef={scrollRef}
             onScrollAtBottomChange={(atBottom) => {

@@ -1,2 +1,2 @@
-.default-value { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: inherit; gap: 3px 5px; max-width: 100%; color: var(--ui-muted); font-weight: 400; }
+.default-value { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: inherit; gap: 4px; max-width: 100%; color: var(--ui-muted); font-weight: 400; }
 .default-value-number { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

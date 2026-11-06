@@ -19,8 +19,8 @@ export function modelIconName(model: string): string {
     ?? "huggingface";
 }
 
-export default function ModelIcon({ model, size = 20 }: { model: string; size?: 20 | 32 }) {
+export default function ModelIcon({ model }: { model: string }) {
   if (!model.trim()) return null;
   return <img src={`/model-icons/${modelIconName(model)}.svg`} alt="" aria-hidden="true"
-    width={size} height={size} className="model-family-icon" />;
+    width={16} height={16} className="model-family-icon" />;
 }

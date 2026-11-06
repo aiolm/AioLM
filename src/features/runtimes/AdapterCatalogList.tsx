@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useId, useMemo, useState } from 'react';
+import { memo, useDeferredValue, useId, useMemo, useState, type ReactNode } from 'react';
 import { type ProviderDescription, type ProviderId, type RuntimeInstance } from '../../shared/api/providers';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -58,19 +58,22 @@ function AdapterRow({ item, runtimes, disabled, copy, onOpen }: {
 
 /** One neutral inventory of every adapter the backend describes: built-in
  * and registered engines are listed, searched and opened the same way.
- * Opening an adapter browses it; it never changes execution selection. */
+ * Opening an adapter browses it; it never changes execution selection.
+ * `action` sits beside the search as the inventory's one primary action. */
 export default memo(function AdapterCatalogList({
   catalog,
   runtimes,
   loading = false,
   disabled = false,
   onOpen,
+  action,
 }: {
   catalog: ProviderDescription[];
   runtimes: RuntimeInstance[];
   loading?: boolean;
   disabled?: boolean;
   onOpen: (id: ProviderId) => void;
+  action?: ReactNode;
 }) {
   const { locale } = useI18n();
   const copy = adapterCatalogCopy[locale];
@@ -92,31 +95,37 @@ export default memo(function AdapterCatalogList({
   }, [catalog, runtimes, deferred]);
 
   return (
-    <section className="app-card app-card--tight mb-4" aria-labelledby={headingId}>
-      <h3 id={headingId} className="app-section-title">{copy.title}</h3>
-      <label htmlFor="adapter-search">{copy.search}</label>
-      <input
-        id="adapter-search"
-        name="adapter-search"
-        className="app-input"
-        type="search"
-        value={search}
-        autoComplete="off"
-        autoCorrect="off"
-        autoCapitalize="off"
-        spellCheck={false}
-        onChange={event => setSearch(event.target.value)}
-      />
-      <p role="status" className="app-section-hint adapter-count">
-        {loading ? copy.loading : fillAdapterCopy(copy.count, { shown: rows.length, total: catalog.length })}
-      </p>
+    <section className="app-card adapter-inventory" aria-labelledby={headingId}>
+      <div className="adapter-inventory__header">
+        <h2 id={headingId} className="app-section-title">{copy.title}</h2>
+        <p role="status" className="app-section-hint adapter-count">
+          {loading ? copy.loading : fillAdapterCopy(copy.count, { shown: rows.length, total: catalog.length })}
+        </p>
+      </div>
+      <div className="adapter-toolbar">
+        <label htmlFor="adapter-search" className="sr-only">{copy.search}</label>
+        <input
+          id="adapter-search"
+          name="adapter-search"
+          className="app-input adapter-toolbar__search"
+          type="search"
+          value={search}
+          placeholder={copy.search}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          onChange={event => setSearch(event.target.value)}
+        />
+        {action}
+      </div>
       <ul className="adapter-list">
         {rows.map(({ item, runtimes: owned }) => (
           <AdapterRow key={item.id} item={item} runtimes={owned} disabled={disabled} copy={copy} onOpen={onOpen} />
         ))}
       </ul>
-      {!loading && rows.length === 0 && catalog.length > 0 && <p className="app-section-hint">{copy.empty}</p>}
-      <p className="app-section-hint">{copy.readyNote}</p>
+      {!loading && rows.length === 0 && catalog.length > 0 && <p className="app-section-hint adapter-list__empty">{copy.empty}</p>}
+      <p className="app-section-hint adapter-ready-note">{copy.readyNote}</p>
     </section>
   );
 });

@@ -913,7 +913,7 @@ describe("ChatPanel document context warning", () => {
     const load = screen.getAllByRole("button", { name: "Load MCP tools" });
     expect(load).toHaveLength(1);
     fireEvent.click(load[0]);
-    await screen.findByText(/Test Server/);
+    await screen.findByRole('checkbox', { name: /Test Server/ });
     expect(mocked.mcpListServers).toHaveBeenCalledOnce();
     expect(mocked.mcpListTools).toHaveBeenCalledWith("srv1");
   });
@@ -926,7 +926,7 @@ describe("ChatPanel document context warning", () => {
     const mutableConfig = structuredClone(cfg);
     renderPanel({ ...store, cfg: mutableConfig });
     fireEvent.click(await screen.findByRole("button", { name: "Load MCP tools" }));
-    await screen.findByText(/Test Server/);
+    await screen.findByRole('checkbox', { name: /Test Server/ });
 
     await attachDocument("big.txt", OVERSIZED_DOCUMENT);
 
@@ -1066,7 +1066,7 @@ describe('ChatPanel retry recovery', () => {
     mocked.mcpCancelToolCall.mockImplementation(async () => cancelCall(new Error('MCP tool call cancelled')));
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Load MCP tools' }));
-    await screen.findByText(/Test Server/);
+    await screen.findByRole('checkbox', { name: /Test Server/ });
     mocked.chatStream.mockImplementationOnce(async (_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: (delta: { tool_calls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>; finish_reason?: string }) => void) => {
       onDelta({ tool_calls: [{ index: 0, id: 'call-1', name: 'srv1__test_tool', arguments: '{}' }], finish_reason: 'tool_calls' });
       return '';

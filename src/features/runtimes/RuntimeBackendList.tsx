@@ -34,14 +34,14 @@ export default function RuntimeBackendList({ visibleRows, ...rowProps }: Props) 
   return <div className="runtime-list">
     <section className="runtime-section" aria-labelledby="runtime-installed-heading">
       <div className="runtime-section__heading">
-        <h2 id="runtime-installed-heading">{t("ui.runtimeInstalledHeading")}</h2>
+        <h3 id="runtime-installed-heading" className="runtime-section__title">{t("ui.runtimeInstalledHeading")}</h3>
         {installedRows.length === 0 && <span className="runtime-section__empty">{t("ui.none")}</span>}
       </div>
       {installedRows.length > 0 && <div className="runtime-groups">{installedRows.map(renderRow)}</div>}
     </section>
     <section className="runtime-section" aria-labelledby="runtime-available-heading">
       <div className="runtime-section__heading">
-        <h2 id="runtime-available-heading">{t("ui.runtimeAvailableHeading")}</h2>
+        <h3 id="runtime-available-heading" className="runtime-section__title">{t("ui.runtimeAvailableHeading")}</h3>
         {availableRows.length === 0 && <span className="runtime-section__empty">{t("ui.none")}</span>}
       </div>
       {availableRows.length > 0 && <div className="runtime-groups">{availableRows.map(renderRow)}</div>}

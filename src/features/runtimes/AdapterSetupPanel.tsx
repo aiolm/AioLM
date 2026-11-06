@@ -84,28 +84,30 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     }
   };
   const locked = disabled || busy;
-  return <section aria-labelledby={`${id}-title`} className="mb-4">
-    <h4 id={`${id}-title`} className="app-section-title">{copy.title}</h4>
+  return <section aria-labelledby={`${id}-title`} className="adapter-setup">
+    <h4 id={`${id}-title`} className="adapter-setup__title">{copy.title}</h4>
     <p className="app-section-hint">{copy.hint}</p>
     <div className="app-page-actions">
       <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => void load()}>{copy.import}</button>
     </div>
     <p className="app-section-hint">{copy.fileHint}</p>
-    {recipe && <form action="#" method="POST" className="model-settings-fields" onSubmit={event => { event.preventDefault(); void prepare(); }}>
-      <p className="app-section-title">{recipe.title}</p>
-      <p>{recipe.description}</p>
+    {recipe && <form action="#" method="POST" className="adapter-setup__recipe" onSubmit={event => { event.preventDefault(); void prepare(); }}>
+      <p className="adapter-setup__recipe-title">{recipe.title}</p>
+      <p className="app-section-hint">{recipe.description}</p>
       <fieldset disabled={locked}>
         <legend>{copy.empty}</legend>
-        {recipe.fields.map(field => <span className="entrypoint-path" key={field.key}>
+        {recipe.fields.map(field => <div className="entrypoint-field" key={field.key}>
           <label htmlFor={`${id}-${field.key}`}>{field.label}{field.required ? ` (${copy.required})` : ''}</label>
-          <input id={`${id}-${field.key}`} name={field.key} className="app-input" value={inputs[field.key] ?? ''} required={field.required}
-            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} maxLength={32768}
-            onChange={event => setInputs(current => ({ ...current, [field.key]: event.target.value }))} />
-          {field.kind !== 'text' && <button type="button" className="app-button app-button--secondary" onClick={() => void pick(field)}>{copy.choose}</button>}
-        </span>)}
+          <span className="entrypoint-path">
+            <input id={`${id}-${field.key}`} name={field.key} className="app-input" value={inputs[field.key] ?? ''} required={field.required}
+              autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} maxLength={32768}
+              onChange={event => setInputs(current => ({ ...current, [field.key]: event.target.value }))} />
+            {field.kind !== 'text' && <button type="button" className="app-button app-button--secondary" onClick={() => void pick(field)}>{copy.choose}</button>}
+          </span>
+        </div>)}
       </fieldset>
       <p className="app-section-hint">{copy.review}</p>
-      <details><summary>{copy.command}</summary><pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(recipe.prepare, null, 2)}</pre></details>
+      <details className="adapter-setup__command"><summary>{copy.command}</summary><pre className="entrypoint-raw">{JSON.stringify(recipe.prepare, null, 2)}</pre></details>
       <div className="app-page-actions">
         <button type="submit" className="app-button app-button--primary" disabled={locked}>{copy.prepare}</button>
         {preparing && <LocalTaskCancelButton taskId={owner} onClick={() => {

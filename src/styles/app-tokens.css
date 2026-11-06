@@ -1,49 +1,65 @@
-/* AioLM: palette colors (surfaces, accent, rail, tones) come from the single
-   Orchid Periwinkle palette in app-palette.css; this file keeps the rest.
-   Success (sea green), information (periwinkle), warning (amber) and danger
-   (muted red) keep separate hues so "can be pressed" never reads as "succeeded". */
+/* Geometry and typography are independent of the semantic color palette. */
 :root, :root[data-theme="light"] {
- color-scheme: light;
- --ui-overlay: rgb(32 33 50 / 36%);
- --ui-danger-solid: #9B3B34; --ui-danger-solid-hover: #8C322A;
- --ui-elev-1: 0 1px 2px rgb(32 33 50 / 6%); --ui-elev-menu: 0 10px 28px rgb(37 34 57 / 20%), 0 1px 3px rgb(37 34 57 / 16%); --ui-elev-2: 0 16px 48px rgb(37 34 57 / 18%);
- /* Primary buttons keep a subtle optical edge under the tonal action fill. */
- --ui-action-edge: inset 0 1px 0 rgb(255 255 255 / 10%), 0 1px 1px rgb(28 29 27 / 12%);
- --ui-radius-sm: 6px; --ui-radius-md: 8px; --ui-radius-lg: 12px; --ui-radius-xl: 16px; --ui-radius-pill: 999px;
- --ui-success: var(--tone-success-ink); --ui-warning: var(--tone-warning-ink); --ui-danger: var(--tone-error-ink); --ui-danger-strong: var(--tone-error-ink);
- --ui-success-solid: #376459; --ui-border-success: var(--tone-success-border); --ui-bg-success: var(--tone-success-bg); --ui-bg-danger-strong: var(--ui-danger-solid);
- --ui-bg-elevated: var(--ui-surface-muted); --ui-bg-elevated-strong: var(--ui-border); --ui-secondary-hover: var(--ui-surface-muted);
- /* Controls share restrained gradients. Dark primary text stays readable
-    across the approved bright sky and periwinkle action fill. */
- --ui-primary-fill: #7AB9F9; --ui-on-primary: var(--ui-on-accent); --ui-primary-hover-veil: rgb(0 0 0 / 8%); --ui-primary-active-veil: rgb(0 0 0 / 14%);
- --ui-action-ink: #3e4d82; --ui-action-ink-hover: #3e4d82;
-  --ui-action-secondary-fill: #E2E9FC; --ui-action-secondary-fill-hover: #D9E0FC;
- --ui-field-fill: #F5F8FE; --ui-field-fill-hover: #F0F5FE;
+  color-scheme: light;
+  --ui-overlay: rgb(16 19 23 / 36%);
+  --ui-elev-1: none;
+  --ui-elev-menu: 0 8px 28px rgb(16 19 23 / 14%), 0 1px 3px rgb(16 19 23 / 10%);
+  --ui-elev-2: 0 16px 48px rgb(16 19 23 / 20%);
+  --ui-action-edge: none;
 }
-/* Geometry is independent of theme so responsive/density rules have one cascade. */
-:root { --ui-action-fill: var(--ui-accent-solid); --ui-action-hover: var(--ui-accent-solid-hover); --ui-action-active: var(--ui-accent-solid-active); --ui-control: 32px; --ui-menu-row: 32px; --ui-nav-row: 34px; --ui-page-padding: 16px; --ui-canvas-padding: 32px; --ui-row-space: 10px; }
-/* One corner scale: controls 6px, floating menus 10px, surfaces 8px, dialogs 12px. */
-:root { --ui-radius-control: 6px; --ui-radius-menu: 10px; --ui-radius-panel: 8px; --ui-radius-dialog: 12px; }
-/* One compact desktop type scale: 13px interface text, 12px supporting text,
-   11px only for secondary metadata (counters, tags, footers) that never carries
-   a fact on its own. Headings: 24px page title, 16px section, 14px group. */
-:root { --ui-text: 13px; --ui-text-leading: 1.5; --ui-text-support: 12px; --ui-text-support-leading: 1.5; --ui-text-caption: 11px; --ui-text-title: 24px; --ui-text-section: 16px; --ui-text-group: 14px; }
 :root[data-theme="dark"] {
- color-scheme: dark;
- --ui-overlay: rgb(0 0 0 / 60%);
- --ui-danger-solid: #9B3B34; --ui-danger-solid-hover: #8C322A;
- --ui-success-solid: #376459;
- --ui-elev-1: 0 1px 2px rgb(0 0 0 / 24%); --ui-elev-menu: 0 8px 24px rgb(0 0 0 / 45%), 0 0 0 1px rgb(255 255 255 / 4%); --ui-elev-2: 0 16px 48px rgb(0 0 0 / 50%);
- --ui-action-edge: inset 0 1px 0 rgb(255 255 255 / 12%), 0 1px 1px rgb(0 0 0 / 30%);
- /* Dark uses a restrained cyan and periwinkle action fill with dark ink.
-    Secondary actions and fields step up from the panel. */
- --ui-primary-fill: #7AB9F9; --ui-on-primary: var(--ui-on-accent); --ui-primary-hover-veil: var(--ui-action-hover-veil); --ui-primary-active-veil: var(--ui-action-active-veil);
- --ui-action-ink: #b5e7ff; --ui-action-ink-hover: #d0f0ff;
-  --ui-action-secondary-fill: #4F5A8B; --ui-action-secondary-fill-hover: #565E8D;
- --ui-field-fill: #49516A; --ui-field-fill-hover: #4D566E;
+  color-scheme: dark;
+  --ui-overlay: rgb(0 0 0 / 60%);
+  --ui-elev-menu: 0 8px 28px rgb(0 0 0 / 40%);
+  --ui-elev-2: 0 16px 48px rgb(0 0 0 / 50%);
 }
-:root[data-density="compact"] { --ui-control: 28px; --ui-menu-row: 28px; --ui-nav-row: 30px; --ui-page-padding: 12px; --ui-canvas-padding: 24px; --ui-row-space: 8px; }
-/* Touch keeps full-size targets regardless of density. */
-@media (pointer: coarse) { :root, :root[data-density="compact"] { --ui-control: 44px; --ui-menu-row: 44px; --ui-nav-row: 44px; } }
-
-:root { --ui-control-pad-block: max(6px, .45em); --ui-control-pad-inline: max(12px, .9em); }
+:root {
+  --ui-radius-sm: 6px;
+  --ui-radius-md: 8px;
+  --ui-radius-lg: 12px;
+  --ui-radius-xl: 16px;
+  --ui-radius-pill: 999px;
+  --ui-radius-control: 8px;
+  --ui-radius-menu: 10px;
+  --ui-radius-panel: 12px;
+  --ui-radius-dialog: 16px;
+  --ui-control: 36px;
+  --ui-menu-row: 36px;
+  --ui-nav-row: 38px;
+  --ui-page-padding: 16px;
+  --ui-canvas-padding: 24px;
+  --ui-row-space: 12px;
+  --ui-control-pad-block: 6px;
+  --ui-control-pad-inline: 12px;
+  --ui-text: 14px;
+  --ui-text-leading: 1.5;
+  --ui-text-support: 12px;
+  --ui-text-support-leading: 1.5;
+  --ui-text-caption: 11px;
+  --ui-text-title: 24px;
+  --ui-text-section: 18px;
+  --ui-text-group: 14px;
+  --ui-success: var(--tone-success-ink);
+  --ui-warning: var(--tone-warning-ink);
+  --ui-danger: var(--tone-error-ink);
+  --ui-danger-strong: var(--tone-error-ink);
+  --ui-success-solid: var(--tone-success-ink);
+  --ui-border-success: var(--tone-success-border);
+  --ui-bg-success: var(--tone-success-bg);
+  --ui-bg-danger-strong: var(--ui-danger-solid);
+  --ui-bg-elevated: var(--ui-surface-muted);
+  --ui-bg-elevated-strong: var(--ui-border);
+  --ui-secondary-hover: var(--ui-input-hover);
+}
+:root[data-density="compact"] {
+  --ui-control: 32px;
+  --ui-menu-row: 32px;
+  --ui-nav-row: 34px;
+  --ui-row-space: 8px;
+  --ui-control-pad-block: 4px;
+}
+@media (max-width: 639px) { :root { --ui-canvas-padding: 16px; } }
+/* Actual controls retain touch targets in both density preferences. */
+@media (pointer: coarse) {
+  :root, :root[data-density="compact"] { --ui-control: 44px; --ui-menu-row: 44px; --ui-nav-row: 44px; }
+}

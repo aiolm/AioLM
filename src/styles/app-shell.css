@@ -1,22 +1,22 @@
-/* Familiar desktop chrome: a narrow sidebar with visible group headings and a
-   48px toolbar that names the current page; pages add their own body title. */
+/* Direct access to work and model operations; each page owns its heading. */
 .app-shell { --aiolm-sidebar-width: 208px; display: grid; grid-template-columns: var(--aiolm-sidebar-width) minmax(0,1fr); height: 100%; overflow: hidden; background: var(--ui-bg); }
-/* The rail takes the palette's solid rail tone with
-   its own rail ink, so navigation never inherits body text colors. No boundary
-   line; the rail meets the body by tone alone. */
-.aiolm-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 0; background: var(--ui-sidebar); color: var(--ui-rail-ink); }
-.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 48px; padding: 0 16px; }
-.aiolm-sidebar-heading { display: flex; align-items: center; flex-shrink: 0; min-width: 0; min-height: 48px; padding-inline-end: 8px; }
+/* The original sky-to-periwinkle rail follows the selected workspace theme. */
+.aiolm-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--ui-border); background: var(--ui-sidebar); background-image: var(--ui-rail-gradient); color: var(--ui-rail-ink); }
+.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 56px; padding: 0 16px; }
+.aiolm-sidebar-heading { display: flex; align-items: center; flex-shrink: 0; min-width: 0; min-height: 56px; padding-inline-end: 8px; }
 .aiolm-sidebar-heading .aiolm-brand { flex: 1; min-width: 0; }
 .aiolm-mark { display: block; width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
 .aiolm-brand strong { display: block; font-size: 14px; font-weight: 650; letter-spacing: -.01em; line-height: 20px; color: var(--ui-rail-ink); }
-/* The current page takes the palette's selected fill with heavier weight and a
-   short solid indicator (app-gradients.css). Scoped to the rail so in-content
-   nav keeps the tinted-fill language. */
-.aiolm-sidebar .aiolm-nav-link, .aiolm-drawer .aiolm-nav-link { display: flex; align-items: center; width: 100%; min-height: var(--ui-nav-row); padding: 6px 10px; gap: 10px; font-size: var(--ui-text); font-weight: 500; color: var(--ui-rail-muted); box-shadow: none; }
+/* Current destination keeps an explicit marker in addition to its selected fill. */
+.aiolm-sidebar .aiolm-nav-link, .aiolm-drawer .aiolm-nav-link { position: relative; display: flex; align-items: center; width: 100%; min-height: var(--ui-nav-row); padding: var(--ui-control-pad-block) 10px; gap: 10px; font-size: var(--ui-text); font-weight: 500; color: var(--ui-rail-muted); box-shadow: none; }
 .aiolm-sidebar .aiolm-nav-link:hover:not(:disabled), .aiolm-drawer .aiolm-nav-link:hover:not(:disabled) { background: var(--ui-nav-hover); color: var(--ui-rail-ink); }
-.aiolm-sidebar .aiolm-nav-link[aria-current="page"], .aiolm-drawer .aiolm-nav-link[aria-current="page"] { background: var(--ui-nav-active); box-shadow: none; color: var(--ui-nav-active-ink); font-weight: 600; }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"], .aiolm-drawer .aiolm-nav-link[aria-current="page"], .aiolm-sidebar .aiolm-nav-link[aria-current="page"]:hover, .aiolm-drawer .aiolm-nav-link[aria-current="page"]:hover { background: var(--ui-nav-active); background-image: var(--ui-selected-gradient); box-shadow: none; color: var(--ui-nav-active-ink); font-weight: 600; }
 .aiolm-sidebar .aiolm-nav-link[aria-current="page"] svg, .aiolm-drawer .aiolm-nav-link[aria-current="page"] svg { color: var(--ui-nav-active-ink); }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"]::before, .aiolm-drawer .aiolm-nav-link[aria-current="page"]::before { content: ""; position: absolute; inset-block: 8px; inset-inline-start: 0; width: 3px; border-radius: 2px; background: var(--ui-accent); }
+@media (forced-colors: active) {
+  .aiolm-sidebar, .aiolm-drawer, .aiolm-sidebar .aiolm-nav-link[aria-current="page"], .aiolm-drawer .aiolm-nav-link[aria-current="page"], .aiolm-sidebar .aiolm-nav-link[aria-current="page"]:hover, .aiolm-drawer .aiolm-nav-link[aria-current="page"]:hover { background-image: none; }
+  .aiolm-sidebar .aiolm-nav-link[aria-current="page"]::before, .aiolm-drawer .aiolm-nav-link[aria-current="page"]::before { background: Highlight; }
+}
 /* Rail chrome takes the rail focus ring (at least 3.2:1 on the rail and the
    selected fill); the 2px offset keeps it clear of the pill.
    Fields and portaled menus keep ordinary input/menu ink. */
@@ -32,8 +32,9 @@
 .app-shell--rail .aiolm-sidebar .aiolm-nav-link { justify-content: center; padding-inline: 0; }
 .app-shell--rail .aiolm-sidebar :is(.aiolm-nav-group h2, .aiolm-nav-link span) { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .aiolm-sidebar .app-input, .aiolm-sidebar .app-textarea, .aiolm-drawer .app-input, .aiolm-drawer .app-textarea { color: var(--ui-ink); }
-.aiolm-navigation { min-height: 0; overflow-y: auto; padding: 4px 8px 16px; }
-.aiolm-nav-group { display: grid; gap: 1px; margin: 0 0 12px; }
+.aiolm-navigation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; padding: 8px 12px 16px; }
+.aiolm-nav-group { display: grid; flex-shrink: 0; gap: 2px; margin: 0 0 24px; }
+.aiolm-nav-group[data-navigation-group="tools"] { margin-top: auto; margin-bottom: 0; padding-top: 16px; }
 .aiolm-nav-group h2 { padding: 0 10px; margin-bottom: 2px; color: var(--ui-rail-muted); font-size: var(--ui-text-support); font-weight: 500; line-height: 22px; letter-spacing: 0; }
 .aiolm-nav-link span { min-width: 0; overflow-wrap: break-word; }
 .aiolm-sidebar .aiolm-nav-link svg, .aiolm-drawer .aiolm-nav-link svg { width: 16px; height: 16px; flex-shrink: 0; color: currentColor; opacity: .75; }
@@ -41,21 +42,20 @@
 .aiolm-sidebar-footer span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .app-main-column, .app-main-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .app-main-area { flex: 1; position: relative; background: var(--ui-bg); }
-.aiolm-header { display: flex; align-items: center; gap: 12px; min-height: 48px; padding-inline: var(--ui-canvas-padding); min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
-.aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 80px; flex: 1 1 auto; }
-.aiolm-heading h1 { min-width: 0; font-size: var(--ui-text); font-weight: 600; line-height: 20px; letter-spacing: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* The model context is a compact filled pill, not a form field: it takes its
-   content's width up to a cap and truncates the name; the full path stays in
-   its title. */
-.aiolm-runtime-context { display: flex; align-items: center; min-width: 0; flex: 0 1 560px; max-width: 560px; min-height: var(--ui-control); gap: 0; padding: 0 2px; border: 1px solid transparent; border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
-.aiolm-runtime-context:hover { background: var(--ui-field-fill-hover); }
+.aiolm-header { display: flex; align-items: center; gap: 12px; min-height: 56px; padding-inline: var(--ui-canvas-padding); min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.aiolm-location { min-width: 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; line-height: 1.5; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* Scope is visible so this default context cannot be mistaken for a chat's
+   named answering session. Names truncate, their full values remain accessible. */
+.aiolm-runtime-context { display: grid; grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr); align-items: center; min-width: 0; flex: 0 1 480px; max-width: 480px; min-height: var(--ui-control); gap: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
+.aiolm-context-scope { padding-inline: 8px; color: var(--ui-muted); font-size: var(--ui-text-caption); line-height: 1.4; }
 .aiolm-runtime-context:focus-within { outline: 2px solid var(--ui-focus); outline-offset: 0; }
-.aiolm-runtime-context button { min-width: 0; min-height: calc(var(--ui-control) - 6px); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
-.aiolm-context-model { flex: 1 1 60%; justify-content: flex-start; gap: 6px; overflow: hidden; }
+.aiolm-runtime-context button { min-width: 0; min-height: var(--ui-control); padding: var(--ui-control-pad-block) 8px; text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
+.aiolm-context-model { justify-content: flex-start; gap: 6px; overflow: hidden; }
 .aiolm-context-model .model-family-icon { margin-inline-end: 0; }
 .aiolm-context-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .aiolm-context-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-border-strongest); }
-.aiolm-context-runtime { flex: 1 1 40%; gap: 6px; overflow: hidden; border-inline-start: 1px solid var(--ui-border) !important; border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0 !important; color: var(--ui-muted) !important; font-size: var(--ui-text-support) !important; font-variant-numeric: tabular-nums; }
+.aiolm-context-runtime { gap: 6px; justify-content: space-between; overflow: hidden; border-inline-start: 1px solid var(--ui-border); border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
 .aiolm-context-runtime svg { flex-shrink: 0; }
 .aiolm-server { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; min-width: 0; }
 .aiolm-server > button { min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); }

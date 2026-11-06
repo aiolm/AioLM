@@ -95,7 +95,7 @@ describe("loaded model and saved session controls", () => {
     renderPanel();
     await waitFor(() => expect(liveRow().getByText('Details')).toBeInTheDocument());
     fireEvent.click(liveRow().getByText('Details'));
-    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · Installed by AioLM')).toBeVisible();
+    expect(await liveRow().findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · Installed by AioLM')).toBeVisible();
     expect(liveRow().queryByText(/test-build/)).not.toBeInTheDocument();
   });
   it("opens the loaded default target without overriding it with saved settings", () => {

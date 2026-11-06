@@ -71,13 +71,14 @@ export default function ChatMessageLog({
       }}
       className="chat-message-log"
     >
+      <div className="chat-message-content">
       {showsEmptyState && (
         <div className="mt-10">
           <EmptyState
             icon={isFailed ? (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 7v5M10 13.5h.01" strokeLinecap="round" /></svg>
             ) : (
-              <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M10 3.5 11.8 8.2H16.5L12.6 10.9 13.9 15.5 10 12.8 6.1 15.5 7.4 10.9 3.5 8.2H8.2L10 3.5Z" /></svg>
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4.5 5.5a1.6 1.6 0 0 1 1.6-1.6h7.8a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H8.3L5.8 14V12.5A1.6 1.6 0 0 1 4.5 11V5.5Z" /><path d="M7 7.2h6M7 9.7h3.5" /></svg>
             )}
             title={initialGuidance ? actions.choose : isFailed ? ct("requestFailed") : isStarting ? ct("startingServer") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
             description={initialGuidance ? actions.noModelHint : isFailed ? ct("blockedFailedDescription") : isStarting ? ct("blockedStartingDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
@@ -137,6 +138,7 @@ export default function ChatMessageLog({
           <button type="button" data-icon="refresh" onClick={retryToolsAction.onClick} disabled={retryToolsAction.disabled} className="app-button app-button--secondary app-button--sm mt-1.5">{retryToolsAction.label}</button>
         </div>
       )}
+      </div>
     </div>
   );
 }

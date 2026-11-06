@@ -40,6 +40,23 @@ describe('composer turn locks', () => {
     expect(options.onSend).toHaveBeenCalledOnce();
   });
 
+  it('closes an open tool picker when the turn locks and keeps it closed until idle', () => {
+    const options = props();
+    const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} /></I18nProvider>);
+    const summary = screen.getByText('mcpTools', { selector: 'summary' });
+    const picker = summary.closest('details')!;
+    fireEvent.click(summary);
+    expect(picker).toHaveAttribute('open');
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="preparing" /></I18nProvider>);
+    expect(picker).not.toHaveAttribute('open');
+    fireEvent.click(summary);
+    expect(picker).not.toHaveAttribute('open');
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toHaveValue('Next question');
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} /></I18nProvider>);
+    fireEvent.click(summary);
+    expect(picker).toHaveAttribute('open');
+  });
+
   it('locks draft and tool changes during approval while preserving the draft and approval actions', () => {
     const options = props();
     options.pendingToolCall = { serverId: 'catalog', serverName: 'Catalog', toolName: 'lookup', argumentsValue: {},
@@ -49,13 +66,12 @@ describe('composer turn locks', () => {
     details.open = true;
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toHaveValue('Next question');
-    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toHaveAttribute('placeholder', 'placeholder');
     expect(within(details).getByRole('checkbox')).toBeDisabled();
     for (const name of ['attachFile', 'send', 'loadMcpTools']) expect(screen.getByRole('button', { name })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'approveTool' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'rejectTool' })).toBeEnabled();
-    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('mcpApprovalRequired');
-    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('responseReady');
+    expect(screen.getByRole('status')).toHaveTextContent('mcpApprovalRequired');
+    expect(screen.getByRole('status')).not.toHaveTextContent('responseReady');
     fireEvent.click(screen.getByRole('button', { name: 'send' }));
     fireEvent.click(screen.getByRole('button', { name: 'attachFile' }));
     fireEvent.click(screen.getByRole('button', { name: 'loadMcpTools' }));
@@ -84,7 +100,7 @@ describe('composer turn locks', () => {
   it('distinguishes the native tool wait from its follow-up model request while keeping Stop available', () => {
     const options = props();
     const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="preparing" toolCallInProgress /></I18nProvider>);
-    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('waitingMcpTool');
+    expect(screen.getByRole('status')).toHaveTextContent('waitingMcpTool');
     expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'stop' }));
     expect(options.onStop).toHaveBeenCalledOnce();

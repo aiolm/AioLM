@@ -1,68 +1,74 @@
-.settings-profile-control { min-width: 0; margin: 0 0 20px; color: var(--ui-ink); }
+.settings-profile-control { min-width: 0; margin: 0 0 24px; color: var(--ui-ink); }
+/* Profile toolbar: state, name and the profile's own actions on one row. */
 .settings-profile-banner { display: flex; align-items: center; gap: 12px; }
-.settings-profile-state-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--ui-muted); }
+.settings-profile-state-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: var(--ui-radius-pill); background: var(--ui-muted); }
 .settings-profile-banner--named .settings-profile-state-dot { background: var(--ui-accent); }
 .settings-profile-banner--working .settings-profile-state-dot { background: var(--ui-warning); }
 .settings-profile-banner-text { flex: 1 1 180px; min-width: 0; }
-.settings-profile-title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.settings-profile-banner h3, .settings-profile-detail h3 { margin: 0; font-size: var(--ui-text); font-weight: 650; overflow-wrap: break-word; }
-.settings-profile-banner p, .settings-profile-detail-heading p[role="status"] { margin: 3px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
+.settings-profile-title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.settings-profile-banner h3, .settings-profile-detail h3 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; overflow-wrap: break-word; outline-offset: 4px; }
+.settings-profile-banner p, .settings-profile-detail-heading p[role="status"] { margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-banner p.settings-profile-feedback, .settings-profile-detail-heading p.settings-profile-feedback { color: var(--ui-accent); font-weight: 500; }
-.settings-profile-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.settings-profile-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 8px; min-width: 0; }
 .settings-profile-buttons .app-button { max-width: 100%; }
 .settings-profile-picker { flex: 1 1 160px; min-width: 0; max-width: 260px; }
 .settings-profile-picker .app-custom-select-trigger { width: 100%; }
-.settings-profile-groups { display: grid; gap: 18px; margin: 22px 0; }
+
+/* Profile step: library chips, then the selected or previewed values. */
+.settings-profile-groups { display: grid; gap: 16px; margin: 16px 0; }
 .settings-profile-group { min-width: 0; }
-.settings-profile-group-heading { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }
-.settings-profile-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.settings-profile-chip { max-width: 100%; text-align: left; }
-.settings-profile-chip > span { min-width: 0; }
-/* The active profile takes the shared pressed language (tint + accent edge +
+.settings-profile-group-heading { margin: 0 0 8px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 600; }
+.settings-profile-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.settings-profile-chip { max-width: 100%; text-align: start; }
+.settings-profile-chip > span { min-width: 0; overflow-wrap: anywhere; }
+/* The active profile takes the shared selected language (tint + accent edge +
    ink text) so the state never relies on the check mark alone. */
-.settings-profile-chip--active { border-color: var(--ui-accent); background: var(--ui-action-secondary-fill-hover); color: var(--ui-ink); }
-.settings-profile-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.settings-profile-detail-heading > div:first-child { min-width: 0; flex: 1 1 180px; }
+.settings-profile-chip--active, .settings-profile-chip--active:hover:not(:disabled) { border-color: var(--ui-accent); background: var(--ui-accent-soft); color: var(--ui-ink); font-weight: 600; }
+.settings-profile-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.settings-profile-detail-heading > div:first-child { flex: 1 1 180px; min-width: 0; }
 .settings-profile-detail-heading .settings-profile-buttons { flex: 0 1 auto; }
-.settings-profile-eyebrow { margin: 0 0 5px; color: var(--ui-muted); font-size: var(--ui-text-caption); letter-spacing: .03em; }
-.settings-profile-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.settings-profile-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
+.settings-profile-eyebrow { margin: 0 0 4px; color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 600; }
+.settings-profile-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.settings-profile-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-detail > .settings-profile-hint { margin: 12px 0 0; }
-.settings-profile-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 18px 28px; margin-top: 18px; }
+.settings-profile-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px 32px; margin-top: 16px; }
 .settings-profile-value-group { min-width: 0; }
-.settings-profile-value-group h4 { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }
-.settings-profile-value-group dl { display: grid; gap: 3px; margin: 0; }
-.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 2px 6px; border-inline-start: 2px solid transparent; border-radius: 3px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
+.settings-profile-value-group h4 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-border); color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
+.settings-profile-value-group dl { display: grid; gap: 2px; margin: 0; }
+.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 2px 8px; border-inline-start: 2px solid transparent; border-radius: var(--ui-radius-sm); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-value dt { color: var(--ui-muted); }
-.settings-profile-value dd { margin: 0; text-align: right; overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-profile-value dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-profile-value dd .default-value { justify-content: flex-end; }
-.settings-profile-value--custom { border-inline-start-color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 7%, transparent); }
+.settings-profile-value--custom { border-inline-start-color: var(--ui-accent); background: var(--ui-accent-soft); }
 .settings-profile-value--custom dt { color: var(--ui-ink); font-weight: 600; }
 .settings-profile-value--custom dd { color: var(--ui-accent); font-weight: 650; }
 /* Structured values use the full row beneath their label. */
-.settings-profile-value.settings-profile-value--stacked { grid-template-columns: minmax(0, 1fr); gap: 3px; }
-.settings-profile-value--stacked > dd { text-align: left; }
+.settings-profile-value.settings-profile-value--stacked { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.settings-profile-value--stacked > dd { text-align: start; }
 .settings-profile-gpu { display: grid; gap: 2px; margin: 0; }
-.settings-profile-gpu > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 10px; }
+.settings-profile-gpu > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; }
 .settings-profile-value .settings-profile-gpu dt { color: var(--ui-muted); font-weight: 400; }
-.settings-profile-value .settings-profile-gpu dd { font-weight: 500; text-align: left; white-space: normal; }
+.settings-profile-value .settings-profile-gpu dd { font-weight: 500; text-align: start; white-space: normal; }
 .settings-profile-gpu dd > span { display: block; }
 .settings-profile-arguments { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-weight: 400; }
-.settings-profile-arguments > li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: baseline; gap: 10px; }
+.settings-profile-arguments > li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: baseline; gap: 12px; }
 .settings-profile-arguments code { min-inline-size: 0; font: inherit; font-family: var(--font-mono, monospace); overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-profile-argument-key { color: var(--ui-muted); }
 .settings-profile-argument-values { display: flex; flex-wrap: wrap; gap: 0 1ch; min-inline-size: 0; font-weight: 600; }
 .settings-profile-inherited { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .settings-profile-prompt { grid-column: 1 / -1; }
-.settings-profile-prompt p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: break-word; margin: 0; font-size: var(--ui-text-support); color: var(--ui-muted); }
-.settings-profile-defaults { margin-top: 18px; }
-.settings-profile-defaults > summary { cursor: pointer; font-size: var(--ui-text-support); font-weight: 600; }
+.settings-profile-prompt p { max-height: 180px; margin: 0; overflow: auto; color: var(--ui-muted); font-size: var(--ui-text-support); white-space: pre-wrap; overflow-wrap: break-word; }
+.settings-profile-defaults { margin-top: 16px; }
+.settings-profile-defaults > summary { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; cursor: pointer; }
 .settings-profile-defaults > summary .app-badge { margin-inline-start: 8px; }
 .settings-profile-defaults > .settings-profile-hint { margin: 12px 0 0; }
+
+/* Save as / rename: one inline form under the toolbar. */
 .settings-profile-action { display: grid; gap: 8px; margin-top: 12px; font-size: var(--ui-text-support); }
 .settings-profile-action p { margin: 0; overflow-wrap: break-word; }
-.settings-profile-action label { font-size: var(--ui-text-support); }
+.settings-profile-action label { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-action .app-input { min-width: 0; }
+.settings-profile-action > .settings-profile-buttons { justify-content: flex-start; }
 .settings-profile-scope { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
 @media (max-width: 900px) {
   .settings-profile-banner { flex-wrap: wrap; }
@@ -79,10 +85,10 @@
 
 /* What a save would rewrite, listed before it is pressed. */
 .settings-profile-changes { display: grid; margin: 8px 0; font-size: var(--ui-text-support); }
-.settings-profile-changes > div { display: grid; grid-template-columns: minmax(8rem, 40%) minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--ui-border); }
+.settings-profile-changes > div { display: grid; grid-template-columns: minmax(8rem, 40%) minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
 .settings-profile-changes > div:last-child { border-bottom: 0; }
 .settings-profile-changes dt { font-weight: 600; }
 .settings-profile-changes dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.settings-profile-change-arrow { flex: none; }
+.settings-profile-change-arrow { flex: none; color: var(--ui-muted); }
 .settings-profile-change-before { color: var(--ui-muted); text-decoration: line-through; }
 .settings-profile-change-after { color: var(--ui-ink); font-weight: 600; }

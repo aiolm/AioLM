@@ -120,7 +120,9 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
           {step === 1 && <fieldset className="setup-options setup-themes">
             <legend className="sr-only">{copy.steps[1]}</legend>
             {(['light', 'dark', 'system'] as const).map(mode => <label key={mode} className={`app-list-row setup-choice setup-theme-choice${theme === mode ? ' is-selected' : ''}`}>
-              <span className={`setup-preview setup-preview--${mode}`} aria-hidden="true"><span className="setup-preview-sidebar" /><span className="setup-preview-workspace"><i /><i /><i /></span></span>
+              <span className={`setup-preview setup-preview--${mode}`} aria-hidden="true">{mode === 'system'
+                ? <svg className="setup-system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M9 21h6m-3-4v4" /></svg>
+                : <><span className="setup-preview-sidebar" /><span className="setup-preview-workspace"><i /><i /><i /></span></>}</span>
               <span className="setup-theme-label"><input type="radio" name="setup-theme" value={mode} checked={theme === mode} onChange={() => setTheme(mode)} /><span>{t(`theme.${mode}`)}</span></span>
               <small>{copy[`${mode}Hint`]}</small>
             </label>)}
@@ -141,7 +143,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
         </div>}
         <footer className="setup-footer">
           {step > 0 && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} data-icon="back" onClick={() => { setError(null); setStep(step - 1); }}>{copy.back}</button>}
-          <button type="submit" className="app-button app-button--primary app-button--lg" disabled={saving || choosing}>{saving ? copy.saving : step === 2 ? copy.finish : copy.next}<span aria-hidden="true"> →</span></button>
+          <button type="submit" className="app-button app-button--primary app-button--lg" disabled={saving || choosing}>{saving ? copy.saving : step === 2 ? copy.finish : copy.next}</button>
         </footer>
       </form>
     </div>

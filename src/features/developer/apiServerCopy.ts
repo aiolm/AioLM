@@ -2,7 +2,6 @@ import type { Locale } from '../../shared/i18n/i18n';
 
 const en = {
   intro: 'Let other apps use models on this computer. You do not need this server for chat inside AioLM.',
-  steps: ['Start the server', 'Load a model', 'Enter the connection details in your app'],
   stopped: 'Start the server when you want to connect another app.',
   running: 'Listening on this computer. Stopping the API keeps your models loaded.',
   models: 'Available models',
@@ -25,7 +24,6 @@ export const apiServerCopy: Record<Locale, typeof en> = {
   en,
   ko: {
     intro: '다른 앱에서 이 컴퓨터의 모델을 사용하려면 켜세요. AioLM 내부 채팅에는 이 서버가 필요하지 않습니다.',
-    steps: ['서버 시작', '모델 로드', '외부 앱에 연결 정보 입력'],
     stopped: '외부 앱을 연결할 때 서버를 시작하세요.',
     running: '이 컴퓨터에서 연결을 받습니다. API를 중지해도 모델은 로드된 상태로 유지됩니다.',
     models: '사용 가능한 모델', modelsOff: 'API를 시작하면 외부 앱에서 사용할 수 있는 모델이 표시됩니다.',
@@ -42,7 +40,6 @@ export const apiServerCopy: Record<Locale, typeof en> = {
   },
   ja: {
     intro: '他のアプリからこのコンピューターのモデルを使うときに起動します。AioLM内のチャットには不要です。',
-    steps: ['サーバーを起動', 'モデルを読み込む', '他のアプリに接続情報を入力'],
     stopped: '他のアプリを接続するときにサーバーを起動してください。',
     running: 'このコンピューターで接続を受け付けています。APIを停止してもモデルは読み込まれたままです。',
     models: '利用可能なモデル', modelsOff: 'APIを起動すると、他のアプリで利用できるモデルが表示されます。',
@@ -59,7 +56,6 @@ export const apiServerCopy: Record<Locale, typeof en> = {
   },
   zh: {
     intro: '需要让其他应用使用此电脑上的模型时，启动此服务器。AioLM 内部聊天无需启动它。',
-    steps: ['启动服务器', '加载模型', '在其他应用中填写连接信息'],
     stopped: '需要连接其他应用时，请启动服务器。',
     running: '正在此电脑上接收连接。停止 API 后，模型仍保持加载。',
     models: '可用模型', modelsOff: '启动 API 后，会显示其他应用可使用的模型。',

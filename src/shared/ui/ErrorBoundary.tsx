@@ -29,6 +29,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     return (
       <div className="app-runtime-empty" role="alert">
         <EmptyState
+          headingLevel={1}
           title={this.props.label ? copy.namedTitle.replace('{screen}', this.props.label) : copy.title}
           description={copy.hint}
           action={{ label: copy.retry, onClick: this.recover }}

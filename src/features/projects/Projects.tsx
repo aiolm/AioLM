@@ -439,12 +439,11 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   };
 
   return (
-    <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
+    <div className="app-page-scroll projects-page relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="app-page-title" >{t("ui.projectsTitle")}</h2>
+          <h1 className="app-page-title">{t("ui.projectsTitle")}</h1>
           <p className="app-page-description" >{t("ui.projectsDescription")}</p>
-          <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-faint" >{t("ui.projectWorkflow")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => switchEditor(() => loadProject(null))} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
@@ -481,26 +480,25 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         onConfirm={() => { if (pendingDelete) confirmRemove(pendingDelete); }}
         onCancel={() => setPendingDelete(null)}
       />
-      <div className="grid shrink-0 items-start gap-4 app-master-detail">
-        <aside className="min-w-0 app-card app-card--tight" >
-          <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
-          <div className="space-y-1 overflow-auto">
+      <div className="projects-workspace app-master-detail grid items-start">
+        <aside className="projects-list" aria-labelledby="projects-list-title">
+          <h2 id="projects-list-title" className="px-2 pb-3 text-sm font-semibold ui-color-ink">{t("ui.savedProjectsCount")} <span className="text-xs font-normal ui-color-muted">· {projects.length}</span></h2>
+          <div className="projects-list-items space-y-1">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
             {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{<ModelName model={project.config.active_model} empty={t("ui.noModelShort")} />}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || t("ui.projectToolsDocsSummary", { tools: project.toolIds.length, docs: project.documentBindings.length })}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
-        <section className="min-w-0 app-card" >
+        <section className="projects-editor" aria-labelledby="project-editor-title">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold ui-color-ink">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h3>
+            <h2 id="project-editor-title" className="app-section-title">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h2>
             {isActiveSelection && <Badge tone="success">{t("ui.active")}</Badge>}
           </div>
-          <h4 className="app-section-title">1 · {t("ui.fieldProjectName")} / {t("ui.fieldDescription")}</h4>
           <div className="mt-2 grid gap-3 app-form-grid">
             <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
-          <h4 className="app-section-title mt-4">2 · {t("ui.projectProfileLabel")}</h4>
-          <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="mt-2 app-card app-card--muted app-card--tight">
+          <h3 className="app-section-title mt-6">{t("ui.projectProfileLabel")}</h3>
+          <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="projects-profile-summary">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium ui-color-ink">
                 {displayedProfileName ?? t("ui.projectNoProfile")}
@@ -519,8 +517,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <p className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-relaxed ui-color-ink">{displayedPrompt || t("ui.projectPromptEmpty")}</p>
             <p className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>
           </section>
-          <div className="mt-4 border-t pt-3 ui-border-color-border" >
-            <h4 className="app-section-title">3 · {t("panel.chatWorkspace")}</h4>
+          <section className="mt-6 border-t pt-4 ui-border-color-border" aria-labelledby="project-workspace-title">
+            <h3 id="project-workspace-title" className="app-section-title">{t("panel.chatWorkspace")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectChatLimitsHint")}</p>
             <div className="mt-3 grid gap-4 app-form-grid">
               <div className="flex min-w-0 flex-col">
@@ -532,7 +530,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button type="button" data-icon="refresh" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm">{mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")}</button>
                 </div>
-                <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
+                <div role="group" aria-labelledby="project-mcp-heading" className="projects-selection-list mt-2 space-y-1">
                   {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
                   {mcpCatalog.map((entry) => {
                     const checked = selectedToolKeys.has(entry.key);
@@ -551,22 +549,22 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 <div className="mt-2">
                   <button type="button" data-icon="add" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
                 </div>
-                <div role="group" aria-labelledby="project-documents-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
+                <div role="group" aria-labelledby="project-documents-heading" className="projects-selection-list mt-2 space-y-1">
                   {documents.length === 0 && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoDocuments")}</p>}
                   {documents.map((document) => <div key={document.path} className="flex items-center justify-between gap-2 px-1 py-1"><span className="min-w-0 flex-1 truncate text-xs ui-color-ink" title={document.path}>{normalizeDisplayText(document.name)} <span className="ui-color-faint">· {normalizeDisplayPath(document.path)}</span></span><button type="button" onClick={() => removeDocument(document.path)} aria-label={t("ui.projectRemoveDocument", { name: document.name })} className="app-icon-button app-icon-button--sm app-icon-button--danger"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}
                 </div>
               </div>
             </div>
-          </div>
-          <div className="mt-4 border-t pt-3 ui-border-color-border" >
-            <h4 className="app-section-title">4 · {t("panel.save")} / {t("panel.apply")}</h4>
+          </section>
+          <section className="mt-6 border-t pt-4 ui-border-color-border" aria-labelledby="project-save-title">
+            <h3 id="project-save-title" className="app-section-title">{t("panel.save")} / {t("panel.apply")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
-          <div className="mt-2 flex flex-wrap gap-2.5">
+          <div className="projects-editor-actions mt-3">
             <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
             {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => void exportSelected(selected)} disabled={exporting} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
           </div>
             <p className="mt-2 text-xs ui-color-faint">{t("ui.projectsFooter")}</p>
-          </div>
+          </section>
         </section>
       </div>
     </div>

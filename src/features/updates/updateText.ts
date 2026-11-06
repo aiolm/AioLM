@@ -9,6 +9,8 @@ export const updateText = {
     nativeOnly: "Update checks are available in the desktop app.", unsupported: "In-app installation is unavailable for this update. Open the release page for installation instructions.",
     confirmTitle: "Install AioLM update?", confirmBody: "After the download is verified, AioLM will close and the installer will open. Running chats, servers and tasks will stop. Save your work before continuing. Complete installation in the window that opens. If asked to replace the app, use its existing installation folder, then reopen AioLM.",
     notes: "Release notes", downloadProgress: "Update download progress", releasePage: "Open release page",
+    steps: "Update installation steps", stepNames: ["Download", "Verify", "Open installer"],
+    downloaded: "{size} downloaded", downloadedOf: "{done} of {total}",
   },
   ko: {
     title: "앱 업데이트", description: "새로운 AioLM 버전을 확인하고 업데이트를 설치합니다.",
@@ -20,6 +22,8 @@ export const updateText = {
     nativeOnly: "데스크톱 앱에서 업데이트를 확인할 수 있습니다.", unsupported: "이 업데이트는 앱에서 설치할 수 없습니다. 릴리스 페이지에서 설치 방법을 확인하세요.",
     confirmTitle: "AioLM을 업데이트할까요?", confirmBody: "다운로드 검증이 끝나면 AioLM이 종료되고 설치 프로그램이 열립니다. 실행 중인 대화, 서버 및 작업이 중단됩니다. 계속하기 전에 작업을 저장하세요. 열린 창에서 설치를 완료하세요. 앱을 교체하라는 안내가 나오면 기존 설치 폴더의 앱을 교체한 뒤 AioLM을 다시 실행하세요.",
     notes: "릴리스 노트", downloadProgress: "업데이트 다운로드 진행률", releasePage: "릴리스 페이지 열기",
+    steps: "업데이트 설치 단계", stepNames: ["다운로드", "검증", "설치 프로그램 열기"],
+    downloaded: "{size} 다운로드됨", downloadedOf: "{total} 중 {done}",
   },
   ja: {
     title: "アプリの更新", description: "AioLMの新しいバージョンを確認し、更新をインストールします。",
@@ -31,6 +35,8 @@ export const updateText = {
     nativeOnly: "デスクトップアプリで更新を確認できます。", unsupported: "この更新はアプリ内でインストールできません。リリースページでインストール方法を確認してください。",
     confirmTitle: "AioLMを更新しますか？", confirmBody: "ダウンロードの検証後、AioLMが終了し、インストーラーが開きます。実行中のチャット、サーバー、タスクは停止します。作業を保存してから続行してください。開いた画面でインストールを完了してください。アプリの置き換えを求められた場合は既存のインストール先を使用し、その後AioLMを再起動してください。",
     notes: "リリースノート", downloadProgress: "更新ダウンロードの進行状況", releasePage: "リリースページを開く",
+    steps: "更新インストールの手順", stepNames: ["ダウンロード", "検証", "インストーラーを開く"],
+    downloaded: "{size} ダウンロード済み", downloadedOf: "{total} 中 {done}",
   },
   zh: {
     title: "应用更新", description: "检查AioLM的新版本并安装更新。",
@@ -42,5 +48,7 @@ export const updateText = {
     nativeOnly: "请在桌面应用中检查更新。", unsupported: "此更新无法在应用内安装。请在发行页面查看安装方法。",
     confirmTitle: "更新AioLM？", confirmBody: "下载验证完成后，AioLM将关闭并打开安装程序。正在运行的对话、服务器和任务将停止。请先保存工作。在打开的窗口中完成安装。如需替换应用，请使用原来的安装目录，然后重新打开AioLM。",
     notes: "发行说明", downloadProgress: "更新下载进度", releasePage: "打开发行页面",
+    steps: "更新安装步骤", stepNames: ["下载", "验证", "打开安装程序"],
+    downloaded: "已下载 {size}", downloadedOf: "{done} / {total}",
   },
 };

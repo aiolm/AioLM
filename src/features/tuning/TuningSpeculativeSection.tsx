@@ -43,7 +43,7 @@ export default function TuningSpeculativeSection({
   const draftDeviceDefault = settingDefaultLabel('spec_draft_device', runtime.options, runtime.verified, locale);
   const draftModelDefault = settingDefaultLabel('spec_draft_model', runtime.options, runtime.verified, locale);
   return (
-    <div className="mt-5 app-card app-card--tight app-card--muted">
+    <div className="tuning-subgroup mt-5 app-card app-card--tight">
       <h3 className="app-section-title">{t("ui.specTitle")}</h3>
       <p className="app-section-hint mb-4">{t("ui.specHint")}</p>
       <div className="grid gap-4 app-form-grid">

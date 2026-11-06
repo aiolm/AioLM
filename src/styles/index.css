@@ -9,10 +9,9 @@
  --color-warning: var(--tone-warning-ink); --color-warning-soft: var(--tone-warning-bg); --color-warning-line: var(--tone-warning-border);
  --font-sans: "Pretendard Variable", "Segoe UI Variable", "Malgun Gothic", sans-serif;
  --font-mono: "Cascadia Code", Consolas, monospace;
- /* Utility sizes follow the shared scale: xs is supporting text, sm is interface
-    text, base is a group heading and lg/xl are section and page headings. */
- --text-xs: 12px; --text-xs--line-height: 1.5; --text-sm: 13px; --text-sm--line-height: 1.5;
- --text-base: 14px; --text-base--line-height: 1.45; --text-lg: 16px; --text-lg--line-height: 1.4; --text-xl: 18px; --text-xl--line-height: 1.35;
+ /* Utility sizes follow the same interface, section and page type scale. */
+ --text-xs: 12px; --text-xs--line-height: 1.5; --text-sm: 14px; --text-sm--line-height: 1.5;
+ --text-base: 14px; --text-base--line-height: 1.5; --text-lg: 18px; --text-lg--line-height: 1.4; --text-xl: 24px; --text-xl--line-height: 1.3;
 }
 @font-face { font-family: "Pretendard Variable"; src: url("/fonts/PretendardVariable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
 @layer base {
@@ -38,11 +37,8 @@
  img, svg { max-width: 100%; }
  input, textarea { min-width: 0; }
  input::placeholder, textarea::placeholder { color: var(--ui-faint); opacity: 1; }
- /* The pastel action fill is about 1.6:1 on light surfaces, so checked boxes and
-    radios take the foreground accent that the palette keeps above 3:1. */
+ /* Checked and range controls use the visible foreground accent. */
  input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--ui-accent); }
- /* Slider thumbs and filled tracks take the same accent so the value position
-    is not drawn in the pastel fill. */
  input[type="range"] { width: 100%; accent-color: var(--ui-accent); }
  textarea { resize: vertical; }
  code, pre { font-family: var(--font-mono); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
@@ -64,4 +60,8 @@
 .app-reduce-motion *, .app-reduce-motion *::before, .app-reduce-motion *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce) {
  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+@media (pointer: coarse) {
+ label:has(> input:is([type="checkbox"], [type="radio"])) { min-block-size: 44px; min-inline-size: 44px; align-content: center; }
+ label:not([class]):has(> input:is([type="checkbox"], [type="radio"])) { display: inline-flex; align-items: center; gap: 8px; }
 }

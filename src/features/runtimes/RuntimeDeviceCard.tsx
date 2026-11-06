@@ -9,8 +9,8 @@ interface Props {
   deviceSummary: string;
 }
 
-/** The detected hardware as label/value rows in the page's side column; the
- * column stacks above the runtime list on narrow windows. */
+/** The detected hardware as one compact label/value strip between the engine
+ * heading and its backends; items wrap onto further lines in narrow windows. */
 export default function RuntimeDeviceCard({ t, device, deviceSummary }: Props) {
   const gpu = device ? device.profile.gpus.find((item) => !item.integrated) ?? device.profile.gpus[0] : undefined;
   // The GPU name and its memory read as a value and a secondary line, like the
@@ -22,7 +22,7 @@ export default function RuntimeDeviceCard({ t, device, deviceSummary }: Props) {
   const platform = device ? normalizeDisplayText(`${device.profile.os}/${device.profile.arch}`) : null;
   return (
     <section className="runtime-device-summary" aria-labelledby="detected-device-heading">
-      <h2 id="detected-device-heading">{t("ui.detectedDevice")}</h2>
+      <h3 id="detected-device-heading" className="runtime-device-summary__title">{t("ui.detectedDevice")}</h3>
       <dl className="runtime-device-properties">
         <div><dt>GPU</dt><dd title={normalizeDisplayText(deviceSummary)}>{gpuName}{gpuDetail && <span className="runtime-device-detail">{gpuDetail}</span>}</dd></div>
         {cpu && <div><dt>CPU</dt><dd title={cpu}>{cpu}{cores && <span className="runtime-device-detail">{cores}</span>}</dd></div>}

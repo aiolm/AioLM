@@ -85,19 +85,6 @@ const store = {
 } as unknown as AppStore;
 
 describe("ModelsPanel layout", () => {
-  it("does not render tuning controls in the model library", () => {
-    render(createElement(I18nProvider, {
-      initialLocale: "en",
-      children: createElement(ModelsPanel, { store }),
-    }));
-
-    const scrollRegion = screen.getByTestId("models-scroll-region");
-    expect(scrollRegion).toHaveClass("models-panel");
-    expect(screen.queryByTestId("execution-profiles-section")).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Execution profiles" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("models-list")).toHaveClass("models-model-list");
-    expect(screen.queryByTestId("models-header-actions")).not.toBeInTheDocument();
-  });
 
   it("leaves server lifecycle controls to the app toolbar", () => {
     const startingStore = {

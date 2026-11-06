@@ -496,7 +496,7 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
         ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
         : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || state === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{state === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>;
   const rowSummary = (name: string, model: string) =>
-    <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} /><ModelName model={model} empty={t("ui.sessionNoModel")} /></span><ModelBadges mode="compact" model={model} localPath={model} /></span>;
+    <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} /><ModelName model={model} empty={t("ui.sessionNoModel")} /></span></span>;
   const rowName = (definition: api.SessionDefinition) => normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
 
   // A stopped default with nothing reported is not a resource; named sessions
@@ -521,6 +521,7 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
                 <div className="session-entry-main">
                   <div className="session-entry-name">{rowSummary(name, model)}</div>
                   <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
+                  <span className="session-entry-runtime"><RuntimeSelectionLabel config={runtimeConfig} /></span>
                   <div className="session-entry-actions">
                     {settingsButton(definition)}
                     {lifecycleButton(definition, state, rowDefinition)}
@@ -530,8 +531,8 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
                 <details className="session-entry-disclosure">
                   <summary>{copy.details}</summary>
                   <div className="session-entry-details">
+                    <ModelBadges mode="detail" model={model} localPath={model} />
                     <div className="session-entry-diagnostics text-xs ui-color-muted">
-                      <span><RuntimeSelectionLabel config={runtimeConfig} /></span>
                       {status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status) || "—" })}</span>}
                       {status?.pid && <span>{t("ui.sessionPidLabel", { pid: status.pid })}</span>}
                       {status?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: status.active_requests })}</span>}
@@ -571,6 +572,7 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
                         {rowSummary(name, model)}
                       </button>
                       <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
+                      <span className="session-entry-runtime"><RuntimeSelectionLabel config={runtimeConfig} /></span>
                       <div className="session-entry-actions">
                         {settingsButton(definition)}
                         {/* Lifecycle actions for a session that is loading, loaded or
@@ -579,10 +581,10 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
                       </div>
                     </div>
                     {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
+                      <ModelBadges mode="detail" model={model} localPath={model} />
                       <div className="grid gap-3 app-form-grid">
                         <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                       </div>
-                      <div className="session-entry-diagnostics text-xs ui-color-muted"><span><RuntimeSelectionLabel config={runtimeConfig} /></span></div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>
                         <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>

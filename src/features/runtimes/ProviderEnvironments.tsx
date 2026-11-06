@@ -1,5 +1,5 @@
 import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
@@ -100,30 +100,52 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       const imported = await api.providerPortableImport();
       setResult(`${t('ui.importProviderRuntimeBundle')} · ${providerDisplayName(imported.provider)} · ${imported.id}`);
     }, { cancellable: true, inventory: true });
-  return <section className="app-card app-card--tight">
-    {lockReason && <FeedbackBanner tone="info" className="mb-3">{lockReason}</FeedbackBanner>}
-    <h3 className="app-section-title">{copy.environment}</h3>
-    {(!selectedProvider || !isExternalProvider(selectedProvider)) && <label>{copy.python}<input className="app-input" value={python} onChange={event => setPython(event.target.value)} disabled={busy} /></label>}
+  const headingId = useId();
+  const managed = !selectedProvider || !isExternalProvider(selectedProvider);
+  return <section className="app-card provider-env" aria-labelledby={headingId}>
+    <h3 id={headingId} className="app-section-title">{copy.environment}</h3>
+    {lockReason && <FeedbackBanner tone="info">{lockReason}</FeedbackBanner>}
+    {managed && <label className="provider-env__field"><span>{copy.python}</span><input className="app-input" value={python} onChange={event => setPython(event.target.value)} disabled={busy} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} /></label>}
     {catalog.filter(provider => provider.id !== 'llama.cpp' && (!selectedProvider || provider.id === selectedProvider)).map(provider => {
       const providerRuntimes = runtimesByProvider.get(provider.id) ?? [];
-      return <div key={provider.id} className="app-card app-card--tight">
-      <h4>{providerDisplayName(provider.id)} · {provider.managed_variant ?? provider.server}</h4>
-      {provider.managed_variant === 'vllm-metal' && provider.availability.supported && <p>{provider.availability.detail}</p>}
-      {!provider.availability.supported && <p>{copy.unsupported} {provider.availability.detail}</p>}
-      {!isExternalProvider(provider.id) && <><button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
-      <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button></>}
-      {isExternalProvider(provider.id) && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
+      const external = isExternalProvider(provider.id);
+      return <div key={provider.id} className="provider-env__provider">
+      <div className="provider-env__provider-header">
+        <div className="provider-env__identity">
+          <h4 className="provider-env__name">{providerDisplayName(provider.id)} · {provider.managed_variant ?? provider.server}</h4>
+          {provider.managed_variant === 'vllm-metal' && provider.availability.supported && <p className="app-section-hint">{provider.availability.detail}</p>}
+          {!provider.availability.supported && <p className="provider-env__unsupported">{copy.unsupported} {provider.availability.detail}</p>}
+          {external && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
+        </div>
+        {!external && <div className="app-page-actions">
+          <button type="button" className="app-button app-button--primary" disabled={busy || resourcesInUse || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
+          <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
+        </div>}
+      </div>
       <div className="provider-runtime-list" role="group" aria-label={`${providerDisplayName(provider.id)} · ${copy.runtime}`}>
-      {providerRuntimes.map(runtime => <div key={runtime.id} className="app-list-row provider-runtime-row"><span><strong>{runtimeInstanceLabel(runtime, locale)}</strong><Badge tone={runtime.available ? 'info' : 'warning'}>{runtime.available ? (isExternalProvider(provider.id) ? adapterCatalogCopy[locale].runtimeFound : copy.ready) : copy.notReady}</Badge><small>{runtime.problems.join('; ')}</small></span><div className="app-page-actions">{!isExternalProvider(provider.id) && <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}<button type="button" className="app-button app-button--danger" disabled={busy || resourcesInUse} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.remove}`, () => api.providerRemove(provider.id, runtime.id), { inventory: true })}>{copy.remove}</button></div></div>)}
+      {providerRuntimes.map(runtime => <div key={runtime.id} className="app-list-row provider-runtime-row">
+        <span className="provider-runtime-row__identity">
+          <strong>{runtimeInstanceLabel(runtime, locale)}</strong>
+          <Badge tone={runtime.available ? 'info' : 'warning'}>{runtime.available ? (external ? adapterCatalogCopy[locale].runtimeFound : copy.ready) : copy.notReady}</Badge>
+          {runtime.problems.length > 0 && <small>{runtime.problems.join('; ')}</small>}
+        </span>
+        <div className="app-page-actions">
+          {!external && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}
+          <button type="button" className="app-button app-button--ghost app-button--danger app-button--sm" disabled={busy || resourcesInUse} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.remove}`, () => api.providerRemove(provider.id, runtime.id), { inventory: true })}>{copy.remove}</button>
+        </div>
+      </div>)}
       {providerRuntimes.length === 0 && <p className="app-section-hint">{copy.noRuntimes}</p>}
       </div>
     </div>;
     })}
-    {(!selectedProvider || !isExternalProvider(selectedProvider)) && <div className="app-card app-card--tight">
-      <h4>{t('ui.importProviderRuntimeBundle')}</h4>
-      <button type="button" className="app-button app-button--primary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableImport(t('ui.importProviderRuntimeBundle'))}>{t('ui.importProviderRuntimeBundle')}</button>
+    {managed && <div className="app-page-actions provider-env__footer">
+      <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableImport(t('ui.importProviderRuntimeBundle'))}>{t('ui.importProviderRuntimeBundle')}</button>
     </div>}
-    {cancellable && <LocalTaskCancelButton taskId={TASK_ID} onClick={() => void cancelOperation()} className="app-button app-button--danger">{t('common.cancel')}</LocalTaskCancelButton>}
-    {progress && <pre role="status" className="whitespace-pre-wrap">{progress}</pre>}{result && <p role="status" data-testid="portable-result">{result}</p>}{error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+    {(cancellable || progress || result) && <div className="provider-env__status">
+      {progress && <pre role="status" className="provider-env__progress">{progress}</pre>}
+      {result && <p role="status" data-testid="portable-result" className="provider-env__result">{result}</p>}
+      {cancellable && <LocalTaskCancelButton taskId={TASK_ID} onClick={() => void cancelOperation()} className="app-button app-button--danger">{t('common.cancel')}</LocalTaskCancelButton>}
+    </div>}
+    {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </section>;
 }
