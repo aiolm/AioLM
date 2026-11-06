@@ -216,6 +216,19 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
     {
         return Err("benchmark record and request do not match".into());
     }
+    // Fixed-output rows must carry exact per-request evidence; historical cap
+    // rows never acquire it.
+    let fixed_output =
+        request.method.version == crate::performance_bench::FIXED_OUTPUT_METHOD_VERSION;
+    for row in rows {
+        let row = crate::performance_bench::PerformanceBenchRow::deserialize(row)
+            .map_err(|e| e.to_string())?;
+        if (fixed_output && !row.validate_fixed_output(request.max_output_tokens))
+            || (!fixed_output && row.reported_completion_tokens_by_request.is_some())
+        {
+            return Err("serving trial does not match its measurement method".into());
+        }
+    }
     let mut points = HashSet::new();
     for row in rows {
         let input = row["input_bytes"].as_u64().unwrap() as u32;
@@ -236,12 +249,13 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
             .map_err(|e| format!("invalid benchmark provenance: {e}"))?;
         provenance.validate(&request.context_profile)?;
         let workload = &provenance.workload;
-        if workload
-            .inputs
-            .iter()
-            .map(|input| input.bytes)
-            .collect::<Vec<_>>()
-            != request.prompt_bytes
+        if provenance.method.version != request.method.version
+            || workload
+                .inputs
+                .iter()
+                .map(|input| input.bytes)
+                .collect::<Vec<_>>()
+                != request.prompt_bytes
             || workload.concurrencies != request.concurrencies
             || workload.max_output_tokens != request.max_output_tokens
             || workload.repetitions != request.repetitions
@@ -1066,12 +1080,14 @@ mod tests {
 
     pub(super) fn serving_row() -> PerformanceBenchRow {
         serde_json::from_value(json!({"id":"synthetic-trial", "input_bytes":256,
-            "max_output_tokens":128,"concurrency":1,"repetition":1,
+            "max_output_tokens":1024,"concurrency":1,"repetition":1,
             "first_output_ms":1.0,"first_content_ms":1.0,"first_reasoning_ms":null,
             "e2e_ms":8.0,"content_bytes":2,"reasoning_bytes":0,"output_bytes":2,
-            "reported_prompt_tokens":null,"reported_completion_tokens":null,"reported_cached_tokens":null,
-            "usage_status":"missing","finish_reasons":["not_reported"],"peak_memory_bytes":null,
-            "timing_source":"client","failed":false,"error":null})).unwrap()
+            "reported_prompt_tokens":null,"reported_completion_tokens":1024,
+            "reported_completion_tokens_by_request":[1024],"reported_cached_tokens":null,
+            "usage_status":"partial","finish_reasons":["length"],"peak_memory_bytes":null,
+            "timing_source":"client","failed":false,"error":null}))
+        .unwrap()
     }
 
     pub(super) fn serving_result(id: &str) -> PerformanceBenchResult {
@@ -1081,11 +1097,11 @@ mod tests {
             method: Default::default(),
             context_profile: "novel_en".into(),
             prompt_bytes: vec![256],
-            max_output_tokens: 128,
+            max_output_tokens: 1024,
             concurrencies: vec![1],
             repetitions: 1,
             warmup: false,
-            request_usage: false,
+            request_usage: true,
         };
         let (workload, _) = crate::performance_bench::prepare_inputs(&request);
         let model = serde_json::from_value(
@@ -1106,16 +1122,42 @@ mod tests {
             workload,
             None,
             "Synthetic model".into(),
+            crate::providers::protocol::FixedOutputControl::IgnoreEos,
         ));
         result
     }
 
     pub(super) fn serving_record(id: &str, created: u64) -> Value {
         json!({"schemaVersion":2,"id":id,"createdAt":created,"model":"synthetic.model",
-            "request":{"run_id":id,"method":{"id":"openai-chat-serving","version":1},
-                "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":128,
-                "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":false},
+            "request":{"run_id":id,"method":{"id":"openai-chat-serving","version":2},
+                "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":1024,
+                "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":true},
             "result":serving_result(id)})
+    }
+
+    /// A record written by the historical cap method (`@1`) before fixed output.
+    pub(super) fn cap_serving_record(id: &str, created: u64) -> Value {
+        let mut record = serving_record(id, created);
+        record["request"]["method"]["version"] = json!(1);
+        record["request"]["max_output_tokens"] = json!(128);
+        record["request"]["request_usage"] = json!(false);
+        let provenance = &mut record["result"]["provenance"];
+        provenance["method"]["version"] = json!(1);
+        provenance["workload"]["max_output_tokens"] = json!(128);
+        provenance["workload"]["request_usage"] = json!(false);
+        provenance["execution"]["settings"] = json!(
+            super::super::provenance::common_request_settings(128, false, None)
+        );
+        let mut row = serving_row();
+        row.max_output_tokens = 128;
+        row.reported_completion_tokens = None;
+        row.reported_completion_tokens_by_request = None;
+        row.usage_status = "missing".into();
+        row.finish_reasons = vec!["stop".into()];
+        record["result"]["rows"] = json!([row]);
+        record["result"]["status"] = json!("complete");
+        record["result"]["message"] = Value::Null;
+        record
     }
 
     #[test]
@@ -1132,6 +1174,7 @@ mod tests {
         initial["request"]["prompt_bytes"] = json!((256..320).collect::<Vec<_>>());
         initial["request"]["concurrencies"] = json!([64]);
         initial["request"]["repetitions"] = json!(100);
+        initial["request"]["max_output_tokens"] = json!(204_800);
         let mut result = serving_result("maximum-serving-grid");
         let provenance = result.provenance.as_mut().unwrap();
         provenance.workload.inputs = (256..320)
@@ -1142,6 +1185,12 @@ mod tests {
             .collect();
         provenance.workload.concurrencies = vec![64];
         provenance.workload.repetitions = 100;
+        provenance.workload.max_output_tokens = 204_800;
+        provenance.execution.settings = super::super::provenance::common_request_settings(
+            204_800,
+            true,
+            Some(crate::providers::protocol::FixedOutputControl::IgnoreEos),
+        );
         initial["result"] = serde_json::to_value(&result).unwrap();
         let journal = RunJournal::begin(&root, initial).unwrap();
         for input in 256..320 {
@@ -1154,6 +1203,9 @@ mod tests {
                 row.content_bytes = 128;
                 row.output_bytes = 128;
                 row.finish_reasons = vec!["not_reported".into(); 64];
+                row.reported_completion_tokens = Some(204_800 * 64);
+                row.reported_completion_tokens_by_request = Some(vec![204_800; 64]);
+                row.max_output_tokens = 204_800;
                 result.rows.push(row);
             }
         }
@@ -1713,5 +1765,64 @@ mod serving_validation_tests {
         assert!(validate_record(&incomplete).is_err());
         incomplete["result"]["status"] = json!("failed");
         validate_record(&incomplete).unwrap();
+    }
+
+    #[test]
+    fn fixed_output_rows_need_exact_per_request_counts_and_cap_history_stays_readable() {
+        let mut fixed = tests::serving_record("fixed-evidence", 1);
+        let mut pair = tests::serving_row();
+        pair.concurrency = 2;
+        pair.finish_reasons = vec!["length".into(); 2];
+        pair.reported_completion_tokens = Some(2048);
+        pair.reported_completion_tokens_by_request = Some(vec![1024, 1024]);
+        fixed["request"]["concurrencies"] = json!([2]);
+        fixed["result"]["provenance"]["workload"]["concurrencies"] = json!([2]);
+        fixed["result"]["rows"] = json!([pair]);
+        fixed["result"]["status"] = json!("complete");
+        fixed["result"]["message"] = Value::Null;
+        validate_record(&fixed).unwrap();
+        let restored: crate::performance_bench::PerformanceBenchRow =
+            serde_json::from_value(fixed["result"]["rows"][0].clone()).unwrap();
+        assert_eq!(
+            restored.reported_completion_tokens_by_request,
+            Some(vec![1024, 1024])
+        );
+        for (label, counts, total) in [
+            (
+                "unequal counts with a matching total",
+                json!([1023, 1025]),
+                json!(2048),
+            ),
+            ("early EOS in one slot", json!([1024, 1000]), json!(2024)),
+            ("overrun", json!([1024, 1025]), json!(2049)),
+            ("missing evidence", Value::Null, json!(2048)),
+            ("one count for two slots", json!([2048]), json!(2048)),
+            ("unknown aggregate", json!([1024, 1024]), Value::Null),
+        ] {
+            let mut invalid = fixed.clone();
+            invalid["result"]["rows"][0]["reported_completion_tokens_by_request"] = counts;
+            invalid["result"]["rows"][0]["reported_completion_tokens"] = total;
+            assert!(validate_record(&invalid).is_err(), "{label}");
+        }
+        let mut wrong_method = fixed.clone();
+        wrong_method["result"]["provenance"]["method"]["version"] = json!(1);
+        assert!(validate_record(&wrong_method).is_err());
+
+        let cap = tests::cap_serving_record("historical-cap", 2);
+        validate_record(&cap).unwrap();
+        let mut forged = cap.clone();
+        forged["result"]["rows"][0]["reported_completion_tokens"] = json!(128);
+        forged["result"]["rows"][0]["reported_completion_tokens_by_request"] = json!([128]);
+        forged["result"]["rows"][0]["usage_status"] = json!("partial");
+        assert!(
+            validate_record(&forged).is_err(),
+            "a cap record never acquires fixed-output evidence"
+        );
+        let root = tests::root();
+        assert_eq!(import(&root, vec![cap.clone(), fixed.clone()]).unwrap(), 2);
+        let page = list(&root, 0, 10).unwrap();
+        assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+        assert_eq!(page.total, 2);
+        let _ = fs::remove_dir_all(&root);
     }
 }

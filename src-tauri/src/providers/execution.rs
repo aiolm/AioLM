@@ -1,7 +1,10 @@
 //! One validated selection shared by the desktop, CLI and API gateway.
 use super::{
     artifacts, compat, launch,
-    protocol::{valid_public_label, ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
+    protocol::{
+        valid_public_label, vllm_accepts_min_tokens, ComputeOwnership, EngineInfo,
+        FixedOutputControl, PublicEngine, ServingMetadata,
+    },
     python_env, ProviderId,
 };
 use crate::config::AppConfig;
@@ -173,6 +176,7 @@ pub fn keep_launch_capabilities(engine: &mut EngineInfo, launched: &EngineInfo) 
     engine.chat_supported = launched.chat_supported;
     engine.serving_metadata = launched.serving_metadata.clone();
     engine.stream_usage_supported = launched.stream_usage_supported;
+    engine.fixed_output = launched.fixed_output;
     engine.embedding_model = launched.embedding_model.clone();
     engine.tools_auto = launched.tools_auto;
     engine.tool_parser = launched.tool_parser;
@@ -343,6 +347,7 @@ fn set_llama_mode(info: &mut EngineInfo, mode: LlamaMode, model: &str) -> Result
         LlamaMode::Generate => {
             info.tasks = vec!["generate".into()];
             info.embedding_model = None;
+            info.fixed_output = Some(FixedOutputControl::IgnoreEos);
         }
         LlamaMode::Embed => {
             info.tasks = vec!["embed".into()];
@@ -350,6 +355,7 @@ fn set_llama_mode(info: &mut EngineInfo, mode: LlamaMode, model: &str) -> Result
             info.chat_supported = Some(false);
             info.tools_auto = false;
             info.tool_parser = false;
+            info.fixed_output = None;
         }
         LlamaMode::Rerank => {
             return Err("llama-server --rerank serves only its rerank endpoint, which AioLM does not route; remove it to serve chat, or use --embedding for embeddings".into());
@@ -415,6 +421,7 @@ fn llama_info(cfg: &AppConfig, modalities: artifacts::Modalities) -> Result<Engi
             info.chat_supported = Some(false);
             info.tools_auto = false;
             info.tool_parser = false;
+            info.fixed_output = None;
         }
     }
     Ok(info)
@@ -484,7 +491,7 @@ pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         .filter(|(key, _)| !launch::BINDING_KEYS.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    Ok(EngineInfo {
+    let mut info = EngineInfo {
         provider,
         serving_metadata: Some(ServingMetadata::from_observations(
             runtime
@@ -502,6 +509,7 @@ pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             },
         )),
         stream_usage_supported: Some(true),
+        fixed_output: None,
         runtime_id: runtime.id.clone(),
         runtime_variant: runtime
             .probe
@@ -555,7 +563,25 @@ pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         embedding_namespace,
         tools_auto: provider != ProviderId::Vllm || harmony || (auto_tools && tool_parser),
         tool_parser: provider != ProviderId::Vllm || harmony || tool_parser,
-    })
+    };
+    info.fixed_output = builtin_fixed_output(provider, runtime.probe.as_ref(), &info.tasks);
+    Ok(info)
+}
+
+/// Only the builtin vLLM OpenAI server is verified to honor a fixed-output
+/// control (`min_tokens`, see [`FixedOutputControl`]). vllm-metal rejects
+/// `min_tokens`, and mlx-vlm documents no such field, so both stay unsupported.
+fn builtin_fixed_output(
+    provider: ProviderId,
+    probe: Option<&python_env::ProbeRecord>,
+    tasks: &[String],
+) -> Option<FixedOutputControl> {
+    let probe = probe?;
+    (provider == ProviderId::Vllm
+        && !compat::is_metal(Some(probe))
+        && vllm_accepts_min_tokens(&probe.version)
+        && tasks.iter().any(|task| task == "generate"))
+    .then_some(FixedOutputControl::MinTokens)
 }
 
 pub fn probe_for(provider: ProviderId, id: Option<&str>) -> Option<python_env::ProbeRecord> {
@@ -567,6 +593,44 @@ pub fn probe_for(provider: ProviderId, id: Option<&str>) -> Option<python_env::P
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn builtin_fixed_output_is_declared_only_for_verified_generation_engines() {
+        let generate = ["generate".to_owned()];
+        let standard = python_env::ProbeRecord {
+            version: "0.31.0".into(),
+            variant: "standard".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            builtin_fixed_output(ProviderId::Vllm, Some(&standard), &generate),
+            Some(FixedOutputControl::MinTokens)
+        );
+        let metal = python_env::ProbeRecord {
+            variant: "vllm-metal".into(),
+            ..standard.clone()
+        };
+        let old = python_env::ProbeRecord {
+            version: "0.3.3".into(),
+            ..standard.clone()
+        };
+        for (provider, probe, tasks) in [
+            (ProviderId::Vllm, Some(&metal), &generate[..]),
+            (ProviderId::Vllm, Some(&old), &generate[..]),
+            (ProviderId::Vllm, None, &generate[..]),
+            (ProviderId::Vllm, Some(&standard), &["embed".to_owned()][..]),
+            (ProviderId::MlxVlm, Some(&standard), &generate[..]),
+        ] {
+            assert_eq!(builtin_fixed_output(provider, probe, tasks), None);
+        }
+
+        let mut llama = EngineInfo::llama("synthetic.gguf", artifacts::Modalities::text_only());
+        assert_eq!(llama.fixed_output, Some(FixedOutputControl::IgnoreEos));
+        set_llama_mode(&mut llama, LlamaMode::Embed, "synthetic.gguf").unwrap();
+        assert_eq!(llama.fixed_output, None);
+        set_llama_mode(&mut llama, LlamaMode::Generate, "synthetic.gguf").unwrap();
+        assert_eq!(llama.fixed_output, Some(FixedOutputControl::IgnoreEos));
+    }
 
     #[test]
     fn builtin_public_identity_uses_reported_binary_or_package_evidence_only() {

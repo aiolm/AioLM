@@ -3,7 +3,10 @@
 use super::{
     artifacts::Modalities,
     launch::{EngineCommand, Readiness},
-    protocol::{ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
+    protocol::{
+        ComputeOwnership, EngineInfo, FixedOutputControl, PublicEngine, ServingMetadata,
+        MAX_FIXED_OUTPUT_TOKENS,
+    },
     ProviderId,
 };
 use crate::config::AppConfig;
@@ -175,6 +178,62 @@ pub struct Capabilities {
     pub tools: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_usage_supported: Option<bool>,
+    /// Explicit opt-in: the request control this engine honors to generate
+    /// exactly `max_tokens` tokens. It must match a declared request option of
+    /// the right kind and requires streamed usage support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_output: Option<FixedOutputControl>,
+}
+
+/// A custom fixed-output declaration is accepted only with the request option
+/// that carries it (flag/toggle for `ignore_eos`, an integer range covering
+/// every fixed target for `min_tokens`) and streamed usage support.
+fn validate_fixed_output(
+    capabilities: &Capabilities,
+    manifest: &RuntimeManifest,
+) -> Result<(), String> {
+    let Some(control) = capabilities.fixed_output else {
+        return Ok(());
+    };
+    let field = control.field_name();
+    if capabilities.stream_usage_supported != Some(true) {
+        return Err(format!(
+            "adapter probe declares fixed_output `{field}` without stream_usage_supported: true; exact output counts could not be verified"
+        ));
+    }
+    let option = manifest
+        .options
+        .iter()
+        .find(|option| option.key == field && option.target == "request")
+        .ok_or_else(|| {
+            format!(
+                "adapter probe declares fixed_output `{field}` but the manifest has no `{field}` request option"
+            )
+        })?;
+    let kind = option.kind["type"].as_str().unwrap_or("");
+    let accepted = match control {
+        FixedOutputControl::IgnoreEos => matches!(kind, "flag" | "toggle"),
+        FixedOutputControl::MinTokens => {
+            kind == "integer"
+                && option.kind.get("choices").is_none()
+                && numeric_range(&option.kind).is_some_and(|mut range| {
+                    // Sentinels cannot establish support for the intervening output targets.
+                    range.sentinel_values.clear();
+                    range.contains(1.0) && range.contains(f64::from(MAX_FIXED_OUTPUT_TOKENS))
+                })
+        }
+    };
+    if !accepted {
+        return Err(match control {
+            FixedOutputControl::IgnoreEos => format!(
+                "adapter fixed_output `{field}` request option must be a flag or toggle"
+            ),
+            FixedOutputControl::MinTokens => format!(
+                "adapter fixed_output `{field}` request option must be an integer accepting 1 to {MAX_FIXED_OUTPUT_TOKENS}"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The probe must resolve the exact selected model, rather than promote the
@@ -1053,7 +1112,7 @@ fn validate_probe_result(
     {
         return Err("adapter probe reports invalid tasks".into());
     }
-    Ok(())
+    validate_fixed_output(&probe.capabilities, manifest)
 }
 pub async fn register(
     source: &Path,
@@ -1366,7 +1425,12 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
 pub fn catalog() -> Vec<Value> {
     let inventory = registrations();
     let mut seen = std::collections::BTreeSet::new();
-    inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":"openai-chat-serving@1","deep_verification":"unsupported","portable":"unsupported"}})).collect()
+    inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| {
+        // Fixed-output measurement needs the probe's explicit control
+        // declaration; the selected model's probe still decides each session.
+        let benchmark = if r.probe.as_ref().is_some_and(|p| p.capabilities.fixed_output.is_some()) { "openai-chat-serving@2" } else { "unsupported" };
+        serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":benchmark,"deep_verification":"unsupported","portable":"unsupported"}})
+    }).collect()
 }
 /// Probe identity (including explicit nulls) and ownership (including unknown)
 /// are authoritative. Supported formats never identify the selected weights.
@@ -1438,6 +1502,10 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         speech_model_type: None,
         serving_metadata: Some(serving_metadata(&r.manifest, &p)),
         stream_usage_supported: p.capabilities.stream_usage_supported,
+        fixed_output: p
+            .capabilities
+            .fixed_output
+            .filter(|_| p.capabilities.tasks.iter().any(|task| task == "generate")),
         upstream_model: upstream.clone(),
         modalities: p.capabilities.modalities,
         tasks: p.capabilities.tasks,
@@ -2439,6 +2507,90 @@ mod tests {
         }
     }
     #[test]
+    fn fixed_output_declarations_need_a_matching_request_option_and_usage() {
+        let declared = |control: &str, kind: Value, usage: Value| {
+            let mut manifest = example();
+            manifest.options.push(ExternalOption {
+                scope: None,
+                key: control.into(),
+                flag: None,
+                kind,
+                target: "request".into(),
+                group: options_group(),
+                runtime_default: None,
+            });
+            validate_manifest(&manifest).unwrap();
+            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
+            probe["capabilities"]["fixed_output"] = control.into();
+            probe["capabilities"]["stream_usage_supported"] = usage;
+            let probe: ProbeResult = serde_json::from_value(probe).unwrap();
+            validate_probe_result(&probe, &manifest, Some("selected"))
+        };
+        let toggle = serde_json::json!({"type":"toggle"});
+        let range = serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS});
+        declared("ignore_eos", toggle.clone(), true.into()).unwrap();
+        declared(
+            "ignore_eos",
+            serde_json::json!({"type":"flag"}),
+            true.into(),
+        )
+        .unwrap();
+        declared("min_tokens", range.clone(), true.into()).unwrap();
+        declared(
+            "min_tokens",
+            serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[-1]}),
+            true.into(),
+        )
+        .unwrap();
+        for usage in [Value::Null, false.into()] {
+            let error = declared("ignore_eos", toggle.clone(), usage).unwrap_err();
+            assert!(error.contains("stream_usage_supported"), "{error}");
+        }
+        for (control, kind) in [
+            ("ignore_eos", range.clone()),
+            ("min_tokens", toggle.clone()),
+            (
+                "min_tokens",
+                serde_json::json!({"type":"integer","min":1,"max":32768}),
+            ),
+            (
+                "min_tokens",
+                serde_json::json!({"type":"integer","min":1,"max":32768,"sentinel_values":[MAX_FIXED_OUTPUT_TOKENS]}),
+            ),
+            (
+                "min_tokens",
+                serde_json::json!({"type":"integer","min":1024,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[1]}),
+            ),
+            (
+                "min_tokens",
+                serde_json::json!({"type":"integer","min":1,"max":MAX_FIXED_OUTPUT_TOKENS,"choices":[1024]}),
+            ),
+            (
+                "min_tokens",
+                serde_json::json!({"type":"number","min":0,"max":MAX_FIXED_OUTPUT_TOKENS}),
+            ),
+        ] {
+            assert!(declared(control, kind, true.into()).is_err(), "{control}");
+        }
+        // Without the request option the declaration cannot be honored.
+        let mut probe = serde_json::to_value(metadata_probe()).unwrap();
+        probe["capabilities"]["fixed_output"] = "min_tokens".into();
+        probe["capabilities"]["stream_usage_supported"] = true.into();
+        let probe: ProbeResult = serde_json::from_value(probe).unwrap();
+        let error = validate_probe_result(&probe, &example(), Some("selected")).unwrap_err();
+        assert!(error.contains("request option"), "{error}");
+        // Unknown controls are not accepted, and absent stays unsupported.
+        let mut unknown = serde_json::to_value(metadata_probe()).unwrap();
+        unknown["capabilities"]["fixed_output"] = "max_tokens".into();
+        assert!(serde_json::from_value::<ProbeResult>(unknown).is_err());
+        let absent = metadata_probe();
+        assert_eq!(absent.capabilities.fixed_output, None);
+        validate_probe_result(&absent, &example(), Some("selected")).unwrap();
+        assert!(!serde_json::to_string(&absent)
+            .unwrap()
+            .contains("fixed_output"));
+    }
+    #[test]
     fn manifest_artifacts_allow_256_paths_within_both_serialized_budgets() {
         // A pinned Strata build on a system ROCm declares 189 library paths
         // (every alias of its library folder plus the loader-resolved nested
@@ -3135,7 +3287,7 @@ mod tests {
             serde_json::json!({"id":record.manifest.engine_id,
                 "engine":record.manifest.display_name,"server":"openai-v1",
                 "availability":availability,"options":options,"managed_version":null,
-                "kind":"external-process","capabilities":{"benchmark":"openai-chat-serving@1",
+                "kind":"external-process","capabilities":{"benchmark":"unsupported",
                     "deep_verification":"unsupported","portable":"unsupported"}})
         }
 

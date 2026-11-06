@@ -85,7 +85,7 @@ describe('native benchmark history UI', () => {
     expect(option).not.toHaveTextContent('a'.repeat(40));
     fireEvent.click(option);
     expect(screen.getByRole('combobox', { name: 'Result history' })).toHaveTextContent('converted-model-4bit');
-    await waitFor(() => expect(document.querySelector('.performance-result-context')).toHaveTextContent('converted-model-4bit'));
+    expect(await screen.findByText('converted-model-4bit', { exact: true })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Export result' }));
     await screen.findByText('File saved.');
     expect(exportBenchmarkResults).toHaveBeenCalledExactlyOnceWith([saved], 'selected', 'xlsx', 'en');

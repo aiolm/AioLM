@@ -57,6 +57,68 @@ fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &str)
     let _ = stream.flush();
 }
 
+/// Synthetic forced-output stream for a request carrying `ignore_eos: true` or
+/// `min_tokens == max_tokens`: one-byte pieces, `finish_reason: length`, and a
+/// completion count with partial usage (no cache counter). Scenario flags make
+/// the fixture misbehave the way real engines can: `--benchmark-early-eos`
+/// stops one token short, `--benchmark-unequal-counts` alternates one short and
+/// one over (so a concurrency-2 total still matches), `--benchmark-missing-usage`
+/// omits the counter, each only from chat call `--benchmark-fault-after`
+/// onward. Not model inference.
+fn forced_stream(request: &serde_json::Value, call: usize, arguments: &[String]) -> Option<String> {
+    let target = request.get("max_tokens")?.as_u64()?;
+    let forced = request.get("ignore_eos") == Some(&serde_json::Value::Bool(true))
+        || request
+            .get("min_tokens")
+            .and_then(serde_json::Value::as_u64)
+            == Some(target);
+    if !forced || target == 0 {
+        return None;
+    }
+    // `--benchmark-fault-after <calls>` keeps earlier chat calls well behaved.
+    let fault_after = arguments
+        .iter()
+        .position(|arg| arg == "--benchmark-fault-after")
+        .and_then(|index| arguments.get(index + 1))
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let flag = |name: &str| call >= fault_after && arguments.iter().any(|arg| arg == name);
+    let count = if flag("--benchmark-early-eos") {
+        target - 1
+    } else if flag("--benchmark-unequal-counts") {
+        if call.is_multiple_of(2) {
+            target - 1
+        } else {
+            target + 1
+        }
+    } else {
+        target
+    };
+    let mut body = String::new();
+    let mut left = count;
+    while left > 0 {
+        let piece = left.min(4096);
+        body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[{"delta":{"content":"x".repeat(piece as usize)}}]})
+        ));
+        left -= piece;
+    }
+    let reason = if count < target { "stop" } else { "length" };
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({"choices":[{"delta":{},"finish_reason":reason}]})
+    ));
+    if !flag("--benchmark-missing-usage") {
+        body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":count,"total_tokens":count + 3}})
+        ));
+    }
+    body.push_str("data: [DONE]\n\n");
+    Some(body)
+}
+
 fn handle(mut stream: TcpStream) {
     let mut reader = match stream.try_clone() {
         Ok(clone) => BufReader::new(clone),
@@ -294,6 +356,13 @@ fn handle(mut stream: TcpStream) {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
                 let _ = stream.write_all(b"data: [DONE]\n\n");
+                return;
+            }
+            if let Some(forced) = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|request| forced_stream(&request, call, &arguments))
+            {
+                respond(&mut stream, "200 OK", "text/event-stream", &forced);
                 return;
             }
             if std::env::args().any(|arg| arg == "--adapter-engine") {
@@ -716,10 +785,17 @@ fn main() {
             eprintln!("synthetic probe: selected loader dependency is missing");
             std::process::exit(7);
         }
-        println!(
-            "{}",
-            serde_json::json!({"schema_version":1,"engine_id":engine,"runtime_id":runtime,"version":"synthetic-adapter-1","accelerator":"cpu","model":model,"served_model":"fake-model","model_supported":model.is_empty() || std::path::Path::new(model).is_file(),"capabilities":{"tasks":["generate"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}})
-        );
+        let mut probe = serde_json::json!({"schema_version":1,"engine_id":engine,"runtime_id":runtime,"version":"synthetic-adapter-1","accelerator":"cpu","model":model,"served_model":"fake-model","model_supported":model.is_empty() || std::path::Path::new(model).is_file(),"capabilities":{"tasks":["generate"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}});
+        // An adapter that explicitly declares the `ignore_eos` force control
+        // (its manifest must carry the matching request option).
+        if arguments
+            .iter()
+            .any(|arg| arg == "--adapter-probe-fixed-output")
+        {
+            probe["capabilities"]["stream_usage_supported"] = true.into();
+            probe["capabilities"]["fixed_output"] = "ignore_eos".into();
+        }
+        println!("{probe}");
         return;
     }
     if arguments.iter().any(|arg| arg == "--adapter-help-fixture") {

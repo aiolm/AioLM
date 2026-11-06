@@ -62,7 +62,7 @@ export function DescriptionEditor({
         <span>{label}</span>
         <textarea
           id={id}
-          className="app-textarea app-textarea--editable"
+          className="app-textarea"
           value={value}
           disabled={disabled}
           rows={rows}

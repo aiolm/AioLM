@@ -230,6 +230,7 @@ export function publicServingRow(row: PerformanceBenchmarkResult['rows'][number]
     input_bytes: row.input_bytes, max_output_tokens: row.max_output_tokens, concurrency: row.concurrency, repetition: row.repetition,
     first_output_ms: row.first_output_ms, first_content_ms: row.first_content_ms, first_reasoning_ms: row.first_reasoning_ms,
     e2e_ms: row.e2e_ms, content_bytes: row.content_bytes, reasoning_bytes: row.reasoning_bytes, output_bytes: row.output_bytes,
+    ...(row.reported_completion_tokens_by_request ? { reported_completion_tokens_by_request: [...row.reported_completion_tokens_by_request] } : {}),
     reported_prompt_tokens: row.reported_prompt_tokens, reported_completion_tokens: row.reported_completion_tokens,
     reported_cached_tokens: row.reported_cached_tokens, usage_status: row.usage_status, finish_reasons: [...row.finish_reasons],
     peak_memory_bytes: row.peak_memory_bytes, timing_source: row.timing_source, failed: row.failed,

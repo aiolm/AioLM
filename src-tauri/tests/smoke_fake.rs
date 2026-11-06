@@ -767,12 +767,23 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         method: Default::default(),
         context_profile: "novel_ko".into(),
         prompt_bytes: vec![256, 4096],
-        max_output_tokens: 128,
+        max_output_tokens: 1024,
         concurrencies: vec![1, 2],
         repetitions: 1,
         warmup: true,
-        request_usage: false,
+        request_usage: true,
     };
+    // Historical cap requests are history only; they never execute again.
+    let cap = bench::PerformanceBenchRequest {
+        method: bench::ServingMethod {
+            id: "openai-chat-serving".into(),
+            version: bench::CAP_METHOD_VERSION,
+        },
+        max_output_tokens: 128,
+        request_usage: false,
+        ..request.clone()
+    };
+    assert!(bench::RuntimeInfo::prepare(&cfg, &cap).await.is_err());
     let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
     let process = Arc::new(Mutex::new(None));
     let complete = bench::run(
@@ -787,13 +798,16 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     .await;
     assert_eq!(complete.status, "complete", "{:?}", complete.message);
     assert_eq!(complete.rows.len(), 4);
+    // Exactly the target per launch slot, with only partial prompt/cache usage.
     assert!(complete
         .rows
         .iter()
-        .all(|r| r.content_bytes == 2 * u64::from(r.concurrency)
-            && r.reported_completion_tokens.is_none()
-            && r.usage_status == "missing"
-            && r.finish_reasons == vec!["not_reported"; r.concurrency as usize]));
+        .all(|r| r.content_bytes == 1024 * u64::from(r.concurrency)
+            && r.reported_completion_tokens == Some(1024 * u64::from(r.concurrency))
+            && r.reported_completion_tokens_by_request
+                == Some(vec![1024; r.concurrency as usize])
+            && r.usage_status == "partial"
+            && r.finish_reasons == vec!["length"; r.concurrency as usize]));
     assert!(process.lock().unwrap().is_none());
     assert!(complete
         .args
@@ -808,11 +822,27 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         .windows(2)
         .any(|args| args == ["--api-key-file", "[redacted]"]));
     let frozen = serde_json::to_value(&complete).unwrap();
+    assert_eq!(frozen["provenance"]["method"]["version"], 2);
     let settings = frozen
         .pointer("/provenance/execution/settings")
         .unwrap()
         .as_array()
         .unwrap();
+    let requests: Vec<_> = settings
+        .iter()
+        .filter(|setting| setting["target"] == "request")
+        .map(|setting| (setting["name"].as_str().unwrap(), setting["value"].clone()))
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            ("ignore_eos", serde_json::json!(true)),
+            ("max_tokens", serde_json::json!(1024)),
+            ("stream", serde_json::json!(true)),
+            ("stream_options.include_usage", serde_json::json!(true)),
+            ("temperature", serde_json::json!(0)),
+        ]
+    );
     let context = settings
         .iter()
         .find(|setting| setting["target"] == "launch" && setting["name"] == "ctx-size")
@@ -853,10 +883,18 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     );
     for call in chats {
         let body = call["body"].as_object().unwrap();
-        assert_eq!(body.len(), 5, "no saved defaults or vendor-only fields");
+        assert_eq!(body.len(), 7, "no saved defaults or vendor-only fields");
         assert_eq!(body["model"], "native-benchmark-alias");
         assert_eq!(body["temperature"], 0);
-        assert_eq!(body["max_tokens"], 128);
+        assert_eq!(body["max_tokens"], 1024);
+        assert_eq!(
+            body["ignore_eos"], true,
+            "warmup and trials are forced alike"
+        );
+        assert_eq!(
+            body["stream_options"],
+            serde_json::json!({"include_usage": true})
+        );
         assert_eq!(body["stream"], true);
         let text = body["messages"][0]["content"].as_str().unwrap();
         assert!([256, 4096].contains(&text.len()));
@@ -893,6 +931,123 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     assert_eq!(partial.rows.len(), 1);
     assert_eq!(partial.rows[0].repetition, 1);
     assert!(partial.message.as_deref().unwrap().contains("repetition 2"));
+
+    // Per-request count evidence fails whole batches; earlier rows survive.
+    let scenario = |flags: &[&str], fault_after: usize| AppConfig {
+        server_args: flags
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .chain([
+                "--benchmark-fault-after".to_owned(),
+                fault_after.to_string(),
+            ])
+            .collect(),
+        ..cfg.clone()
+    };
+    let unequal_request = bench::PerformanceBenchRequest {
+        run_id: "unequal-serving".into(),
+        prompt_bytes: vec![256],
+        concurrencies: vec![1, 2],
+        repetitions: 1,
+        warmup: false,
+        ..request.clone()
+    };
+    for (label, server, measured, expected) in [
+        // 1023 + 1025 matches the 2048 total, but no slot produced 1024.
+        (
+            "unequal counts",
+            scenario(&["--benchmark-unequal-counts"], 1),
+            unequal_request.clone(),
+            &["stopped after 1023 of 1024", "reported 1025 output tokens"][..],
+        ),
+        (
+            "missing counter",
+            scenario(&["--benchmark-missing-usage"], 1),
+            short.clone(),
+            &["did not report a valid completion token count"][..],
+        ),
+        (
+            "early EOS",
+            scenario(&["--benchmark-early-eos"], 1),
+            short.clone(),
+            &["stopped after 1023 of 1024"][..],
+        ),
+    ] {
+        let runtime = bench::RuntimeInfo::prepare(&server, &measured)
+            .await
+            .unwrap();
+        let result = bench::run(
+            server,
+            measured,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(result.status, "partial", "{label}: {:?}", result.message);
+        assert_eq!(result.rows.len(), 1, "{label}");
+        assert_eq!(
+            result.rows[0].reported_completion_tokens_by_request,
+            Some(vec![1024]),
+            "{label}"
+        );
+        let message = result.message.as_deref().unwrap();
+        assert!(
+            expected.iter().any(|text| message.contains(text)),
+            "{label}: {message}"
+        );
+    }
+    // Warmup uses the same forced workload and count check.
+    let warmup_request = bench::PerformanceBenchRequest {
+        run_id: "warmup-serving".into(),
+        warmup: true,
+        ..short.clone()
+    };
+    let server = scenario(&["--benchmark-early-eos"], 0);
+    let runtime = bench::RuntimeInfo::prepare(&server, &warmup_request)
+        .await
+        .unwrap();
+    let warmup = bench::run(
+        server,
+        warmup_request,
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
+    assert_eq!(warmup.status, "failed", "{:?}", warmup.message);
+    assert!(warmup.rows.is_empty());
+    assert!(warmup.message.as_deref().unwrap().starts_with("warmup"));
+
+    // The largest preset streams through the real child with a scaled budget.
+    let largest = bench::PerformanceBenchRequest {
+        run_id: "largest-serving".into(),
+        max_output_tokens: 204_800,
+        ..short.clone()
+    };
+    let runtime = bench::RuntimeInfo::prepare(&cfg, &largest).await.unwrap();
+    let result = bench::run(
+        cfg.clone(),
+        largest,
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
+    assert_eq!(result.status, "complete", "{:?}", result.message);
+    assert!(result
+        .rows
+        .iter()
+        .all(
+            |row| row.reported_completion_tokens_by_request == Some(vec![204_800])
+                && row.content_bytes == 204_800
+        ));
 
     // Cancel after the second request reaches the actual child, not at a phase event.
     let cancel_receipt = root.join("cancel-serving-requests.jsonl");
@@ -978,7 +1133,8 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
             python: env!("CARGO_BIN_EXE_fake-llama-server").into(),
             requested_version: None,
             probe: Some(ProbeRecord {
-                version: "synthetic".into(),
+                // A min_tokens-capable vLLM release; the fixture never runs vLLM.
+                version: "0.31.0".into(),
                 accelerator: "cpu".into(),
                 architectures: vec!["Qwen2ForCausalLM".into()],
                 generation_architectures: vec!["Qwen2ForCausalLM".into()],
@@ -1006,9 +1162,13 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
             warmup: false,
             ..request
         };
-        let runtime = bench::RuntimeInfo::prepare(&python_cfg, &python_request)
-            .await
-            .unwrap();
+        let prepared = bench::RuntimeInfo::prepare(&python_cfg, &python_request).await;
+        if provider == providers::ProviderId::MlxVlm {
+            // mlx-vlm declares no force control: explicit refusal, no cap fallback.
+            let error = prepared.err().expect("mlx-vlm cannot run fixed output");
+            assert!(error.contains("fixed-output control"), "{error}");
+            return;
+        }
         let result = bench::run(
             python_cfg,
             python_request,
@@ -1016,18 +1176,24 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
             Arc::new(AtomicBool::new(false)),
             process.clone(),
             Arc::new(|_| {}),
-            runtime,
+            prepared.unwrap(),
         )
         .await;
         assert_eq!(result.status, "complete", "{:?}", result.message);
         assert_eq!(result.rows.len(), 2);
-        assert!(
-            result
-                .rows
-                .iter()
-                .all(|r| r.usage_status == "missing"
-                    && r.output_bytes == u64::from(r.concurrency) * 2)
-        );
+        assert!(result.rows.iter().all(|r| r.usage_status == "partial"
+            && r.output_bytes == u64::from(r.concurrency) * 1024
+            && r.reported_completion_tokens_by_request
+                == Some(vec![1024; r.concurrency as usize])));
+        let force = serde_json::to_value(&result).unwrap()["provenance"]["execution"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|setting| setting["name"] == "min_tokens")
+            .cloned()
+            .unwrap();
+        assert_eq!(force["value"], 1024);
+        assert_eq!(force["unit"], "tokens");
         assert!(process.lock().unwrap().is_none());
     }
 }

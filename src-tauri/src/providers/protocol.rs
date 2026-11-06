@@ -146,6 +146,71 @@ impl ServingMetadata {
     }
 }
 
+/// The single request field a runtime honors to generate exactly the requested
+/// number of tokens: with `max_tokens` equal to the same target, the field keeps
+/// end-of-generation tokens from ending the response early. Support is declared
+/// per runtime, never inferred from an engine name or its help text, and it is
+/// not success evidence: every response must still report that exact count.
+///
+/// - llama.cpp `llama-server` (pinned b11617) `ignore_eos`: a boolean request
+///   field that adds a -inf logit bias for every end-of-generation token
+///   (<https://github.com/ggml-org/llama.cpp/blob/b11617/tools/server/server-schema.cpp>,
+///   <https://github.com/ggml-org/llama.cpp/blob/b11617/tools/server/README.md>).
+///   Chat completions pass non-OpenAI fields through to the same parser.
+/// - vLLM (OpenAI server since v0.4.0, pinned v0.31.0) `min_tokens`: an integer
+///   extra sampling parameter; EOS and stop token ids are masked and stop strings
+///   are not checked until that many tokens are generated
+///   (<https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/entrypoints/openai/chat_completion/protocol.py>,
+///   <https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/core/sched/utils.py>,
+///   <https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/>).
+///
+/// Neither field can extend generation past the model's context; such runs end
+/// short and fail the per-request count check.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FixedOutputControl {
+    IgnoreEos,
+    MinTokens,
+}
+
+/// Largest fixed output target a runtime declaration must accept.
+pub const MAX_FIXED_OUTPUT_TOKENS: u32 = 204_800;
+
+impl FixedOutputControl {
+    pub const ALL: [FixedOutputControl; 2] =
+        [FixedOutputControl::IgnoreEos, FixedOutputControl::MinTokens];
+
+    /// The request field this control is sent as.
+    pub fn field_name(self) -> &'static str {
+        match self {
+            FixedOutputControl::IgnoreEos => "ignore_eos",
+            FixedOutputControl::MinTokens => "min_tokens",
+        }
+    }
+
+    /// The request value that forces `tokens` output tokens when `max_tokens`
+    /// is the same target.
+    pub fn value(self, tokens: u32) -> Value {
+        match self {
+            FixedOutputControl::IgnoreEos => Value::Bool(true),
+            FixedOutputControl::MinTokens => Value::from(tokens),
+        }
+    }
+}
+
+/// vLLM's OpenAI server accepts `min_tokens` from v0.4.0. An unreadable
+/// version is not evidence of support.
+pub(crate) fn vllm_accepts_min_tokens(version: &str) -> bool {
+    let mut parts = version.split(['.', '+', '-']);
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) else {
+        return false;
+    };
+    (major, minor) >= (0, 4)
+}
+
 /// What a running engine session accepts. Stored with the session when it
 /// becomes ready.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -167,6 +232,10 @@ pub struct EngineInfo {
     pub serving_metadata: Option<ServingMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_usage_supported: Option<bool>,
+    /// The declared request control that forces an exact output count.
+    /// Absent means fixed-output measurement is unsupported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_output: Option<FixedOutputControl>,
     /// Validated request fields from the provider's saved options.
     pub request_fields: Map<String, Value>,
     pub request_option_keys: Vec<String>,
@@ -194,6 +263,7 @@ impl EngineInfo {
             chat_supported: None,
             serving_metadata: None,
             stream_usage_supported: Some(true),
+            fixed_output: Some(FixedOutputControl::IgnoreEos),
             request_option_keys: Vec::new(),
             request_fields: Map::new(),
             request_lora: None,
@@ -892,10 +962,93 @@ fn adapt_audio_request(
 }
 
 /// Whether saved profile request fields fill absent fields in a routed request.
+/// `Omit` is the benchmark's controlled workload: it also admits an
+/// output-forcing field only as the runtime's declared fixed-output control.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RequestDefaultsPolicy {
     Apply,
     Omit,
+}
+
+fn fixed_output_error(message: impl Into<String>) -> AdaptError {
+    adapt_error("unsupported_fixed_output", message)
+}
+
+/// Under `Omit` an output-forcing field travels only as the runtime's declared
+/// control, with the same exact `max_tokens` target and streamed usage so every
+/// count can be checked. Routed client requests (`Apply`) keep their fields.
+fn check_fixed_output(info: &EngineInfo, endpoint: &str, body: &Value) -> Result<(), AdaptError> {
+    let Some(object) = body.as_object() else {
+        return Ok(());
+    };
+    let mut present = FixedOutputControl::ALL
+        .into_iter()
+        .filter(|control| object.contains_key(control.field_name()));
+    let Some(control) = present.next() else {
+        return Ok(());
+    };
+    if present.next().is_some() {
+        return Err(fixed_output_error(
+            "A fixed-output request carries exactly one output control.",
+        ));
+    }
+    match info.fixed_output {
+        None => {
+            return Err(fixed_output_error(
+                "This runtime declares no fixed-output control; exact output token counts cannot be requested.",
+            ))
+        }
+        Some(declared) if declared != control => {
+            return Err(fixed_output_error(format!(
+                "This runtime forces fixed output with `{}`, not `{}`.",
+                declared.field_name(),
+                control.field_name()
+            )))
+        }
+        Some(_) => {}
+    }
+    if info.stream_usage_supported != Some(true) {
+        return Err(fixed_output_error(
+            "This runtime does not declare streamed usage reporting; exact output token counts cannot be verified.",
+        ));
+    }
+    if endpoint != "chat/completions" && endpoint != "completions" {
+        return Err(fixed_output_error(format!(
+            "Fixed output applies only to text generation, not `{endpoint}`."
+        )));
+    }
+    if object.contains_key("max_completion_tokens") {
+        return Err(fixed_output_error(
+            "A fixed-output request sets its target only through max_tokens.",
+        ));
+    }
+    let target = object
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .filter(|tokens| (1..=u64::from(MAX_FIXED_OUTPUT_TOKENS)).contains(tokens))
+        .ok_or_else(|| {
+            fixed_output_error(format!(
+                "A fixed-output request needs max_tokens between 1 and {MAX_FIXED_OUTPUT_TOKENS}."
+            ))
+        })? as u32;
+    if object.get(control.field_name()) != Some(&control.value(target)) {
+        return Err(fixed_output_error(format!(
+            "`{}` must be {} to force exactly max_tokens output tokens.",
+            control.field_name(),
+            control.value(target)
+        )));
+    }
+    if object.get("stream") != Some(&Value::Bool(true))
+        || object
+            .get("stream_options")
+            .and_then(|options| options.get("include_usage"))
+            != Some(&Value::Bool(true))
+    {
+        return Err(fixed_output_error(
+            "A fixed-output request streams with stream_options.include_usage so each output count is reported.",
+        ));
+    }
+    Ok(())
 }
 
 /// Adapt a Chat Completions, Completions, Embeddings or audio transcription
@@ -919,6 +1072,9 @@ pub fn adapt_request(
             "chat_template_required",
             "This model has no chat template. Select an Instruct/chat model or configure --chat-template in its runtime profile. Text completions remain available.",
         ));
+    }
+    if defaults == RequestDefaultsPolicy::Omit {
+        check_fixed_output(info, endpoint, body)?;
     }
     if endpoint == "embeddings" {
         if let Some(input) = body.get("input") {
@@ -1103,6 +1259,7 @@ mod tests {
             chat_supported: None,
             serving_metadata: None,
             stream_usage_supported: None,
+            fixed_output: None,
             request_option_keys: Vec::new(),
             request_fields: json!({"temperature": 0.3}).as_object().unwrap().clone(),
             request_lora: None,
@@ -1181,6 +1338,140 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(error.code, "chat_template_required");
+        }
+    }
+
+    #[test]
+    fn fixed_output_control_travels_only_as_the_declared_exact_target() {
+        let custom = ProviderId::parse("custom.synthetic").unwrap();
+        for (provider, control) in [
+            (ProviderId::Llama, FixedOutputControl::IgnoreEos),
+            (ProviderId::Vllm, FixedOutputControl::MinTokens),
+            (custom, FixedOutputControl::MinTokens),
+            (custom, FixedOutputControl::IgnoreEos),
+        ] {
+            let mut engine = info(provider, Modalities::text_only());
+            engine.stream_usage_supported = Some(true);
+            engine.fixed_output = Some(control);
+            engine.request_option_keys = vec![control.field_name().into()];
+            engine
+                .request_fields
+                .insert(control.field_name().into(), control.value(7));
+            let request = |tokens: u64, value: Value| {
+                let mut body = json!({
+                    "model": "public-alias",
+                    "messages": [{"role": "user", "content": "synthetic"}],
+                    "max_tokens": tokens,
+                    "stream": true,
+                    "stream_options": {"include_usage": true},
+                    "temperature": 0
+                });
+                body[control.field_name()] = value;
+                body
+            };
+            let mut body = request(1024, control.value(1024));
+            adapt_request(
+                &engine,
+                "chat/completions",
+                &mut body,
+                RequestDefaultsPolicy::Omit,
+            )
+            .unwrap();
+            assert_eq!(
+                body[control.field_name()],
+                control.value(1024),
+                "{provider:?}"
+            );
+            assert_eq!(body["max_tokens"], 1024);
+
+            let refused = |engine: &EngineInfo, mut body: Value| {
+                adapt_request(
+                    engine,
+                    "chat/completions",
+                    &mut body,
+                    RequestDefaultsPolicy::Omit,
+                )
+                .unwrap_err()
+                .code
+            };
+            if control == FixedOutputControl::MinTokens {
+                assert_eq!(
+                    refused(&engine, request(1024, json!(512))),
+                    "unsupported_fixed_output"
+                );
+            } else {
+                assert_eq!(
+                    refused(&engine, request(1024, json!(false))),
+                    "unsupported_fixed_output"
+                );
+            }
+            for tokens in [0, u64::from(MAX_FIXED_OUTPUT_TOKENS) + 1] {
+                assert_eq!(
+                    refused(&engine, request(tokens, control.value(tokens as u32))),
+                    "unsupported_fixed_output"
+                );
+            }
+            let mut without_usage = request(1024, control.value(1024));
+            without_usage
+                .as_object_mut()
+                .unwrap()
+                .remove("stream_options");
+            assert_eq!(refused(&engine, without_usage), "unsupported_fixed_output");
+            let mut both = request(1024, control.value(1024));
+            let other = FixedOutputControl::ALL
+                .into_iter()
+                .find(|c| *c != control)
+                .unwrap();
+            both[other.field_name()] = other.value(1024);
+            assert_eq!(refused(&engine, both), "unsupported_fixed_output");
+
+            let mut unknown_usage = engine.clone();
+            unknown_usage.stream_usage_supported = None;
+            assert_eq!(
+                refused(&unknown_usage, request(1024, control.value(1024))),
+                "unsupported_fixed_output"
+            );
+            let mut undeclared = engine.clone();
+            undeclared.fixed_output = None;
+            assert_eq!(
+                refused(&undeclared, request(1024, control.value(1024))),
+                "unsupported_fixed_output"
+            );
+            let mut different = engine.clone();
+            different.fixed_output = Some(other);
+            assert_eq!(
+                refused(&different, request(1024, control.value(1024))),
+                "unsupported_fixed_output"
+            );
+
+            // Routed client requests keep their fields and saved defaults.
+            let mut routed = json!({"messages": [{"role": "user", "content": "synthetic"}]});
+            adapt_request(
+                &undeclared,
+                "chat/completions",
+                &mut routed,
+                RequestDefaultsPolicy::Apply,
+            )
+            .unwrap();
+            if provider != ProviderId::Llama {
+                assert_eq!(routed[control.field_name()], control.value(7));
+            }
+        }
+        assert_eq!(FixedOutputControl::IgnoreEos.value(4096), json!(true));
+        assert_eq!(FixedOutputControl::MinTokens.value(4096), json!(4096));
+        assert_eq!(
+            serde_json::to_value(FixedOutputControl::ALL).unwrap(),
+            json!(["ignore_eos", "min_tokens"])
+        );
+    }
+
+    #[test]
+    fn vllm_min_tokens_requires_a_readable_supporting_version() {
+        for version in ["0.4.0", "0.31.0", "0.30.0+cpu", "1.0", "0.11.1rc2.dev3+g1"] {
+            assert!(vllm_accepts_min_tokens(version), "{version}");
+        }
+        for version in ["0.3.3", "", "unknown", "0", "0.x"] {
+            assert!(!vllm_accepts_min_tokens(version), "{version}");
         }
     }
 

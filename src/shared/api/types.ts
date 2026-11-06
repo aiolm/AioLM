@@ -466,10 +466,10 @@ export interface LegacyPerformanceBenchmarkProvenance {
   };
 }
 
-/** The common API workload; launch tuning is preserved rather than overridden. */
+/** Current runs use fixed-output v2; historical cap-based v1 requests remain readable. */
 export interface PerformanceBenchmarkRequest {
   run_id: string;
-  method: { id: 'openai-chat-serving'; version: 1 };
+  method: { id: 'openai-chat-serving'; version: 1 | 2 };
   context_profile: BenchmarkContextProfile;
   prompt_bytes: number[];
   max_output_tokens: number;
@@ -487,7 +487,7 @@ export interface PerformanceBenchmarkRow extends ServingBenchmarkRow {
 export interface PerformanceBenchmarkProvenance {
   schema_version: 2;
   app_version: string;
-  method: { id: 'openai-chat-serving'; version: 1 };
+  method: { id: 'openai-chat-serving'; version: 1 | 2 };
   workload: ServingWorkload;
   runtime: ServingRuntimeIdentity;
   model: BenchmarkModelIdentity;

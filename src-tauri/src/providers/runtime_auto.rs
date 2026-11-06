@@ -786,6 +786,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
                 chat: false,
                 tools: false,
                 stream_usage_supported: None,
+                fixed_output: None,
             },
         };
         println!(
@@ -827,7 +828,9 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
                 },
                 chat: true,
                 tools: false,
+                // Core API verification proves no request control.
                 stream_usage_supported: None,
+                fixed_output: None,
             },
         };
         println!(

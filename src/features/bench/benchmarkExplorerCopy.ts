@@ -2,7 +2,7 @@ import type { Locale } from '../../shared/i18n/i18n';
 
 const en = {
   website: 'AioLM website', browse: 'Browse public benchmarks',
-  browseHint: 'Explore the website’s filters, comparisons and result details in an AioLM window.',
+  browseHint: 'Opens filters and comparisons in an AioLM window.',
   import: 'Create profile from run settings', importing: 'Creating profile…',
   importHint: 'Choose a destination engine and installed runtime, review compatible launch settings, then confirm. Model files, devices and connections are not selected or copied.',
   saved: 'Profile created:', failed: 'Could not create the profile.', openFailed: 'Could not open the website.',
@@ -20,7 +20,7 @@ const translations: Record<Locale, typeof en> = {
   en,
   ko: {
     website: 'AioLM 웹사이트', browse: '공개 벤치마크 조회',
-    browseHint: 'AioLM 전용 창에서 웹사이트의 필터, 비교 및 기록 상세 화면을 이용합니다.',
+    browseHint: 'AioLM 창에서 필터와 비교 화면을 엽니다.',
     import: '실행 설정으로 프로필 생성', importing: '프로필 생성 중…',
     importHint: '대상 추론 엔진과 설치된 런타임을 선택하고 호환되는 실행 설정을 검토한 뒤 확인하세요. 모델 파일, 장치와 연결은 선택하거나 복사하지 않습니다.',
     saved: '프로필 생성 완료:', failed: '프로필을 생성하지 못했습니다.', openFailed: '웹사이트를 열지 못했습니다.',
@@ -36,7 +36,7 @@ const translations: Record<Locale, typeof en> = {
   },
   ja: {
     website: 'AioLM ウェブサイト', browse: '公開ベンチマークを参照',
-    browseHint: 'AioLM ウィンドウでウェブサイトのフィルター、比較、結果詳細を利用できます。',
+    browseHint: 'AioLM ウィンドウでフィルターと比較を開きます。',
     import: '実行設定からプロファイルを作成', importing: 'プロファイルを作成中…',
     importHint: '移行先エンジンとインストール済みランタイムを選択し、互換性のある起動設定を確認してください。モデルファイル、デバイス、接続は選択・コピーしません。',
     saved: 'プロファイルを作成しました:', failed: 'プロファイルを作成できませんでした。', openFailed: 'ウェブサイトを開けませんでした。',
@@ -52,7 +52,7 @@ const translations: Record<Locale, typeof en> = {
   },
   zh: {
     website: 'AioLM 网站', browse: '浏览公开基准测试',
-    browseHint: '在 AioLM 窗口中使用网站的筛选、比较和结果详情。',
+    browseHint: '在 AioLM 窗口中打开筛选和比较。',
     import: '根据运行设置创建配置档', importing: '正在创建配置档…',
     importHint: '选择目标引擎和已安装的运行时，检查兼容的启动设置后确认。不会选择或复制模型文件、设备或连接。',
     saved: '已创建配置档：', failed: '无法创建配置档。', openFailed: '无法打开网站。',

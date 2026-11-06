@@ -54,6 +54,47 @@ describe('frozen serving benchmark snapshots', () => {
     expect(record).toEqual(before);
   });
 
+  it('publishes exact 200k output evidence and rejects unequal requests even when their total matches', () => {
+    const record = serving();
+    record.request.method.version = 2;
+    record.request.max_output_tokens = 204800;
+    record.request.concurrencies = [2];
+    record.request.request_usage = true;
+    const provenance = record.result.provenance!;
+    provenance.method.version = 2;
+    provenance.workload.max_output_tokens = 204800;
+    provenance.workload.concurrencies = [2];
+    provenance.workload.request_usage = true;
+    provenance.execution.settings = [
+      { target: 'request', scope: [], name: 'ignore_eos', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'max_tokens', value: 204800, unit: 'tokens', role: null },
+      { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
+    ];
+    Object.assign(record.result.rows[0], {
+      max_output_tokens: 204800, concurrency: 2, reported_completion_tokens: 409600,
+      reported_completion_tokens_by_request: [204800, 204800], usage_status: 'partial',
+      finish_reasons: ['length', 'stop'],
+    });
+    expect(isPerformanceRecord(record)).toBe(true);
+    const published = toPublicBenchmark(record, submission);
+    expect(summarizeServingPoints(published.measurements.rows)[0].reported_tokens_per_second?.median).toBe(2048000);
+    expect(validatePublicBenchmark(published)).toBe(published);
+    record.result.status = 'partial';
+    record.request.max_output_tokens = provenance.workload.max_output_tokens = 131072;
+    provenance.execution.settings[1].value = 131072;
+    Object.assign(record.result.rows[0], {
+      max_output_tokens: 131072, reported_completion_tokens: 262144, reported_completion_tokens_by_request: [65536, 196608],
+    });
+    expect(isPerformanceRecord(record)).toBe(false);
+    record.result.rows[0].reported_completion_tokens_by_request = [131072, 131071];
+    record.result.rows[0].reported_completion_tokens = 262143;
+    expect(isPerformanceRecord(record)).toBe(false);
+    delete record.result.rows[0].reported_completion_tokens_by_request;
+    expect(isPerformanceRecord(record)).toBe(false);
+  });
+
   it('keeps the recorded display label independent of live model presentation', () => {
     const record = serving();
     record.model = '/private/replaced-model';

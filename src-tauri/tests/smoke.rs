@@ -48,6 +48,9 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     );
     let model = aiolm_lib::branding::env_var("AIOLM_SMOKE_MODEL").expect("set smoke model");
     let mut cfg = cfg_with(&model);
+    // Room for the prompt plus one forced 1024-token answer per parallel slot;
+    // this is the test's private launch, never a saved user setting.
+    cfg.ctx_size = 8192;
     if let Ok(gpu_id) = std::env::var("AIOLM_BENCH_SMOKE_GPU") {
         cfg.gpu.gpu_ids = vec![gpu_id];
     } else if let Ok(devices) = aiolm_lib::branding::env_var("AIOLM_SMOKE_DEVICE") {
@@ -72,20 +75,20 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     let request = performance_bench::PerformanceBenchRequest {
         run_id: "smoke-cancel".into(),
         method: Default::default(),
-        prompt_bytes: vec![4096],
-        max_output_tokens: 8,
+        prompt_bytes: vec![1024],
+        max_output_tokens: 1024,
         concurrencies: vec![1, 2],
         repetitions: 1,
         context_profile: "code_python".into(),
         warmup: true,
-        request_usage: false,
+        request_usage: true,
     };
     let runtime = performance_bench::RuntimeInfo::prepare(&cfg, &request)
         .await
         .unwrap();
     let active_pid = Arc::new(Mutex::new(None));
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(90),
+        std::time::Duration::from_secs(600),
         performance_bench::run(
             cfg,
             request,
@@ -113,8 +116,13 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     );
     let completed = &result.rows[0];
     assert!(completed.error.is_none(), "{:?}", completed.error);
-    assert_eq!(completed.input_bytes, 4096);
+    assert_eq!(completed.input_bytes, 1024);
     assert_eq!(completed.timing_source, "client");
+    assert_eq!(
+        completed.reported_completion_tokens_by_request,
+        Some(vec![1024]),
+        "a real ignore_eos run reports exactly the target"
+    );
     println!(
         "[smoke] cancelled benchmark retained {} rows",
         result.rows.len()

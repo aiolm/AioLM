@@ -3,7 +3,7 @@ import { inferenceMetricCopy } from "../../shared/i18n/inferenceMetricCopy.ts";
 import { benchmarkSharingCopy } from './benchmarkSharingCopy';
 
 const en = {
-  title: "Benchmark", description: "Compare response speed across prompt lengths and concurrent requests.",
+  title: "Benchmark", description: "Measure how fast the selected model responds across input sizes and concurrent requests.",
   conditions: "Test conditions", model: "Selected model", corpus: "Prompt content", promptLengths: "Input tokens", generation: "Output tokens", repetitions: "Repetitions", batchSizes: "Concurrent requests", warmup: "Warm up before measuring",
   batchHint: "Every selected input length includes a single request as the comparison baseline.",
   workloadNote: "Server context length and request slots are set from these conditions.",
@@ -12,7 +12,7 @@ const en = {
   totalTests: "Total trials", idle: "Ready to benchmark", starting: "Preparing model…", complete: "Completed", cancelled: "Cancelled", failed: "Failed", partial: "Partial results",
   single: "Single requests", batch: "Concurrent requests", test: "Input / output tokens", repeat: "Samples", ttft: "TTFT", tpot: "TPOT", pp: inferenceMetricCopy("en").prefillEstimated, tg: inferenceMetricCopy("en").decode, e2e: "Total time", throughput: "Total throughput", memory: "Peak process RAM", speedup: "Speedup", unavailable: "N/A",
   emptyTitle: "No results yet",
-  empty: "Choose the test conditions and run a benchmark. Results appear here as each test finishes.",
+  empty: "Results appear here as each trial finishes.",
   history: "Result history", current: "Current run", exportFile: "Export result", exportFormat: "Export format", copy: "Copy Markdown", copied: "Copied", metrics: "About these metrics",
   exportSaved: "File saved.", exportStarted: "Download started.", exportError: "Could not export the file.",
   deleteHistory: "Delete result", deleteTitle: "Delete this result?", deleteHint: "Permanently remove the selected result from local history. Results shared on the website and their management access are kept.",
@@ -39,7 +39,7 @@ const en = {
 type BenchmarkCopy = { [K in keyof typeof en]: string };
 
 const ko: BenchmarkCopy = {
-  title: "벤치마크", description: "입력 길이와 동시 요청 수에 따른 응답 속도를 비교합니다.",
+  title: "벤치마크", description: "선택한 모델의 응답 속도를 입력 크기와 동시 요청 수별로 측정합니다.",
   conditions: "측정 조건", model: "선택한 모델", corpus: "입력 내용", promptLengths: "입력 토큰 수", generation: "출력 토큰 수", repetitions: "반복 횟수", batchSizes: "동시 요청 수", warmup: "측정 전 워밍업",
   batchHint: "선택한 모든 입력 길이에서 단일 요청을 함께 측정해 비교 기준으로 사용합니다.",
   workloadNote: "서버 컨텍스트 길이와 요청 슬롯은 이 측정 조건으로 정해집니다.",
@@ -48,7 +48,7 @@ const ko: BenchmarkCopy = {
   totalTests: "전체 측정 횟수", idle: "측정 준비 완료", starting: "모델 준비 중…", complete: "완료", cancelled: "취소됨", failed: "실패", partial: "부분 결과",
   single: "단일 요청", batch: "동시 요청", test: "입력 / 출력 토큰", repeat: "표본 수", ttft: "TTFT", tpot: "TPOT", pp: inferenceMetricCopy("ko").prefillEstimated, tg: inferenceMetricCopy("ko").decode, e2e: "전체 시간", throughput: "전체 처리량", memory: "최대 프로세스 RAM", speedup: "속도 배율", unavailable: "측정 불가",
   emptyTitle: "아직 결과가 없습니다",
-  empty: "측정 조건을 선택하고 벤치마크를 실행하세요. 각 측정이 끝나면 결과가 표시됩니다.",
+  empty: "각 측정이 끝나면 여기에 결과가 표시됩니다.",
   history: "결과 이력", current: "현재 실행", exportFile: "결과 내보내기", exportFormat: "내보내기 형식", copy: "Markdown으로 복사", copied: "복사됨", metrics: "측정 지표 안내",
   exportSaved: "파일을 저장했습니다.", exportStarted: "다운로드를 시작했습니다.", exportError: "파일을 내보내지 못했습니다.",
   deleteHistory: "이력 삭제", deleteTitle: "이 결과 이력을 삭제할까요?", deleteHint: "선택한 결과를 이 기기의 이력에서 삭제합니다. 이 작업은 되돌릴 수 없습니다. 웹사이트에 공유한 결과와 관리 권한은 유지됩니다.",
@@ -73,7 +73,7 @@ const ko: BenchmarkCopy = {
 };
 
 const ja: BenchmarkCopy = {
-  title: "ベンチマーク", description: "入力長と同時リクエスト数による応答速度を比較します。",
+  title: "ベンチマーク", description: "選択したモデルの応答速度を、入力サイズと同時リクエスト数ごとに測定します。",
   conditions: "測定条件", model: "選択中のモデル", corpus: "入力内容", promptLengths: "入力トークン数", generation: "出力トークン数", repetitions: "繰り返し回数", batchSizes: "同時リクエスト数", warmup: "測定前にウォームアップ",
   batchHint: "選択した各入力長で単一リクエストも測定し、比較の基準にします。",
   workloadNote: "サーバーのコンテキスト長とリクエスト枠は、これらの測定条件で決まります。",
@@ -82,7 +82,7 @@ const ja: BenchmarkCopy = {
   totalTests: "総測定回数", idle: "測定準備完了", starting: "モデル準備中…", complete: "完了", cancelled: "中止済み", failed: "失敗", partial: "部分的な結果",
   single: "単一リクエスト", batch: "同時リクエスト", test: "入力 / 出力トークン", repeat: "サンプル数", ttft: "TTFT", tpot: "TPOT", pp: inferenceMetricCopy("ja").prefillEstimated, tg: inferenceMetricCopy("ja").decode, e2e: "合計時間", throughput: "総処理量", memory: "最大プロセスRAM", speedup: "速度倍率", unavailable: "測定不可",
   emptyTitle: "まだ結果がありません",
-  empty: "条件を選択してベンチマークを実行してください。各測定が完了すると結果が表示されます。",
+  empty: "各測定が完了すると、ここに結果が表示されます。",
   history: "結果履歴", current: "現在の実行", exportFile: "結果を書き出す", exportFormat: "書き出し形式", copy: "Markdownでコピー", copied: "コピー済み", metrics: "測定指標について",
   exportSaved: "ファイルを保存しました。", exportStarted: "ダウンロードを開始しました。", exportError: "ファイルを書き出せませんでした。",
   deleteHistory: "結果を削除", deleteTitle: "この結果を削除しますか？", deleteHint: "選択した結果をローカル履歴から削除します。この操作は元に戻せません。ウェブサイトで共有した結果と管理権限は保持されます。",
@@ -107,7 +107,7 @@ const ja: BenchmarkCopy = {
 };
 
 const zh: BenchmarkCopy = {
-  title: "基准测试", description: "比较不同输入长度和并发请求数下的响应速度。",
+  title: "基准测试", description: "按输入大小和并发请求数测量所选模型的响应速度。",
   conditions: "测试条件", model: "已选模型", corpus: "输入内容", promptLengths: "输入令牌数", generation: "输出令牌数", repetitions: "重复次数", batchSizes: "并发请求数", warmup: "测量前预热",
   batchHint: "每个选定的输入长度都会测量单个请求，作为比较基准。",
   workloadNote: "服务器上下文长度和请求槽位由这些测试条件决定。",
@@ -116,7 +116,7 @@ const zh: BenchmarkCopy = {
   totalTests: "总测量次数", idle: "准备就绪", starting: "正在准备模型…", complete: "已完成", cancelled: "已取消", failed: "失败", partial: "部分结果",
   single: "单个请求", batch: "并发请求", test: "输入 / 输出令牌", repeat: "样本数", ttft: "TTFT", tpot: "TPOT", pp: inferenceMetricCopy("zh").prefillEstimated, tg: inferenceMetricCopy("zh").decode, e2e: "总耗时", throughput: "总吞吐量", memory: "进程峰值 RAM", speedup: "加速比", unavailable: "不可测量",
   emptyTitle: "暂无结果",
-  empty: "选择条件并运行基准测试。每项测试完成后会显示结果。",
+  empty: "每项测试完成后，结果会显示在这里。",
   history: "结果历史", current: "当前运行", exportFile: "导出结果", exportFormat: "导出格式", copy: "复制 Markdown", copied: "已复制", metrics: "测量指标说明",
   exportSaved: "已保存文件。", exportStarted: "已开始下载。", exportError: "无法导出文件。",
   deleteHistory: "删除结果", deleteTitle: "删除此结果？", deleteHint: "将从本地历史记录中删除所选结果，此操作无法撤销。网站上已分享的结果及其管理权限会保留。",
@@ -141,11 +141,13 @@ const zh: BenchmarkCopy = {
 };
 
 const servingEn = {
-  adapterDescription: 'AioLM is a GUI adapter. All connected text-streaming engines use the same API benchmark and result management. Times are client-observed; token and cache counts are engine-reported and may be unknown.',
   inputBytes: 'Input UTF-8 bytes', outputCap: 'Maximum output token request', servingTest: 'Input bytes / output token cap',
+  outputTokens: 'Output tokens', fixedServingTest: 'Input bytes / output tokens', fixedTokenRate: 'Output speed',
+  requestOutputTokens: 'Output tokens per request',
+  fixedOutputConditions: 'The engine controls output length, and every request must report the selected token count. Early endings or unverifiable counts fail the measurement. Model context and cache settings are preserved.',
   servingConditions: 'Launch profile settings are preserved. Cache is as configured; this is not a cold-cache test. The output token cap is a request limit, not a promised output length.',
   concurrencyHint: 'Select concurrent request counts explicitly. Client concurrency does not change server capacity.',
-  servingValidation: 'Select input sizes and concurrency counts (at most 64 points). Output cap must be 1–65,536 and repetitions 1–100.',
+  servingValidation: 'Select at least one input size and concurrency count (at most 64 points).',
   advanced: 'Advanced request options', requestUsage: 'Request optional token usage', usageHint: 'Sends stream_options.include_usage. Some engines reject this optional field; usage may remain unknown even when requested.',
   servingResults: 'API serving results', legacy: 'Legacy · token-based cold-prompt method',
   servingShareIncomplete: 'Only a completed API benchmark with every configured trial can be published. These local observations remain available for history and export.',
@@ -164,16 +166,20 @@ const servingEn = {
   hostScope: 'AioLM host (not engine/container allocation)', topology: 'Compute topology', memoryScope: 'Memory attribution', recordedSettings: 'Recorded public settings',
   launchTarget: 'Launch', requestTarget: 'Request', noRecordedSettings: 'No public settings were observed.', cachePolicy: 'Cache policy', asConfigured: 'As configured',
   usageComplete: 'Complete', usagePartial: 'Partial', usageMissing: 'Not reported', usageInvalid: 'Invalid report',
+  setupTitle: 'Setup', resultsTitle: 'Results',
+  noneSelected: 'None', warmupShort: 'Warm-up', resultActions: 'Export and manage',
 } as const;
 type ServingCopy = { [K in keyof typeof servingEn]: string };
 const servingCopies: Record<Locale, ServingCopy> = {
   en: servingEn,
   ko: {
-    adapterDescription: 'AioLM은 GUI 어댑터입니다. 연결된 모든 text-streaming 엔진에 같은 API 벤치마크와 결과 관리를 제공합니다. 시간은 클라이언트 관측값이며 엔진이 보고하는 토큰·캐시는 미확인일 수 있습니다.',
     inputBytes: '입력 UTF-8 bytes', outputCap: '최대 출력 token 요청', servingTest: '입력 bytes / 출력 token 상한',
+    outputTokens: '출력 토큰', fixedServingTest: '입력 bytes / 출력 토큰', fixedTokenRate: '출력 속도',
+    requestOutputTokens: '요청별 출력 토큰',
+    fixedOutputConditions: '선택한 토큰 수만큼 생성하도록 제어하고 요청별 보고 토큰 수를 검증합니다. 조기 종료하거나 확인할 수 없으면 측정에 실패합니다. 모델 컨텍스트와 캐시 설정은 유지됩니다.',
     servingConditions: '실행 프로필 설정을 보존합니다. 캐시는 설정된 상태 그대로이며 cold-cache 측정이 아닙니다. 출력 token 상한은 요청 제한이지 보장된 생성 길이가 아닙니다.',
     concurrencyHint: '동시 요청 수를 직접 선택하세요. 클라이언트 동시성은 서버 수용량을 변경하지 않습니다.',
-    servingValidation: '입력 크기와 동시 요청 수를 선택하세요(최대 64개 지점). 출력 상한은 1~65,536, 반복 횟수는 1~100입니다.',
+    servingValidation: '입력 크기와 동시 요청 수를 하나 이상 선택하세요(최대 64개 지점).',
     advanced: '고급 요청 옵션', requestUsage: '선택적 토큰 사용량 요청', usageHint: 'stream_options.include_usage를 보냅니다. 일부 엔진은 이 선택적 필드를 거부하며 요청해도 사용량은 미확인일 수 있습니다.',
     servingResults: 'API 서빙 결과', legacy: '이전 방식 · 토큰 기반 cold-prompt 측정',
     servingShareIncomplete: '설정한 모든 측정을 완료한 API 벤치마크만 게시할 수 있습니다. 현재 관측 결과는 로컬 이력과 내보내기에 보존됩니다.',
@@ -192,13 +198,17 @@ const servingCopies: Record<Locale, ServingCopy> = {
     hostScope: 'AioLM 호스트 (엔진·컨테이너 할당 아님)', topology: '연산 소유 형태', memoryScope: '메모리 측정 범위', recordedSettings: '기록된 공개 설정',
     launchTarget: '실행', requestTarget: '요청', noRecordedSettings: '관측한 공개 설정이 없습니다.', cachePolicy: '캐시 정책', asConfigured: '설정된 상태 그대로',
     usageComplete: '완전 보고', usagePartial: '부분 보고', usageMissing: '미보고', usageInvalid: '잘못된 보고',
+    setupTitle: '측정 설정', resultsTitle: '결과',
+    noneSelected: '없음', warmupShort: '워밍업', resultActions: '내보내기·관리',
   },
   ja: {
-    adapterDescription: 'AioLMはGUIアダプターです。接続したすべてのtext-streamingエンジンで同じAPIベンチマークと結果管理を使います。時間はクライアント観測値で、トークン・キャッシュはエンジンの自己報告のため不明な場合があります。',
     inputBytes: '入力UTF-8 bytes', outputCap: '最大出力tokenリクエスト', servingTest: '入力bytes / 出力token上限',
+    outputTokens: '出力トークン数', fixedServingTest: '入力bytes / 出力トークン数', fixedTokenRate: '出力速度',
+    requestOutputTokens: 'リクエスト別の出力トークン数',
+    fixedOutputConditions: '出力長を制御し、各リクエストの報告トークン数が選択値と一致することを検証します。早期終了や検証不能な場合は測定に失敗します。モデルのコンテキストとキャッシュ設定は保持します。',
     servingConditions: '起動プロファイルを保持します。キャッシュは設定どおりで、cold-cache測定ではありません。出力上限はリクエストの制限であり、生成長の保証ではありません。',
     concurrencyHint: '同時リクエスト数を明示的に選択します。クライアントの同時実行数はサーバー容量を変更しません。',
-    servingValidation: '入力サイズと同時実行数を選択してください（最大64ポイント）。出力上限は1〜65,536、繰り返しは1〜100です。',
+    servingValidation: '入力サイズと同時実行数をそれぞれ1つ以上選択してください（最大64ポイント）。',
     advanced: '高度なリクエスト設定', requestUsage: '任意のトークン使用量を要求', usageHint: 'stream_options.include_usageを送信します。この任意フィールドを拒否するエンジンもあり、要求しても使用量が不明な場合があります。',
     servingResults: 'APIサービング結果', legacy: '旧方式 · トークン基準のcold-prompt測定',
     firstOutput: '最初の出力の観測', firstContent: '最初のテキストの観測', firstReasoning: '最初のreasoningの観測',
@@ -217,13 +227,17 @@ const servingCopies: Record<Locale, ServingCopy> = {
     hostScope: 'AioLMホスト（エンジン・コンテナの割当ではない）', topology: '計算の所有形態', memoryScope: 'メモリ測定範囲', recordedSettings: '記録した公開設定',
     launchTarget: '起動', requestTarget: 'リクエスト', noRecordedSettings: '観測した公開設定はありません。', cachePolicy: 'キャッシュ方針', asConfigured: '設定どおり',
     usageComplete: '完全報告', usagePartial: '部分報告', usageMissing: '未報告', usageInvalid: '無効な報告',
+    setupTitle: '測定設定', resultsTitle: '結果',
+    noneSelected: 'なし', warmupShort: 'ウォームアップ', resultActions: '書き出し・管理',
   },
   zh: {
-    adapterDescription: 'AioLM 是 GUI 适配器。所有已连接的 text-streaming 引擎均使用相同的 API 基准测试和结果管理。时间由客户端观测；令牌和缓存由引擎自行报告，可能未知。',
     inputBytes: '输入 UTF-8 bytes', outputCap: '最大输出 token 请求', servingTest: '输入 bytes / 输出 token 上限',
+    outputTokens: '输出令牌数', fixedServingTest: '输入bytes / 输出令牌数', fixedTokenRate: '输出速度',
+    requestOutputTokens: '每个请求的输出令牌数',
+    fixedOutputConditions: '控制输出长度，并验证每个请求报告的令牌数与所选值一致。提前结束或无法验证时，测量失败。保留模型上下文和缓存设置。',
     servingConditions: '保留启动配置。缓存按原配置使用，并非冷缓存测试。输出上限是请求限制，不保证生成长度。',
     concurrencyHint: '请明确选择并发请求数。客户端并发不会改变服务器容量。',
-    servingValidation: '请选择输入大小和并发数（最多 64 个点）。输出上限为 1–65,536，重复次数为 1–100。',
+    servingValidation: '请至少选择一个输入大小和并发数（最多 64 个点）。',
     advanced: '高级请求选项', requestUsage: '请求可选令牌用量', usageHint: '发送 stream_options.include_usage。部分引擎拒绝此可选字段，即使请求也可能不报告用量。',
     servingResults: 'API 服务测试结果', legacy: '旧版 · 基于令牌的 cold-prompt 方法',
     firstOutput: '首次观测输出', firstContent: '首次观测文本', firstReasoning: '首次观测 reasoning',
@@ -242,6 +256,8 @@ const servingCopies: Record<Locale, ServingCopy> = {
     hostScope: 'AioLM 主机（非引擎或容器资源分配）', topology: '计算归属', memoryScope: '内存归属范围', recordedSettings: '记录的公开设置',
     launchTarget: '启动', requestTarget: '请求', noRecordedSettings: '未观测到公开设置。', cachePolicy: '缓存策略', asConfigured: '按原配置',
     usageComplete: '完整报告', usagePartial: '部分报告', usageMissing: '未报告', usageInvalid: '无效报告',
+    setupTitle: '测试设置', resultsTitle: '结果',
+    noneSelected: '无', warmupShort: '预热', resultActions: '导出与管理',
   },
 };
 

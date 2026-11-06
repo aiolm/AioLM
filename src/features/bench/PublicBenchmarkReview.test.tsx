@@ -31,6 +31,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function waitForShare() {
+  fireEvent.click(screen.getByText('Share result'));
   await screen.findByLabelText('Shared details');
 }
 
@@ -102,14 +103,11 @@ describe('public benchmark review', () => {
     expect(screen.getByLabelText('Shared details')).toHaveTextContent('valid zero-byte output');
   });
 
-  it('opens and prepares the review without publishing automatically', async () => {
+  it('prepares a review only when opened and never publishes automatically', async () => {
     const copy = benchmarkCopy('en');
     render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
-    expect(screen.getByText('Share result').closest('details')).toHaveAttribute('open');
-    // No separate prepare, export, or queue actions exist.
-    expect(screen.queryByText('Review what will be shared')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Export public JSON/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/sharing queue/i)).not.toBeInTheDocument();
+    expect(getQueuedBenchmark).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
     await waitForShare();
     expect(screen.getByRole('button', { name: copy.publishSelected })).toBeInTheDocument();
     expect(enqueuePublicationBenchmark).not.toHaveBeenCalled();
@@ -129,7 +127,6 @@ describe('public benchmark review', () => {
     expect(document.body.textContent).not.toMatch(/private|model\.gguf|secret/);
     expect(document.body.textContent).not.toContain('00000000-0000-4000-8000-000000000001');
     expect(screen.queryByText(/submission_id/)).not.toBeInTheDocument();
-    expect(document.querySelector('pre.performance-public-json')).not.toBeInTheDocument();
   });
 
   it('keeps the same snapshot when closed and reopened with a stable submission ID', async () => {
@@ -153,6 +150,7 @@ describe('public benchmark review', () => {
     const frozenBody = serializePublicationRequest({ benchmark: frozenBenchmark, description_md: 'saved notes' });
     vi.mocked(getQueuedBenchmark).mockResolvedValue({ requestBody: frozenBody, descriptionMd: 'saved notes' } as Awaited<ReturnType<typeof getQueuedBenchmark>>);
     render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
+    fireEvent.click(screen.getByText('Share result'));
     const editor = await screen.findByDisplayValue('saved notes');
     expect(editor).toBeDisabled();
     const summary = await screen.findByLabelText('Shared details');
@@ -164,6 +162,7 @@ describe('public benchmark review', () => {
     vi.mocked(getQueuedBenchmark).mockResolvedValue({ requestBody: '{corrupt', descriptionMd: 'old notes' } as Awaited<ReturnType<typeof getQueuedBenchmark>>);
     const copy = benchmarkCopy('en');
     render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    fireEvent.click(screen.getByText('Share result'));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('could not be read');
     expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
@@ -174,6 +173,7 @@ describe('public benchmark review', () => {
     const copy = benchmarkCopy('en');
     vi.mocked(getQueuedBenchmark).mockRejectedValue(new Error('unavailable'));
     render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    fireEvent.click(screen.getByText('Share result'));
     await screen.findByRole('alert');
     expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
@@ -183,6 +183,7 @@ describe('public benchmark review', () => {
     const copy = benchmarkCopy('en');
     const partial = { ...saved, result: { ...saved.result, status: 'partial' as const } };
     render(<PublicBenchmarkReview record={partial} busy={false} copy={copy} />);
+    fireEvent.click(screen.getByText('Share result'));
     await screen.findByText(copy.publicInvalid);
     expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();

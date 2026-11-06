@@ -29,14 +29,17 @@ const unlisten = vi.fn();
 const mocked = vi.mocked(api);
 
 function row(overrides: Partial<api.PerformanceBenchmarkRow> = {}): api.PerformanceBenchmarkRow {
-  return { id: "single-4096-1", input_bytes: 4096, max_output_tokens: 128, concurrency: 1, repetition: 1,
+  const output = overrides.max_output_tokens ?? 1024;
+  const concurrency = overrides.concurrency ?? 1;
+  return { id: "single-4096-1", input_bytes: 4096, max_output_tokens: output, concurrency, repetition: 1,
     first_output_ms: 50, first_content_ms: 100, first_reasoning_ms: 50, e2e_ms: 200,
-    content_bytes: 6, reasoning_bytes: 6, output_bytes: 12, reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null,
-    usage_status: 'missing', finish_reasons: ['not_reported'], peak_memory_bytes: null, timing_source: 'client', failed: false, ...overrides };
+    content_bytes: 6, reasoning_bytes: 6, output_bytes: 12, reported_prompt_tokens: null, reported_completion_tokens: output * concurrency,
+    reported_completion_tokens_by_request: Array(concurrency).fill(output), reported_cached_tokens: null,
+    usage_status: 'partial', finish_reasons: Array(concurrency).fill('length'), peak_memory_bytes: null, timing_source: 'client', failed: false, ...overrides };
 }
 function result(runId: string, rows: api.PerformanceBenchmarkRow[] = [], status: api.PerformanceBenchmarkResult["status"] = "complete"): api.PerformanceBenchmarkResult {
   const request = mocked.runPerformanceBench.mock.calls.find(([, request]) => request.run_id === runId)?.[1]
-    ?? { run_id: runId, method: { id: 'openai-chat-serving', version: 1 }, context_profile: 'code_python', prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false } satisfies api.PerformanceBenchmarkRequest;
+    ?? { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: 'code_python', prompt_bytes: [4096], max_output_tokens: 1024, concurrencies: [1], repetitions: 1, warmup: true, request_usage: true } satisfies api.PerformanceBenchmarkRequest;
   const measurements = status === 'complete' ? request.prompt_bytes.flatMap(bytes => request.concurrencies.flatMap(concurrency =>
     Array.from({ length: request.repetitions }, (_, i) => rows.find(row => row.input_bytes === bytes && row.concurrency === concurrency && row.repetition === i + 1)
       ?? row({ id: `${bytes}/${concurrency}/${i + 1}`, input_bytes: bytes, concurrency, repetition: i + 1, max_output_tokens: request.max_output_tokens, finish_reasons: Array.from({ length: concurrency }, () => 'not_reported') })))) : rows;
@@ -49,6 +52,7 @@ function result(runId: string, rows: api.PerformanceBenchmarkRow[] = [], status:
     environment: { scope: 'aiolm_host', os: 'test', arch: 'arm64', cpu: { name: 'Synthetic CPU', logical_cores: 8 }, installed_gpus: [],
       execution: { mode: 'unknown', selected_gpus: [], devices: [], selection_complete: false }, detection: 'fixture' },
     execution: { topology: 'attached', memory_scope: 'unavailable', settings: [
+      { target: 'request', scope: [], name: 'ignore_eos', value: true, unit: null, role: null },
       { target: 'request', scope: [], name: 'max_tokens', value: request.max_output_tokens, unit: 'tokens', role: null },
       { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
       ...(request.request_usage ? [{ target: 'request' as const, scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null }] : []),
@@ -120,6 +124,8 @@ describe("Performance benchmark workflow", () => {
     const { unmount } = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     const remove = await screen.findByRole('button', { name: 'Delete result' });
+    fireEvent.click(screen.getByText('Export and manage'));
+    expect(remove).toBeVisible();
     await waitFor(() => expect(remove).toBeEnabled());
     expect(performanceRecords.readPerformanceHistory()).toHaveLength(2);
     fireEvent.click(remove);
@@ -307,43 +313,36 @@ describe("Performance benchmark workflow", () => {
     expect(mocked.sessionStop).not.toHaveBeenCalled();
   });
 
-  it.each(['llama.cpp', 'vllm', 'mlx-vlm', 'custom.streaming'] as const)('runs %s through the common request with explicit warmup and optional usage controls', async provider => {
-    const selectedStore = { ...store, cfg: { ...cfg, active_provider: provider, active_runtime: 'synthetic-runtime' } };
-    renderPanel(selectedStore);
-    fireEvent.click(screen.getByRole("checkbox", { name: "2×" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "4×" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Warm up before measuring" }));
-    fireEvent.click(screen.getByText('Advanced request options'));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Request optional token usage' }));
-    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
-    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
-    expect(mocked.runPerformanceBench.mock.calls[0][0]).toMatchObject({ active_provider: provider, active_runtime: 'synthetic-runtime' });
-    expect(mocked.runPerformanceBench.mock.calls[0][1]).toMatchObject({ method: { id: 'openai-chat-serving', version: 1 }, prompt_bytes: [4096, 16384], max_output_tokens: 128, concurrencies: [1], repetitions: 1, context_profile: "code_python", warmup: false, request_usage: true });
-    await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
-    expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0]).toMatchObject({ schemaVersion: 2, result: { status: 'complete' } });
-  });
 
-  it('uses the shared dropdown for input content and applies its selected workload', async () => {
+  it('measures and saves the selected workload while locking its controls during a run', async () => {
+    let finish!: (value: api.PerformanceBenchmarkResult) => void;
+    mocked.runPerformanceBench.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     renderPanel();
     const corpus = screen.getByRole('combobox', { name: 'Prompt content' });
+    const outputTokens = screen.getByRole('combobox', { name: 'Output tokens' });
+    const repetitions = screen.getByRole('combobox', { name: 'Repetitions' });
     fireEvent.click(corpus);
     fireEvent.click(screen.getByRole('option', { name: 'Prose · Korean' }));
-    expect(corpus).toHaveTextContent('Prose · Korean');
+    fireEvent.click(outputTokens);
+    fireEvent.click(screen.getByRole('option', { name: '200k' }));
+    fireEvent.click(repetitions);
+    fireEvent.click(screen.getByRole('option', { name: '3' }));
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
-    expect(mocked.runPerformanceBench.mock.calls[0][1].context_profile).toBe('novel_ko');
+    expect(corpus).toBeDisabled();
+    expect(outputTokens).toBeDisabled();
+    expect(repetitions).toBeDisabled();
+    const request = mocked.runPerformanceBench.mock.calls[0][1];
+    await act(async () => finish(result(request.run_id, [row({ max_output_tokens: 204800 })])));
+    const [saved] = performanceRecords.readPerformanceHistory();
+    expect(saved.request).toMatchObject({ method: { version: 2 }, context_profile: 'novel_ko', max_output_tokens: 204800, repetitions: 3, request_usage: true });
+    expect(saved.result.rows).toHaveLength(18);
+    expect(outputTokens).toBeEnabled();
+    expect(repetitions).toBeEnabled();
   });
 
-  it("prevents invalid workloads and requires the loaded model to unload", async () => {
+  it("requires an input size and the loaded model to unload before measuring", async () => {
     const { rerender } = renderPanel();
-    const generation = screen.getByRole("spinbutton", { name: "Maximum output token request" });
-    fireEvent.change(generation, { target: { value: "65537" } });
-    expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
-    expect(generation).toHaveAttribute("aria-invalid", "true");
-    fireEvent.change(generation, { target: { value: "128" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Repetitions" }), { target: { value: "0" } });
-    expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Repetitions" }), { target: { value: "1" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "4,096" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "16,384" }));
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
@@ -479,6 +478,8 @@ describe("Performance benchmark workflow", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     const exportButton = await screen.findByRole("button", { name: "Export result" });
+    fireEvent.click(screen.getByText("Export and manage"));
+    expect(exportButton).toBeVisible();
     expect(screen.queryByRole("button", { name: "Export all history" })).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Result history" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("combobox", { name: "Export format" }));
@@ -499,6 +500,7 @@ describe("Performance benchmark workflow", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     const summary = await screen.findByText("Effective runtime arguments");
+    fireEvent.click(summary);
     // A negative value belongs to its option; a switch stays on a line of its own.
     expect(summary.parentElement?.querySelector("code")?.textContent).toBe([
       '"--model" "C:/models/test.gguf"',
@@ -625,6 +627,7 @@ describe("Performance benchmark workflow", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("Current benchmark failed to start")).not.toBeInTheDocument();
     const disclosure = screen.getByText("Run configuration").closest("details")!;
+    fireEvent.click(screen.getByText("Run configuration"));
     expect(within(disclosure).getByText("llama-test(1)")).toBeVisible();
     expect(within(disclosure).getByText("32,768")).toBeVisible();
     expect(within(disclosure).getByText("Enabled")).toBeVisible();

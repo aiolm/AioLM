@@ -170,6 +170,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
   return (
     <details className="app-card app-card--flush performance-card performance-details" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary>{copy.ownedListTitle}{items.length > 0 ? ` · ${items.length}${cursor ? '+' : ''}` : ''}</summary>
+      <div className="performance-details-body">
       <p>{copy.ownedListHint}</p>
       {/* The keep-private warning sits outside the restore disclosure so it stays
           visible wherever the per-row backup save/copy actions are visible. */}
@@ -210,6 +211,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
           <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || importing || loading || working !== null} data-icon="upload" onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
         </div>
       </details>
+      </div>
     </details>
   );
 }

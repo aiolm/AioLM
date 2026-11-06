@@ -59,10 +59,11 @@ export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: L
     ['e2e_seconds', `${copy.e2e} (${copy.seconds})`], ['total_tps', `${copy.throughput} (tok/s)`],
     ['peak_memory_gib', `${copy.memory} (GiB)`],
   ] as const;
+  const onlyFixedOutput = records.length > 0 && records.every(record => record.schemaVersion === 2 && record.request.method.version === 2);
   const columns: BenchmarkReport['columns'] = [
     { key: 'recorded_model_label', label: copy.shareModel, width: 42 },
     ...identityKeys.map((key, index) => ({ key, label: identityLabels[locale][index], width: key === 'execution.settings' ? 60 : 24, ...(key === 'model.size_bytes' ? { numFmt: '#,##0' } : {}) })),
-    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: pointLabels[locale][index], width: 20, numFmt: '#,##0' })),
+    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: index === 1 && onlyFixedOutput ? copy.outputTokens : pointLabels[locale][index], width: 20, numFmt: '#,##0' })),
     ...SERVING_METRIC_KEYS.flatMap((key, index) => ['median', 'min', 'max', 'samples'].map((stat, statIndex) => ({
       key: `${key}.${stat}`, label: `${metricLabels[locale][index]} · ${statLabels[locale][statIndex]}`, width: 24,
       numFmt: stat === 'samples' ? '#,##0' : '#,##0.###############',

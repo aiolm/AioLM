@@ -128,7 +128,7 @@ pub(crate) async fn run_performance_bench(
             "another server or benchmark operation is in progress".into(),
         ));
     };
-    let validation = performance_bench::validate_request(&mut request).and_then(|()| {
+    let validation = performance_bench::validate_execution_request(&mut request).and_then(|()| {
         cfg.normalize();
         cfg.validate()?;
         if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {

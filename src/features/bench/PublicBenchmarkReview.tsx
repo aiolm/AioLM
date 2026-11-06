@@ -14,7 +14,7 @@ type Copy = ReturnType<typeof benchmarkCopy>;
 type Hydration = 'idle' | 'pending' | 'ready' | 'failed';
 
 export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorkingChange }: { record: PerformanceBenchmarkRecord; busy: boolean; copy: Copy; onPublished?: () => void; onWorkingChange?: (working: boolean) => void }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<PublicBenchmarkSubmission | null>(null);
   const [description, setDescription] = useState('');
   const [boundDescription, setBoundDescription] = useState<string | null>(null);
@@ -103,6 +103,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
   return (
     <details className="app-card app-card--flush performance-card performance-details performance-share" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>{copy.publicReview}</summary>
+      <div className="performance-details-body">
       <p>{copy.publicHint}</p>
       {open && !snapshot && !error && <p role="status">{copy.hydrateLoading}</p>}
       {open && error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
@@ -131,6 +132,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
           onWorkingChange={setPublishing}
         />
       </>}
+      </div>
     </details>
   );
 }

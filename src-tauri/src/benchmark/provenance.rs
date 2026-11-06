@@ -3,6 +3,7 @@ use super::identity::ModelIdentity;
 use crate::{
     config::AppConfig,
     hardware::{DeviceProfile, GpuDevice},
+    providers::protocol::FixedOutputControl,
 };
 use serde::{Deserialize, Serialize};
 
@@ -236,6 +237,7 @@ pub(crate) struct ServingBenchmarkProvenance {
     pub recorded_model_label: String,
 }
 
+/// New captures always freeze the fixed-output method and its force control.
 pub(crate) fn capture_serving(
     _cfg: &AppConfig,
     profile: &DeviceProfile,
@@ -243,6 +245,7 @@ pub(crate) fn capture_serving(
     workload: ServingWorkload,
     metadata: Option<&crate::providers::protocol::ServingMetadata>,
     recorded_model_label: String,
+    control: FixedOutputControl,
 ) -> ServingBenchmarkProvenance {
     use crate::providers::{
         artifacts::ArtifactFormat,
@@ -269,13 +272,17 @@ pub(crate) fn capture_serving(
         model.metadata = None;
     }
     model.format = Some(format);
-    let settings = common_request_settings(workload.max_output_tokens, workload.request_usage);
+    let settings = common_request_settings(
+        workload.max_output_tokens,
+        workload.request_usage,
+        Some(control),
+    );
     ServingBenchmarkProvenance {
         schema_version: 2,
         app_version: env!("CARGO_PKG_VERSION").into(),
         method: Method {
             id: "openai-chat-serving".into(),
-            version: 1,
+            version: crate::performance_bench::FIXED_OUTPUT_METHOD_VERSION,
         },
         workload,
         runtime: metadata
@@ -467,7 +474,14 @@ pub(crate) fn capture_serving_gpu_execution(
     }
 }
 
-pub(crate) fn common_request_settings(cap: u32, request_usage: bool) -> Vec<RecordedSetting> {
+/// The exact common request in the persisted ASCII order of names. A
+/// fixed-output request (`@2`) adds exactly one force descriptor; a historical
+/// cap request (`@1`) has none.
+pub(crate) fn common_request_settings(
+    cap: u32,
+    request_usage: bool,
+    force: Option<FixedOutputControl>,
+) -> Vec<RecordedSetting> {
     use serde_json::json;
     let mut entries = vec![
         ("max_tokens", json!(cap), Some("tokens".to_owned())),
@@ -477,6 +491,14 @@ pub(crate) fn common_request_settings(cap: u32, request_usage: bool) -> Vec<Reco
         entries.push(("stream_options.include_usage", json!(true), None));
     }
     entries.push(("temperature", json!(0), None));
+    if let Some(control) = force {
+        let unit = match control {
+            FixedOutputControl::IgnoreEos => None,
+            FixedOutputControl::MinTokens => Some("tokens".to_owned()),
+        };
+        entries.push((control.field_name(), control.value(cap), unit));
+    }
+    entries.sort_by(|left, right| left.0.cmp(right.0));
     entries
         .into_iter()
         .map(|(name, value, unit)| RecordedSetting {
@@ -508,7 +530,8 @@ impl ServingWorkload {
             || self.concurrencies.is_empty()
             || self.concurrencies.len() > 64
             || self.inputs.len() * self.concurrencies.len() > 64
-            || !(1..=65536).contains(&self.max_output_tokens)
+            || !(1..=crate::performance_bench::MAX_SERVING_OUTPUT_TOKENS)
+                .contains(&self.max_output_tokens)
             || !(1..=100).contains(&self.repetitions)
             || !ordered(&self.concurrencies)
             || self
@@ -535,6 +558,16 @@ impl ServingWorkload {
 }
 
 impl ServingBenchmarkProvenance {
+    /// The force control frozen in a fixed-output (`@2`) request descriptor.
+    pub(crate) fn fixed_output_control(&self) -> Option<FixedOutputControl> {
+        FixedOutputControl::ALL.into_iter().find(|control| {
+            self.execution
+                .settings
+                .iter()
+                .any(|setting| setting.target == "request" && setting.name == control.field_name())
+        })
+    }
+
     pub(crate) fn validate(&self, profile: &str) -> Result<(), String> {
         use crate::providers::{
             artifacts::ArtifactFormat,
@@ -553,9 +586,21 @@ impl ServingBenchmarkProvenance {
             "unidentified" | "multipart" => model.sha256.is_none(),
             _ => false,
         };
+        use crate::performance_bench::{
+            CAP_METHOD_MAX_OUTPUT_TOKENS, CAP_METHOD_VERSION, FIXED_OUTPUT_METHOD_VERSION,
+            FIXED_OUTPUT_TOKENS,
+        };
+        let method_workload = match self.method.version {
+            CAP_METHOD_VERSION => self.workload.max_output_tokens <= CAP_METHOD_MAX_OUTPUT_TOKENS,
+            FIXED_OUTPUT_METHOD_VERSION => {
+                FIXED_OUTPUT_TOKENS.contains(&self.workload.max_output_tokens)
+                    && self.workload.request_usage
+            }
+            _ => false,
+        };
         if self.schema_version != 2
             || self.method.id != "openai-chat-serving"
-            || self.method.version != 1
+            || !method_workload
             || self.workload.corpus != profile
             || self.environment.scope != "aiolm_host"
             || !model_valid
@@ -649,8 +694,21 @@ impl ServingBenchmarkProvenance {
             .filter(|setting| setting.target == "request")
             .cloned()
             .collect();
+        // A cap record never acquires a force descriptor; a fixed-output
+        // record carries exactly one declared control.
+        let force = match self.method.version {
+            CAP_METHOD_VERSION => None,
+            _ => Some(
+                self.fixed_output_control()
+                    .ok_or("fixed-output provenance has no force descriptor")?,
+            ),
+        };
         if requests
-            != common_request_settings(self.workload.max_output_tokens, self.workload.request_usage)
+            != common_request_settings(
+                self.workload.max_output_tokens,
+                self.workload.request_usage,
+                force,
+            )
         {
             return Err("serving settings do not describe the common request".into());
         }
@@ -734,11 +792,11 @@ mod tests {
             "corpus": "novel_en",
             "corpus_version": 1,
             "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
-            "max_output_tokens": 128,
+            "max_output_tokens": 1024,
             "concurrencies": [1],
             "repetitions": 1,
             "warmup": false,
-            "request_usage": false,
+            "request_usage": true,
             "cache_policy": "as_configured"
         }))
         .unwrap();
@@ -749,6 +807,7 @@ mod tests {
             workload,
             None,
             "Recorded model".into(),
+            FixedOutputControl::IgnoreEos,
         );
         assert_eq!(provenance.environment.host.execution.mode, "unknown");
         assert!(provenance
@@ -1011,6 +1070,116 @@ mod tests {
             .unwrap()
             .validate("novel_en")
             .is_err());
+    }
+
+    fn serving_fixture(
+        version: u32,
+        cap: u32,
+        force: Option<FixedOutputControl>,
+    ) -> ServingBenchmarkProvenance {
+        let workload = serde_json::from_value(json!({
+            "corpus": "novel_en", "corpus_version": 1,
+            "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
+            "max_output_tokens": cap, "concurrencies": [1], "repetitions": 1,
+            "warmup": false, "request_usage": true, "cache_policy": "as_configured"
+        }))
+        .unwrap();
+        let mut provenance = capture_serving(
+            &AppConfig::default(),
+            &profile(),
+            legacy_fixture().model,
+            workload,
+            None,
+            "Recorded model".into(),
+            FixedOutputControl::IgnoreEos,
+        );
+        provenance.method.version = version;
+        provenance.execution.settings = common_request_settings(cap, true, force);
+        provenance
+    }
+
+    #[test]
+    fn fixed_output_descriptors_are_exact_sorted_and_cap_records_stay_readable() {
+        use FixedOutputControl::{IgnoreEos, MinTokens};
+        let names = |settings: &[RecordedSetting]| {
+            settings
+                .iter()
+                .map(|setting| setting.name.clone())
+                .collect::<Vec<_>>()
+        };
+        let ignore = common_request_settings(1024, true, Some(IgnoreEos));
+        assert_eq!(
+            names(&ignore),
+            [
+                "ignore_eos",
+                "max_tokens",
+                "stream",
+                "stream_options.include_usage",
+                "temperature"
+            ]
+        );
+        assert_eq!((&ignore[0].value, &ignore[0].unit), (&json!(true), &None));
+        let min = common_request_settings(204_800, true, Some(MinTokens));
+        assert_eq!(
+            names(&min),
+            [
+                "max_tokens",
+                "min_tokens",
+                "stream",
+                "stream_options.include_usage",
+                "temperature"
+            ]
+        );
+        assert_eq!(min[1].value, json!(204_800));
+        assert_eq!(min[1].unit.as_deref(), Some("tokens"));
+
+        for (cap, control) in [(1024, IgnoreEos), (204_800, MinTokens)] {
+            let provenance = serving_fixture(2, cap, Some(control));
+            provenance.validate("novel_en").unwrap();
+            let restored: ServingBenchmarkProvenance =
+                serde_json::from_value(serde_json::to_value(&provenance).unwrap()).unwrap();
+            restored.validate("novel_en").unwrap();
+            assert_eq!(restored.fixed_output_control(), Some(control));
+        }
+
+        // A historical cap record keeps its arbitrary limit and never gains a force.
+        let mut cap = serving_fixture(1, 128, None);
+        cap.workload.request_usage = false;
+        cap.execution.settings = common_request_settings(128, false, None);
+        cap.validate("novel_en").unwrap();
+        assert_eq!(cap.fixed_output_control(), None);
+
+        let mut no_usage = serving_fixture(2, 1024, Some(IgnoreEos));
+        no_usage.workload.request_usage = false;
+        no_usage.execution.settings = common_request_settings(1024, false, Some(IgnoreEos));
+        let mut wrong_value = serving_fixture(2, 4096, Some(MinTokens));
+        wrong_value.execution.settings[1].value = json!(1024);
+        let mut two_forces = serving_fixture(2, 1024, Some(MinTokens));
+        two_forces.execution.settings.insert(
+            0,
+            common_request_settings(1024, true, Some(IgnoreEos)).remove(0),
+        );
+        let mut unsorted = serving_fixture(2, 1024, Some(IgnoreEos));
+        unsorted.execution.settings.rotate_left(1);
+        for (label, provenance) in [
+            ("missing force", serving_fixture(2, 1024, None)),
+            (
+                "non-preset target",
+                serving_fixture(2, 1000, Some(IgnoreEos)),
+            ),
+            (
+                "cap claiming force",
+                serving_fixture(1, 1024, Some(IgnoreEos)),
+            ),
+            ("cap above its range", serving_fixture(1, 131_072, None)),
+            ("unknown method", serving_fixture(3, 1024, Some(IgnoreEos))),
+            ("usage disabled", no_usage),
+            ("wrong force value", wrong_value),
+            ("two forces", two_forces),
+            ("unsorted", unsorted),
+        ] {
+            assert!(provenance.validate("novel_en").is_err(), "{label}");
+        }
     }
 
     #[test]

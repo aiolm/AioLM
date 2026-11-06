@@ -130,15 +130,16 @@ function MetricCell({ stat, copy, memory = false }: { stat: ServingMetricStat | 
 }
 
 /** Shared serving-point renderer: statistics are never averaged again by the UI. */
-export function ServingResultTable({ points, copy, label = copy.servingResults }: { points: readonly ServingBenchmarkPoint[]; copy: Copy; label?: string }) {
+export function ServingResultTable({ points, copy, label = copy.servingResults, fixedOutput = false }: { points: readonly ServingBenchmarkPoint[]; copy: Copy; label?: string; fixedOutput?: boolean }) {
   if (!points.length) return null;
   const metrics = [
+    ...(fixedOutput ? [['reported_tokens_per_second', copy.fixedTokenRate, copy.tokens] as const] : []),
     ['first_output_ms', copy.firstOutput, copy.milliseconds],
     ['first_content_ms', copy.firstContent, copy.milliseconds],
     ['first_reasoning_ms', copy.firstReasoning, copy.milliseconds],
     ['e2e_ms', copy.e2e, copy.milliseconds],
     ['output_bytes_per_second', copy.outputRate, copy.bytesPerSecond],
-    ['reported_tokens_per_second', copy.reportedRate, copy.tokens],
+    ...(!fixedOutput ? [['reported_tokens_per_second', copy.reportedRate, copy.tokens] as const] : []),
     ['content_bytes', copy.contentBytes, copy.bytes],
     ['reasoning_bytes', copy.reasoningBytes, copy.bytes],
     ['output_bytes', copy.outputBytes, copy.bytes],
@@ -152,7 +153,7 @@ export function ServingResultTable({ points, copy, label = copy.servingResults }
     <p className="performance-hint">{copy.medianHint}</p>
     <BenchmarkTableScroll label={label} copy={copy}><table>
       <caption className="sr-only">{label}</caption>
-      <thead><tr><th scope="col">{copy.servingTest}</th><th scope="col">{copy.concurrency}</th><th scope="col">{copy.repeat}</th>
+      <thead><tr><th scope="col">{fixedOutput ? copy.fixedServingTest : copy.servingTest}</th><th scope="col">{copy.concurrency}</th><th scope="col">{copy.repeat}</th>
         {metrics.map(([key, label, unit]) => <th scope="col" key={key}>{label}{unit && <small>{unit}</small>}</th>)}
       </tr></thead>
       <tbody>{points.map(point => <tr key={`${point.input_bytes}/${point.concurrency}/${point.max_output_tokens}`}>
@@ -209,7 +210,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
       <div><dt>{copy.corpus}</dt><dd>{copy[snapshot.workload.corpus]}</dd></div>
       <div><dt>{copy.inputBytes}</dt><dd>{snapshot.workload.inputs.map(input => input.bytes.toLocaleString()).join(' / ')}</dd></div>
       {snapshot.workload.inputs.map(input => <div key={input.bytes}><dt>{copy.inputHash} · {input.bytes}</dt><dd>{input.sha256}</dd></div>)}
-      <div><dt>{copy.outputCap}</dt><dd>{snapshot.workload.max_output_tokens}</dd></div>
+      <div><dt>{snapshot.method.version === 2 ? copy.outputTokens : copy.outputCap}</dt><dd>{snapshot.workload.max_output_tokens}</dd></div>
       <div><dt>{copy.concurrency}</dt><dd>{snapshot.workload.concurrencies.map(value => `${value}×`).join(' / ')}</dd></div>
       <div><dt>{copy.repetitions}</dt><dd>{snapshot.workload.repetitions}</dd></div>
       <div><dt>{copy.warmup}</dt><dd>{snapshot.workload.warmup ? copy.enabled : copy.disabled}</dd></div>
@@ -218,7 +219,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
     </dl><RecordedSettings settings={snapshot.execution.settings} copy={copy} /></section>
     <section className="performance-share-results performance-results" aria-label={copy.shareResults}>
       <h4>{copy.shareResults}</h4><p>{copy.shareStatus}: {copy[snapshot.measurements.status]}</p>
-      <ServingResultTable points={summarizeServingPoints(snapshot.measurements.rows)} copy={copy} label={copy.shareResults} />
+      <ServingResultTable points={summarizeServingPoints(snapshot.measurements.rows)} copy={copy} label={copy.shareResults} fixedOutput={snapshot.method.version === 2} />
     </section><p>{copy.emptyOutputHint}</p><p>{copy.publicUnknown}</p>
   </div>;
 }

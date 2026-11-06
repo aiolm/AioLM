@@ -64,12 +64,16 @@ export interface ProviderDescription {
   kind?: 'external-process'; capabilities?: { benchmark: string; deep_verification: string; portable: string };
   availability: { supported: boolean; reason?: string; detail: string }; options: ProviderOption[];
 }
+/** The request field a runtime declares to force exactly `max_tokens` output
+ * tokens. Absent means fixed-output measurement is unsupported. */
+export type FixedOutputControl = 'ignore_eos' | 'min_tokens';
 export interface EngineInfo {
   provider: ProviderId; runtime_id: string; upstream_model: string; modalities: Modalities;
   runtime_variant?: string; speech_model_type?: string | null;
   tasks?: string[];
   chat_supported?: boolean;
   stream_usage_supported?: boolean;
+  fixed_output?: FixedOutputControl;
   serving_metadata?: {
     runtime: ServingRuntimeIdentity;
     model_format: ModelArtifact['format'];

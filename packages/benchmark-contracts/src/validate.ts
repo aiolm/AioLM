@@ -1,4 +1,5 @@
 import { publicBenchmarkSchema, benchmarkReceiptSchema } from './schema.js';
+import { FIXED_OUTPUT_TOKENS } from './fixedOutput.js';
 import type { PublicBenchmarkSubmission, LegacyPublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkConfiguration, BenchmarkReceipt, RecordedSetting, ServingExecution } from './types.js';
 
 interface JsonSchema {
@@ -111,8 +112,16 @@ function validateServing(result: ServingPublicBenchmarkSubmission): void {
   if (!ordered(workload.inputs.map(input => input.bytes)) || !ordered(workload.concurrencies) || workload.inputs.length * workload.concurrencies.length > 64) throw new Error('Invalid serving workload operating points.');
   validateExecution(execution);
   const requests = execution.settings.filter(setting => setting.target === 'request');
+  const fixed = result.method.version === 2;
+  const force = requests.find(setting => setting.name === 'ignore_eos' || setting.name === 'min_tokens');
+  if (fixed && (!workload.request_usage || !FIXED_OUTPUT_TOKENS.includes(workload.max_output_tokens)
+    || !force || (force.name === 'ignore_eos' ? force.value !== true : force.value !== workload.max_output_tokens))) {
+    throw new Error('Fixed-output benchmarks require a supported control, usage reporting and an exact preset target.');
+  }
   const expected = ['max_tokens', 'stream', ...(workload.request_usage ? ['stream_options.include_usage'] : []), 'temperature'];
-  if (requests.length !== expected.length || requests.some((setting, index) => setting.name !== expected[index]) || requests.find(setting => setting.name === 'max_tokens')?.value !== workload.max_output_tokens) throw new Error('Public request settings must describe the exact common serving request.');
+  if (fixed && force) expected.push(force.name);
+  expected.sort(asciiCompare);
+  if (requests.length !== expected.length || requests.some((setting, index) => setting.name !== expected[index]) || requests.find(setting => setting.name === 'max_tokens')?.value !== workload.max_output_tokens) throw new Error('Public request settings must describe the exact serving request.');
   const rows = result.measurements.rows;
   if (rows.length !== workload.inputs.length * workload.concurrencies.length * workload.repetitions) throw new Error('Incomplete serving measurement grid.');
   const inputs = new Set(workload.inputs.map(input => input.bytes));
@@ -123,6 +132,12 @@ function validateServing(result: ServingPublicBenchmarkSubmission): void {
     if (!inputs.has(row.input_bytes) || !concurrencies.has(row.concurrency) || row.max_output_tokens !== workload.max_output_tokens || row.repetition > workload.repetitions || seen.has(key)) throw new Error('Invalid serving measurement grid membership.');
     seen.add(key);
     if (!Number.isSafeInteger(row.content_bytes + row.reasoning_bytes) || row.output_bytes !== row.content_bytes + row.reasoning_bytes || row.finish_reasons.length !== row.concurrency) throw new Error('Invalid serving output byte counts or finish slots.');
+    const counts = row.reported_completion_tokens_by_request;
+    if (fixed && (!counts || counts.length !== row.concurrency
+      || counts.some(count => count !== workload.max_output_tokens)
+      || row.reported_completion_tokens !== workload.max_output_tokens * row.concurrency)) {
+      throw new Error('Fixed-output measurements require the exact reported token count for every request.');
+    }
     const counters = [row.reported_prompt_tokens, row.reported_completion_tokens, row.reported_cached_tokens];
     const known = counters.filter(value => value !== null).length;
     if ((row.usage_status === 'complete' && known !== 3) || (row.usage_status === 'partial' && known === 3) || ((row.usage_status === 'missing' || row.usage_status === 'invalid') && known !== 0) || (row.reported_cached_tokens !== null && row.reported_prompt_tokens !== null && row.reported_cached_tokens > row.reported_prompt_tokens)) throw new Error('Invalid serving reported usage.');

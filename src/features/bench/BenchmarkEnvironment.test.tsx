@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BenchmarkEnvironment } from './BenchmarkEnvironment';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
@@ -27,6 +27,7 @@ const capabilities = (backend = 'vulkan', devices: string[] = []): RuntimeCapabi
 const view = (config = cfg, report: DeviceReport | null = device) => <I18nProvider initialLocale="en"><BenchmarkEnvironment config={config}
   application={materializeProfileApplication(config, '', { id: 'example-profile', name: 'Example profile', scope: 'global', revision: 1, settings: {} })} device={report} runtimes={[]} active busy={false} /></I18nProvider>;
 const term = (name: string) => within(screen.getByRole('region', { name: 'Execution environment' })).getByText(name).nextElementSibling!;
+const disclosure = (name: string) => within(screen.getByRole('region', { name: 'Execution environment' })).getByText(name, { selector: 'summary' }).closest('details')!;
 
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(rtProbe).mockResolvedValue(capabilities()); });
 afterEach(cleanup);
@@ -42,6 +43,7 @@ describe('benchmark execution environment', () => {
       provider_options: { 'custom.bench': { credential: 'BENCH-PRIVATE', retired: 'BENCH-UNKNOWN' } } }));
     expect(container).not.toHaveTextContent('BENCH-PRIVATE');
     expect(container).not.toHaveTextContent('BENCH-UNKNOWN');
+    fireEvent.click(within(disclosure('Key settings')).getByText('Key settings'));
     expect(await screen.findByText('--credential')).toBeVisible();
     expect(container).not.toHaveTextContent('BENCH-PRIVATE');
   });
@@ -69,16 +71,24 @@ describe('benchmark execution environment', () => {
     await waitFor(() => expect(rtProbe).toHaveBeenCalledWith('vulkan', 'b123'));
   });
 
-  it('groups the profile launch options apart from the hardware that supports them', async () => {
+  it('keeps launch options and hardware in closed disclosures apart from the visible identity', async () => {
     render(view());
-    const region = screen.getByRole('region', { name: 'Execution environment' });
-    const settings = within(region).getByRole('heading', { name: 'Key settings' }).nextElementSibling as HTMLElement;
-    const hardware = within(region).getByRole('heading', { name: 'Hardware' }).nextElementSibling as HTMLElement;
+    expect(term('Profile')).toBeVisible();
+    const settings = disclosure('Key settings');
+    const hardware = disclosure('Hardware');
+    expect(settings).not.toHaveAttribute('open');
+    expect(hardware).not.toHaveAttribute('open');
+    expect(within(settings).getByText('GPU layers')).not.toBeVisible();
+    expect(within(hardware).getByText(/Example CPU/)).not.toBeVisible();
     for (const label of ['GPU layers', 'CPU threads', 'Batch / microbatch', 'KV cache (K / V)', 'Flash Attention']) expect(settings).toHaveTextContent(label);
     expect(settings).not.toHaveTextContent('Example GPU B');
     expect(hardware).toHaveTextContent('Example GPU B · 16.00 GiB VRAM');
     expect(hardware).toHaveTextContent('Example CPU');
     expect(hardware).not.toHaveTextContent('GPU layers');
+    fireEvent.click(within(settings).getByText('Key settings'));
+    fireEvent.click(within(hardware).getByText('Hardware'));
+    expect(within(settings).getByText('GPU layers')).toBeVisible();
+    expect(within(hardware).getByText(/Example CPU/)).toBeVisible();
     await waitFor(() => expect(rtProbe).toHaveBeenCalled());
   });
 

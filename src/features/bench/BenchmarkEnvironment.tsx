@@ -72,7 +72,8 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
   });
   const cpu = device?.profile.cpu;
   const ram = device?.system_memory_bytes;
-  // The profile and its launch options lead; the machine they run on supports them.
+  // The profile and engine identity stay in view; launch options and the host
+  // hardware they run on are one keyboard-reachable disclosure away.
   return <section className="performance-environment" aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`} className="performance-column-title">{copy.title}</h3>
     <dl className="performance-environment-overview">
@@ -80,22 +81,30 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
       <div><dt>{providerCopy[locale].engine}</dt><dd>{providerDisplayName(provider)}</dd></div>
       <div><dt>{copy.runtime}</dt><dd>{llama ? config.active_backend ? `${config.active_backend} · ${runtimeVersionLabel(runtimes, config.active_backend, config.active_build)}` : copy.unknown : <RuntimeSelectionLabel config={config} />}</dd></div>
     </dl>
-    <p className="performance-hint">{copy.profileHint}</p>
-    <h4 id={`${id}-settings`} className="sr-only">{copy.settings}</h4>
-    {llama ? <dl className="performance-environment-settings" aria-labelledby={`${id}-settings`}>
-      <div><dt>{copy.context}</dt><dd>{usesRuntimeDefault(config, 'ctx_size') ? copy.automatic : config.ctx_size}</dd></div>
-      <div><dt>{copy.parallel}</dt><dd>{usesRuntimeDefault(config, 'parallel') ? copy.automatic : config.parallel}</dd></div>
-      <div><dt>{copy.gpuLayers}</dt><dd>{value('ngl')}</dd></div>
-      <div><dt>{copy.threads}</dt><dd>{value('threads')}</dd></div>
-      <div><dt>{copy.batch}</dt><dd>{value('batch_size')} / {value('ubatch_size')}</dd></div>
-      <div><dt>{copy.cache}</dt><dd>{value('cache_type_k')} / {value('cache_type_v')}</dd></div>
-      <div><dt>{copy.flash}</dt><dd>{value('flash_attn')}</dd></div>
-    </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} mode="current" showRuntime={false} />}
-    <p className="performance-hint">{copy.hostHint}</p>
-    <h4 id={`${id}-hardware`} className="sr-only">{copy.hardware}</h4>
-    <dl className="performance-environment-hardware" aria-labelledby={`${id}-hardware`}>
-      <div><dt>{copy.gpu}</dt><dd className="performance-environment-devices">{!llama ? copy.automaticGpu : cpuOnly ? copy.cpuOnly : <>{!ids.length && <span>{copy.automaticGpu}</span>}{devices}{draftCpu && <span>{copy.cpuOnly} · {copy.draft}</span>}</>}</dd></div>
-      <div><dt>{copy.system}</dt><dd>{cpu ? <>{normalizeDisplayText(cpu.name)}<small>{formatCpuCores(cpu)}{typeof ram === 'number' && ram > 0 ? ` · ${formatBytes(ram)} RAM` : ''}</small></> : copy.unknown}</dd></div>
-    </dl>
+    <details className="performance-environment-disclosure">
+      <summary>{copy.settings}</summary>
+      <div className="performance-environment-disclosure-body">
+        <p className="performance-hint">{copy.profileHint}</p>
+        {llama ? <dl className="performance-environment-settings">
+          <div><dt>{copy.context}</dt><dd>{usesRuntimeDefault(config, 'ctx_size') ? copy.automatic : config.ctx_size}</dd></div>
+          <div><dt>{copy.parallel}</dt><dd>{usesRuntimeDefault(config, 'parallel') ? copy.automatic : config.parallel}</dd></div>
+          <div><dt>{copy.gpuLayers}</dt><dd>{value('ngl')}</dd></div>
+          <div><dt>{copy.threads}</dt><dd>{value('threads')}</dd></div>
+          <div><dt>{copy.batch}</dt><dd>{value('batch_size')} / {value('ubatch_size')}</dd></div>
+          <div><dt>{copy.cache}</dt><dd>{value('cache_type_k')} / {value('cache_type_v')}</dd></div>
+          <div><dt>{copy.flash}</dt><dd>{value('flash_attn')}</dd></div>
+        </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} mode="current" showRuntime={false} />}
+      </div>
+    </details>
+    <details className="performance-environment-disclosure">
+      <summary>{copy.hardware}</summary>
+      <div className="performance-environment-disclosure-body">
+        <p className="performance-hint">{copy.hostHint}</p>
+        <dl className="performance-environment-hardware">
+          <div><dt>{copy.gpu}</dt><dd className="performance-environment-devices">{!llama ? copy.automaticGpu : cpuOnly ? copy.cpuOnly : <>{!ids.length && <span>{copy.automaticGpu}</span>}{devices}{draftCpu && <span>{copy.cpuOnly} · {copy.draft}</span>}</>}</dd></div>
+          <div><dt>{copy.system}</dt><dd>{cpu ? <>{normalizeDisplayText(cpu.name)}<small>{formatCpuCores(cpu)}{typeof ram === 'number' && ram > 0 ? ` · ${formatBytes(ram)} RAM` : ''}</small></> : copy.unknown}</dd></div>
+        </dl>
+      </div>
+    </details>
   </section>;
 }

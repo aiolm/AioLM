@@ -2,7 +2,7 @@ import type { LegacyPerformanceBenchmarkRequest, LegacyPerformanceBenchmarkResul
 import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkReport } from './benchmarkReport';
-import { validateBenchmarkConfiguration, type BenchmarkReceipt } from '@aiolm/benchmark-contracts';
+import { FIXED_OUTPUT_TOKENS, MAX_SERVING_OUTPUT_TOKENS, HISTORICAL_CAP_MAX_OUTPUT_TOKENS, validateBenchmarkConfiguration, type BenchmarkReceipt } from '@aiolm/benchmark-contracts';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
 import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark';
 
@@ -99,16 +99,16 @@ const nullableCount = (value: unknown) => value === null || count(value);
 const nullableTime = (value: unknown) => value === null || isFiniteNonnegative(value);
 const orderedIntegers = (value: unknown, min: number, max: number): value is number[] => Array.isArray(value)
   && value.length > 0 && value.length <= 64 && value.every((n, i) => boundedInteger(n, min, max) && (i === 0 || n > value[i - 1]));
-const methodValid = (value: unknown) => isObject(value) && value.id === 'openai-chat-serving' && value.version === 1
+const methodValid = (value: unknown): value is PerformanceBenchmarkRequest['method'] => isObject(value) && value.id === 'openai-chat-serving' && (value.version === 1 || value.version === 2)
   && Object.keys(value).every(key => key === 'id' || key === 'version');
 
 function isServingRow(value: unknown): boolean {
   if (!isObject(value) || typeof value.id !== 'string' || !value.id.length || value.id.length > 256
     || !Object.keys(value).every(key => ['id', 'input_bytes', 'max_output_tokens', 'concurrency', 'repetition',
       'first_output_ms', 'first_content_ms', 'first_reasoning_ms', 'e2e_ms', 'content_bytes', 'reasoning_bytes', 'output_bytes',
-      'reported_prompt_tokens', 'reported_completion_tokens', 'reported_cached_tokens', 'usage_status', 'finish_reasons',
+      'reported_prompt_tokens', 'reported_completion_tokens', 'reported_completion_tokens_by_request', 'reported_cached_tokens', 'usage_status', 'finish_reasons',
       'peak_memory_bytes', 'timing_source', 'failed', 'error'].includes(key))
-    || !boundedInteger(value.input_bytes, 256, 1048576) || !boundedInteger(value.max_output_tokens, 1, 65536)
+    || !boundedInteger(value.input_bytes, 256, 1048576) || !boundedInteger(value.max_output_tokens, 1, MAX_SERVING_OUTPUT_TOKENS)
     || !boundedInteger(value.concurrency, 1, 64) || !boundedInteger(value.repetition, 1, 100)
     || !isFiniteNonnegative(value.e2e_ms) || !['first_output_ms', 'first_content_ms', 'first_reasoning_ms'].every(key => nullableTime(value[key]))
     || !['content_bytes', 'reasoning_bytes', 'output_bytes'].every(key => count(value[key]))
@@ -124,7 +124,10 @@ function isServingRow(value: unknown): boolean {
     && (value.reported_cached_tokens === null || value.reported_prompt_tokens === null || (value.reported_cached_tokens as number) <= (value.reported_prompt_tokens as number))
     && (value.content_bytes !== 0 || value.first_content_ms === null)
     && (value.reasoning_bytes !== 0 || value.first_reasoning_ms === null)
-    && (value.output_bytes !== 0 || value.first_output_ms === null);
+    && (value.output_bytes !== 0 || value.first_output_ms === null)
+    && (value.reported_completion_tokens_by_request === undefined || Array.isArray(value.reported_completion_tokens_by_request)
+      && value.reported_completion_tokens_by_request.length === value.concurrency
+      && value.reported_completion_tokens_by_request.every(n => boundedInteger(n, 1, MAX_SERVING_OUTPUT_TOKENS)));
 }
 
 function isServingRecord(value: Record<string, unknown>, request: Record<string, unknown>, result: Record<string, unknown>): boolean {
@@ -134,18 +137,21 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
       'concurrencies', 'repetitions', 'warmup', 'request_usage'].includes(key))
     || !orderedIntegers(request.prompt_bytes, 256, 1048576) || !orderedIntegers(request.concurrencies, 1, 64)
     || request.prompt_bytes.length * request.concurrencies.length > 64
-    || !boundedInteger(request.max_output_tokens, 1, 65536) || !boundedInteger(request.repetitions, 1, 100)
+    || !boundedInteger(request.max_output_tokens, 1, MAX_SERVING_OUTPUT_TOKENS) || !boundedInteger(request.repetitions, 1, 100)
     || !['code_python', 'code_mixed', 'novel_ko', 'novel_en', 'novel_ja'].includes(request.context_profile as string)
     || typeof request.warmup !== 'boolean' || typeof request.request_usage !== 'boolean'
     || !['complete', 'partial', 'cancelled', 'failed'].includes(result.status as string)
     || (result.message != null && typeof result.message !== 'string')
     || !Array.isArray(result.args) || !result.args.every(arg => typeof arg === 'string')
     || !Array.isArray(result.rows) || result.rows.length > 10000 || !result.rows.every(isServingRow)) return false;
+  const fixed = request.method.version === 2;
+  if (fixed && (request.request_usage !== true || !FIXED_OUTPUT_TOKENS.includes(request.max_output_tokens as number))) return false;
+  if (!fixed && (request.max_output_tokens as number) > HISTORICAL_CAP_MAX_OUTPUT_TOKENS) return false;
   const p = result.provenance;
   // A launch failure can be journaled before any provenance or observations exist.
   if (p === undefined) return result.rows.length === 0 && result.status !== 'complete';
   if (!isObject(p) || p.schema_version !== 2 || typeof p.app_version !== 'string' || !methodValid(p.method)
-    || typeof p.recorded_model_label !== 'string' || !isObject(p.workload) || !isObject(p.environment) || !isObject(p.model)) return false;
+    || p.method.version !== request.method.version || typeof p.recorded_model_label !== 'string' || !isObject(p.workload) || !isObject(p.environment) || !isObject(p.model)) return false;
   const w = p.workload;
   if (w.corpus !== request.context_profile || w.corpus_version !== 1 || w.cache_policy !== 'as_configured'
     || w.max_output_tokens !== request.max_output_tokens || w.repetitions !== request.repetitions
@@ -157,9 +163,13 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
   try {
     const configuration = validateBenchmarkConfiguration({ runtime: p.runtime, execution: p.execution });
     const requests = configuration.execution.settings.filter(setting => setting.target === 'request');
+    const force = requests.find(setting => setting.name === 'ignore_eos' || setting.name === 'min_tokens');
+    if (fixed && (!force || (force.name === 'ignore_eos' ? force.value !== true : force.value !== w.max_output_tokens))) return false;
     const names = ['max_tokens', 'stream', ...(w.request_usage ? ['stream_options.include_usage'] : []), 'temperature'];
+    if (fixed && force) names.push(force.name);
+    names.sort();
     if (requests.length !== names.length || requests.some((setting, index) => setting.name !== names[index])
-      || requests[0].value !== w.max_output_tokens) return false;
+      || requests.find(setting => setting.name === 'max_tokens')?.value !== w.max_output_tokens) return false;
   } catch { return false; }
   const model = p.model;
   if (!['gguf', 'hf-safetensors', 'mlx', 'unknown'].includes(model.format as string)
@@ -185,6 +195,10 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
       || !(request.concurrencies as number[]).includes(row.concurrency as number)
       || row.max_output_tokens !== request.max_output_tokens || (row.repetition as number) > (request.repetitions as number)
       || seen.has(key) || ((p.execution as Record<string, unknown>).memory_scope === 'unavailable' && row.peak_memory_bytes !== null)) return false;
+    if (fixed && (!Array.isArray(row.reported_completion_tokens_by_request)
+      || row.reported_completion_tokens_by_request.some(n => n !== request.max_output_tokens)
+      || row.reported_completion_tokens !== (request.max_output_tokens as number) * (row.concurrency as number))) return false;
+    if (!fixed && row.reported_completion_tokens_by_request !== undefined) return false;
     seen.add(key);
   }
   if (result.status === 'complete') {

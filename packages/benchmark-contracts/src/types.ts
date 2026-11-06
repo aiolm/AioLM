@@ -210,6 +210,8 @@ export interface ServingBenchmarkRow {
   output_bytes: number;
   reported_prompt_tokens: number | null;
   reported_completion_tokens: number | null;
+  /** Fixed-output method v2 evidence, in request launch-slot order. */
+  reported_completion_tokens_by_request?: number[];
   reported_cached_tokens: number | null;
   usage_status: 'complete' | 'partial' | 'missing' | 'invalid';
   /** One last-observed reason per request, in launch-slot order. */
@@ -248,7 +250,7 @@ export interface ServingPublicBenchmarkSubmission extends BenchmarkConfiguration
   schema_version: 3;
   submission_id: string;
   app_version: string | null;
-  method: { id: 'openai-chat-serving'; version: 1 };
+  method: { id: 'openai-chat-serving'; version: 1 | 2 };
   workload: ServingWorkload;
   model: ServingBenchmarkModelIdentity;
   environment: (NonNullable<LegacyPublicBenchmarkSubmission['environment']> & { scope: 'aiolm_host' }) | null;

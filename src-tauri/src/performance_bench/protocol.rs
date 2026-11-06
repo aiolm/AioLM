@@ -8,6 +8,36 @@ const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
+/// Bounded per-request wall time and streamed byte budget. The 64 KiB line
+/// and event limits of the SSE framer apply regardless of the budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Budget {
+    pub timeout: Duration,
+    pub response_bytes: usize,
+}
+
+impl Default for Budget {
+    /// Generic protocol limits, independent of any output target.
+    fn default() -> Self {
+        Self {
+            timeout: REQUEST_TIMEOUT,
+            response_bytes: MAX_RESPONSE_BYTES,
+        }
+    }
+}
+
+impl Budget {
+    /// A forced request may legitimately stream `target` tokens: scale the
+    /// wall time per started 1024 tokens and add 1 KiB of SSE per token.
+    pub(super) fn fixed_output(target: u32) -> Self {
+        Self {
+            timeout: REQUEST_TIMEOUT * super::budget_units(target),
+            response_bytes: MAX_RESPONSE_BYTES
+                .saturating_add((target as usize).saturating_mul(1024)),
+        }
+    }
+}
+
 pub(super) async fn cancelled(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -107,10 +137,16 @@ impl Usage {
     }
 }
 
-#[derive(Default)]
 struct CompletionStream {
     framing: Framer,
     observed: Observed,
+    response_bytes: usize,
+}
+
+impl Default for CompletionStream {
+    fn default() -> Self {
+        Self::new(MAX_RESPONSE_BYTES)
+    }
 }
 
 #[derive(Default)]
@@ -239,9 +275,17 @@ impl Observed {
 }
 
 impl CompletionStream {
+    fn new(response_bytes: usize) -> Self {
+        Self {
+            framing: Framer::default(),
+            observed: Observed::default(),
+            response_bytes,
+        }
+    }
+
     fn push(&mut self, bytes: &[u8], now: Instant) -> Result<bool, String> {
         let observed = &mut self.observed;
-        self.framing.push(bytes, MAX_RESPONSE_BYTES, |data, kind| {
+        self.framing.push(bytes, self.response_bytes, |data, kind| {
             observed.event(data, kind, now)
         })
     }
@@ -259,15 +303,7 @@ pub(super) async fn request(
     client: &reqwest::Client,
     request: &reqwest::Request,
     cancel: &AtomicBool,
-) -> Result<Measurement, String> {
-    request_with_timeout(client, request, cancel, REQUEST_TIMEOUT).await
-}
-
-async fn request_with_timeout(
-    client: &reqwest::Client,
-    request: &reqwest::Request,
-    cancel: &AtomicBool,
-    timeout: Duration,
+    budget: Budget,
 ) -> Result<Measurement, String> {
     let started = Instant::now();
     let work = async {
@@ -294,7 +330,7 @@ async fn request_with_timeout(
         {
             return Err("benchmark response is not an event stream".into());
         }
-        let mut stream = CompletionStream::default();
+        let mut stream = CompletionStream::new(budget.response_bytes);
         while let Some(chunk) = response
             .chunk()
             .await
@@ -309,7 +345,7 @@ async fn request_with_timeout(
     tokio::select! {
         biased;
         _ = cancelled(cancel) => Err("benchmark cancelled".into()),
-        result = tokio::time::timeout(timeout, work) => result.unwrap_or_else(|_| Err("benchmark request timed out".into())),
+        result = tokio::time::timeout(budget.timeout, work) => result.unwrap_or_else(|_| Err("benchmark request timed out".into())),
     }
 }
 
@@ -650,6 +686,46 @@ mod tests {
         assert!(stream.push(b"x", now).is_err());
     }
 
+    #[test]
+    fn fixed_output_budgets_scale_per_started_kib_but_keep_event_limits() {
+        let minutes = |n: u64| Duration::from_secs(n * 60);
+        assert_eq!(Budget::default().response_bytes, MAX_RESPONSE_BYTES);
+        assert_eq!(
+            Budget::fixed_output(1024),
+            Budget {
+                timeout: minutes(5),
+                response_bytes: MAX_RESPONSE_BYTES + 1024 * 1024
+            }
+        );
+        assert_eq!(
+            Budget::fixed_output(204_800),
+            Budget {
+                timeout: minutes(1000),
+                response_bytes: MAX_RESPONSE_BYTES + 204_800 * 1024
+            }
+        );
+        assert_eq!(super::super::run_timeout(1024), minutes(30));
+        assert_eq!(super::super::run_timeout(204_800), minutes(6000));
+
+        // Beyond the generic 8 MiB response budget but within the 1k target budget.
+        let now = Instant::now();
+        let comment = format!(":{}\n", " ".repeat(4094));
+        let lines = MAX_RESPONSE_BYTES / comment.len() + 16;
+        let mut generic = CompletionStream::default();
+        assert!((0..lines).any(|_| generic.push(comment.as_bytes(), now).is_err()));
+        let mut fixed = CompletionStream::new(Budget::fixed_output(1024).response_bytes);
+        for _ in 0..lines {
+            fixed.push(comment.as_bytes(), now).unwrap();
+        }
+        assert!(fixed.push(b"data: [DONE]\n\n", now).unwrap());
+        assert!(fixed.complete(now).is_ok());
+
+        // The largest target budget never relaxes the per-line/per-event limits.
+        use crate::providers::sse::EVENT_LIMIT;
+        let mut largest = CompletionStream::new(Budget::fixed_output(204_800).response_bytes);
+        assert!(largest.push(&vec![b'x'; EVENT_LIMIT + 1], now).is_err());
+    }
+
     async fn fixture_request(socket: &mut tokio::net::TcpStream) {
         let mut request = Vec::new();
         loop {
@@ -725,7 +801,12 @@ mod tests {
         let (client, prepared, fixture) = http_fixture(200, wire, true).await;
         let row = tokio::time::timeout(
             Duration::from_secs(1),
-            request(&client, &prepared, &AtomicBool::new(false)),
+            request(
+                &client,
+                &prepared,
+                &AtomicBool::new(false),
+                Budget::default(),
+            ),
         )
         .await
         .unwrap()
@@ -754,9 +835,14 @@ mod tests {
             (401, b"data: [DONE]\n\n".to_vec()),
         ] {
             let (client, prepared, fixture) = http_fixture(status, body, false).await;
-            assert!(request(&client, &prepared, &AtomicBool::new(false))
-                .await
-                .is_err());
+            assert!(request(
+                &client,
+                &prepared,
+                &AtomicBool::new(false),
+                Budget::default()
+            )
+            .await
+            .is_err());
             fixture.await.unwrap();
         }
     }
@@ -765,11 +851,14 @@ mod tests {
     async fn request_deadline_and_cancellation_discard_unfinished_output() {
         let partial = event(json!({"choices":[{"delta":{"content":"partial"}}]})).into_bytes();
         let (client, prepared, fixture) = http_fixture(200, partial.clone(), true).await;
-        assert!(request_with_timeout(
+        assert!(request(
             &client,
             &prepared,
             &AtomicBool::new(false),
-            Duration::from_millis(100)
+            Budget {
+                timeout: Duration::from_millis(100),
+                ..Budget::default()
+            }
         )
         .await
         .unwrap_err()
@@ -777,7 +866,7 @@ mod tests {
         fixture.abort();
         let (client, prepared, fixture) = http_fixture(200, partial, true).await;
         let cancel = AtomicBool::new(false);
-        let operation = request(&client, &prepared, &cancel);
+        let operation = request(&client, &prepared, &cancel, Budget::default());
         let stop = async {
             tokio::time::sleep(Duration::from_millis(50)).await;
             cancel.store(true, Ordering::Release);

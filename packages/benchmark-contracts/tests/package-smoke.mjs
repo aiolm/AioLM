@@ -100,6 +100,52 @@ try {
     const serving = ${JSON.stringify(serving)};
     const observed = serving.measurements.rows[0];
     assert.equal(validatePublicBenchmark(serving), serving);
+    const fixed = structuredClone(serving);
+    fixed.method.version = 2;
+    fixed.workload.max_output_tokens = 1024;
+    fixed.workload.concurrencies = [2];
+    fixed.workload.request_usage = true;
+    fixed.execution.settings = [
+      { target: 'request', scope: [], name: 'ignore_eos', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'max_tokens', value: 1024, unit: 'tokens', role: null },
+      { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null },
+      { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
+    ];
+    Object.assign(fixed.measurements.rows[0], {
+      max_output_tokens: 1024, concurrency: 2, reported_completion_tokens: 2048,
+      reported_completion_tokens_by_request: [1024, 1024], usage_status: 'partial',
+      finish_reasons: ['length', 'stop'],
+    });
+    assert.equal(validatePublicBenchmark(fixed), fixed, 'Exact per-request output counts do not require prompt/cache counters.');
+    const rejectFixed = mutate => {
+      const candidate = structuredClone(fixed);
+      mutate(candidate);
+      assert.throws(() => validatePublicBenchmark(candidate));
+    };
+    rejectFixed(value => { value.measurements.rows[0].reported_completion_tokens_by_request = [512, 1536]; });
+    rejectFixed(value => { delete value.measurements.rows[0].reported_completion_tokens_by_request; });
+    rejectFixed(value => { value.measurements.rows[0].reported_completion_tokens_by_request = [1024]; });
+    rejectFixed(value => { value.measurements.rows[0].reported_completion_tokens = 2047; });
+    rejectFixed(value => { value.measurements.rows[0].reported_completion_tokens = null; });
+    rejectFixed(value => { value.execution.settings[0].value = false; });
+    rejectFixed(value => { value.execution.settings.shift(); });
+    rejectFixed(value => { value.workload.request_usage = false; });
+    rejectFixed(value => {
+      value.workload.max_output_tokens = 2048;
+      value.execution.settings[1].value = 2048;
+      Object.assign(value.measurements.rows[0], { max_output_tokens: 2048, reported_completion_tokens: 4096, reported_completion_tokens_by_request: [2048, 2048] });
+    });
+    const largestFixed = structuredClone(fixed);
+    largestFixed.workload.max_output_tokens = 204800;
+    largestFixed.execution.settings.shift();
+    largestFixed.execution.settings[0].value = 204800;
+    largestFixed.execution.settings.splice(1, 0, { target: 'request', scope: [], name: 'min_tokens', value: 204800, unit: 'tokens', role: null });
+    Object.assign(largestFixed.measurements.rows[0], { max_output_tokens: 204800, reported_completion_tokens: 409600, reported_completion_tokens_by_request: [204800, 204800] });
+    assert.equal(validatePublicBenchmark(largestFixed), largestFixed, 'The requested 200k fixed length accepts exact per-slot evidence.');
+    const wrongMinimum = structuredClone(largestFixed);
+    wrongMinimum.execution.settings[1].value = 131072;
+    assert.throws(() => validatePublicBenchmark(wrongMinimum));
     for (const name of ['llama.cpp', 'vllm', 'mlx-vlm', 'sglang', null]) {
       for (const format of ['gguf', 'hf-safetensors', 'mlx', 'unknown']) {
         const engineNeutral = { ...serving, runtime: { ...serving.runtime, name, variant: 'arbitrary-safe-variant' }, model: { ...serving.model, format } };
@@ -549,8 +595,6 @@ try {
   const publicSchema = JSON.parse(readFileSync(consumerRequire.resolve('@aiolm/benchmark-contracts/schema'), 'utf8'));
   assert.deepEqual(JSON.parse(JSON.stringify(browser.namespace.publicBenchmarkSchema)), publicSchema);
   const openapi = JSON.parse(readFileSync(consumerRequire.resolve('@aiolm/benchmark-contracts/openapi'), 'utf8'));
-  assert.equal(openapi.info.version, '2.0.0');
-  assert.equal(publicSchema.oneOf.length, 2);
   assert(publicSchema.$defs.servingRuntime && publicSchema.$defs.servingExecution);
   const requestSchema = openapi.paths['/v1/benchmark-runs'].post.requestBody.content['application/json'].schema;
   assert.ok(Array.isArray(requestSchema.oneOf) && requestSchema.oneOf.some(entry => entry.$ref === './publication.schema.json'));

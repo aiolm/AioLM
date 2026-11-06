@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiolm:benchmark:public:1",
   "title": "AioLM public benchmark submission",
-  "description": "A reviewed public snapshot. Null means unknown. Local paths, raw arguments, diagnostics and persistent hardware identifiers are excluded. Model status sha256 requires a hash; unidentified and multipart require null. Schema 3 uses engine-neutral, client-observed UTF-8 output with optional reported token counts; schema 1/2 snapshots remain legacy measurements.",
+  "description": "A reviewed public snapshot. Null means unknown. Local paths, raw arguments, diagnostics and persistent hardware identifiers are excluded. Model status sha256 requires a hash; unidentified and multipart require null. Schema 3 method openai-chat-serving@2 requires controlled fixed output and per-request reported token evidence; @1 retains cap-based byte/time measurements. Schema 1/2 snapshots remain legacy measurements.",
   "oneOf": [
     {
       "$ref": "#/$defs/legacy"
@@ -1228,7 +1228,7 @@
                   "value": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 65536
+                    "maximum": 204800
                   },
                   "unit": {
                     "const": "tokens"
@@ -1258,6 +1258,34 @@
                   },
                   "unit": {
                     "const": null
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "name": {
+                    "const": "ignore_eos"
+                  },
+                  "value": {
+                    "const": true
+                  },
+                  "unit": {
+                    "const": null
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "name": {
+                    "const": "min_tokens"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 204800
+                  },
+                  "unit": {
+                    "const": "tokens"
                   }
                 }
               }
@@ -1319,6 +1347,15 @@
         }
       ]
     },
+    "historicalOutputTokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65536
+    },
+    "fixedOutputTokens": {
+      "type": "integer",
+      "enum": [1024, 4096, 8192, 16384, 32768, 65536, 131072, 204800]
+    },
     "servingWorkload": {
       "type": "object",
       "properties": {
@@ -1363,7 +1400,7 @@
         "max_output_tokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 65536
+          "maximum": 204800
         },
         "concurrencies": {
           "type": "array",
@@ -1774,7 +1811,7 @@
         "max_output_tokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 65536
+          "maximum": 204800
         },
         "concurrency": {
           "type": "integer",
@@ -1841,6 +1878,16 @@
           ],
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "reported_completion_tokens_by_request": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 204800
+          },
+          "minItems": 1,
+          "maxItems": 64
         },
         "reported_cached_tokens": {
           "type": [
@@ -1938,7 +1985,7 @@
             },
             "version": {
               "type": "integer",
-              "const": 1
+              "enum": [1, 2]
             }
           },
           "required": [
@@ -1996,7 +2043,64 @@
         "execution",
         "measurements"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "properties": {
+                  "version": { "const": 2 }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "workload": {
+                "properties": {
+                  "max_output_tokens": { "$ref": "#/$defs/fixedOutputTokens" },
+                  "request_usage": { "const": true }
+                }
+              },
+              "measurements": {
+                "properties": {
+                  "rows": {
+                    "items": {
+                      "properties": {
+                        "reported_completion_tokens": { "type": "integer", "minimum": 1 },
+                        "usage_status": { "enum": ["complete", "partial"] }
+                      },
+                      "required": ["reported_completion_tokens_by_request"]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "workload": {
+                "properties": {
+                  "max_output_tokens": { "$ref": "#/$defs/historicalOutputTokens" }
+                }
+              },
+              "measurements": {
+                "properties": {
+                  "rows": {
+                    "items": {
+                      "properties": {
+                        "max_output_tokens": { "$ref": "#/$defs/historicalOutputTokens" }
+                      },
+                      "not": { "required": ["reported_completion_tokens_by_request"] }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

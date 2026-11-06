@@ -255,12 +255,39 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
             method: Default::default(),
             context_profile: "novel_en".into(),
             prompt_bytes: vec![256],
-            max_output_tokens: 128,
+            max_output_tokens: 1024,
             concurrencies: vec![1, 2],
             repetitions: 1,
             warmup: false,
-            request_usage: false,
+            request_usage: true,
         };
+        // Without a declared force control the adapter is refused explicitly;
+        // there is no cap-mode fallback.
+        let refused = bench::RuntimeInfo::prepare(&selection, &request)
+            .await
+            .err()
+            .expect("an undeclared adapter cannot run fixed output");
+        assert!(refused.contains("fixed-output control"), "{refused}");
+        // The same engine, registered with an explicit `ignore_eos` declaration
+        // and its matching request option.
+        let mut fixed = manifest.clone();
+        fixed.runtime_id = "fixture-fixed".into();
+        fixed.probe.args[2] = fixed.runtime_id.clone();
+        fixed.probe.args.push("--adapter-probe-fixed-output".into());
+        fixed.options.push(
+            serde_json::from_value(serde_json::json!({
+                "key": "ignore_eos", "kind": {"type": "toggle"}, "target": "request"
+            }))
+            .unwrap(),
+        );
+        let fixed_source = area.path.join("fixed-output.json");
+        fs::write(&fixed_source, serde_json::to_vec(&fixed).unwrap()).unwrap();
+        providers::registry::register(&fixed_source, None)
+            .await
+            .unwrap();
+        selection.active_runtime = "fixture-fixed".into();
+        providers::adapter::refresh(&selection, None).await.unwrap();
+        providers::execution::validate(&selection).unwrap();
         let runtime = bench::RuntimeInfo::prepare(&selection, &request)
             .await
             .unwrap();
@@ -277,16 +304,23 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         .await;
         assert_eq!(result.status, "complete", "{:?}", result.message);
         assert_eq!(result.rows.len(), 2);
-        assert!(result
-            .rows
-            .iter()
-            .all(|row| row.output_bytes == 2 * u64::from(row.concurrency)
-                && row.reported_completion_tokens == Some(u64::from(row.concurrency))
-                && row.reported_cached_tokens.is_none()
-                && row.usage_status == "partial"
-                && row.peak_memory_bytes.is_none()
-                && row.finish_reasons == vec!["not_reported"; row.concurrency as usize]));
+        assert!(result.rows.iter().all(|row| row.output_bytes
+            == 1024 * u64::from(row.concurrency)
+            && row.reported_completion_tokens == Some(1024 * u64::from(row.concurrency))
+            && row.reported_completion_tokens_by_request
+                == Some(vec![1024; row.concurrency as usize])
+            && row.reported_cached_tokens.is_none()
+            && row.usage_status == "partial"
+            && row.peak_memory_bytes.is_none()
+            && row.finish_reasons == vec!["length"; row.concurrency as usize]));
         let recorded = serde_json::to_value(&result).unwrap();
+        assert!(recorded["provenance"]["execution"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|setting| setting["target"] == "request"
+                && setting["name"] == "ignore_eos"
+                && setting["value"] == true));
         assert_eq!(
             recorded["provenance"]["runtime"]["name"],
             serde_json::Value::Null
@@ -302,6 +336,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
             serde_json::Value::Null
         );
         assert!(process.lock().unwrap().is_none());
+        providers::registry::remove(engine, "fixture-fixed").unwrap();
         providers::adapter::refresh(&cfg, None).await.unwrap();
     }
     fs::write(&adapter_source, b"changed adapter source").unwrap();

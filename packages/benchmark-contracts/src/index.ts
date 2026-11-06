@@ -32,3 +32,4 @@ export {
   type UploadSessionStatus, type UploadSessionPoll, type ServiceErrorBody,
 } from './service.js';
 export { formatRuntimeVersionLabel, type RuntimeVersionLabelInput } from './runtimeLabel.js';
+export { FIXED_OUTPUT_TOKENS, MAX_SERVING_OUTPUT_TOKENS, HISTORICAL_CAP_MAX_OUTPUT_TOKENS } from './fixedOutput.js';
