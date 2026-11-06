@@ -1,17 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { isNativeRuntimeAvailable } from "../shared/api/transport";
 import { AioMark } from "../shared/ui/AppIcons";
 import type { Locale } from "../shared/i18n/i18nCatalog";
 
 /*
- * The desktop title bar for frameless windows.
+ * The desktop title bar, with native macOS or app-drawn frame controls.
  *
- * On Windows and Linux the native side removes the system frame before the
- * window is shown; macOS keeps its native frame and traffic lights. Rather than
- * guess the platform, the bar asks the window whether it is still decorated
- * and appears only when it is not, so a frame that could not be removed keeps
- * the native controls and the browser preview never shows controls it cannot
- * operate.
+ * Windows and Linux use app-drawn captions. macOS reserves the same strip for
+ * its real traffic lights over the webview. Native frame detection decides
+ * which presentation to draw, without guessing the platform or duplicating
+ * controls when frame removal is unavailable. Browser previews draw neither.
  *
  * It is mounted once above every surface, from the first loading screen
  * through setup and the workspace, so the window stays movable and closable
@@ -19,7 +18,7 @@ import type { Locale } from "../shared/i18n/i18nCatalog";
  * reason and follows the document language the app already publishes.
  */
 
-type NativeWindow = Awaited<ReturnType<typeof frameWindow>>;
+type NativeWindow = Awaited<ReturnType<typeof frameWindow>> | null;
 
 const copy: Record<Locale, { controls: string; minimize: string; maximize: string; restore: string; close: string }> = {
   en: { controls: "Window controls", minimize: "Minimize", maximize: "Maximize", restore: "Restore", close: "Close" },
@@ -29,9 +28,18 @@ const copy: Record<Locale, { controls: string; minimize: string; maximize: strin
 };
 
 async function frameWindow() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const current = getCurrentWindow();
-  return (await current.isDecorated()) ? null : current;
+  const [{ getCurrentWindow }, { invoke }] = await Promise.all([
+    import("@tauri-apps/api/window"),
+    import("@tauri-apps/api/core"),
+  ]);
+  const chrome = await invoke<"frameless" | "overlay" | "native">("window_chrome");
+  return {
+    window: getCurrentWindow(),
+    chrome,
+    // Linux needs an actual System policy, not tao's setTheme(null), which
+    // writes prefer-dark=false. Other platforms retain the SDK behavior.
+    setTheme: (theme: "light" | "dark" | null) => invoke<void>("window_theme", { theme }),
+  };
 }
 
 // The frame is decided once per window, so every mount shares one answer and
@@ -50,27 +58,80 @@ const readLocale = (): Locale => {
   return lang === "ko" || lang === "ja" || lang === "zh" ? lang : "en";
 };
 
-function useDocumentLocale(): Locale {
-  const [locale, setLocale] = useState(readLocale);
+const readAppearance = () => ({
+  locale: readLocale(),
+  theme: document.documentElement.dataset.themeMode === "system" ? null
+    : document.documentElement.dataset.theme === "dark" ? "dark" as const
+    : document.documentElement.dataset.theme === "light" ? "light" as const : null,
+});
+
+function useDocumentAppearance() {
+  const [appearance, setAppearance] = useState(readAppearance);
   useEffect(() => {
-    const observer = new MutationObserver(() => setLocale(readLocale()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+    const observer = new MutationObserver(() => {
+      const next = readAppearance();
+      setAppearance(previous => previous.locale === next.locale && previous.theme === next.theme ? previous : next);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang", "data-theme", "data-theme-mode"] });
     return () => observer.disconnect();
   }, []);
-  return locale;
+  return appearance;
+}
+
+// A modal makes the rest of the document inert, regardless of z-index. Move
+// the single portal host into the latest opened dialog, not the app itself:
+// editors, dirty guards and the native modal focus owner stay mounted.
+function useChromeHost(enabled: boolean) {
+  const slot = useRef<HTMLDivElement>(null);
+  const [host] = useState(() => document.createElement("div"));
+  useLayoutEffect(() => {
+    if (!enabled || !slot.current) return;
+    host.className = "app-titlebar-host";
+    document.documentElement.dataset.windowChrome = "custom";
+    const stack: HTMLDialogElement[] = Array.from(document.querySelectorAll("dialog[open]"));
+    const sync = (records: MutationRecord[] = []) => {
+      for (const record of records) {
+        if (record.type !== "attributes" || !(record.target instanceof HTMLDialogElement)) continue;
+        const dialog = record.target;
+        const index = stack.indexOf(dialog);
+        if (index >= 0) stack.splice(index, 1);
+        if (dialog.open && dialog.isConnected) stack.push(dialog);
+      }
+      for (let index = stack.length - 1; index >= 0; index--) {
+        if (!stack[index].open || !stack[index].isConnected) stack.splice(index, 1);
+      }
+      const owner = stack.at(-1) ?? slot.current;
+      if (owner && host.parentElement !== owner) owner.append(host);
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
+    return () => {
+      observer.disconnect();
+      host.remove();
+      delete document.documentElement.dataset.windowChrome;
+    };
+  }, [enabled, host]);
+  return { slot, host };
 }
 
 export default function TitleBar() {
-  const [win, setWin] = useState<NativeWindow | undefined>(detected);
+  const [frame, setFrame] = useState<NativeWindow | undefined>(detected);
   const [maximized, setMaximized] = useState(false);
-  const text = copy[useDocumentLocale()];
+  const themeUpdate = useRef<Promise<void> | null>(null);
+  const { locale, theme } = useDocumentAppearance();
+  const text = copy[locale];
+  const win = frame?.window;
+  const captions = frame?.chrome === "frameless";
+  const customChrome = !!frame && frame.chrome !== "native";
+  const { slot, host } = useChromeHost(customChrome);
   useEffect(() => {
     let live = true;
-    void detectFrameWindow().then((result) => { if (live) setWin(result); });
+    void detectFrameWindow().then((result) => { if (live) setFrame(result); });
     return () => { live = false; };
   }, []);
   useEffect(() => {
-    if (!win) return undefined;
+    if (!win || !captions) return undefined;
     let live = true;
     let unlisten: (() => void) | undefined;
     const sync = () => { void win.isMaximized().then((value) => { if (live) setMaximized(value); }, () => undefined); };
@@ -79,14 +140,24 @@ export default function TitleBar() {
     // arrive as resizes, so the restore glyph follows every path.
     void win.onResized(sync).then((stop) => { if (live) unlisten = stop; else stop(); }, () => undefined);
     return () => { live = false; unlisten?.(); };
-  }, [win]);
-  if (!win) return null;
+  }, [win, captions]);
+  useEffect(() => {
+    if (!frame) return undefined;
+    let live = true;
+    // Keep the native frame's last applied theme aligned with the document,
+    // even if an earlier native update finishes after a newer selection.
+    themeUpdate.current = (themeUpdate.current ?? Promise.resolve())
+      .then(() => { if (live) return frame.setTheme(theme); })
+      .catch(error => { console.error("Native window appearance could not be synchronized", error); });
+    return () => { live = false; };
+  }, [frame, theme]);
+  if (!frame || !win || frame.chrome === "native") return null;
   const maximizeLabel = maximized ? text.restore : text.maximize;
   // Only the bar itself carries the drag attribute: the brand ignores the
   // pointer so presses fall through to it, and the buttons stay clickable.
-  return <div className="app-titlebar" data-tauri-drag-region>
+  return <div className="app-titlebar-slot" ref={slot}>{createPortal(<div className="app-titlebar" data-chrome={frame.chrome} data-tauri-drag-region>
     <div className="app-titlebar-brand"><AioMark /><span>AioLM</span></div>
-    <div className="app-titlebar-controls" role="group" aria-label={text.controls}>
+    {captions && <div className="app-titlebar-controls" role="group" aria-label={text.controls}>
       <button type="button" className="app-titlebar-button" aria-label={text.minimize} title={text.minimize} onClick={() => { void win.minimize().catch(() => undefined); }}>
         <svg aria-hidden="true" viewBox="0 0 10 10" width="10" height="10"><path d="M0 5.5h10" stroke="currentColor" strokeWidth="1" /></svg>
       </button>
@@ -100,6 +171,6 @@ export default function TitleBar() {
       <button type="button" className="app-titlebar-button app-titlebar-button--close" aria-label={text.close} title={text.close} onClick={() => { void win.close().catch(() => undefined); }}>
         <svg aria-hidden="true" viewBox="0 0 10 10" width="10" height="10"><path d="M.5.5l9 9M9.5.5l-9 9" stroke="currentColor" strokeWidth="1" /></svg>
       </button>
-    </div>
-  </div>;
+    </div>}
+  </div>, host)}</div>;
 }

@@ -41,6 +41,7 @@ mod state;
 mod tray;
 pub mod tuning_defaults;
 pub mod verify;
+pub mod window_appearance;
 #[cfg(windows)]
 mod window_placement;
 
@@ -53,6 +54,30 @@ pub use server::ErrBuf;
 use state::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{Manager, RunEvent, WindowEvent};
+
+// Inspect the real frame, not the webview's user agent. A failed frame removal
+// keeps the native controls; macOS overlays retain AppKit's real traffic lights.
+#[tauri::command]
+fn window_chrome(window: tauri::WebviewWindow) -> Result<&'static str, String> {
+    if !window.is_decorated().map_err(|error| error.to_string())? {
+        return Ok("frameless");
+    }
+    #[cfg(target_os = "macos")]
+    if window
+        .app_handle()
+        .config()
+        .app
+        .windows
+        .iter()
+        .any(|config| {
+            config.label == window.label()
+                && matches!(config.title_bar_style, tauri::TitleBarStyle::Overlay)
+        })
+    {
+        return Ok("overlay");
+    }
+    Ok("native")
+}
 
 /// Stop every managed child process and cancel background work, synchronously.
 ///
@@ -168,6 +193,8 @@ pub fn run() {
         .manage(AppState::default())
         .on_window_event(attachment_drop::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            window_chrome,
+            window_appearance::window_theme,
             commands::notifications::send_desktop_notification,
             commands::providers::provider_catalog,
             commands::providers::runtime_adapter_register,
@@ -333,9 +360,9 @@ pub fn run() {
         // after it appears. The OS keeps resizing from the edges, the Windows
         // drop shadow and rounded corners (`shadow` defaults on), and closing
         // still goes through `CloseRequested`, so the tray setting below keeps
-        // working. macOS keeps its native frame and traffic lights. The
-        // frontend asks `isDecorated()` instead of guessing the platform, so a
-        // frame that could not be removed simply keeps the native title bar.
+        // working. macOS overlays the webview while retaining its native frame
+        // and traffic lights. The frontend reads the actual frame presentation,
+        // so failed frame removal keeps native controls without duplicating them.
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(any(windows, target_os = "linux"))]

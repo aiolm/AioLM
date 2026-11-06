@@ -83,7 +83,7 @@
 .app-skip-link { position: fixed; top: 8px; left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: var(--ui-on-accent); background: var(--ui-accent-solid); border-radius: var(--ui-radius-control); }
 .app-skip-link:focus { transform: none; }
 .aiolm-menu-trigger { display: none; }
-.aiolm-drawer { border: 0; padding: 0; margin: 0; height: 100dvh; max-height: 100dvh; width: min(304px,85vw); max-width: 85vw; background: var(--ui-sidebar); color: var(--ui-rail-ink); box-shadow: var(--ui-elev-2); }
+.aiolm-drawer { border: 0; padding: 0; margin: 0; height: calc(100dvh - var(--app-window-chrome-height, 0px)); max-height: calc(100dvh - var(--app-window-chrome-height, 0px)); width: min(304px,85vw); max-width: 85vw; background: var(--ui-sidebar); background-image: var(--ui-rail-gradient); color: var(--ui-rail-ink); box-shadow: var(--ui-elev-2); }
 .aiolm-drawer::backdrop { background: var(--ui-overlay); }
 .aiolm-drawer-sheet { display: flex; flex-direction: column; height: 100%; }
 .aiolm-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding-right: 16px; color: var(--ui-rail-ink); }
@@ -100,21 +100,29 @@
 .app-activity-notice { color: var(--ui-muted); }
 .app-activity-content { max-height: calc(var(--activity-max-height) - 33px); overflow-y: auto; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); }
 
-/* Frameless window (Windows and Linux desktop). The frame wraps every surface;
-   without a title bar the body fills the window exactly as before. The bar takes
-   the rail tone so it reads as one frame with the sidebar, with caption buttons
-   at the conventional 46px width and the platform's red close hover. */
+/* One quiet frame above every surface. macOS keeps native traffic lights over
+   the reserved leading space; frameless captions keep their OS-sized targets. */
 .app-window { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .app-window-body { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; }
-.app-titlebar { display: flex; align-items: stretch; flex-shrink: 0; height: 32px; background: var(--ui-sidebar); color: var(--ui-rail-ink); user-select: none; -webkit-user-select: none; }
-.app-titlebar-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-inline: 12px; font-size: var(--ui-text-caption); font-weight: 600; pointer-events: none; }
+:root[data-window-chrome="custom"] { --app-window-chrome-height: 32px; }
+/* The portal host belongs to the active top-layer dialog. Fixed positioning
+   escapes its scrollport; the reserved inset keeps fields below the strip. */
+:root[data-window-chrome="custom"] dialog { inset-block-start: 32px; }
+.app-titlebar-slot { flex: 0 0 32px; height: 32px; }
+.app-titlebar-host { position: fixed; inset: 0 0 auto; height: 32px; z-index: 100; }
+.app-titlebar { display: flex; align-items: stretch; flex: 0 0 32px; height: 32px; min-width: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-ink); user-select: none; -webkit-user-select: none; }
+.app-titlebar[data-chrome="overlay"] { justify-content: center; padding-inline: 80px; }
+.app-titlebar-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-inline: 12px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 650; line-height: 1; letter-spacing: -.01em; pointer-events: none; }
+.app-titlebar-brand span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .app-titlebar-brand .aiolm-mark { width: 16px; height: 16px; }
-.app-titlebar-controls { display: flex; margin-inline-start: auto; }
-.app-titlebar-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-rail-ink); }
-.app-titlebar-button:hover { background: var(--ui-nav-hover); }
-.app-titlebar-button:focus-visible { outline-color: var(--ui-rail-focus); outline-offset: -2px; }
-.app-titlebar-button--close:hover, .app-titlebar-button--close:focus-visible { background: #C42B1C; color: #FFFFFF; }
+.app-titlebar-controls { display: flex; flex: 0 0 auto; margin-inline-start: auto; }
+.app-titlebar-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-muted); }
+.app-titlebar-button:hover { background: var(--ui-field-fill-hover); color: var(--ui-ink); }
+.app-titlebar-button:active { background: var(--ui-nav-active); color: var(--ui-ink); }
+.app-titlebar-button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -3px; }
+.app-titlebar-button--close:hover, .app-titlebar-button--close:focus-visible { background: var(--tone-error-action-fill); color: var(--tone-error-action-ink); }
+.app-titlebar-button--close:active { background: var(--tone-error-action-fill-hover); color: var(--tone-error-action-ink); }
 @media (forced-colors: active) {
   .app-titlebar { border-bottom: 1px solid CanvasText; }
-  .app-titlebar-button:hover, .app-titlebar-button--close:hover { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .app-titlebar-button:is(:hover, :active, :focus-visible), .app-titlebar-button--close:is(:hover, :active, :focus-visible) { background: Highlight; color: HighlightText; forced-color-adjust: none; }
 }

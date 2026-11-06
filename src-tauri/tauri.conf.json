@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "AioLM",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "width": 1280,
         "height": 800,
         "minWidth": 360,

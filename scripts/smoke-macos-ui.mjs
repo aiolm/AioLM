@@ -85,7 +85,10 @@ try {
   await launch();
   await waitFor(() => script("return !!document.querySelector('.setup-form');"), "fresh onboarding");
   assert.equal(await script("return document.documentElement.lang;"), "en");
-  assert.equal(await script("return !!document.querySelector('.app-titlebar');"), false, "macOS keeps its native frame");
+  assert.equal(await request("POST", `/session/${session}/execute/async`, {
+    script: "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('plugin:window|is_decorated', { label: 'main' }).then(done);", args: [],
+  }), true, "macOS retains its native window controls");
+  assert.equal(await script("return !!document.querySelector('.app-titlebar button');"), false, "native controls are not duplicated in the webview");
   await click(".setup-form button[type=submit]");
   await click("label:has(input[name=setup-theme][value=dark])");
   await click(".setup-form button[type=submit]");
