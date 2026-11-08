@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { readDocumentBinding } from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import { activeProjectId, PROJECTS_CHANGED_EVENT, readProjects, type ProjectPreset } from "../projects/projectStore";
+import { activeProjectId, PROJECT_APPLIED_EVENT, PROJECTS_CHANGED_EVENT, readProjects, type ProjectPreset } from "../projects/projectStore";
 import type { ChatWorkspace } from "./chatHistory";
 import type { DocumentAttachment } from "./chatUtils";
 import { projectChatBindingCopy, projectDocumentBindingError } from "./projectChatBindingCopy";
@@ -45,6 +45,9 @@ export function useProjectChatBinding(options: Options) {
   const owned = useRef<DocumentAttachment[]>([]);
   const toolContext = useRef('');
   const requestedDefaults = useRef<{ id: string; updatedAt: number } | null>(null);
+  // Library edits are not application. Retain the last applied snapshot until
+  // another explicit Apply (or deactivation), including across busy turns.
+  const appliedProject = useRef<ProjectPreset | null | undefined>(undefined);
   const [state, setState] = useState<BindingState>(() => {
     try {
       const id = activeProjectId();
@@ -61,23 +64,27 @@ export function useProjectChatBinding(options: Options) {
   useEffect(() => {
     let mounted = true;
     const load = (event?: Event) => {
-      const ownGeneration = ++generation.current;
       const current = latest.current;
+      let project: ProjectPreset | null | undefined;
+      try {
+        const id = activeProjectId();
+        if (event?.type === PROJECTS_CHANGED_EVENT && id !== null) return;
+        if (appliedProject.current === undefined || event || appliedProject.current?.id !== id) {
+          appliedProject.current = id ? readProjects().find(item => item.id === id) ?? null : null;
+        }
+        project = appliedProject.current;
+      } catch {
+        setState({ projectName: null, loading: false, error: projectChatBindingCopy[current.locale].projectReadFailed });
+        return;
+      }
+      const ownGeneration = ++generation.current;
       const threadId = current.workspace.activeThreadId;
       const revision = current.composerRevision;
       const isCurrent = () => mounted && generation.current === ownGeneration
         && latest.current.workspace.activeThreadId === threadId
         && latest.current.composerRevision === revision
         && latest.current.phase === "idle" && !latest.current.hasPendingTurn;
-      let project: ProjectPreset | null | undefined;
-      try {
-        const id = activeProjectId();
-        project = id ? readProjects().find(item => item.id === id) : null;
-      } catch {
-        setState({ projectName: null, loading: false, error: projectChatBindingCopy[current.locale].projectReadFailed });
-        return;
-      }
-      if (event?.type === PROJECTS_CHANGED_EVENT) {
+      if (event?.type === PROJECT_APPLIED_EVENT) {
         requestedDefaults.current = project ? { id: project.id, updatedAt: project.updatedAt } : null;
       }
       if (current.phase !== "idle" || current.hasPendingTurn) {
@@ -105,8 +112,7 @@ export function useProjectChatBinding(options: Options) {
       current.setWorkspace(workspace => {
         if (!isCurrent() || workspace.activeThreadId !== threadId) return workspace;
         const thread = workspace.threads.find(thread => thread.id === threadId);
-        if (!thread || (!explicit && thread.projectBinding?.id === binding.id
-          && thread.projectBinding.updatedAt === binding.updatedAt)) return workspace;
+        if (!thread || (!explicit && thread.projectBinding?.id === binding.id)) return workspace;
         // Legacy saved conversations already own their instructions. Applying
         // a project explicitly can replace them; reopening Chat cannot.
         const applyPrompt = explicit || !!thread.projectBinding || (!thread.messages.length && !thread.systemPrompt);
@@ -155,11 +161,13 @@ export function useProjectChatBinding(options: Options) {
     reload.current = load;
     load();
     window.addEventListener(PROJECTS_CHANGED_EVENT, load);
+    window.addEventListener(PROJECT_APPLIED_EVENT, load);
     return () => {
       mounted = false;
       generation.current += 1;
       if (reload.current === load) reload.current = null;
       window.removeEventListener(PROJECTS_CHANGED_EVENT, load);
+      window.removeEventListener(PROJECT_APPLIED_EVENT, load);
     };
   }, [options.workspace.activeThreadId, options.composerRevision, options.phase, options.hasPendingTurn]);
 

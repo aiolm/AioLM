@@ -10,6 +10,7 @@
    actions are one reading order whether beside or above the results. */
 .performance-setup { display: grid; min-width: 0; }
 .performance-setup-section { min-width: 0; padding: 16px; border-bottom: 1px solid var(--ui-border); }
+.performance-setup-section:last-child { border-bottom: 0; }
 .performance-target { display: grid; gap: 12px; }
 .performance-target-identity { display: grid; gap: 4px; min-width: 0; }
 .performance-target-label { color: var(--ui-muted); font-size: var(--ui-text-support); }
@@ -69,10 +70,9 @@
 .performance-chip > input:focus-visible + span { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 .performance-chip > input:disabled { cursor: not-allowed; }
 .performance-chip > input:disabled + span { opacity: .6; }
-/* Status takes the line and the run/cancel action keeps its own width at the
-   end, wrapping below in the 320px column instead of stretching across a
-   full-width setup card. */
-.performance-run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; min-width: 0; padding: 16px; }
+/* Primary execution and admission stay above setup, so long model/runtime
+   labels cannot push the Run action or its blocking reason below the fold. */
+.performance-run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; min-width: 0; margin-bottom: 16px; padding: 16px; }
 .performance-run-status { display: grid; flex: 1 1 14rem; gap: 4px; min-width: 0; }
 .performance-run-bar > button { flex: 0 0 auto; margin-inline-start: auto; }
 .performance-run-summary { color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
@@ -83,7 +83,7 @@
 .performance-progress span { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ui-muted); }
 .performance-hint { margin: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: anywhere; }
 .performance-validation { color: var(--ui-danger); font-size: var(--ui-text-support); line-height: 1.5; }
-.performance-notice { min-width: 0; }
+.performance-notice { min-width: 0; margin-bottom: 16px; }
 .performance-error .app-feedback-message { white-space: pre-wrap; }
 .performance-results-toolbar { display: grid; gap: 12px; min-width: 0; }
 .performance-history-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; min-width: 0; }

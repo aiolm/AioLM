@@ -10,7 +10,7 @@ import type {
   LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
-  PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress,
+  PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress, PerformanceBenchmarkAdmission,
 } from "./types.ts";
 
 export const getConfig = () => invoke<AppConfig>("get_config");
@@ -119,6 +119,8 @@ export const startAnthropicGateway = () => invoke<string>("start_anthropic_gatew
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");
 
+export const performanceBenchAdmission = (cfg: AppConfig, request: PerformanceBenchmarkRequest) =>
+  invoke<PerformanceBenchmarkAdmission>("performance_bench_admission", { cfg, request });
 export const runPerformanceBench = (cfg: AppConfig, request: PerformanceBenchmarkRequest) =>
   invoke<PerformanceBenchmarkResult>("run_performance_bench", { cfg, request });
 export const benchCancel = () => invoke<void>("bench_cancel");

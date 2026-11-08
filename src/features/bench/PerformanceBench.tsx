@@ -10,7 +10,7 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import StableLabel from '../../shared/ui/StableLabel';
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import { providerOf } from '../../shared/api/providers';
 import type { AppStore } from "../../shared/state/store";
@@ -133,6 +133,7 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
 
 export default function PerformanceBench({ store, active = true }: { store: AppStore; active?: boolean }) {
   const { locale } = useI18n();
+  const setupFormId = useId();
   const copy = benchmarkCopy(locale);
   const explorerCopy = benchmarkExplorerCopy(locale);
   const profileImport = useBenchmarkProfileImport(store);
@@ -177,6 +178,8 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const [copying, setCopying] = useState(false);
   const [device, setDevice] = useState<api.DeviceReport | null>(null);
   const [runTarget, setRunTarget] = useState<ReturnType<typeof benchmarkTarget> | null>(null);
+  const [admissionReply, setAdmissionReply] = useState<{ key: string; value: api.PerformanceBenchmarkAdmission } | null>(null);
+  const [admissionRevision, setAdmissionRevision] = useState(0);
   const rowsRef = useRef<api.PerformanceBenchmarkRow[]>([]);
   const activeRef = useRef(false);
   const cancelRequestedRef = useRef(false);
@@ -206,7 +209,12 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const setupGaps = targetConfig
     ? runSetupGaps({ activeModel: model, activeProvider: targetConfig.active_provider, activeRuntime: targetConfig.active_runtime, activeBackend: targetConfig.active_backend, activeBuild: targetConfig.active_build })
     : [];
-  const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
+  const admissionKey = targetConfig ? JSON.stringify({ revision: admissionRevision, cfg: targetConfig, request: {
+    run_id: 'admission', method: { id: 'openai-chat-serving', version: 2 }, context_profile: corpus,
+    prompt_bytes: promptBytes, max_output_tokens: outputTokens, concurrencies, repetitions, warmup, request_usage: true,
+  } }) : '';
+  const admission = admissionReply?.key === admissionKey ? admissionReply.value : null;
+  const canRun = admission?.status === 'supported' && !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptBytes.length * concurrencies.length * repetitions;
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
   const localImportUnavailable = selectedRecord?.schemaVersion === 2 && !selectedRecord.result.provenance;
@@ -235,6 +243,20 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     return () => { copyMountedRef.current = false; copyRequestRef.current += 1; };
   }, []);
 
+  useEffect(() => {
+    if (!admissionKey || !active || busy) return;
+    setAdmissionReply(null);
+    let disposed = false;
+    const { cfg, request } = JSON.parse(admissionKey) as { cfg: api.AppConfig; request: api.PerformanceBenchmarkRequest };
+    void api.performanceBenchAdmission(cfg, request).then(value => {
+      if (!disposed) setAdmissionReply({ key: admissionKey, value });
+    }).catch(cause => {
+      if (!disposed) setAdmissionReply({ key: admissionKey, value: {
+        status: 'unknown', reason: 'configuration', detail: cause instanceof Error ? cause.message : String(cause),
+      } });
+    });
+    return () => { disposed = true; };
+  }, [admissionKey, active, busy]);
   useEffect(() => {
     if (!targetApplication && store.cfg) setTargetApplication(benchmarkTarget(store.cfg).application);
   }, [store.cfg, targetApplication]);
@@ -316,6 +338,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     registerTask({ id: TASK_ID, kind: "benchmark", label: copy.title, phase: copy.starting, received: 0, total, interruptible: true, cancel });
     let unlisten: (() => void) | undefined;
     let finalResult: api.PerformanceBenchmarkResult;
+    let executionReturned = false;
     try {
       unlisten = await api.onPerformanceBenchmarkProgress((event) => {
         if (event.run_id !== runId || !activeRef.current) return;
@@ -332,6 +355,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
         finalResult = { run_id: runId, rows: [], status: "cancelled", args: [] };
       } else {
         finalResult = await api.runPerformanceBench(cfg, request);
+        executionReturned = true;
         if (!finalResult.rows.length && rowsRef.current.length) finalResult = { ...finalResult, rows: rowsRef.current };
       }
     } catch (caught) {
@@ -343,14 +367,18 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     }
     finalResult = withoutCancelledTrials(finalResult);
     const saved: PerformanceBenchmarkRecord = { schemaVersion: 2, id: runId, createdAt, model: cfg.active_model, request, result: finalResult };
+    // A rejected admission is not a failed measurement. Genuine returned
+    // failures (including zero-row failures after start) remain recordable.
+    const unstarted = !executionReturned && !finalResult.rows.length;
     const emptyCancellation = finalResult.status === 'cancelled' && !finalResult.rows.length;
-    setRows(finalResult.rows); setResult(emptyCancellation ? null : finalResult); setRecord(emptyCancellation ? null : saved);
+    const noRecord = emptyCancellation || unstarted;
+    setRows(finalResult.rows); setResult(noRecord ? null : finalResult); setRecord(noRecord ? null : saved);
     historyRevisionRef.current++;
     setHistoryLoading(false);
     try {
-      const page = emptyCancellation ? await loadBenchmarkHistoryPage() : await rememberBenchmarkResult(saved);
+      const page = noRecord ? await loadBenchmarkHistoryPage() : await rememberBenchmarkResult(saved);
       setHistory(page.records); setHistoryOffset(page.next_offset);
-    } catch { if (emptyCancellation) setHistoryError(true); else setStorageError(true); }
+    } catch { if (noRecord) setHistoryError(true); else setStorageError(true); }
     activeRef.current = false;
     setPhase("idle");
     if (finalResult.status === "failed") setError(finalResult.message ?? copy.failed);
@@ -427,14 +455,39 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       <div><h1 className="app-page-title">{copy.title}</h1><p className="app-page-description">{copy.description}</p></div>
       <BenchmarkExplorerActions listenerReady={profileImport.listenerReady} />
     </header>
+    <div className="app-card performance-run-bar">
+      <div className="performance-run-status">
+        {busy
+          ? <section className="performance-progress" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><ProgressBar label={copy.totalTests} value={(progress?.completed ?? 0) / Math.max(1, progress?.total ?? total) * 100} /></section>
+          : <p className="performance-run-summary">{copy.totalTests}: <strong>{total}</strong></p>}
+        <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.servingValidation}</p>
+      </div>
+      {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</LocalTaskCancelButton> : <button type="submit" form={setupFormId} className="app-button app-button--primary" disabled={!canRun}>{copy.run}</button>}
+    </div>
     {profileImport.importDialog}
     <ActivePanelContext.Provider value={true}><PanelFeedback>
       {profileImport.notice && <FeedbackBanner tone={profileImport.notice.error ? 'error' : 'success'} onDismiss={profileImport.dismissNotice}>{profileImport.notice.text}</FeedbackBanner>}
     </PanelFeedback></ActivePanelContext.Provider>
+    {!setupGaps.length && !busy && admission?.status !== 'supported' && <FeedbackBanner tone={admission ? 'warning' : 'info'} className="performance-notice"
+      action={modelSettings ? { label: copy.admissionConfigure, onClick: () => editModel('runtime') }
+        : admission?.status === 'unknown' ? { label: modelCopy.retry, onClick: () => setAdmissionRevision(value => value + 1) } : undefined}>
+      <span role="status">{!admission ? copy.admissionPending : admission.status === 'unknown' ? copy.admissionUnknown
+        : admission.reason === 'fixed_output' ? copy.admissionFixedOutput
+        : admission.reason === 'stream_usage' ? copy.admissionUsage : copy.admissionRequest}</span>
+      {admission?.detail && <details><summary>{copy.details}</summary>{normalizeDisplayText(admission.detail)}</details>}
+    </FeedbackBanner>}
+    {setupGaps.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice"
+      action={modelSettings ? { label: setupGaps.includes('runtime') ? runCopy.needRuntimeAction : runCopy.needModelAction, onClick: () => editModel(setupGaps.includes('runtime') ? 'runtime' : 'model') } : undefined}>
+      {setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ')}
+    </FeedbackBanner>}
+    {serverRunning && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: copy.stopServer, disabled: store.busy, onClick: () => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught))) }}>{copy.stopHint}</FeedbackBanner>}
+    {blockingSessions.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: modelCopy.stopSessions, disabled: stoppingSessions, onClick: () => void stopSessions() }}>{`${modelCopy.sessionsHint} ${blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}`}</FeedbackBanner>}
+    {sessionsError && <FeedbackBanner tone="error" className="performance-notice" action={{ label: modelCopy.retry, onClick: () => void refreshSessions().catch(() => undefined) }}>{modelCopy.sessionsError}</FeedbackBanner>}
+    {otherBenchmark && <FeedbackBanner tone="warning" className="performance-notice">{copy.activeElsewhere}</FeedbackBanner>}
     <div className="performance-workspace">
       <div className="performance-setup-column">
         <h2 id="performance-setup-title" className="performance-section-title">{copy.setupTitle}</h2>
-        <form className="app-card app-card--flush performance-setup" aria-labelledby="performance-setup-title" onSubmit={(event) => { event.preventDefault(); void run(); }}>
+        <form id={setupFormId} className="app-card app-card--flush performance-setup" aria-labelledby="performance-setup-title" onSubmit={(event) => { event.preventDefault(); void run(); }}>
           <div className="performance-setup-section performance-target">
             <div className="performance-target-identity"><span className="performance-target-label">{copy.model}</span>
               <strong className="performance-target-name" title={normalizeDisplayPath(displayedModel.model)}><ModelIcon model={displayedModel.model} /><span><ModelName model={displayedModel.model} empty={copy.noModel} /></span></strong>
@@ -473,24 +526,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
               </details>
             </div>
           </fieldset></div>
-          <div className="performance-run-bar">
-            <div className="performance-run-status">
-              {busy
-                ? <section className="performance-progress" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><ProgressBar label={copy.totalTests} value={(progress?.completed ?? 0) / Math.max(1, progress?.total ?? total) * 100} /></section>
-                : <p className="performance-run-summary">{copy.totalTests}: <strong>{total}</strong></p>}
-              <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.servingValidation}</p>
-            </div>
-            {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</LocalTaskCancelButton> : <button type="submit" className="app-button app-button--primary" disabled={!canRun}>{copy.run}</button>}
-          </div>
         </form>
-        {setupGaps.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice"
-          action={modelSettings ? { label: setupGaps.includes('runtime') ? runCopy.needRuntimeAction : runCopy.needModelAction, onClick: () => editModel(setupGaps.includes('runtime') ? 'runtime' : 'model') } : undefined}>
-          {setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ')}
-        </FeedbackBanner>}
-        {serverRunning && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: copy.stopServer, disabled: store.busy, onClick: () => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught))) }}>{copy.stopHint}</FeedbackBanner>}
-        {blockingSessions.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: modelCopy.stopSessions, disabled: stoppingSessions, onClick: () => void stopSessions() }}>{`${modelCopy.sessionsHint} ${blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}`}</FeedbackBanner>}
-        {sessionsError && <FeedbackBanner tone="error" className="performance-notice" action={{ label: modelCopy.retry, onClick: () => void refreshSessions().catch(() => undefined) }}>{modelCopy.sessionsError}</FeedbackBanner>}
-        {otherBenchmark && <FeedbackBanner tone="warning" className="performance-notice">{copy.activeElsewhere}</FeedbackBanner>}
       </div>
       <div className="performance-results-column">
         <section className="performance-results-area" aria-labelledby="performance-results-title">

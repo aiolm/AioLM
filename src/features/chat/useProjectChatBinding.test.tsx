@@ -261,6 +261,31 @@ describe("active project chat binding", () => {
     expect(result.current.documents).toHaveLength(1);
   });
 
+  it('preserves thread overrides on library saves, imports and unrelated deletion until explicit Apply', async () => {
+    const selected = project('active', 0);
+    const unrelated = project('unrelated', 0);
+    writeProjects([selected, unrelated]); setActiveProjectId(selected.id);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    act(() => {
+      result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
+        thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'My thread instructions' } : thread) }));
+      result.current.setTools(['manual-tool']);
+    });
+    const saved = { ...selected, systemPrompt: 'Saved for later', toolIds: ['saved-tool'], updatedAt: selected.updatedAt + 1 };
+    const imported = project('imported', 0);
+    for (const library of [[selected], [selected, imported], [saved, imported]]) {
+      act(() => writeProjects(library));
+      await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+      expect(result.current.workspace.threads[0].systemPrompt).toBe('My thread instructions');
+      expect(result.current.tools).toEqual(['manual-tool']);
+    }
+    act(() => setActiveProjectId(saved.id));
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    expect(result.current.workspace.threads[0].systemPrompt).toBe('Saved for later');
+    expect(result.current.tools).toEqual(['saved-tool']);
+  });
+
   it('honors explicit project application and preserves later explicit empty instructions', async () => {
     const selected = project('existing');
     writeProjects([selected]);
@@ -287,6 +312,7 @@ describe("active project chat binding", () => {
       thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'Conversation instructions after applying', messages: [{ role: 'user', content: 'Saved request' }] } : thread) })));
     const saved = structuredClone(initial.result.current.workspace);
     initial.unmount();
+    writeProjects([{ ...selected, systemPrompt: 'New library defaults, not applied', updatedAt: selected.updatedAt + 1 }]);
     const reopened = setup([], {}, 'en', saved);
     await waitFor(() => expect(reopened.result.current.documentsLoading).toBe(false));
     expect(reopened.result.current.workspace.threads[0].systemPrompt).toBe('Conversation instructions after applying');

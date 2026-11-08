@@ -30,7 +30,7 @@ export function useChatMcpTools() {
   const [mcpError, setMcpError] = useState<string | null>(null);
   const catalogLoaded = useRef(false);
   const selectionExplicit = useRef(false);
-  /** Counts explicit selection writes (user or project); discovery's own pruning does not count. */
+  /** Counts explicit selection writes (user or project); discovery does not count. */
   const selectionRevision = useRef(0);
   const pendingRefresh = useRef(false);
   const generation = useRef(0);
@@ -59,8 +59,8 @@ export function useChatMcpTools() {
       setMcpCatalog(entries);
       const keys = entries.map((entry) => `${entry.serverId}:${entry.tool.name}`);
       const firstCatalog = !catalogLoaded.current;
-      // Loading a catalog must not broaden a project's or the user's tool selection.
-      writeSelection(current => firstCatalog && !selectionExplicit.current ? keys : current.filter(key => keys.includes(key)));
+      // Discovery resolves stored choices; it must never remove or broaden explicit selections.
+      writeSelection(current => firstCatalog && !selectionExplicit.current ? keys : current);
       catalogLoaded.current = true;
       setMcpCatalogLoaded(true);
       setMcpError(null);

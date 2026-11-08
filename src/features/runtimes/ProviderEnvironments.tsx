@@ -12,6 +12,12 @@ import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInven
 import { buildPhaseLabelKey } from '../../shared/runtime/runtimeUtils';
 import { adapterCatalogCopy } from '../../shared/i18n/adapterCatalogCopy';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
+import { shouldConfirmDestructive } from '../../shared/config/preferences';
+import ConfirmDialog from '../../shared/ui/ConfirmDialog';
+import { providerRuntimeReferences } from './runtimeReferences';
+import { RuntimeRemovalTargets } from './RuntimeRemovalNotice';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
 
 const TASK_ID = 'provider-environment-operation';
 const CANCELLATION_MESSAGES = new Set([
@@ -22,13 +28,17 @@ const CANCELLATION_MESSAGES = new Set([
   'portable runtime operation cancelled',
 ]);
 
-export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, resourcesInUse = false, onBusyChange }: { active: boolean; provider?: api.ProviderId; revision?: number; resourcesInUse?: boolean; onBusyChange?: (busy: boolean) => void }) {
+export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange }: { active: boolean; provider?: api.ProviderId; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void }) {
   const { locale, t } = useI18n(); const copy = providerCopy[locale];
   const [catalog, setCatalog] = useState<api.ProviderDescription[]>([]);
   const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
   const [python, setPython] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [result, setResult] = useState('');
-  const lockReason = resourcesInUse ? t('ui.stopSessionsBeforeRuntime') : undefined;
+  const [pendingRemoval, setPendingRemoval] = useState<api.RuntimeInstance | null>(null);
+  const removalCopy = runtimeAdapterCopy[locale];
+  const removalReferences = pendingRemoval ? providerRuntimeReferences(cfg, pendingRemoval.provider, pendingRemoval.id) : [];
+  const lockReason = resourcesInUse ? t('ui.stopSessionsBeforeRuntime') : operationBusy ? runtimeAutoCopy[locale].operationLocked : undefined;
+  const blocked = resourcesInUse || operationBusy;
   const operationLock = useRef<{ cancelRequested: boolean } | null>(null);
   const [cancellable, setCancellable] = useState(false);
   const [progress, setProgress] = useState(''); const [revision, setRevision] = useState(0);
@@ -74,7 +84,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     }
   };
   const run = async (label: string, operation: () => Promise<unknown>, options: { cancellable?: boolean; notifyDownload?: boolean; inventory?: boolean } = {}) => {
-    if (operationLock.current || resourcesInUse) return;
+    if (operationLock.current || blocked) return;
     const currentOperation = { cancelRequested: false };
     operationLock.current = currentOperation;
     setBusy(true); setCancellable(options.cancellable ?? false); setError(''); setProgress(''); setResult('');
@@ -100,6 +110,15 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       const imported = await api.providerPortableImport();
       setResult(`${t('ui.importProviderRuntimeBundle')} · ${providerDisplayName(imported.provider)} · ${imported.id}`);
     }, { cancellable: true, inventory: true });
+  const removeRuntime = (runtime: api.RuntimeInstance) => run(`${providerDisplayName(runtime.provider)} · ${copy.remove}`, async () => {
+    try { await api.providerRemove(runtime.provider, runtime.id); }
+    finally { setPendingRemoval(null); }
+  }, { inventory: true });
+  const requestRemoval = (runtime: api.RuntimeInstance) => {
+    if (operationLock.current || blocked) return;
+    if (shouldConfirmDestructive()) setPendingRemoval(runtime);
+    else void removeRuntime(runtime);
+  };
   const headingId = useId();
   const managed = !selectedProvider || !isExternalProvider(selectedProvider);
   return <section className="app-card provider-env" aria-labelledby={headingId}>
@@ -118,8 +137,8 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
           {external && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
         </div>
         {!external && <div className="app-page-actions">
-          <button type="button" className="app-button app-button--primary" disabled={busy || resourcesInUse || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
-          <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
+          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
+          <button type="button" className="app-button app-button--secondary" disabled={busy || blocked || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
         </div>}
       </div>
       <div className="provider-runtime-list" role="group" aria-label={`${providerDisplayName(provider.id)} · ${copy.runtime}`}>
@@ -130,8 +149,8 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
           {runtime.problems.length > 0 && <small>{runtime.problems.join('; ')}</small>}
         </span>
         <div className="app-page-actions">
-          {!external && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}
-          <button type="button" className="app-button app-button--ghost app-button--danger app-button--sm" disabled={busy || resourcesInUse} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.remove}`, () => api.providerRemove(provider.id, runtime.id), { inventory: true })}>{copy.remove}</button>
+          {!external && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || blocked} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}
+          <button type="button" className="app-button app-button--ghost app-button--danger app-button--sm" disabled={busy || blocked} title={lockReason} onClick={() => requestRemoval(runtime)}>{copy.remove}</button>
         </div>
       </div>)}
       {providerRuntimes.length === 0 && <p className="app-section-hint">{copy.noRuntimes}</p>}
@@ -139,7 +158,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     </div>;
     })}
     {managed && <div className="app-page-actions provider-env__footer">
-      <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableImport(t('ui.importProviderRuntimeBundle'))}>{t('ui.importProviderRuntimeBundle')}</button>
+      <button type="button" className="app-button app-button--secondary" disabled={busy || blocked} title={lockReason} onClick={() => runPortableImport(t('ui.importProviderRuntimeBundle'))}>{t('ui.importProviderRuntimeBundle')}</button>
     </div>}
     {(cancellable || progress || result) && <div className="provider-env__status">
       {progress && <pre role="status" className="provider-env__progress">{progress}</pre>}
@@ -147,5 +166,18 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       {cancellable && <LocalTaskCancelButton taskId={TASK_ID} onClick={() => void cancelOperation()} className="app-button app-button--danger">{t('common.cancel')}</LocalTaskCancelButton>}
     </div>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+    <ConfirmDialog open={pendingRemoval !== null} title={t('ui.removeRuntimeTitle')} confirmLabel={copy.remove}
+      busy={busy} confirmDisabled={blocked} onConfirm={() => { if (pendingRemoval) void removeRuntime(pendingRemoval); }}
+      onCancel={() => { if (!busy) setPendingRemoval(null); }}
+      description={pendingRemoval ? <div className="runtime-removal-notice">
+        <p>{normalizeDisplayText(`${providerDisplayName(pendingRemoval.provider)} · ${runtimeInstanceLabel(pendingRemoval, locale)}`)}</p>
+        <p>{pendingRemoval.installation === 'managed' ? removalCopy.removeManaged : removalCopy.removeExternal}</p>
+        <p className="app-section-hint">{removalCopy.removeSavedSelections}</p>
+        {removalReferences.length > 0 && <>
+          <p className="app-section-hint">{removalCopy.removeAffected}</p>
+          <RuntimeRemovalTargets t={t} references={removalReferences} />
+        </>}
+        {lockReason && <p>{lockReason}</p>}
+      </div> : ''} />
   </section>;
 }

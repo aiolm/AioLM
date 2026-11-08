@@ -17,6 +17,10 @@ export const runtimeAutoCopy = {
     ready: '연결이 확인되었습니다.', saved: '이 모델의 텍스트 응답과 스트리밍을 확인하고 연결 정보를 앱에 저장했습니다. 별도 설정 파일을 만들 필요가 없습니다.',
     limits: '이 검사는 이미지·음성·영상·도구 호출의 지원이나 내용 품질을 확인하지 않습니다.', details: '확인 정보', selectAgain: '다른 항목 연결',
     progress: '연결 진행 단계', stepFind: '찾기 또는 폴더 선택', stepCheck: '후보 검사', stepModel: '모델 지정', stepVerify: '실제 연결 검증', stepDone: '완료',
+    sessionsLocked: '모델 세션이 실행 중이거나 시작·중지 중이므로 엔진 연결이 잠겨 있습니다.',
+    sessionsLockedHint: '라이브러리에서 해당 세션을 중지하거나 시작을 취소한 뒤, 정리가 끝나면 다시 시도하세요.',
+    defaultSession: '기본 세션', openLibrary: '라이브러리 열기',
+    operationLocked: '다른 엔진 작업이 진행 중입니다. 완료될 때까지 기다리거나 작업 영역에서 취소한 뒤, 정리가 끝나면 다시 시도하세요.',
   },
   en: {
     title: 'Connect an external inference engine',
@@ -34,6 +38,10 @@ export const runtimeAutoCopy = {
     ready: 'Connection verified.', saved: 'Text responses and streaming worked with this model. Connection details were saved in the app; you do not need to create a settings file.',
     limits: 'This check does not verify image, audio, video, tool use, or response quality.', details: 'Verification details', selectAgain: 'Connect another item',
     progress: 'Connection progress', stepFind: 'Find or choose a folder', stepCheck: 'Inspect a candidate', stepModel: 'Select the model', stepVerify: 'Verify the connection', stepDone: 'done',
+    sessionsLocked: 'Model sessions are running, starting, or stopping, so engine connection is locked.',
+    sessionsLockedHint: 'Open Library to stop or cancel the affected sessions, then retry after cleanup finishes.',
+    defaultSession: 'Default session', openLibrary: 'Open Library',
+    operationLocked: 'Another engine operation is in progress. Wait for it to finish or cancel it in the activity area, then retry after cleanup finishes.',
   },
   ja: {
     title: '外部推論エンジンに接続',
@@ -51,6 +59,10 @@ export const runtimeAutoCopy = {
     ready: '接続を確認しました。', saved: 'このモデルのテキスト応答とストリーミングを確認し、接続情報をアプリに保存しました。設定ファイルを作る必要はありません。',
     limits: 'この検査は画像・音声・動画・ツール利用の対応や応答の品質を確認するものではありません。', details: '確認情報', selectAgain: '別の項目に接続',
     progress: '接続の進行状況', stepFind: '検索またはフォルダー選択', stepCheck: '候補を検査', stepModel: 'モデルを指定', stepVerify: '実際の接続を検証', stepDone: '完了',
+    sessionsLocked: 'モデルセッションが実行中、起動中、または停止中のため、エンジン接続はロックされています。',
+    sessionsLockedHint: 'ライブラリで該当セッションを停止するか起動をキャンセルし、後処理が終わってから再試行してください。',
+    defaultSession: '既定のセッション', openLibrary: 'ライブラリを開く',
+    operationLocked: '別のエンジン操作が進行中です。完了を待つか作業領域でキャンセルし、後処理が終わってから再試行してください。',
   },
   zh: {
     title: '连接外部推理引擎',
@@ -68,5 +80,9 @@ export const runtimeAutoCopy = {
     ready: '连接已验证。', saved: '已验证此模型的文本响应和流式传输，并将连接信息保存在应用中。无需创建设置文件。',
     limits: '此检查不验证图像、音频、视频、工具调用的支持情况或回答质量。', details: '验证详情', selectAgain: '连接其他项目',
     progress: '连接进度', stepFind: '查找或选择文件夹', stepCheck: '检查候选项', stepModel: '指定模型', stepVerify: '验证实际连接', stepDone: '已完成',
+    sessionsLocked: '模型会话正在运行、启动或停止，因此引擎连接已锁定。',
+    sessionsLockedHint: '请打开模型库停止相关会话或取消启动，等待清理完成后重试。',
+    defaultSession: '默认会话', openLibrary: '打开模型库',
+    operationLocked: '另一个引擎操作正在进行。请等待完成或在任务区域中取消，等待清理完成后重试。',
   },
 } satisfies Record<Locale, Record<string, string>>;

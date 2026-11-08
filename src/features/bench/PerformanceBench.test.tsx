@@ -16,6 +16,7 @@ vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi
 
 vi.mock("../../shared/api/index", () => ({
   deviceProfile: vi.fn(), onPerformanceBenchmarkProgress: vi.fn(), runPerformanceBench: vi.fn(), benchCancel: vi.fn(),
+  performanceBenchAdmission: vi.fn(),
   sessionList: vi.fn(async () => []), normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []), sessionStop: vi.fn(async () => undefined),
   sessionSummaryList: vi.fn(async () => []),
   isNativeRuntimeAvailable: () => false,
@@ -92,6 +93,7 @@ beforeEach(() => {
   mocked.deviceProfile.mockResolvedValue(null as unknown as api.DeviceReport);
   mocked.onPerformanceBenchmarkProgress.mockImplementation(async (callback) => { emit = callback; return unlisten; });
   mocked.benchCancel.mockResolvedValue(undefined);
+  mocked.performanceBenchAdmission.mockResolvedValue({ status: 'supported', reason: 'ready' });
   mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => result(request.run_id, [row()]));
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -100,6 +102,7 @@ describe("Performance benchmark workflow", () => {
 
   it('lets a narrow serving result table reveal observed metrics with the keyboard', async () => {
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     const table = (await screen.findByRole('table', { name: 'API serving results' })).parentElement!;
     Object.defineProperties(table, { clientWidth: { configurable: true, value: 320 }, scrollWidth: { configurable: true, value: 960 } });
@@ -117,11 +120,85 @@ describe("Performance benchmark workflow", () => {
 
   const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null };
 
+  it('can retry unknown support without starting or modifying the target', async () => {
+    mocked.performanceBenchAdmission.mockRejectedValueOnce(new Error('Metadata temporarily unavailable'));
+    renderPanel();
+    expect(await screen.findByText(/Benchmark support is not verified/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['en', 'Run benchmark', /cannot force an exact output token count/],
+    ['ko', '벤치마크 실행', /정확한 출력 토큰 수를 강제할 수 없습니다/],
+    ['ja', 'ベンチマークを実行', /正確な出力トークン数を強制できません/],
+    ['zh', '运行基准测试', /无法强制生成精确的输出令牌数/],
+  ] as const)('blocks unsupported fixed output with an explanation in %s', async (locale, runLabel, reason) => {
+    mocked.performanceBenchAdmission.mockResolvedValue({ status: 'unsupported', reason: 'fixed_output' });
+    render(<I18nProvider initialLocale={locale}><BenchPanel store={store} /></I18nProvider>);
+    expect(await screen.findByText(reason)).toBeVisible();
+    const run = screen.getByRole('button', { name: runLabel });
+    expect(run).toBeDisabled();
+    fireEvent.click(run);
+    expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBeNull();
+  });
+
+  it('keeps the current target blocked while pending and ignores an older supported reply', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const replies: Array<(value: api.PerformanceBenchmarkAdmission) => void> = [];
+    // This project targets ES2020, before Promise.withResolvers.
+    mocked.performanceBenchAdmission.mockImplementation(() => new Promise(resolve => replies.push(resolve)));
+    renderPanel();
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
+    await waitFor(() => expect(replies).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
+    const edit = vi.mocked(settings.open).mock.calls[0][0];
+    const next = assignedConfig({ active_model: 'models/new-target.gguf' });
+    store.cfg = { ...store.cfg!, settings_profiles: next.config.settings_profiles };
+    await act(async () => { await edit.onApply?.(next.config, next.application); });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    await act(async () => { replies[0]({ status: 'supported', reason: 'ready' }); });
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
+    await act(async () => { replies[1]({ status: 'supported', reason: 'ready' }); });
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled();
+  });
+
+  it('offers safe configuration when target support cannot be verified', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    mocked.performanceBenchAdmission.mockRejectedValueOnce(new Error('Probe metadata unavailable'));
+    renderPanel();
+    expect(await screen.findByText(/Benchmark support is not verified/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure benchmark target' }));
+    expect(vi.mocked(settings.open).mock.calls[0][0].target.kind).toBe('benchmark');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
+  });
+
+  it('does not add rejected unstarted attempts to saved measurement history', async () => {
+    mocked.runPerformanceBench.mockRejectedValue(new Error('Fixed output admission rejected'));
+    renderPanel();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Fixed output admission rejected');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    }
+    expect(mocked.runPerformanceBench).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export result' })).not.toBeInTheDocument();
+  });
+
   it('confirms deletion, selects a remaining result and clears the last result from storage and the screen', async () => {
     const request: api.LegacyPerformanceBenchmarkRequest = { run_id: 'older', context_profile: 'novel_en', prompt_lengths: [4096], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true };
     const older: PerformanceBenchmarkRecord = { schemaVersion: 1, id: 'older', createdAt: 1, model: 'models/older.gguf', backend: 'cpu', build: 'b1', request, result: legacyResult('older') };
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([older]));
     const { unmount } = renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     const remove = await screen.findByRole('button', { name: 'Delete result' });
     fireEvent.click(screen.getByText('Export and manage'));
@@ -327,6 +404,7 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole('option', { name: '200k' }));
     fireEvent.click(repetitions);
     fireEvent.click(screen.getByRole('option', { name: '3' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     expect(corpus).toBeDisabled();
@@ -360,6 +438,7 @@ describe("Performance benchmark workflow", () => {
     let finish!: (value: api.PerformanceBenchmarkResult) => void;
     mocked.runPerformanceBench.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
     await act(async () => { ready(unlisten); });
@@ -383,6 +462,7 @@ describe("Performance benchmark workflow", () => {
     const { rerender } = render(page(false));
     expect(screen.getByRole("heading", { name: "Benchmark" })).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const request = mocked.runPerformanceBench.mock.calls[0][1];
@@ -409,6 +489,7 @@ describe("Performance benchmark workflow", () => {
     let finish!: (value: api.PerformanceBenchmarkResult) => void;
     mocked.runPerformanceBench.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const request = mocked.runPerformanceBench.mock.calls[0][1];
@@ -432,6 +513,7 @@ describe("Performance benchmark workflow", () => {
       return measured;
     });
     const { rerender } = renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await screen.findByRole('button', { name: 'Export result' });
     rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...cfg, active_model: 'models/replaced.gguf', active_build: 'replacement-build' } }} /></I18nProvider>);
@@ -450,6 +532,7 @@ describe("Performance benchmark workflow", () => {
   it("keeps successful measurements exportable when history storage is unavailable", async () => {
     renderPanel();
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await screen.findByText("The result could not be saved to history. It remains on this screen and can be exported to a file.");
     expect(screen.getByRole("button", { name: "Export result" })).toBeEnabled();
@@ -461,6 +544,7 @@ describe("Performance benchmark workflow", () => {
     const original = '{unreadable-history-kept-for-recovery';
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, original);
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await screen.findByText('The result could not be saved to history. It remains on this screen and can be exported to a file.');
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(original);
@@ -476,6 +560,7 @@ describe("Performance benchmark workflow", () => {
     });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     const exportButton = await screen.findByRole("button", { name: "Export result" });
     fireEvent.click(screen.getByText("Export and manage"));
@@ -498,6 +583,7 @@ describe("Performance benchmark workflow", () => {
       args: ["--model", "C:/models/test.gguf", "--ctx-size", "4096", "--sleep-idle-seconds", "-1", "--cont-batching", "--no-webui"],
     }));
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     const summary = await screen.findByText("Effective runtime arguments");
     fireEvent.click(summary);
@@ -513,10 +599,12 @@ describe("Performance benchmark workflow", () => {
 
   it("keeps current and history exports separate when the new result could not be saved", async () => {
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await screen.findByRole("button", { name: "Export result" });
     const prior = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]");
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await screen.findByText("The result could not be saved to history. It remains on this screen and can be exported to a file.");
     const csv = vi.spyOn(performanceRecords, "performanceCsv");
@@ -599,6 +687,7 @@ describe("Performance benchmark workflow", () => {
     let finish!: (value: api.PerformanceBenchmarkResult) => void;
     mocked.runPerformanceBench.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     render(<I18nProvider initialLocale="ko"><BenchPanel store={store} /></I18nProvider>);
+    await waitFor(() => expect(screen.getByRole('button', { name: '벤치마크 실행' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "벤치마크 실행" }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const request = mocked.runPerformanceBench.mock.calls[0][1];
@@ -615,8 +704,11 @@ describe("Performance benchmark workflow", () => {
     const request: api.LegacyPerformanceBenchmarkRequest = { run_id: "previous", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 2, context_profile: "code_python", warmup: true };
     const previous: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "previous", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: legacyResult("previous") };
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([previous]));
-    mocked.runPerformanceBench.mockRejectedValue(new Error("Current benchmark failed to start"));
+    mocked.runPerformanceBench.mockImplementationOnce(async (_cfg, request) => ({
+      ...result(request.run_id, [], 'failed'), message: 'Current benchmark failed to start',
+    }));
     renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Current benchmark failed to start");
     fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));

@@ -30,13 +30,20 @@ export default function RuntimeRemovalNotice({ t, backend, build, references }: 
         ? <p className="app-section-hint">{t("ui.removeRuntimeUnused")}</p>
         : <>
             <p className="app-section-hint">{t("ui.removeRuntimeAffected")}</p>
-            <ul className="runtime-removal-targets">
-              {references.map(reference => <li key={`${reference.kind}:${reference.name}`}>
-                {normalizeDisplayText(t(`ui.${referenceText[reference.kind]}`, { name: reference.name }))}
-              </li>)}
-            </ul>
+            <RuntimeRemovalTargets t={t} references={references} />
             <p className="app-section-hint">{t("ui.removeRuntimeAffectedNote")}</p>
           </>}
     </div>
   );
+}
+
+export function RuntimeRemovalTargets({ t, references }: {
+  t: (key: UnifiedKey, vars?: TranslationVars) => string;
+  references: RuntimeReference[];
+}) {
+  return <ul className="runtime-removal-targets">
+    {references.map(reference => <li key={`${reference.kind}:${reference.name}`}>
+      {normalizeDisplayText(t(`ui.${referenceText[reference.kind]}`, { name: reference.name }))}
+    </li>)}
+  </ul>;
 }

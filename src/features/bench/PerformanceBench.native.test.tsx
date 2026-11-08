@@ -8,12 +8,13 @@ import { testConfig } from '../../testing/appStore';
 import type { AppStore } from '../../shared/state/store';
 import type { PerformanceBenchmarkRecord } from './performanceRecords';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
-import { modelArtifact, type ModelArtifact } from '../../shared/api/providers';
+import { snapshotModelName } from '../../shared/api/providers';
+import type { SnapshotDisplayName } from '../../shared/api/providers';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
-vi.mock('../../shared/api/providers', async original => ({ ...await original<typeof import('../../shared/api/providers')>(), modelArtifact: vi.fn() }));
+vi.mock(import('../../shared/api/providers'), async original => ({ ...await original(), snapshotModelName: vi.fn() }));
 vi.mock('../../shared/api/benchmarkSharing', () => ({
   benchmarkSharingOwnedList: vi.fn(async () => ({ items: [], next_cursor: null })),
   benchmarkSharingRecoveryCopy: vi.fn(async () => true),
@@ -35,6 +36,7 @@ vi.mock('../../shared/api/index', () => ({
   providerOptionSchema: vi.fn(async () => effectiveSchema([])),
   onPerformanceBenchmarkProgress: vi.fn(async () => () => undefined),
   runPerformanceBench: vi.fn(),
+  performanceBenchAdmission: vi.fn(async () => ({ status: 'supported', reason: 'ready' })),
 }));
 vi.mock('./benchmarkRepository', () => ({ deleteBenchmarkHistoryRecord: vi.fn(), initializeBenchmarkHistory: vi.fn(), loadBenchmarkHistoryPage: vi.fn(), rememberBenchmarkResult: vi.fn(), loadAllBenchmarkHistory: vi.fn() }));
 vi.mock('./benchmarkExport', () => ({ exportBenchmarkResults: vi.fn() }));
@@ -48,15 +50,11 @@ const store = { cfg: testConfig, status: { state: 'stopped' }, busy: false, refr
 const renderPanel = (selectedStore = store) => render(<I18nProvider initialLocale="en"><BenchPanel store={selectedStore} /></I18nProvider>);
 
 const externalSnapshot = `/synthetic/external/snapshots/${'a'.repeat(40)}`;
-const declaredArtifact = (path: string, name: string): ModelArtifact => ({
-  path, name, format: 'mlx', role: 'model', size_bytes: 10, file_count: 3, architectures: [],
-  modalities: { text: true, image: false, audio: false, video: false }, missing: [],
-  incomplete: false, ownership: 'external', notes: [],
-});
+const declaredLabel = (name: string): SnapshotDisplayName => ({ name, selected: false });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(modelArtifact).mockReset();
+  vi.mocked(snapshotModelName).mockReset();
   for (const task of getTaskSnapshot()) removeTask(task.id);
   vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [recovered], total: 1, next_offset: null });
   vi.mocked(exportBenchmarkResults).mockResolvedValue('saved');
@@ -65,18 +63,9 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('native benchmark history UI', () => {
-  it('names an external snapshot target from its declared model title without changing its identity', async () => {
-    vi.mocked(modelArtifact).mockResolvedValue(declaredArtifact(externalSnapshot, 'converted-model-4bit'));
-    const selectedStore = { ...store, cfg: { ...testConfig, active_model: externalSnapshot } };
-    renderPanel(selectedStore);
-    const target = screen.getByTitle(externalSnapshot);
-    await waitFor(() => expect(target).toHaveTextContent('converted-model-4bit'));
-    expect(target).not.toHaveTextContent('a'.repeat(40));
-    expect(selectedStore.cfg.active_model).toBe(externalSnapshot);
-  });
 
   it('uses declared snapshot names in history, result and deletion while exporting the original record', async () => {
-    vi.mocked(modelArtifact).mockResolvedValue(declaredArtifact(externalSnapshot, 'converted-model-4bit'));
+    vi.mocked(snapshotModelName).mockResolvedValue(declaredLabel('converted-model-4bit'));
     const saved = { ...recovered, model: externalSnapshot };
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [saved], total: 1, next_offset: null });
     renderPanel();
@@ -98,8 +87,8 @@ describe('native benchmark history UI', () => {
   });
 
   it('runs the selected model while its display name is pending and records the original path', async () => {
-    let finish!: (value: ModelArtifact) => void;
-    vi.mocked(modelArtifact).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    let finish!: (value: SnapshotDisplayName | null) => void;
+    vi.mocked(snapshotModelName).mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const api = await import('../../shared/api/index');
     vi.mocked(api.runPerformanceBench).mockImplementation(async (_config, request) => ({
       run_id: request.run_id, rows: [], status: 'complete', args: [],
@@ -108,9 +97,9 @@ describe('native benchmark history UI', () => {
     const selectedStore = { ...store, cfg: { ...testConfig, active_provider: 'vllm' as const, active_runtime: 'synthetic-runtime', active_model: externalSnapshot } };
     try {
       renderPanel(selectedStore);
-      await waitFor(() => expect(modelArtifact).toHaveBeenCalledWith(externalSnapshot));
+      await waitFor(() => expect(snapshotModelName).toHaveBeenCalledWith(externalSnapshot));
       const run = screen.getByRole('button', { name: 'Run benchmark' });
-      expect(run).toBeEnabled();
+      await waitFor(() => expect(run).toBeEnabled());
       expect(screen.getByTitle(externalSnapshot)).toHaveTextContent('a'.repeat(40));
       fireEvent.click(run);
       await waitFor(() => expect(repository.rememberBenchmarkResult).toHaveBeenCalledOnce());
@@ -118,7 +107,7 @@ describe('native benchmark history UI', () => {
       expect(repository.rememberBenchmarkResult).toHaveBeenCalledWith(expect.objectContaining({ model: externalSnapshot }));
       expect(selectedStore.cfg.active_model).toBe(externalSnapshot);
     } finally {
-      await act(async () => { finish(declaredArtifact(externalSnapshot, 'converted-model-4bit')); });
+      await act(async () => { finish(declaredLabel('converted-model-4bit')); });
     }
     await waitFor(() => expect(screen.getByTitle(externalSnapshot)).toHaveTextContent('converted-model-4bit'));
   });

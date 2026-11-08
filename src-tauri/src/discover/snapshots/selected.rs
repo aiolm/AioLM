@@ -158,8 +158,126 @@ pub(in crate::discover) async fn selected_snapshot_plan(
     selected: &str,
     cancel: &AtomicBool,
 ) -> Result<(String, Vec<SnapshotFile>), String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(DOWNLOAD_CANCELLED.into());
+    }
     let indices = read_indices(repo, revision, entries, selected, cancel).await?;
-    plan(entries, selected, &indices)
+    let (canonical, mut files) = plan(entries, selected, &indices)?;
+    // Only filename normalization needs a remote namespace check. Existing
+    // model-prefixed HF/MLX layouts keep their identity and are checked locally
+    // before readiness is published.
+    let mut native = false;
+    let mut metadata_remaining = MAX_SNAPSHOT_MANIFEST_BYTES;
+    for file in files.iter().filter(|file| {
+        file.path.ends_with(".safetensors") && file.path != name(file.repository_path())
+    }) {
+        native |=
+            native_weight_header(repo, revision, file, cancel, &mut metadata_remaining).await?;
+    }
+    if native {
+        preserve_weight_names(&mut files)?;
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err(DOWNLOAD_CANCELLED.into());
+    }
+    Ok((canonical, files))
+}
+
+/// A server ignoring Range must be rejected before consuming its weight body.
+/// Exact Content-Range binds both bounded reads to the immutable tree's size.
+async fn range_response_bytes(
+    response: reqwest::Response,
+    start: u64,
+    length: usize,
+    size: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(DOWNLOAD_CANCELLED.into());
+    }
+    let end = start
+        .checked_add(length as u64)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or("invalid Safetensors header range")?;
+    let expected = format!("bytes {start}-{end}/{size}");
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+        || response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            != Some(expected.as_str())
+    {
+        return Err("selected Safetensors inspection requires an exact bounded byte range".into());
+    }
+    let bytes = tokio::select! {
+        _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        bytes = bounded_response_bytes(response, length) => bytes?
+    };
+    if bytes.len() != length {
+        return Err("selected Safetensors header range is truncated".into());
+    }
+    Ok(bytes)
+}
+
+async fn weight_range(
+    repo: &str,
+    revision: &str,
+    file: &SnapshotFile,
+    start: u64,
+    length: usize,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(DOWNLOAD_CANCELLED.into());
+    }
+    let end = start
+        .checked_add(length as u64)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or("invalid Safetensors header range")?;
+    let response = tokio::select! {
+        _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        response = client()?.get(download_url_at(repo, file.repository_path(), revision))
+            .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send() => response.map_err(|error| error.to_string())?
+    };
+    validate_response_url(&response)?;
+    range_response_bytes(response, start, length, file.size, cancel).await
+}
+
+async fn native_weight_header(
+    repo: &str,
+    revision: &str,
+    file: &SnapshotFile,
+    cancel: &AtomicBool,
+    metadata_remaining: &mut u64,
+) -> Result<bool, String> {
+    use crate::providers::artifacts::{inspect_safetensors_metadata, safetensors_header_length};
+    *metadata_remaining = metadata_remaining
+        .checked_sub(8)
+        .ok_or("selected tensor headers exceed the metadata limit")?;
+    let prefix = weight_range(repo, revision, file, 0, 8, cancel).await?;
+    let length = safetensors_header_length(prefix.try_into().unwrap(), file.size)?;
+    *metadata_remaining = metadata_remaining
+        .checked_sub(length as u64)
+        .ok_or("selected tensor headers exceed the metadata limit")?;
+    let header = weight_range(repo, revision, file, 8, length, cancel).await?;
+    inspect_safetensors_metadata(&header, file.size, None)
+}
+
+fn preserve_weight_names(files: &mut [SnapshotFile]) -> Result<(), String> {
+    let mut names = BTreeSet::new();
+    for file in files {
+        if file.path.ends_with(".safetensors") {
+            let remote = file.repository_path().to_owned();
+            file.path = name(&remote).to_owned();
+            file.remote_path = (file.path != remote).then_some(remote);
+        }
+        if !names.insert(file.path.to_ascii_lowercase()) {
+            return Err("selected native snapshot has colliding file paths".into());
+        }
+    }
+    Ok(())
 }
 
 fn plan(
@@ -351,15 +469,17 @@ pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), Stri
                     parts
                         .binary_search_by(|part| part.as_str().cmp(remote))
                         .is_ok_and(|part| {
-                            file.path
-                                == format!(
-                                    "model-{:05}-of-{:05}.safetensors",
-                                    part + 1,
-                                    parts.len()
-                                )
+                            file.path == name(remote)
+                                || file.path
+                                    == format!(
+                                        "model-{:05}-of-{:05}.safetensors",
+                                        part + 1,
+                                        parts.len()
+                                    )
                         })
                 } else {
-                    remote == selected && file.path == "model.safetensors"
+                    remote == selected
+                        && (file.path == "model.safetensors" || file.path == name(remote))
                 }
         } else if remote.ends_with(".safetensors.index.json") {
             indexed && parent(remote) == folder && file.path == "model.safetensors.index.json"
@@ -560,6 +680,237 @@ mod tests {
         bytes.extend(header);
         bytes.extend([0u8; 4]);
         bytes
+    }
+
+    async fn range_reply(headers: &str, body: &[u8]) -> reqwest::Response {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut reply = headers.as_bytes().to_vec();
+        reply.extend_from_slice(body);
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let mut received = 0;
+            while !request[..received]
+                .windows(4)
+                .any(|bytes| bytes == b"\r\n\r\n")
+            {
+                let count = socket.read(&mut request[received..]).await.unwrap();
+                assert_ne!(
+                    count, 0,
+                    "HTTP request headers ended before their terminator"
+                );
+                received += count;
+            }
+            socket.write_all(&reply).await.unwrap();
+        });
+        reqwest::get(format!("http://{address}/weight"))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn header_inspection_requires_bounded_ranges_and_honors_cancellation() {
+        let cancel = AtomicBool::new(false);
+        let response = range_reply(
+            "HTTP/1.1 200 OK\r\nContent-Length: 1000000000000\r\n\r\n",
+            b"",
+        )
+        .await;
+        assert!(range_response_bytes(response, 0, 8, 1000000000000, &cancel)
+            .await
+            .unwrap_err()
+            .contains("byte range"));
+        let response = range_reply("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/100\r\nContent-Length: 8\r\n\r\n", b"12345678").await;
+        assert_eq!(
+            range_response_bytes(response, 0, 8, 100, &cancel)
+                .await
+                .unwrap(),
+            b"12345678"
+        );
+        let response = range_reply("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/101\r\nContent-Length: 8\r\n\r\n", b"12345678").await;
+        assert!(range_response_bytes(response, 0, 8, 100, &cancel)
+            .await
+            .is_err());
+        let response = range_reply("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/100\r\nContent-Length: 9\r\n\r\n", b"123456789").await;
+        assert!(range_response_bytes(response, 0, 8, 100, &cancel)
+            .await
+            .is_err());
+        let response = range_reply("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/100\r\nContent-Length: 8\r\n\r\n", b"12345678").await;
+        cancel.store(true, Ordering::Release);
+        assert_eq!(
+            range_response_bytes(response, 0, 8, 100, &cancel)
+                .await
+                .unwrap_err(),
+            DOWNLOAD_CANCELLED
+        );
+    }
+
+    #[tokio::test]
+    async fn native_selected_archive_keeps_source_identity_and_completes_without_hf_loadability() {
+        use crate::providers::artifacts::{inspect_safetensors_metadata, ArtifactFormat};
+        let root = std::env::temp_dir().join(format!("aiolm-native-selected-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let blobs = [
+            ("config.json", br#"{"model_type":"mistral"}"#.to_vec()),
+            ("tokenizer.json", b"{}".to_vec()),
+            ("params.json", br#"{"dim":1,"n_layers":1}"#.to_vec()),
+            (
+                "variant/any-name.safetensors",
+                named_weights("tok_embeddings.weight"),
+            ),
+            (
+                "variant/hf-alternative.safetensors",
+                named_weights("model.embed_tokens.weight"),
+            ),
+        ];
+        let entries = blobs
+            .iter()
+            .map(|(path, bytes)| {
+                serde_json::from_value(serde_json::json!({
+                    "type":"file", "path":path, "size":bytes.len(),
+                    "oid":format!("{:x}", Sha256::digest(bytes))
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let (selected, mut files) = plan(&entries, blobs[3].0, &BTreeMap::new()).unwrap();
+        let bytes = &blobs[3].1;
+        let length = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        assert!(
+            inspect_safetensors_metadata(&bytes[8..8 + length], bytes.len() as u64, None).unwrap()
+        );
+        preserve_weight_names(&mut files).unwrap();
+        assert_eq!(files[0].path, "any-name.safetensors");
+        assert_eq!(files[0].repository_path(), blobs[3].0);
+        assert!(!files
+            .iter()
+            .any(|file| file.repository_path() == blobs[4].0));
+        for file in &files {
+            let bytes = &blobs
+                .iter()
+                .find(|(path, _)| *path == file.repository_path())
+                .unwrap()
+                .1;
+            fs::write(root.join(&file.path), bytes).unwrap();
+        }
+        let mut manifest = SnapshotManifest {
+            format: 2,
+            repository: "owner/model".into(),
+            revision: "a".repeat(40),
+            selected_file: Some(selected),
+            files,
+            complete: false,
+        };
+        let artifact = download_snapshot_files(
+            &root,
+            &mut manifest,
+            &AtomicBool::new(false),
+            |_, _, _, _| {},
+        )
+        .await
+        .unwrap();
+        assert!(artifact.ready_files(), "{artifact:?}");
+        assert!(manifest.complete);
+        assert_eq!(artifact.format, ArtifactFormat::Unknown);
+        assert_eq!(artifact.name, "model · variant/any-name.safetensors");
+        assert_eq!(
+            fs::read(root.join("any-name.safetensors")).unwrap(),
+            blobs[3].1
+        );
+        assert_eq!(fs::read(root.join("params.json")).unwrap(), blobs[2].1);
+        assert!(!root.join("model.safetensors").exists());
+        assert!(!crate::providers::compat::assess(
+            &artifact,
+            crate::providers::ProviderId::MlxVlm,
+            None
+        )
+        .loadable());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hf_and_mlx_standalone_alternatives_share_config_without_becoming_native() {
+        use crate::providers::artifacts::{inspect_safetensors_metadata, ArtifactFormat};
+        for (config, tensor, expected) in [
+            (
+                br#"{"model_type":"mistral"}"#.as_slice(),
+                "model.embed_tokens.weight",
+                ArtifactFormat::HfSafetensors,
+            ),
+            (
+                br#"{"model_type":"mistral","quantization":{"bits":4,"group_size":32}}"#.as_slice(),
+                "model.layers.0.self_attn.q_proj.scales",
+                ArtifactFormat::Mlx,
+            ),
+        ] {
+            let root =
+                std::env::temp_dir().join(format!("aiolm-hf-alternative-{}", Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let blobs = [
+                ("config.json", config.to_vec()),
+                ("tokenizer.json", b"{}".to_vec()),
+                ("params.json", br#"{"dim":1}"#.to_vec()),
+                ("consolidated.safetensors", named_weights(tensor)),
+                (
+                    "another-valid-alternative.safetensors",
+                    named_weights(tensor),
+                ),
+            ];
+            let entries = blobs
+                .iter()
+                .map(|(path, bytes)| {
+                    serde_json::from_value(serde_json::json!({
+                        "type":"file", "path":path, "size":bytes.len(),
+                        "oid":format!("{:x}", Sha256::digest(bytes))
+                    }))
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let (selected, files) = plan(&entries, blobs[3].0, &BTreeMap::new()).unwrap();
+            let bytes = &blobs[3].1;
+            let length = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+            assert!(
+                !inspect_safetensors_metadata(&bytes[8..8 + length], bytes.len() as u64, None)
+                    .unwrap()
+            );
+            assert_eq!(files[0].path, "model.safetensors");
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|file| file.path.ends_with(".safetensors"))
+                    .count(),
+                1
+            );
+            for file in &files {
+                let bytes = &blobs
+                    .iter()
+                    .find(|(path, _)| *path == file.repository_path())
+                    .unwrap()
+                    .1;
+                fs::write(root.join(&file.path), bytes).unwrap();
+            }
+            let mut manifest = SnapshotManifest {
+                format: 2,
+                repository: "owner/model".into(),
+                revision: "a".repeat(40),
+                selected_file: Some(selected),
+                files,
+                complete: false,
+            };
+            let artifact = download_snapshot_files(
+                &root,
+                &mut manifest,
+                &AtomicBool::new(false),
+                |_, _, _, _| {},
+            )
+            .await
+            .unwrap();
+            assert!(artifact.ready_files(), "{artifact:?}");
+            assert_eq!(artifact.format, expected);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

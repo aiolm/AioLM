@@ -644,25 +644,43 @@ fn weight_files(dir: &Path) -> (Vec<String>, u64, usize, bool) {
 fn inspect_safetensors_header(
     path: &Path,
     required_tensors: Option<&BTreeSet<String>>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     use std::io::Read;
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
     let mut prefix = [0; 8];
     file.read_exact(&mut prefix)
         .map_err(|error| error.to_string())?;
+    let length = safetensors_header_length(prefix, size)?;
+    let mut bytes = vec![0; length];
+    file.read_exact(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    inspect_safetensors_metadata(&bytes, size, required_tensors)
+}
+
+pub(crate) fn safetensors_header_length(prefix: [u8; 8], size: u64) -> Result<usize, String> {
     let length = u64::from_le_bytes(prefix);
     if length == 0 || length > MAX_INDEX_BYTES || length > size.saturating_sub(8) {
         return Err("invalid or excessive Safetensors header length".into());
     }
-    let mut bytes = vec![0; length as usize];
-    file.read_exact(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    let header: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    Ok(length as usize)
+}
+
+/// Validate bounded metadata against the declared file size, without reading
+/// payloads. Native Mistral/Llama tensor names require a real conversion:
+/// mlx-lm 9e6acca's llama sanitizer does not remap them, and the HF Mistral
+/// converter also permutes q/k tensors for its RoPE layout.
+pub(crate) fn inspect_safetensors_metadata(
+    bytes: &[u8],
+    size: u64,
+    required_tensors: Option<&BTreeSet<String>>,
+) -> Result<bool, String> {
+    safetensors_header_length((bytes.len() as u64).to_le_bytes(), size)?;
+    let header: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let tensors = header
         .as_object()
         .ok_or("Safetensors header is not an object")?;
-    let payload = size - 8 - length;
+    let payload = size - 8 - bytes.len() as u64;
     let mut spans = Vec::with_capacity(tensors.len());
     for (name, tensor) in tensors {
         if name == "__metadata__" {
@@ -734,7 +752,27 @@ fn inspect_safetensors_header(
     if end != payload {
         return Err("Safetensors tensor payload length is invalid".into());
     }
-    Ok(())
+    Ok(tensors.keys().any(|name| {
+        name == "tok_embeddings.weight"
+            || name.strip_prefix("layers.").is_some_and(|rest| {
+                rest.split_once('.').is_some_and(|(layer, parameter)| {
+                    !layer.is_empty()
+                        && layer.bytes().all(|byte| byte.is_ascii_digit())
+                        && matches!(
+                            parameter,
+                            "attention.wq.weight"
+                                | "attention.wk.weight"
+                                | "attention.wv.weight"
+                                | "attention.wo.weight"
+                                | "attention_norm.weight"
+                                | "ffn_norm.weight"
+                                | "feed_forward.w1.weight"
+                                | "feed_forward.w2.weight"
+                                | "feed_forward.w3.weight"
+                        )
+                })
+            })
+    }))
 }
 
 fn missing_split_parts(present: &[String], missing: &mut Vec<String>) {
@@ -858,6 +896,89 @@ fn declared_snapshot_name(dir: &Path) -> Option<String> {
         return (component(publisher) && component(model)).then(|| model.to_owned());
     }
     None
+}
+
+/// Display-only identity for a selected group. Source paths, not normalized
+/// local filenames, keep alternatives and variant folders distinguishable.
+fn selected_display_name(manifest: &SnapshotManifest) -> Option<String> {
+    let selected = manifest.selected_entrypoint()?;
+    let group = manifest
+        .files
+        .iter()
+        .find(|file| file.repository_path().ends_with(".safetensors.index.json"))
+        .map(|file| file.repository_path().strip_suffix(".index.json").unwrap())
+        .unwrap_or(selected);
+    let identity = group
+        .strip_suffix(".safetensors")
+        .and_then(|stem| stem.rsplit_once("-of-"))
+        .and_then(|(prefix, count)| {
+            let (base, part) = prefix.rsplit_once('-')?;
+            (part.len() == 5
+                && count.len() == 5
+                && part
+                    .bytes()
+                    .chain(count.bytes())
+                    .all(|byte| byte.is_ascii_digit()))
+            .then(|| format!("{base}.safetensors"))
+        })
+        .unwrap_or_else(|| group.to_owned());
+    let base = manifest.repository.rsplit('/').next()?;
+    Some(format!("{base} · {identity}"))
+}
+
+fn has_opaque_snapshot_name(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.len() == 40 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        && dir
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|part| part == "snapshots")
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SnapshotDisplayName {
+    pub name: String,
+    pub selected: bool,
+}
+
+/// Resolve display metadata only. This path deliberately never opens weights;
+/// session/topbar labels must not trigger tensor validation or digest work.
+pub fn snapshot_display_name(dir: &Path) -> Option<SnapshotDisplayName> {
+    if let Ok(Some(manifest)) =
+        crate::discover::read_snapshot_manifest_for_inspection(&dir.join(SNAPSHOT_MANIFEST))
+    {
+        if let Some(name) = selected_display_name(&manifest) {
+            return Some(SnapshotDisplayName {
+                name,
+                selected: true,
+            });
+        }
+        return manifest
+            .repository
+            .rsplit('/')
+            .next()
+            .map(|name| SnapshotDisplayName {
+                name: name.to_owned(),
+                selected: false,
+            });
+    }
+    if let Some((_, repository)) = hf_cache_revision(dir) {
+        return repository
+            .rsplit('/')
+            .next()
+            .map(|name| SnapshotDisplayName {
+                name: name.to_owned(),
+                selected: false,
+            });
+    }
+    has_opaque_snapshot_name(dir)
+        .then(|| declared_snapshot_name(dir))
+        .flatten()
+        .map(|name| SnapshotDisplayName {
+            name,
+            selected: false,
+        })
 }
 
 /// Inspect a snapshot directory. Never fails: unreadable parts become notes
@@ -1041,6 +1162,7 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
     let mut repository = None;
     let mut selected_file = None;
     let mut selected_weight_files = None;
+    let mut selected_name = None;
     let mut ownership = "external";
     if let Some((rev, repo)) = hf_cache_revision(dir) {
         revision = Some(rev);
@@ -1050,6 +1172,7 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
     match snapshot_manifest {
         Ok(Some(manifest)) => {
             ownership = "app";
+            selected_name = selected_display_name(&manifest);
             incomplete |= !manifest.complete;
             let root = dir.canonicalize().ok();
             for file in &manifest.files {
@@ -1066,10 +1189,20 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
                             let tensors = indexed_weights
                                 .as_ref()
                                 .and_then(|weights| weights.get(&file.path));
-                            if let Err(error) = inspect_safetensors_header(&path, tensors) {
-                                incomplete = true;
-                                missing.push(format!("{} (invalid Safetensors header)", file.path));
-                                notes.push(format!("{}: {error}", file.path));
+                            match inspect_safetensors_header(&path, tensors) {
+                                Ok(true) => {
+                                    format = ArtifactFormat::Unknown;
+                                    notes.push(format!("{} uses native Mistral/Llama tensors; convert the tensor names, q/k RoPE layout and configuration to Hugging Face/MLX before loading", file.repository_path()));
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    incomplete = true;
+                                    missing.push(format!(
+                                        "{} (invalid Safetensors header)",
+                                        file.path
+                                    ));
+                                    notes.push(format!("{}: {error}", file.path));
+                                }
                             }
                         }
                         if selected && file.path.ends_with(".json") {
@@ -1126,14 +1259,9 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
     }
     // Preserve user-chosen folder names and established repository naming. Only
     // an otherwise opaque revision label may use an explicitly declared title.
-    let name = if repository.is_none()
-        && name.len() == 40
-        && name.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && dir
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|part| part == "snapshots")
-    {
+    let name = if let Some(selected_name) = selected_name {
+        selected_name
+    } else if repository.is_none() && has_opaque_snapshot_name(dir) {
         declared_snapshot_name(dir).unwrap_or(name)
     } else {
         name
@@ -1482,6 +1610,170 @@ mod tests {
     }
 
     #[test]
+    fn whole_snapshot_display_metadata_preserves_repository_and_card_precedence() {
+        let root = temp_dir("whole-display-metadata");
+        let external = root.join("snapshots").join("a".repeat(40));
+        fs::create_dir_all(&external).unwrap();
+        write(&external, "README.md", b"# example/declared-model\n");
+        assert_eq!(
+            snapshot_display_name(&external),
+            Some(SnapshotDisplayName {
+                name: "declared-model".into(),
+                selected: false,
+            })
+        );
+        let mut manifest = selected_fixture(
+            &external,
+            "nested/weights.safetensors",
+            &["model.safetensors"],
+        );
+        manifest.format = 1;
+        manifest.selected_file = None;
+        for file in &mut manifest.files {
+            file.remote_path = None;
+        }
+        write(
+            &external,
+            SNAPSHOT_MANIFEST,
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        fs::remove_file(external.join("model.safetensors")).unwrap();
+        assert_eq!(
+            snapshot_display_name(&external),
+            Some(SnapshotDisplayName {
+                name: "model".into(),
+                selected: false,
+            })
+        );
+        let cache = root
+            .join("models--publisher--cache-model")
+            .join("snapshots")
+            .join("b".repeat(40));
+        fs::create_dir_all(&cache).unwrap();
+        write(&cache, "README.md", b"# example/different-card-title\n");
+        assert_eq!(
+            snapshot_display_name(&cache),
+            Some(SnapshotDisplayName {
+                name: "cache-model".into(),
+                selected: false,
+            })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn selected_display_names_distinguish_variants_without_opening_weights() {
+        let dir = temp_dir("selected-display-names");
+        for (selected, expected) in [
+            ("nested/fp16.safetensors", "model · nested/fp16.safetensors"),
+            ("nested/q4.safetensors", "model · nested/q4.safetensors"),
+            (
+                "nested/q4/model.safetensors",
+                "model · nested/q4/model.safetensors",
+            ),
+        ] {
+            selected_fixture(&dir, selected, &["model.safetensors"]);
+            // Missing payloads cannot prevent display metadata resolution.
+            fs::remove_file(dir.join("model.safetensors")).unwrap();
+            let display = snapshot_display_name(&dir).unwrap();
+            assert!(display.selected);
+            assert_eq!(display.name, expected);
+            assert_eq!(inspect_snapshot(&dir).name, expected);
+        }
+        let parts = [
+            "model-00001-of-00002.safetensors",
+            "model-00002-of-00002.safetensors",
+        ];
+        let mut manifest =
+            selected_fixture(&dir, "nested/model-00001-of-00002.safetensors", &parts);
+        for complete in [true, false] {
+            manifest.complete = complete;
+            write(
+                &dir,
+                SNAPSHOT_MANIFEST,
+                &serde_json::to_vec(&manifest).unwrap(),
+            );
+            let display = snapshot_display_name(&dir).unwrap();
+            assert!(display.selected);
+            assert_eq!(display.name, "model · nested/model.safetensors");
+            assert_eq!(
+                inspect_snapshot(&dir).name,
+                "model · nested/model.safetensors"
+            );
+        }
+        manifest.format = 1;
+        manifest.selected_file = None;
+        for file in &mut manifest.files {
+            file.remote_path = None;
+        }
+        write(
+            &dir,
+            SNAPSHOT_MANIFEST,
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        assert_eq!(
+            snapshot_display_name(&dir),
+            Some(SnapshotDisplayName {
+                name: "model".into(),
+                selected: false
+            })
+        );
+        assert_eq!(
+            inspect_snapshot(&dir).name,
+            dir.file_name().unwrap().to_string_lossy()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn selected_native_tensors_do_not_become_hf_weights_when_renamed() {
+        let dir = temp_dir("native-tensor-layout");
+        for (tensor, native) in [
+            ("tok_embeddings.weight", true),
+            ("layers.0.attention.wq.weight", true),
+            ("model.embed_tokens.weight", false),
+            ("model.layers.0.self_attn.q_proj.weight", false),
+            ("model.layers.0.self_attn.q_proj.scales", false),
+        ] {
+            let mut manifest =
+                selected_fixture(&dir, "nested/arbitrary.safetensors", &["model.safetensors"]);
+            let header = serde_json::to_vec(&json!({
+                (tensor): {"dtype":"F32","shape":[1],"data_offsets":[0,4]}
+            }))
+            .unwrap();
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(&header);
+            bytes.extend_from_slice(&1f32.to_le_bytes());
+            write(&dir, "model.safetensors", &bytes);
+            manifest.files[2].size = bytes.len() as u64;
+            write(
+                &dir,
+                SNAPSHOT_MANIFEST,
+                &serde_json::to_vec(&manifest).unwrap(),
+            );
+            let before = fs::read(dir.join(SNAPSHOT_MANIFEST)).unwrap();
+            let artifact = inspect_snapshot(&dir);
+            assert!(artifact.ready_files(), "{:?}", artifact.notes);
+            assert_eq!(
+                artifact.format == ArtifactFormat::Unknown,
+                native,
+                "{tensor}"
+            );
+            for provider in [
+                super::super::ProviderId::MlxVlm,
+                super::super::ProviderId::Vllm,
+            ] {
+                if native {
+                    assert!(!super::super::compat::assess(&artifact, provider, None).loadable());
+                }
+            }
+            assert_eq!(fs::read(dir.join("model.safetensors")).unwrap(), bytes);
+            assert_eq!(fs::read(dir.join(SNAPSHOT_MANIFEST)).unwrap(), before);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn selected_large_tokenizer_and_vocabulary_assets_are_ready_only_when_valid() {
         let dir = temp_dir("selected-large-loading-json");
         let mut manifest =
@@ -1708,6 +2000,10 @@ mod tests {
             }
             let artifact = inspect_snapshot(&dir);
             assert_eq!(artifact.ready_files(), complete, "{:?}", artifact.notes);
+            assert_eq!(artifact.name, "model · nested/model.safetensors");
+            let display = snapshot_display_name(&dir).unwrap();
+            assert!(display.selected);
+            assert_eq!(display.name, artifact.name);
             assert_eq!(
                 artifact.selected_file.as_deref(),
                 Some("nested/model-a.safetensors")

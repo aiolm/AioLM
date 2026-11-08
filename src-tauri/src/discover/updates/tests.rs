@@ -553,6 +553,61 @@ fn older_indexed_update_ownership_normalizes_identity_without_relocating_user_pa
 }
 
 #[tokio::test]
+async fn selected_native_archives_update_without_claiming_hf_compatibility() {
+    let header = br#"{"tok_embeddings.weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#;
+    let mut weights = (header.len() as u64).to_le_bytes().to_vec();
+    weights.extend_from_slice(header);
+    weights.extend_from_slice(&1f32.to_le_bytes());
+    let selected = "variant/model.safetensors";
+    let old = vec![
+        Blob::new("variant/config.json", CONFIG),
+        Blob::new("variant/tokenizer.json", b"{}"),
+        Blob::new(selected, &weights),
+    ];
+    let fixture = Fixture::selected_snapshot(&old, selected);
+    let before = FileState::read(&fixture.root().join("model.safetensors"));
+    let mut next = old.clone();
+    next[0] = Blob::new("variant/config.json", NEW_CONFIG);
+    let cancel = AtomicBool::new(false);
+    let plan = plan_update(
+        fixture.installed(),
+        &remote(&next, 'b'),
+        &cancel,
+        PlanMode::Apply,
+    )
+    .await
+    .unwrap();
+    let server = Loopback::start(&next).await;
+    apply_plan(plan, &cancel, |_, _, _| {}, &server.source)
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), ["/variant/config.json"]);
+    assert_eq!(
+        FileState::read(&fixture.root().join("model.safetensors")),
+        before
+    );
+    let artifact = crate::providers::artifacts::inspect_snapshot(fixture.root());
+    assert!(artifact.ready_files(), "{artifact:?}");
+    assert_eq!(
+        artifact.format,
+        crate::providers::artifacts::ArtifactFormat::Unknown
+    );
+    assert_eq!(artifact.selected_file.as_deref(), Some(selected));
+    assert!(
+        read_snapshot_manifest(&fixture.metadata)
+            .unwrap()
+            .unwrap()
+            .complete
+    );
+    assert!(!crate::providers::compat::assess(
+        &artifact,
+        crate::providers::ProviderId::MlxVlm,
+        None
+    )
+    .loadable());
+}
+
+#[tokio::test]
 async fn selected_nested_update_preserves_source_paths_and_excludes_other_models() {
     let old = nested_selected_blobs();
     let selected = "variants/q4/model.safetensors";

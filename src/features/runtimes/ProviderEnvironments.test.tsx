@@ -7,6 +7,8 @@ import * as api from '../../shared/api/index';
 import { notifyCompletion } from '../../shared/lib/notifications';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import TaskStrip from '../../shared/ui/TaskStrip';
+import { defaultPreferences, savePreferences } from '../../shared/config/preferences';
+import { testConfig } from '../../testing/appStore';
 
 vi.mock('../../shared/lib/notifications', () => ({ notifyCompletion: vi.fn(async () => undefined) }));
 
@@ -63,6 +65,7 @@ function renderPanel(resourcesInUse = false, onBusyChange?: (busy: boolean) => v
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   progressListeners.length = 0;
   mocked.isNativeRuntimeAvailable.mockReturnValue(false);
   mocked.providerCatalog.mockResolvedValue(catalog());
@@ -88,6 +91,77 @@ function deferred<T>() {
   const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
   return { promise, resolve, reject };
 }
+
+describe('provider runtime removal', () => {
+  it('waits for approval, names managed file removal, and returns focus without deleting on Cancel', async () => {
+    renderPanel();
+    const remove = await screen.findByRole('button', { name: 'Remove' });
+    remove.focus();
+    fireEvent.click(remove);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('portable-0-31-0-synthetic');
+    expect(dialog).toHaveTextContent(/installation files.*removed/i);
+    expect(mocked.providerRemove).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(mocked.providerRemove).not.toHaveBeenCalled();
+    expect(remove).toHaveFocus();
+    fireEvent.click(remove);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(mocked.providerRemove).toHaveBeenCalledExactlyOnceWith('vllm', 'portable-0-31-0-synthetic'));
+  });
+
+  it('explains external registration-only removal and identifies exact saved references without clearing them', async () => {
+    mocked.providerRuntimes.mockResolvedValue([runtime({ installation: 'external' })]);
+    const cfg: api.AppConfig = { ...testConfig, active_provider: 'vllm', active_runtime: 'portable-0-31-0-synthetic',
+      sessions: [{ id: 'worker', name: 'Translation worker', enabled: true,
+        models: { primary_model: '/synthetic/chat', mmproj: '', draft_model: '' },
+        gpu: { gpu_ids: [], split_mode: 'none', tensor_split: [] },
+        execution: { active_provider: 'vllm', active_runtime: 'portable-0-31-0-synthetic' } }],
+      settings_profiles: { version: 1, revision: 1, legacy_imported: false, entries: [
+        { id: 'selected', provider: 'vllm', name: 'Selected runtime profile', scope: 'global', revision: 1, settings: { active_runtime: 'portable-0-31-0-synthetic' } },
+        { id: 'other', provider: 'mlx-vlm', name: 'Other provider profile', scope: 'global', revision: 1, settings: { active_runtime: 'portable-0-31-0-synthetic' } },
+      ], applied: {
+        'session:worker': { provider: 'vllm', model: '/synthetic/chat', system_prompt: '', settings: { active_runtime: 'portable-0-31-0-synthetic' } },
+        'provider:vllm:model:/synthetic/embedding': { provider: 'vllm', model: '/synthetic/embedding', system_prompt: '', settings: { active_runtime: 'portable-0-31-0-synthetic' } },
+      } } };
+    const before = structuredClone(cfg);
+    render(<I18nProvider initialLocale="en"><ProviderEnvironments active cfg={cfg} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/only.*registration.*removed/i);
+    expect(dialog).toHaveTextContent(/installation files.*not.*deleted/i);
+    expect(dialog).toHaveTextContent('Translation worker');
+    expect(within(dialog).getAllByText(/Translation worker/)).toHaveLength(1);
+    expect(dialog).toHaveTextContent('Default execution');
+    expect(dialog).toHaveTextContent('Selected runtime profile');
+    expect(dialog).toHaveTextContent('embedding');
+    expect(dialog).not.toHaveTextContent('Other provider profile');
+    expect(dialog).toHaveTextContent(/Saved runtime selections are preserved but become unavailable/);
+    expect(mocked.providerRemove).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(mocked.providerRemove).toHaveBeenCalledExactlyOnceWith('vllm', 'portable-0-31-0-synthetic'));
+    expect(cfg).toEqual(before);
+  });
+
+  it('intentionally removes without a dialog when destructive confirmation is disabled', async () => {
+    savePreferences({ ...defaultPreferences(), advanced: { confirmDestructiveActions: false } });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(mocked.providerRemove).toHaveBeenCalledExactlyOnceWith('vllm', 'portable-0-31-0-synthetic'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('does not remove after approval if a model session became busy while confirmation was open', async () => {
+    const panel = (resourcesInUse: boolean) => <I18nProvider initialLocale="en"><ProviderEnvironments active resourcesInUse={resourcesInUse} /></I18nProvider>;
+    const view = render(panel(false));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    view.rerender(panel(true));
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocked.providerRemove).not.toHaveBeenCalled();
+  });
+});
 
 describe('provider portable import/export', () => {
   it('explains the model-session lock before submitting runtime changes or transfers', async () => {

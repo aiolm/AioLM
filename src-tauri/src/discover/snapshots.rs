@@ -754,12 +754,19 @@ where
     // not publish completion until the downloaded loading metadata agrees.
     let artifact = crate::providers::artifacts::inspect_snapshot(snapshot);
     if !artifact.missing.is_empty()
-        || artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown
+        || (manifest.selected_file.is_none()
+            && artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown)
     {
         invalidate()?;
+        let mut details = artifact.missing.join("; ");
+        for note in &artifact.notes {
+            if !details.is_empty() {
+                details.push_str("; ");
+            }
+            details.push_str(note);
+        }
         return Err(format!(
-            "snapshot loading files are incomplete or invalid: {}",
-            artifact.missing.join(", ")
+            "snapshot loading files are incomplete or invalid: {details}"
         ));
     }
     if cancel.load(Ordering::Acquire) {

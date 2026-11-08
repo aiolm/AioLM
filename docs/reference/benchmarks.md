@@ -43,12 +43,12 @@ without owner credentials or cookies.
 ## Workflow
 
 On a wide workspace, the setup form sits beside the results; a narrow window
-stacks setup above results. Profile, engine and runtime stay visible; **Key
-settings** and **Hardware** expand to show launch values and host specifications.
-Input-size and concurrency rows summarize their selected values and expand for
-editing. **Advanced request options** contains warmup and the fixed-output
-requirements. The trial count, validation and Run/Cancel remain
-outside these disclosures.
+stacks setup above results. Trial count, progress, Run/Cancel and blocking
+reasons stay above the setup so long runtime labels do not hide the primary
+action. Profile, engine and runtime stay visible; **Key settings** and
+**Hardware** expand to show launch values and host specifications. Input-size
+and concurrency rows summarize their selected values and expand for editing.
+**Advanced request options** contains warmup and the fixed-output requirements.
 
 The result toolbar keeps history selection and copy visible. **Export and
 manage** expands inline for export format, selected/all-history export, profile
@@ -65,6 +65,12 @@ parallel capacity, cache, GPU and thinking launch settings remain as configured.
 Client request concurrency is distinct from server capacity. Common benchmark
 request fields are read-only in the profile editor, while stale request
 options can be explicitly cleared.
+
+Run stays disabled while target support is being checked, is unknown or is
+unsupported. The check uses existing target metadata rather than starting an
+engine; **Configure benchmark target** opens the normal model/runtime workflow
+when verification or a different runtime is needed. A supported reply for an
+older target cannot enable the current one.
 
 Choose exact input UTF-8 byte sizes, fixed output tokens, client concurrencies,
 repetitions, corpus and warmup. Defaults are 4096/16384 input bytes, 1k output
@@ -145,8 +151,11 @@ discards the entire in-flight batch and retains previously completed rows.
 
 ## History and export
 
-Runs are journaled in the data folder; completed batches survive interruption
-and restart. Local schema2 records freeze method, configured workload and input
+Runs are journaled after execution admission; completed batches survive interruption
+and restart. Validation, unsupported-target rejection or cancellation before a
+measurement starts does not create an empty failed result or invalidate existing
+sharing permits. Genuine failures after measurement starts remain recordable.
+Local schema2 records freeze method, configured workload and input
 hashes, runtime identity, model evidence, AioLM-host hardware, compute ownership,
 public typed settings and a private display label. Capture masks secrets before
 typed parsing. Unannotated text/JSON, credentials, local paths and machine-local

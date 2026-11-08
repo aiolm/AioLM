@@ -54,12 +54,12 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const refreshGeneration = useRef(0);
   const probeGeneration = useRef(0);
   const prBackendTouched = useRef(false);
-  const [sessionsInUse, setSessionsInUse] = useState(false);
+  const [sessionsInUse, setSessionsInUse] = useState<api.SessionSummary[]>([]);
   const transitionInProgress = useSessionTransitionInProgress();
-  useSessionPolling({ active, onData: sessions => setSessionsInUse(sessions.some(session => isServerBusy(session.state))) });
+  useSessionPolling({ active, onData: sessions => setSessionsInUse(sessions.filter(session => isServerBusy(session.state))) });
   // Runtime mutations share the native lock across the default model and
   // named sessions, including their starting/stopping transitions.
-  const serverRunning = isServerBusy(store.status.state) || sessionsInUse || transitionInProgress;
+  const serverRunning = isServerBusy(store.status.state) || sessionsInUse.length > 0 || transitionInProgress;
   const tasks = useTasks();
   const ownedRuntimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
   const runtimeBusy = ownedRuntimeBusy
@@ -280,7 +280,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     prBackend, setPrBackend, prBackendTouched,
     prSource, setPrSource, prBusy, bundleBusy, bundleProgress, activePrBackend, prReviewBusy,
     prPreview, setPrPreview, pendingUninstall, setPendingUninstall, uninstallBusy, cancelBusy,
-    device, showAll, toggleShowAll, probeTarget, serverRunning, runtimeBusy, ownedRuntimeBusy,
+    device, showAll, toggleShowAll, probeTarget, serverRunning, sessionsInUse, runtimeBusy, ownedRuntimeBusy,
     probe, refresh,
     cancelInstall, exportRuntime, importRuntime, install,
     reviewPullRequest, installPullRequest, uninstall, confirmUninstall,

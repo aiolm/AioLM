@@ -340,7 +340,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading title={labelFor("projects")} />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
-          {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} />)}
+          {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} onOpenLibrary={() => navigate('models')} />)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
           {panel("api", <DeveloperPanel store={store} onNavigate={navigate} />)}
           {panel("mcp", <McpPanel store={store} />)}

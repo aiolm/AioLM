@@ -665,6 +665,263 @@ async fn fixed_output_needs_declared_control_and_usage_and_an_unchanged_force_fi
     .is_err());
 }
 
+#[tokio::test]
+async fn benchmark_admission_rejects_a_custom_target_without_declared_fixed_output() {
+    let mut engine = fixed_engine();
+    engine.provider = crate::providers::ProviderId::parse("custom.benchmark-test").unwrap();
+    engine.chat_supported = Some(true);
+    engine.fixed_output = None;
+
+    let admission = engine_admission(&engine, &request());
+
+    assert_eq!(admission.status, "unsupported");
+    assert_eq!(admission.reason, "fixed_output");
+    assert!(admission.detail.is_some());
+}
+
+#[tokio::test]
+async fn benchmark_admission_requires_declared_streamed_usage() {
+    for usage in [None, Some(false)] {
+        let mut engine = fixed_engine();
+        engine.chat_supported = Some(true);
+        engine.stream_usage_supported = usage;
+
+        let admission = engine_admission(&engine, &request());
+
+        assert_eq!(admission.status, "unsupported", "{usage:?}");
+        assert_eq!(admission.reason, "stream_usage", "{usage:?}");
+        assert!(admission.detail.is_some(), "{usage:?}");
+    }
+}
+
+#[tokio::test]
+async fn benchmark_admission_rejects_known_non_chat_targets() {
+    let mut no_chat_template = fixed_engine();
+    no_chat_template.chat_supported = Some(false);
+    let mut embeddings_only = fixed_engine();
+    embeddings_only.tasks = vec!["embed".into()];
+    embeddings_only.chat_supported = Some(true);
+
+    for engine in [no_chat_template, embeddings_only] {
+        let admission = engine_admission(&engine, &request());
+
+        assert_eq!(admission.status, "unsupported", "{engine:?}");
+        assert_eq!(admission.reason, "request", "{engine:?}");
+        assert!(admission.detail.is_some(), "{engine:?}");
+    }
+}
+
+#[tokio::test]
+async fn benchmark_admission_supports_declared_fixed_output_chat_requests() {
+    for provider in [
+        fixed_engine().provider,
+        crate::providers::ProviderId::parse("custom.benchmark-test").unwrap(),
+    ] {
+        for control in [FixedOutputControl::IgnoreEos, FixedOutputControl::MinTokens] {
+            let mut engine = fixed_engine();
+            engine.provider = provider;
+            engine.tasks = vec!["generate".into()];
+            engine.chat_supported = Some(true);
+            engine.fixed_output = Some(control);
+            engine.request_option_keys = vec![control.field_name().into()];
+
+            let admission = engine_admission(&engine, &request());
+
+            assert_eq!(admission.status, "supported", "{provider:?}/{control:?}");
+            assert_eq!(admission.reason, "ready", "{provider:?}/{control:?}");
+            assert!(admission.detail.is_none(), "{provider:?}/{control:?}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_benchmark_rejection_preserves_history_and_measurement_permits_on_retries() {
+    use crate::benchmark::{sharing::permits, store};
+    use crate::providers::registry;
+    use std::fs;
+    use std::path::Path;
+
+    const CHILD: &str = "AIOLM_BENCHMARK_ADMISSION_FIXTURE";
+    const FILTER: &str = "performance_bench::tests::native_benchmark_rejection_preserves_history_and_measurement_permits_on_retries";
+    const OWNER: &str = ".admission-fixture-owner";
+    if std::env::var_os(CHILD).is_none() {
+        let original_home = std::env::var_os("AIOLM_HOME");
+        let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = Directory(base.join(format!(
+            "aiolm-benchmark-admission-{}",
+            uuid::Uuid::new_v4()
+        )));
+        fs::create_dir(&directory.0).unwrap();
+        fs::write(
+            directory.0.join(OWNER),
+            b"synthetic benchmark admission fixture",
+        )
+        .unwrap();
+        let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
+            .env(CHILD, &directory.0)
+            .env("AIOLM_HOME", &directory.0);
+        let output = crate::procutil::capture_output_cancellable(
+            &mut command,
+            Duration::from_secs(60),
+            256 * 1024,
+            None,
+        )
+        .unwrap();
+        assert_eq!(std::env::var_os("AIOLM_HOME"), original_home);
+        assert!(
+            output.status.success(),
+            "isolated admission fixture failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
+        return;
+    }
+
+    let area = PathBuf::from(std::env::var_os(CHILD).unwrap());
+    assert_eq!(PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap()), area);
+    assert!(area.is_absolute());
+    assert_eq!(
+        fs::read(area.join(OWNER)).unwrap(),
+        b"synthetic benchmark admission fixture"
+    );
+    let model = area.join("deployment.json");
+    fs::write(&model, b"{}").unwrap();
+    let probe_script = area.join("probe.sh");
+    let launch_script = area.join("launch.sh");
+    let launched = area.join("unexpected-launch");
+    fs::write(
+        &probe_script,
+        b"if [ -z \"$1\" ]; then cat \"$2\"; else cat \"$3\"; fi\n",
+    )
+    .unwrap();
+    fs::write(&launch_script, b"printf launched > \"$1\"\nexit 1\n").unwrap();
+    let independent_probe = area.join("independent-probe.json");
+    let selected_probe = area.join("selected-probe.json");
+    let mut probe = json!({
+        "schema_version":1, "engine_id":"custom.benchmark-admission", "runtime_id":"build-1",
+        "version":"synthetic", "accelerator":"synthetic", "model":"",
+        "model_supported":true, "served_model":"selected-model",
+        "capabilities":{
+            "tasks":["generate"],
+            "modalities":{"text":true,"image":false,"audio":false,"video":false},
+            "chat":true, "stream_usage_supported":true
+        }
+    });
+    fs::write(&independent_probe, serde_json::to_vec(&probe).unwrap()).unwrap();
+    probe["model"] = json!(model);
+    fs::write(&selected_probe, serde_json::to_vec(&probe).unwrap()).unwrap();
+    let manifest = serde_json::from_value(json!({
+        "schema_version":1, "adapter_version":1,
+        "engine_id":"custom.benchmark-admission", "runtime_id":"build-1",
+        "display_name":"Synthetic admission engine", "protocol":"openai-v1",
+        "platforms":[{"os":std::env::consts::OS,"arch":std::env::consts::ARCH}],
+        "probe":{
+            "program":"/bin/sh",
+            "args":[probe_script,"{model}",independent_probe,selected_probe]
+        },
+        "launch":{
+            "program":"/bin/sh",
+            "args":[launch_script,launched,"{model}","{port}","{model_alias}"],
+            "env":{"ENGINE_KEY":"{api_key}"}
+        },
+        "artifacts":[probe_script,launch_script,independent_probe,selected_probe],
+        "model_formats":["unknown"], "health_path":"/health", "options":[]
+    }))
+    .unwrap();
+    registry::register_manifest(manifest, None).await.unwrap();
+    let cfg = AppConfig {
+        active_provider: "custom.benchmark-admission".into(),
+        active_runtime: "build-1".into(),
+        active_model: model.to_string_lossy().into_owned(),
+        ..AppConfig::default()
+    };
+    registry::refresh(&cfg, None).await.unwrap();
+    let verdict = admission(cfg.clone(), request()).await;
+    assert_eq!(verdict.status, "unsupported");
+    assert_eq!(verdict.reason, "fixed_output");
+    let expected_error = verdict.detail.unwrap();
+
+    let root = crate::benchmark::data_root().unwrap();
+    let existing_request = PerformanceBenchRequest {
+        run_id: "existing-history".into(),
+        ..request()
+    };
+    let existing_result = result(&existing_request);
+    let journal = store::RunJournal::begin(
+        &root,
+        json!({
+            "schemaVersion":2, "id":existing_request.run_id, "createdAt":1,
+            "model":"synthetic.model", "request":existing_request, "result":existing_result
+        }),
+    )
+    .unwrap();
+    journal.finish(&existing_result).unwrap();
+    drop(journal);
+    fn journal_bytes(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut journals = fs::read_dir(root.join("runs"))
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+        journals.sort_by(|left, right| left.0.cmp(&right.0));
+        journals
+    }
+    let history_before = serde_json::to_value(store::list(&root, 0, 20).unwrap()).unwrap();
+    assert_eq!(history_before["total"], 1);
+    let journals_before = journal_bytes(&root);
+    let epoch = permits::epoch();
+    permits::store_permit("existing-submission", "existing-session", "existing-permit");
+    let permit = permits::live_permit("existing-submission");
+    assert!(permit.is_some());
+    let state = crate::state::AppState::default();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let progress: Progress = Arc::new(move |event| captured.lock().unwrap().push(event));
+    for run_id in [
+        "unsupported-attempt",
+        "unsupported-attempt",
+        "unsupported-retry",
+    ] {
+        let error = crate::commands::benchmark::run_performance_bench_with_progress(
+            &state,
+            cfg.clone(),
+            PerformanceBenchRequest {
+                run_id: run_id.into(),
+                ..request()
+            },
+            progress.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, expected_error);
+        assert_eq!(permits::epoch(), epoch);
+        assert_eq!(permits::live_permit("existing-submission"), permit);
+        assert_eq!(journal_bytes(&root), journals_before);
+        assert_eq!(
+            serde_json::to_value(store::list(&root, 0, 20).unwrap()).unwrap(),
+            history_before
+        );
+        assert!(!launched.exists());
+        assert!(state.bench_process.lock().unwrap().is_none());
+        assert!(!state.bench_cancel.load(Ordering::Acquire));
+    }
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 3);
+    assert!(events
+        .iter()
+        .all(|event| event.phase == "loading" && event.row.is_none()));
+    permits::clear_permit("existing-submission");
+}
+
 #[test]
 fn aggregation_preserves_launch_slot_finish_order_and_nullable_channel_means() {
     let started = Instant::now();

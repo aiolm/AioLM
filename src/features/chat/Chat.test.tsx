@@ -14,6 +14,7 @@ import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
 import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatRetrySnapshot } from "./chatHistory";
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -33,6 +34,7 @@ vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return 
   mcpCancelToolCall: vi.fn(async () => undefined),
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
+  sessionStop: vi.fn(async () => undefined),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
   // The public API listener is independent of chat; nothing here may reach it.
   apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
@@ -1184,6 +1186,61 @@ describe('saved names for running chat targets', () => {
     mocked.serverActivity.mockResolvedValue(undefined);
     mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1, 0]));
     setActiveProjectId(null);
+    for (const task of getTaskSnapshot()) removeTask(task.id);
+  });
+
+  it.each(['preparation', 'readiness'] as const)('cancels a named session during %s without reporting a request failure', async stage => {
+    const saved = definition('work', 'My answer engine');
+    const target = createTestStore({ ...cfg, sessions: [saved] });
+    let completePreparation!: () => void;
+    let rejectStart!: (cause: Error) => void;
+    if (stage === 'preparation') {
+      const update = target.updateConfig;
+      target.updateConfig = vi.fn(async patch => {
+        const result = await update(patch);
+        await new Promise<void>(resolve => { completePreparation = resolve; });
+        return result;
+      });
+    } else {
+      mocked.sessionStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStart = reject; }));
+    }
+    renderPanel(target);
+    fireEvent.click(await screen.findByLabelText('Loaded sessions'));
+    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · — · Stopped' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load model' }));
+    await waitFor(() => expect(stage === 'preparation' ? completePreparation : rejectStart).toBeTypeOf('function'));
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('running');
+    expect(screen.getByLabelText('Loaded sessions')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
+    await act(async () => {
+      if (stage === 'preparation') completePreparation();
+      else rejectStart(new Error('server start cancelled'));
+    });
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled'));
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.queryByText('Request failed')).not.toBeInTheDocument();
+    expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
+    expect(target.start).not.toHaveBeenCalled();
+    if (stage === 'preparation') expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it('stops a late successful named-session launch after Cancel instead of leaving it running', async () => {
+    const saved = definition('work', 'My answer engine');
+    const target = createTestStore({ ...cfg, sessions: [saved] });
+    let complete!: (status: api.SessionStatus) => void;
+    mocked.sessionStart.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    renderPanel(target);
+    fireEvent.click(await screen.findByLabelText('Loaded sessions'));
+    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · — · Stopped' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load model' }));
+    await waitFor(() => expect(complete).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledTimes(1));
+    await act(async () => { complete({ id: 'work', name: saved.name, state: 'running' }); });
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled'));
+    expect(mocked.sessionStop).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Request failed')).not.toBeInTheDocument();
   });
 
   it('routes an answer through the running session chosen by its saved name', async () => {

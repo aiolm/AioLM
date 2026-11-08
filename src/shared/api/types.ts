@@ -479,6 +479,12 @@ export interface PerformanceBenchmarkRequest {
   request_usage: boolean;
 }
 
+export interface PerformanceBenchmarkAdmission {
+  status: 'supported' | 'unsupported' | 'unknown';
+  reason: 'ready' | 'fixed_output' | 'stream_usage' | 'request' | 'configuration';
+  detail?: string;
+}
+
 export interface PerformanceBenchmarkRow extends ServingBenchmarkRow {
   id: string;
   error?: string | null;

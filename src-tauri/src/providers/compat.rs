@@ -93,6 +93,15 @@ fn reason(code: &'static str, detail: impl Into<String>) -> CompatReason {
     }
 }
 
+fn unidentified_detail(artifact: &ModelArtifact, fallback: &str) -> String {
+    let mut detail = fallback.to_owned();
+    for note in &artifact.notes {
+        detail.push_str("; ");
+        detail.push_str(note);
+    }
+    detail
+}
+
 fn readiness(artifact: &ModelArtifact) -> Vec<String> {
     let mut problems = Vec::new();
     if artifact.incomplete {
@@ -268,7 +277,7 @@ fn assess_llama(artifact: &ModelArtifact, result: &mut ModelCompatibility) {
             result.status = CompatStatus::Unknown;
             result.reasons.push(reason(
                 "unidentified",
-                "the model files could not be identified",
+                unidentified_detail(artifact, "the model files could not be identified"),
             ));
         }
         _ => {
@@ -310,7 +319,10 @@ fn assess_vllm(
         ArtifactFormat::Unknown => {
             result.reasons.push(reason(
                 "unidentified",
-                "config.json does not name an architecture",
+                unidentified_detail(
+                    artifact,
+                    "the tensor/configuration layout is not identified as Hugging Face",
+                ),
             ));
             return;
         }
@@ -476,7 +488,10 @@ fn assess_metal(
     if artifact.format == ArtifactFormat::Unknown {
         result.reasons.push(reason(
             "unidentified",
-            "config.json does not identify a Metal-loadable model",
+            unidentified_detail(
+                artifact,
+                "the tensor/configuration layout is not identified as Metal-loadable",
+            ),
         ));
         return;
     }
@@ -732,7 +747,10 @@ fn assess_mlx(
         ArtifactFormat::Unknown => {
             result.reasons.push(reason(
                 "unidentified",
-                "config.json does not name a model type",
+                unidentified_detail(
+                    artifact,
+                    "the tensor/configuration layout is not identified as Hugging Face/MLX",
+                ),
             ));
             return None;
         }

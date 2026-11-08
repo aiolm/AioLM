@@ -893,7 +893,8 @@ fn validate_staged_model(plan: &Plan, stage: &Path) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         let artifact = crate::providers::artifacts::inspect_snapshot(&view);
         if !artifact.missing.is_empty()
-            || artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown
+            || (plan.installed.selected_file.is_none()
+                && artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown)
         {
             return Err(format!(
                 "updated snapshot loading files are invalid: {}",

@@ -7,6 +7,7 @@ import type { ExecutionKey, ExecutionSettings } from "../../shared/config/execut
 export const PROJECTS_KEY = "aiolm.projects.v1";
 export const ACTIVE_PROJECT_KEY = "aiolm.active-project.v1";
 export const PROJECTS_CHANGED_EVENT = "aiolm-projects-changed";
+export const PROJECT_APPLIED_EVENT = "aiolm-project-applied";
 
 export const MAX_PROJECTS = 100;
 export const MAX_PROJECT_TOOLS = 128;
@@ -275,11 +276,13 @@ export function activeProjectId(store: Storage | null = storage()): string | nul
   } catch { return null; }
 }
 
-export function setActiveProjectId(id: string | null, store: Storage | null = storage()): void {
+/** Explicit application, optionally persisting a refreshed snapshot atomically first. */
+export function setActiveProjectId(id: string | null, store: Storage | null = storage(), projects?: ProjectPreset[]): void {
   if (!store) throw new Error('Project storage is unavailable.');
-  if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
+  if (projects) writeProjects(projects, store, id);
+  else if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
   else store.removeItem(ACTIVE_PROJECT_KEY);
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECT_APPLIED_EVENT));
 }
 
 export function projectFromConfig(

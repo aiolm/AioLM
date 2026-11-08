@@ -1,5 +1,7 @@
 import type * as api from "../../shared/api/types";
 import { modelDisplayName } from "../../shared/lib/displayPaths";
+import type { ExecutionSettings } from "../../shared/config/executionSettings";
+import type { ProviderId } from "../../shared/api/providers";
 
 export type RuntimeReferenceKind = "default" | "profile" | "session" | "model";
 export interface RuntimeReference {
@@ -8,11 +10,7 @@ export interface RuntimeReference {
   name: string;
 }
 
-type RuntimeSettings = { active_backend?: string; active_build?: string } | undefined;
-
-function names(settings: RuntimeSettings, backend: string, build: string): boolean {
-  return !!settings && settings.active_backend === backend && settings.active_build === build;
-}
+type RuntimeSettings = Partial<ExecutionSettings> | undefined;
 
 /**
  * Everything a runtime removal would leave without one.
@@ -27,18 +25,27 @@ function names(settings: RuntimeSettings, backend: string, build: string): boole
  * the per-target applications.
  */
 export function runtimeReferences(cfg: api.AppConfig | null | undefined, backend: string, build: string): RuntimeReference[] {
-  if (!cfg || !backend || !build) return [];
+  return referencesMatching(cfg, settings => !!settings && settings.active_backend === backend && settings.active_build === build, !!backend && !!build);
+}
+
+/** Provider removal leaves selections saved but unavailable until reconfigured. */
+export function providerRuntimeReferences(cfg: api.AppConfig | null | undefined, provider: ProviderId, runtime: string): RuntimeReference[] {
+  return referencesMatching(cfg, (settings, owner) => !!settings && (settings.active_provider ?? owner ?? cfg?.active_provider) === provider && settings.active_runtime === runtime, !!runtime);
+}
+
+function referencesMatching(cfg: api.AppConfig | null | undefined, matches: (settings: RuntimeSettings, owner?: ProviderId) => boolean, valid: boolean): RuntimeReference[] {
+  if (!cfg || !valid) return [];
   const found: RuntimeReference[] = [];
-  if (cfg.active_backend === backend && cfg.active_build === build) found.push({ kind: "default", name: "" });
+  if (matches(cfg)) found.push({ kind: "default", name: "" });
   for (const entry of cfg.settings_profiles?.entries ?? []) {
-    if (names(entry.settings, backend, build)) found.push({ kind: "profile", name: entry.name });
+    if (matches(entry.settings, entry.provider)) found.push({ kind: "profile", name: entry.name });
   }
   const sessionNames = new Map((cfg.sessions ?? []).map(item => [item.id, item.name || item.id]));
   for (const definition of cfg.sessions ?? []) {
-    if (names(definition.execution, backend, build)) found.push({ kind: "session", name: sessionNames.get(definition.id) ?? definition.id });
+    if (matches(definition.execution)) found.push({ kind: "session", name: sessionNames.get(definition.id) ?? definition.id });
   }
   for (const [target, application] of Object.entries(cfg.settings_profiles?.applied ?? {})) {
-    if (!names(application.settings, backend, build)) continue;
+    if (!matches(application.settings, application.provider)) continue;
     if (target.startsWith("session:")) {
       const id = target.slice("session:".length);
       found.push({ kind: "session", name: sessionNames.get(id) ?? id });

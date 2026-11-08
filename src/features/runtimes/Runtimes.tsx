@@ -32,6 +32,9 @@ import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 import { notifyRuntimeInventoryChanged, useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 import { useModelSettings } from '../model-settings/modelSettingsContext';
 import { settingsFlowCopy } from '../model-settings/settingsFlowCopy';
+import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
+import { isServerBusy } from '../../shared/lib/serverLifecycle';
+import { sessionStatusLabel } from '../../shared/runtime/sessionUtils';
 
 export type { BackendRow } from "./runtimesHelpers";
 
@@ -45,9 +48,10 @@ function BackIcon() {
 /** Opens on the full engine inventory. An explicit request without a provider
  * restores that inventory even if the page is already showing an engine.
  * Provider-specific requests remain independent of execution selection. */
-export default function RuntimesPanel({ store, active = true, onOpenProfiles, engineRequest, onBusyChange }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; engineRequest?: { provider?: ProviderId; revision: number }; onBusyChange?: (busy: boolean) => void }) {
+export default function RuntimesPanel({ store, active = true, onOpenProfiles, onOpenLibrary, engineRequest, onBusyChange }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; onOpenLibrary?: () => void; engineRequest?: { provider?: ProviderId; revision: number }; onBusyChange?: (busy: boolean) => void }) {
   const { t, locale } = useI18n();
   const copy = adapterCatalogCopy[locale];
+  const autoCopy = runtimeAutoCopy[locale];
   const modelSettings = useModelSettings();
   const addHeadingId = useId();
   const [view, setView] = useState<View>(() => engineRequest?.provider ? { kind: 'adapter', id: engineRequest.provider } : { kind: 'inventory' });
@@ -195,6 +199,21 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       {wizardOpened && (
         <div className="runtimes-main runtimes-wizard" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
+          {(rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy) && <FeedbackBanner tone="info">
+            {rt.serverRunning && <>
+              <p>{autoCopy.sessionsLocked}</p>
+              {(isServerBusy(store.status.state) || rt.sessionsInUse.length > 0) && <ul>
+                {isServerBusy(store.status.state) && <li>{autoCopy.defaultSession} · {executionText[locale][sessionStatusLabel(store.status.state)]}</li>}
+                {rt.sessionsInUse.filter(session => session.id !== 'default' || !isServerBusy(store.status.state)).map(session => <li key={session.id}>
+                  <span>{normalizeDisplayText(session.id === 'default' ? autoCopy.defaultSession : store.cfg?.sessions?.find(item => item.id === session.id)?.name || session.name || session.id)}</span>
+                  {' · '}{executionText[locale][sessionStatusLabel(session.state)]}
+                </li>)}
+              </ul>}
+              <p>{autoCopy.sessionsLockedHint}</p>
+              {onOpenLibrary && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={onOpenLibrary}>{autoCopy.openLibrary}</button>}
+            </>}
+            {(rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy) && <p>{autoCopy.operationLocked}</p>}
+          </FeedbackBanner>}
           <AutomaticRuntimeConnection key={`auto-${wizardKey}`} titleRef={wizardHeading} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy}
             onConnected={result => { notifyRuntimeInventoryChanged(); onRegistered(result.engine_id, result); }} onBusyChange={setAutoBusy} />
           <details className="runtime-advanced">
@@ -229,7 +248,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
             ? <FeedbackBanner tone="warning">{copy.missing}</FeedbackBanner>
             : <>
           <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
-          {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} />}
+          {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} />}
           {llama && <>
           <PanelFeedback>
             {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}

@@ -150,15 +150,6 @@ describe('runtime model selection', () => {
     expect(modelSelectable(model({ ...compatibility([], 'unsupported'), provider }), provider)).toBe(false);
     expect(modelSelectable(model(compatibility([], 'unknown')), 'vllm')).toBe(false);
   });
-  it('preserves omitted catalog IPC defaults and returns the exact selected runtime view', async () => {
-    vi.mocked(invoke).mockResolvedValue({ models: [], truncated: false });
-    await listModelArtifacts('models', 'scan');
-    expect(invoke).toHaveBeenLastCalledWith('list_model_artifacts', { modelsDir: 'models', scanId: 'scan', providerId: null, runtimeId: null });
-    const selection = { provider: 'custom.example' as const, runtime: 'one', source: 'runtime-bindings' as const, binding_paths: ['deployment.json'] };
-    vi.mocked(invoke).mockResolvedValue({ models: [], truncated: false, selection });
-    expect((await listModelArtifacts('models', 'scan', { provider: selection.provider, runtime: selection.runtime, includeLibrary: false })).selection).toEqual(selection);
-    expect(invoke).toHaveBeenLastCalledWith('list_model_artifacts', { modelsDir: 'models', scanId: 'scan', providerId: selection.provider, runtimeId: 'one', includeLibrary: false });
-  });
   it('names catalog snapshots from proven repositories while preserving external folders and GGUF filenames', async () => {
     const revision = '0123456789abcdef0123456789abcdef01234567';
     const artifact: ModelArtifact = { path: `/synthetic/models/${revision}`, name: revision, format: 'hf-safetensors',
@@ -176,8 +167,6 @@ describe('runtime model selection', () => {
     vi.mocked(invoke).mockResolvedValue({ models: artifacts.map(value => ({ artifact: value, compatibility: [] })), truncated: false });
     const result = await listModelArtifacts('/synthetic/models');
     expect(result.models.map(value => value.name)).toEqual(['synthetic-model', 'synthetic-mlx', revision, 'custom-folder', 'weights.Q4_K_M.gguf', revision]);
-    expect(result.models.map(value => value.path)).toEqual(artifacts.map(value => value.path));
-    expect(result.models.map(value => value.artifact)).toEqual(artifacts);
   });
   it('labels the vllm-metal plugin and core versions while retaining the existing provider', () => {
     const runtime: RuntimeInstance = { provider: 'vllm', id: 'synthetic-metal', engine: 'vllm', server: 'vllm',

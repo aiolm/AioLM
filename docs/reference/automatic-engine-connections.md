@@ -28,6 +28,11 @@ expanded details kept.
 
 This flow needs no JSON files or probe programs.
 
+Discovery and registration are locked while model sessions are running, starting
+or stopping, or another runtime operation owns the resources. The Add flow names
+the affected sessions and offers **Open Library** to stop or cancel them. A
+separate runtime-operation notice explains locks not owned by a model session.
+
 The progress indicator identifies the operation that failed: discovery,
 inspection or connection verification. A failed rediscovery does not discard an
 already inspected candidate and its model selection.

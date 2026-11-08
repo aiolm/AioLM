@@ -12,6 +12,8 @@ After a successful library scan, AioLM checks downloaded models for upstream upd
 
 Models are distinguished by their actual loaded state across all sessions. Unloaded models have no active or inactive designation. The header shows the default session's loaded model; when it is stopped, choose a model to load. The stopped default session is hidden from the session list. Named saved sessions remain available to load directly, including sessions saved with a disabled flag in older configurations. Per-model settings are preserved after unloading.
 
+Chat registers saved-session loading as cancellable work before profile preparation. **Cancel** remains available while preparing or starting that session; cancellation from Chat or the Library shows a neutral **Cancelled** notice and keeps already-saved settings. Actual startup failures still retain their error and runtime diagnostics.
+
 Before a model has been configured, an empty default chat offers **Find a model** to open Discover and **Choose model** to open settings for an existing model. A successfully scanned empty library offers **Find a model** and **Choose folder**. These entry points do not save execution settings, download files or start a model automatically. A filtered library instead offers filter recovery or supporting-file visibility controls.
 
 Choosing a library folder keeps the current folder and scanned models visible until the new folder is saved successfully. Folder selection and rescanning are unavailable while that operation is pending. A cancelled picker leaves the library unchanged; a picker or save failure stays visible until dismissed or retried. A successful save switches the library to the folder returned by native persistence and scans it.
@@ -46,6 +48,8 @@ Other recurrent, sliding-window, MLA and shared-KV architectures currently show 
 - **Save profile & start**, **Save profile & restart**, or **Save profile, switch & start** saves the selected profile before starting the requested operation. The existing policy for stopping other sessions still applies and is shown in the dialog. An active response must finish or be stopped first.
 - Benchmark settings use the same **Save profile** action before updating the benchmark target. Workload-controlled settings are explained in the dialog. Start the measurement from the benchmark page after stopping running model sessions.
 - Project settings use **Save profile** before updating the project editor. Save the project separately; applying the saved project to default execution remains an explicit action. Its system prompt is edited and saved through the profile's model settings.
+
+Saving or importing a project, updating the project library, or deleting another project does not replace an existing conversation's instructions, tool selections or manually attached documents. **Apply runtime settings** explicitly activates the saved project and applies its conversation defaults. Deleting the active project clears its binding rather than activating a different saved project or inheriting that project's instructions.
 
 The header Close button or Escape closes the editor. If pending changes exist, the dialog offers to keep editing or discard them. Completed profile saves, renames, default designations, deletions and applications remain saved after closing. A failed save preserves the draft. During model loading, Cancel stops the pending launch; settings that were saved before loading remain available for correction and retry.
 

@@ -59,14 +59,14 @@ describe('MCP catalog refresh selection', () => {
     await act(async () => { loaded([{ id: 'catalog', name: 'Catalog', enabled: true, command: 'synthetic', args: [] }]); await refreshing; });
   });
 
-  it('preserves catalog order and collision suffixes while pruning missing selections', async () => {
+  it('preserves unresolved selections while offering only discovered definitions in catalog order', async () => {
     const first = { name: 'same', input_schema: { type: 'object', properties: { first: { type: 'string' } } } };
     const second = { name: 'same', input_schema: { type: 'object', properties: { second: { type: 'number' } } } };
     vi.mocked(api.mcpListTools).mockResolvedValue([second, first, { name: 'other', input_schema: { type: 'object' } }]);
     const { result } = setup();
     act(() => result.current.setSelectedMcpTools(['catalog:other', 'catalog:same', 'catalog:missing']));
     await act(async () => { await result.current.refreshMcpTools(); });
-    expect(result.current.selectedMcpTools).toEqual(['catalog:other', 'catalog:same']);
+    expect(result.current.selectedMcpTools).toEqual(['catalog:other', 'catalog:same', 'catalog:missing']);
     expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['catalog__same', 'catalog__same_2', 'catalog__other']);
     expect(result.current.mcpDefinitions.map(definition => definition.function.parameters)).toEqual([second.input_schema, first.input_schema, { type: 'object' }]);
     expect([...result.current.mcpEntryByFunctionName.keys()]).toEqual(['catalog__same', 'catalog__same_2', 'catalog__other']);
@@ -82,6 +82,20 @@ describe('MCP catalog refresh selection', () => {
     expect(result.current.selectedMcpTools).toEqual(['catalog:summarize']);
     expect(result.current.mcpDefinitions).toHaveLength(1);
     expect([...result.current.mcpEntryByFunctionName.values()].map(entry => entry.tool.name)).toEqual(['summarize']);
+  });
+
+  it('keeps a selected tool through disappearance and offers it again when discovery resolves it', async () => {
+    const { result } = setup();
+    act(() => result.current.setSelectedMcpTools(['catalog:lookup', 'offline:remember']));
+    await act(async () => { await result.current.refreshMcpTools(); });
+    vi.mocked(api.mcpListTools).mockResolvedValue([]);
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['catalog:lookup', 'offline:remember']);
+    expect(result.current.mcpDefinitions).toEqual([]);
+    vi.mocked(api.mcpListTools).mockResolvedValue(tools);
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['catalog:lookup', 'offline:remember']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['catalog__lookup']);
   });
 
   it.each([{ selected: ['catalog:lookup'] }, { selected: [] }])('honors explicit project selection $selected before the first catalog load', async ({ selected }) => {

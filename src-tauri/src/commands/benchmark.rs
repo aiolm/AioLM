@@ -110,24 +110,41 @@ pub(crate) fn bench_cancel(state: State<'_, AppState>) {
     }
 }
 
+/// Inspect only existing target metadata; ordinary launch preflight still runs
+/// under the execution lock when the user starts a measurement.
+#[tauri::command]
+pub(crate) async fn performance_bench_admission(
+    cfg: config::AppConfig,
+    request: performance_bench::PerformanceBenchRequest,
+) -> performance_bench::BenchmarkAdmission {
+    performance_bench::admission(cfg, request).await
+}
+
 /// Run the common chat workload on a private launch without touching the
 /// application's selected server state or saving the temporary configuration.
 #[tauri::command]
 pub(crate) async fn run_performance_bench(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    cfg: config::AppConfig,
+    request: performance_bench::PerformanceBenchRequest,
+) -> Result<performance_bench::PerformanceBenchResult, String> {
+    let progress: performance_bench::Progress = Arc::new(move |progress| {
+        let _ = app.emit("performance-bench-progress", progress);
+    });
+    run_performance_bench_with_progress(&state, cfg, request, progress).await
+}
+
+pub(crate) async fn run_performance_bench_with_progress(
+    state: &AppState,
     mut cfg: config::AppConfig,
     mut request: performance_bench::PerformanceBenchRequest,
+    progress: performance_bench::Progress,
 ) -> Result<performance_bench::PerformanceBenchResult, String> {
-    // Reject overlapping launches instead of queuing a run whose cancel
-    // request could otherwise be consumed by the currently active benchmark.
-    let Ok(_operation) = state.operation.try_lock() else {
-        return Ok(performance_bench::failed(
-            &request,
-            &cfg,
-            "another server or benchmark operation is in progress".into(),
-        ));
-    };
+    let _operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "another server or benchmark operation is in progress".to_string())?;
     let validation = performance_bench::validate_execution_request(&mut request).and_then(|()| {
         cfg.normalize();
         cfg.validate()?;
@@ -156,38 +173,44 @@ pub(crate) async fn run_performance_bench(
         }
         Ok(())
     });
-    if let Err(error) = validation {
-        return Ok(performance_bench::failed(&request, &cfg, error));
-    }
-    // General adapter preflight is shared with ordinary model serving.
-    crate::benchmark::sharing::permits::note_measurement_start();
+    validation?;
+    // Admission may probe the target but is not a measurement: rejection must
+    // neither invalidate sharing permits nor create an empty failed journal.
     state.bench_cancel.store(false, Ordering::Release);
     let cancel = state.bench_cancel.clone();
-    let _ = app.emit(
-        "performance-bench-progress",
-        performance_bench::PerformanceBenchProgress {
-            run_id: request.run_id.clone(),
-            phase: "loading",
-            completed: 0,
-            total: request.prompt_bytes.len()
-                * request.concurrencies.len()
-                * request.repetitions as usize,
-            row: None,
-            message: None,
-        },
-    );
-    let launch =
-        crate::launch_validation::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await;
-    let root = benchmark::data_root()?;
-    let prepared = match &launch {
-        Ok(_) => performance_bench::RuntimeInfo::prepare(&cfg, &request).await,
-        Err(error) => Err(error.clone()),
+    progress(performance_bench::PerformanceBenchProgress {
+        run_id: request.run_id.clone(),
+        phase: "loading",
+        completed: 0,
+        total: request.prompt_bytes.len()
+            * request.concurrencies.len()
+            * request.repetitions as usize,
+        row: None,
+        message: None,
+    });
+    let admitted = async {
+        let gpu =
+            crate::launch_validation::validate_launch_config_with_cancel(&mut cfg, Some(&cancel))
+                .await?;
+        let runtime = performance_bench::RuntimeInfo::prepare(&cfg, &request).await?;
+        Ok::<_, String>((gpu, runtime))
+    }
+    .await;
+    let (gpu, mut runtime) = match admitted {
+        Ok(admitted) if !cancel.load(Ordering::Acquire) => admitted,
+        Ok(_) => {
+            state.bench_cancel.store(false, Ordering::Release);
+            return Err("benchmark cancelled before measurement".into());
+        }
+        Err(error) => {
+            state.bench_cancel.store(false, Ordering::Release);
+            return Err(error);
+        }
     };
+    let root = benchmark::data_root()?;
     let mut initial =
         performance_bench::failed(&request, &cfg, "benchmark has not completed".into());
-    if let Ok(runtime) = &prepared {
-        initial.provenance = Some(runtime.provenance.clone());
-    }
+    initial.provenance = Some(runtime.provenance.clone());
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -200,24 +223,9 @@ pub(crate) async fn run_performance_bench(
             "request": request, "result": initial,
         }),
     )?);
-    let (gpu, mut runtime) = match (launch, prepared) {
-        (Ok(gpu), Ok(runtime)) => (gpu, runtime),
-        (Err(error), _) | (_, Err(error)) => {
-            let mut result = initial;
-            result.message = Some(error);
-            if cancel.load(Ordering::Acquire) {
-                result.status = "cancelled";
-            }
-            journal.finish(&result)?;
-            state.bench_cancel.store(false, Ordering::Release);
-            return Ok(result);
-        }
-    };
+    crate::benchmark::sharing::permits::note_measurement_start();
     let trial_journal = journal.clone();
     runtime.checkpoint = Some(Arc::new(move |result| trial_journal.checkpoint(result)));
-    let progress: performance_bench::Progress = Arc::new(move |progress| {
-        let _ = app.emit("performance-bench-progress", progress);
-    });
     let result = performance_bench::run(
         cfg,
         request,

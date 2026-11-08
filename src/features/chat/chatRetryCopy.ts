@@ -94,3 +94,29 @@ export const chatRetryToolsCopy: Record<Locale, Record<RetryToolsState | 'reload
     reload: '为重试重新加载 MCP 工具',
   },
 };
+
+/** Saved project tool choices remain selected until the user removes them. */
+export const chatMcpSelectionCopy: Record<Locale, {
+  notLoaded: string; unavailable: string; remove: string; tool: string; loadHint: string; unavailableHint: string;
+}> = {
+  en: {
+    notLoaded: 'Not loaded', unavailable: 'Unavailable', remove: 'Remove MCP tool', tool: 'MCP tool',
+    loadHint: 'Load MCP tools to resolve saved selections. Only loaded tools are offered to the model; each call requires approval.',
+    unavailableHint: 'Some selected tools are unavailable. Enable their servers in MCP settings and load again, or remove these selections. Each tool call still requires approval.',
+  },
+  ko: {
+    notLoaded: '불러오지 않음', unavailable: '사용할 수 없음', remove: 'MCP 도구 제거', tool: 'MCP 도구',
+    loadHint: 'MCP 도구를 불러와 저장된 선택을 확인하세요. 불러온 도구만 모델에 제공되며 호출마다 승인이 필요합니다.',
+    unavailableHint: '일부 선택한 도구를 사용할 수 없습니다. MCP 설정에서 서버를 활성화하고 다시 불러오거나 해당 선택을 제거하세요. 도구 호출은 매번 승인이 필요합니다.',
+  },
+  ja: {
+    notLoaded: '未読み込み', unavailable: '利用不可', remove: 'MCPツールを削除', tool: 'MCPツール',
+    loadHint: 'MCPツールを読み込んで保存済みの選択を確認してください。読み込まれたツールのみモデルに提供され、呼び出しごとに承認が必要です。',
+    unavailableHint: '選択した一部のツールは利用できません。MCP設定でサーバーを有効にして再読み込みするか、選択を削除してください。ツール呼び出しは毎回承認が必要です。',
+  },
+  zh: {
+    notLoaded: '尚未加载', unavailable: '不可用', remove: '移除 MCP 工具', tool: 'MCP 工具',
+    loadHint: '加载 MCP 工具以确认已保存的选择。只有已加载的工具会提供给模型；每次调用都需要批准。',
+    unavailableHint: '部分所选工具不可用。请在 MCP 设置中启用其服务器后重新加载，或移除这些选择。每次工具调用仍需批准。',
+  },
+};

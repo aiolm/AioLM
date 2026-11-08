@@ -325,9 +325,7 @@ mod linux {
             // Install both watches before the first Read can begin.
             let weak = Rc::downgrade(self);
             proxy.connect_local("g-signal", false, move |values| {
-                let Some(service) = weak.upgrade() else {
-                    return None;
-                };
+                let service = weak.upgrade()?;
                 let result = (|| -> Result<(), String> {
                     let signal = values[2]
                         .get::<String>()
@@ -355,9 +353,7 @@ mod linux {
             });
             let weak = Rc::downgrade(self);
             proxy.connect_local("notify::g-name-owner", false, move |values| {
-                let Some(service) = weak.upgrade() else {
-                    return None;
-                };
+                let service = weak.upgrade()?;
                 let proxy = match values[0].get::<gio::DBusProxy>() {
                     Ok(proxy) => proxy,
                     Err(error) => {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
-import { ACTIVE_PROJECT_KEY, PROJECTS_KEY, activeProjectId, exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
+import { PROJECTS_KEY, activeProjectId, exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
@@ -53,13 +53,13 @@ describe("Project configuration snapshots", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it.each([PROJECTS_KEY, ACTIVE_PROJECT_KEY])('keeps the edited project and reports failed persistence of %s before a successful retry', key => {
+  it('keeps the edited project and reports failed persistence before a successful retry', () => {
     const store = createTestStore();
     const project = projectFromConfig('Research', 'Keep citations', store.cfg!, [], [], '', 100);
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited project' } });
-    const failure = failWrites(key);
+    const failure = failWrites();
     fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
     expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
     expect(readProjects()).toEqual([project]);
@@ -73,6 +73,23 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
     expect(readProjects()[0].name).toBe('Edited project');
     expect(screen.queryByText(/Synthetic project storage failure/)).not.toBeInTheDocument();
+  });
+
+  it('saves another project for later without activating it, then applies only on request', async () => {
+    const store = createTestStore();
+    const active = projectFromConfig('Active project', 'Active prompt', store.cfg!, [], [], '', 100);
+    const later = projectFromConfig('Later project', 'Later prompt', store.cfg!, [], [], '', 200);
+    writeProjects([active, later]); setActiveProjectId(active.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /Later project.*model\.gguf/ }));
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Saved for later' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    expect(readProjects().find(project => project.id === later.id)?.description).toBe('Saved for later');
+    expect(activeProjectId()).toBe(active.id);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    await waitFor(() => expect(activeProjectId()).toBe(later.id));
+    expect(store.updateConfig).toHaveBeenCalledOnce();
   });
 
   it('keeps a project visible and active when its deletion cannot be persisted', () => {
@@ -460,10 +477,10 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
     expect(readProjects()).toEqual(afterDeletion);
-    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    expect(activeProjectId()).toBeNull();
     await act(async () => { finish(); });
     expect(readProjects()).toEqual(afterDeletion);
-    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    expect(activeProjectId()).toBeNull();
     expect(screen.getByLabelText('Project name')).toHaveValue(hasRemaining ? 'Remaining project' : '');
     expect(store.getConfig()?.ctx_size).toBe(8192);
     expect(screen.queryByText(/^Applied “Pending project”\./)).not.toBeInTheDocument();

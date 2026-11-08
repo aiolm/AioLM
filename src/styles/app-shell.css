@@ -80,7 +80,7 @@
 .app-task-strip__copy > span { display: block; }
 .app-task-strip__transfer { color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .app-task-strip__progress { width: 160px; max-width: 100%; margin-top: 8px; }
-.app-skip-link { position: fixed; top: 8px; left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: var(--ui-on-accent); background: var(--ui-accent-solid); border-radius: var(--ui-radius-control); }
+.app-skip-link { position: fixed; top: calc(8px + var(--app-window-chrome-height, 0px)); left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: var(--ui-on-accent); background: var(--ui-accent-solid); border-radius: var(--ui-radius-control); }
 .app-skip-link:focus { transform: none; }
 .aiolm-menu-trigger { display: none; }
 .aiolm-drawer { border: 0; padding: 0; margin: 0; height: calc(100dvh - var(--app-window-chrome-height, 0px)); max-height: calc(100dvh - var(--app-window-chrome-height, 0px)); width: min(304px,85vw); max-width: 85vw; background: var(--ui-sidebar); background-image: var(--ui-rail-gradient); color: var(--ui-rail-ink); box-shadow: var(--ui-elev-2); }

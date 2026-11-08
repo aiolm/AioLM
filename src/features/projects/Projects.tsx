@@ -216,7 +216,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       const existing = selectedId ? projects.find((item) => item.id === selectedId) : null;
       const saved = existing ? { ...project, id: existing.id, createdAt: existing.createdAt } : project;
       const next = upsertProject(saved, projects);
-      writeProjects(next, undefined, saved.id);
+      writeProjects(next);
       setProjects(next);
       setSelectedId(saved.id);
       setConfigSnapshot(structuredClone(savedConfig)); setSystemPrompt(savedPrompt);
@@ -268,7 +268,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             ...item, profileApplication: application,
             config: { ...item.config, ...profileSettings }, systemPrompt: application.system_prompt,
           } : item);
-          writeProjects(next, undefined, project.id); setProjects(next);
+          setActiveProjectId(project.id, undefined, next); setProjects(next);
           projectStateWritten = true;
         }
         const draft = latestDraft.current;
@@ -298,7 +298,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const confirmRemove = (project: ProjectPreset) => {
     try {
       const next = deleteProject(project.id, projects);
-      writeProjects(next, undefined, activeProjectId() === project.id ? next[0]?.id ?? null : undefined);
+      writeProjects(next, undefined, activeProjectId() === project.id ? null : undefined);
       setProjects(next);
       if (selectedId === project.id) setSelectedId(next[0]?.id ?? null);
       setPendingDelete(null);

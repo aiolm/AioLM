@@ -127,6 +127,9 @@ export const providerPortableExport = (providerId: ProviderId, runtimeId: string
 /** Import one portable archive into a new isolated runtime (native open dialog). */
 export const providerPortableImport = () => invoke<PortableRuntimeManifest>('provider_portable_import');
 export const modelArtifact = (path: string) => invoke<ModelArtifact>('model_artifact', { path });
+export interface SnapshotDisplayName { name: string; selected: boolean }
+/** Snapshot labels read only naming metadata, never every weight header. */
+export const snapshotModelName = (path: string) => invoke<SnapshotDisplayName | null>('snapshot_model_name', { path });
 export const modelCompatibility = (cfg: AppConfig) => invoke<ModelCompatibility>('model_compatibility', { cfg });
 export const providerCommandPreview = (cfg: AppConfig) => invoke<string[]>('provider_command_preview', { cfg });
 export const providerOptionIssues = (cfg: AppConfig) => invoke<Array<{ key: string; code: string; message: string }>>('provider_option_issues', { cfg });
@@ -161,7 +164,7 @@ export async function listModelArtifacts(modelsDir: string, scanId?: string, sel
       ? /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(artifact.repository ?? '')?.[1]
       : undefined;
     return {
-      name: repositoryName ?? artifact.name, path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
+      name: artifact.selected_file ? artifact.name : repositoryName ?? artifact.name, path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
       is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
     };
   });

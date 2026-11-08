@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useLayoutEffect, useRef } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as api from '../../shared/api';
@@ -29,6 +29,7 @@ const customConfig = { ...testConfig, active_provider: 'custom.synthetic' as con
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   resetInstalledRuntimes();
 });
 
@@ -59,6 +60,7 @@ describe('runtime labels follow the current inventory (U2)', () => {
     await waitFor(() => expect(screen.getByTestId('selection')).toHaveTextContent('synthetic-1.0'));
     vi.mocked(api.providerRuntimes).mockResolvedValue([]);
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(api.providerRemove).toHaveBeenCalledWith('custom.synthetic', 'syn-1'));
     await waitFor(() => expect(screen.getByTestId('selection')).not.toHaveTextContent('synthetic-1.0'));
   });

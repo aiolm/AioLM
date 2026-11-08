@@ -332,6 +332,60 @@ pub(crate) fn fixed_output_control(engine: &EngineInfo) -> Result<FixedOutputCon
     Ok(control)
 }
 
+/// Read-only admission from the selected model/runtime's existing probe metadata.
+/// This never refreshes an adapter, loads a model, or captures benchmark identity.
+#[derive(Debug, Serialize)]
+pub struct BenchmarkAdmission {
+    pub status: &'static str,
+    pub reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+pub async fn admission(
+    mut cfg: AppConfig,
+    mut request: PerformanceBenchRequest,
+) -> BenchmarkAdmission {
+    let unknown = |detail| BenchmarkAdmission {
+        status: "unknown",
+        reason: "configuration",
+        detail: Some(detail),
+    };
+    if let Err(error) = validate_execution_request(&mut request) {
+        return unknown(error);
+    }
+    if let Err(error) = crate::launch_validation::validate_start_config(&mut cfg) {
+        return unknown(error);
+    }
+    let engine = match crate::providers::execution::probed_info(&cfg).await {
+        Ok(engine) => engine,
+        Err(error) => return unknown(error),
+    };
+    engine_admission(&engine, &request)
+}
+
+fn engine_admission(engine: &EngineInfo, request: &PerformanceBenchRequest) -> BenchmarkAdmission {
+    let unsupported = |reason, detail| BenchmarkAdmission {
+        status: "unsupported",
+        reason,
+        detail: Some(detail),
+    };
+    let Some(control) = engine.fixed_output else {
+        return unsupported("fixed_output", fixed_output_control(engine).unwrap_err());
+    };
+    if let Err(error) = fixed_output_control(engine) {
+        return unsupported("stream_usage", error);
+    }
+    match point_body(engine, String::new(), request, control) {
+        Ok(_) => BenchmarkAdmission {
+            status: "supported",
+            reason: "ready",
+            detail: None,
+        },
+        Err(error) => unsupported("request", error),
+    }
+}
+
 /// Each launch slot must report exactly `target` completion tokens. A batch
 /// with early EOS, overrun, or a missing/invalid counter is not a measurement.
 fn fixed_output_counts(
@@ -583,6 +637,22 @@ fn point_request(
     request: &PerformanceBenchRequest,
     control: FixedOutputControl,
 ) -> Result<reqwest::Request, String> {
+    let body = point_body(engine, text, request, control)?;
+    client
+        .post(format!("{}/chat/completions", url.trim_end_matches('/')))
+        .bearer_auth(key)
+        .json(&body)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Admission and execution pass through exactly the same request adapter.
+fn point_body(
+    engine: &EngineInfo,
+    text: String,
+    request: &PerformanceBenchRequest,
+    control: FixedOutputControl,
+) -> Result<serde_json::Value, String> {
     let model = engine
         .request_lora
         .as_deref()
@@ -609,12 +679,7 @@ fn point_request(
     {
         return Err("the runtime adapter did not send the fixed-output request unchanged".into());
     }
-    client
-        .post(format!("{}/chat/completions", url.trim_end_matches('/')))
-        .bearer_auth(key)
-        .json(&body)
-        .build()
-        .map_err(|e| e.to_string())
+    Ok(body)
 }
 
 pub struct RuntimeInfo {
@@ -635,6 +700,12 @@ impl RuntimeInfo {
         validate_execution_request(&mut request)?;
         let engine = crate::providers::execution::probed_info(cfg).await?;
         let control = fixed_output_control(&engine)?;
+        let admission = engine_admission(&engine, &request);
+        if admission.status != "supported" {
+            return Err(admission
+                .detail
+                .unwrap_or_else(|| "benchmark admission failed".into()));
+        }
         let (workload, input_texts) = prepare_inputs(&request);
         let model_path = PathBuf::from(&cfg.active_model);
         let label = model_path

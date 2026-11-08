@@ -48,6 +48,8 @@ The chat header aligns with the message canvas. The answering model and runtime 
 
 The topbar controls default execution. The always-visible session selector in the chat header chooses the session that answers that conversation; choosing a worker does not change the default target. Retrieval and audio/video preprocessing are in **Conversation settings**. Attachments and selected tools/skills appear above the input, with attachment/tool/skill controls and Send/Stop below it.
 
+Loading a saved answering session can be cancelled directly from Chat or the Library. Cancellation is reported as **Cancelled**, not a failed request. Selected MCP tools show **Not loaded** or **Unavailable** until discovered; their loading/removal controls stay beside the selection, while detailed guidance stays in the MCP tools panel.
+
 Model settings use **Choose runtime → Choose profile → Adjust options**. Downloading or previewing a model does not start it; saving a profile and starting execution remain separate actions. Projects likewise separate saving a preset from applying its saved settings.
 
 Theme and font controls are in **Settings → Appearance**; density is in **General**. Compact density reduces row spacing and control padding without shrinking touch targets. Personalization separates instruction-file application from the file being edited. Benchmark input-size and concurrency rows summarize the selected values; technical environment details and advanced request options start collapsed. History and copy stay in the result toolbar, while **Export and manage** contains export, profile creation and deletion.
@@ -81,7 +83,11 @@ Use the Node, npm and Rust versions pinned in the repository; see [build require
 
 Vitest coverage measures the frontend sources exercised by its suite, not the separate direct Node scripts. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
 
+Local native UI checks must isolate both application data and webview storage. Use a disposable `HOME`/`AIOLM_HOME` and a smoke-only window override with `incognito: true`; changing `HOME` alone does not isolate macOS WKWebView storage. Verify that preferences, projects and conversations are fresh before seeding synthetic fixtures, and never run a smoke against a production webview profile.
+
 Desktop window chrome uses one theme-aware title strip above startup, setup and the workspace. macOS retains its native traffic lights over the strip; Windows/Linux draw caption buttons only when native frame removal succeeds. The strip stays interactive inside modal settings, nested confirmations and the navigation drawer, with space reserved above their content. The frame follows Light, Dark and System without pinning System to the last resolved color; Linux delegates System to the desktop portal and GTK session policy. Closing still follows the native close request and close-to-tray setting. Browser previews do not display window controls.
+
+The keyboard **Skip to content** link starts below the title strip so it does not cover native window controls.
 
 ## Security and privacy
 

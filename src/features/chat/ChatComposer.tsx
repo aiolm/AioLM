@@ -4,7 +4,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import Badge from "../../shared/ui/Badge";
-import { useEffect, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { ChatSkill } from "../../shared/api/personalization";
 import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
@@ -14,7 +14,7 @@ import type { ChatMcpTool } from "./useChatMcpTools";
 import type { PendingToolCall } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
 import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
-import { chatReplyStateCopy } from './chatRetryCopy';
+import { chatMcpSelectionCopy, chatReplyStateCopy } from './chatRetryCopy';
 
 interface ChatComposerProps {
   dropTargetRef?: Ref<HTMLDivElement>;
@@ -22,6 +22,7 @@ interface ChatComposerProps {
   contextWarning: string | null;
   contextSources: string[];
   mcpCatalog: ChatMcpTool[];
+  mcpCatalogLoaded?: boolean;
   selectedMcpTools: string[];
   toggleMcpTool: (key: string) => void;
   loadingMcpTools: boolean;
@@ -64,13 +65,14 @@ interface ChatComposerProps {
 
 export default function ChatComposer({
   dropTargetRef,
-  contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
+  contextWarning, contextSources, mcpCatalog, mcpCatalogLoaded = false, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, toolCallInProgress, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, enterToSend = true, phase, onAddAttachment, onStop,
   aborting, onSend, canSend, msgsLength, responseState, responseFinishReason, responseWithoutOutput = false, ct, locale = 'en', loadingModel = false,
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
 }: ChatComposerProps) {
   const toolStripRef = useRef<HTMLDivElement>(null);
+  const mcpHelpId = useId();
   const imeHandlers = useImeEnterGuard(input, onKeyDown);
   useEffect(() => {
     const strip = toolStripRef.current;
@@ -104,6 +106,25 @@ export default function ChatComposer({
     : phase !== 'idle' ? ct(phase)
     : responseStatus ? `${responseStatus} · ${msgsLength} ${ct('messages')}`
     : msgsLength === 0 ? ct('emptyConversation') : `${msgsLength} ${ct('messages')}`;
+  const mcpCopy = chatMcpSelectionCopy[locale];
+  const mcpSelectionHint = mcpCatalogLoaded ? mcpCopy.unavailableHint : mcpCopy.loadHint;
+  const selectedTools = selectedMcpTools.map(key => {
+    const entry = mcpCatalog.find(candidate => `${candidate.serverId}:${candidate.tool.name}` === key);
+    const separator = key.indexOf(':');
+    const toolName = separator >= 0 ? key.slice(separator + 1) : '';
+    return {
+      key,
+      resolved: !!entry,
+      label: entry
+        ? `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.tool.name)}`
+        : normalizeDisplayText(toolName) || mcpCopy.tool,
+    };
+  });
+  const hasUnresolvedTools = selectedTools.some(tool => !tool.resolved);
+  const loadToolsButton = <button type="button" data-icon="refresh" onClick={refreshMcpTools}
+    disabled={controlsLocked || loadingMcpTools} aria-describedby={mcpHelpId} className="app-button app-button--secondary app-button--sm">
+    <StableLabel value={loadingMcpTools ? ct("loadingMcpTools") : ct("loadMcpTools")} labels={[ct("loadingMcpTools"), ct("loadMcpTools")]} />
+  </button>;
   return (
     <div className="chat-composer">
 
@@ -132,10 +153,19 @@ export default function ChatComposer({
       </div>}
         {selectedSkills.length > 0 && <div className="col-span-full flex flex-wrap gap-1.5" role="group" aria-label={selectedSkillsLabel}>{selectedSkills.map((skill) => <div key={skill.id} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">${normalizeDisplayText(skill.name)}</span><button type="button" onClick={() => onRemoveSkill?.(skill.id)} disabled={skillsLocked} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${removeSkillLabel}: ${normalizeDisplayText(skill.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
         {selectedMcpTools.length > 0 && <div className="chat-selected-tools flex flex-wrap gap-1.5" role="group" aria-label={ct("mcpTools")}>
-          {selectedMcpTools.map(key => {
-            const entry = mcpCatalog.find(candidate => `${candidate.serverId}:${candidate.tool.name}` === key);
-            return <Badge key={key}>{entry ? `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.tool.name)}` : normalizeDisplayText(key)}</Badge>;
-          })}
+          {selectedTools.map(({ key, resolved, label }) => (
+            <div key={key} className="flex items-center gap-1">
+              <Badge tone={resolved ? 'neutral' : 'warning'} title={resolved ? undefined : normalizeDisplayText(key)}>
+                {label}{!resolved && ` · ${mcpCatalogLoaded ? mcpCopy.unavailable : mcpCopy.notLoaded}`}
+              </Badge>
+              <button type="button" onClick={() => toggleMcpTool(key)} disabled={controlsLocked}
+                className="app-icon-button app-icon-button--sm app-icon-button--danger"
+                aria-label={`${mcpCopy.remove}: ${label}`} title={normalizeDisplayText(key)}>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg>
+              </button>
+            </div>
+          ))}
+          {hasUnresolvedTools && loadToolsButton}
         </div>}
         <textarea value={input} onChange={(event) => setInput(event.target.value)}
           {...imeHandlers}
@@ -150,10 +180,10 @@ export default function ChatComposer({
         <div className="chat-mcp-expanded border-t p-3 ui-border-color-border" >
         <button type="button" data-icon="close" className="chat-mcp-close app-button app-button--secondary app-button--sm absolute right-2 top-2" onClick={event => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{ct("close")}</button>
         <div className="flex flex-wrap items-center gap-2 pr-16">
-          <button type="button" data-icon="refresh" onClick={refreshMcpTools} disabled={disabled || controlsLocked || loadingMcpTools} className="app-button app-button--secondary app-button--sm"><StableLabel value={loadingMcpTools ? ct("loadingMcpTools") : ct("loadMcpTools")} labels={[ct("loadingMcpTools"), ct("loadMcpTools")]} /></button>
+          {!hasUnresolvedTools && loadToolsButton}
           <span className="text-xs ui-color-faint"><StableLabel value={`${ct("mcpToolsCount").replace("{count}", String(mcpDefinitions.length))} · ${ct("mcpApproval")}`} labels={[`${ct("mcpToolsCount").replace("{count}", "9999")} · ${ct("mcpApproval")}`]} /></span>
         </div>
-        <p className="mt-2 text-xs ui-color-faint">{ct("mcpOptional")}</p>
+        <p id={mcpHelpId} className="mt-2 text-xs ui-color-faint">{hasUnresolvedTools ? mcpSelectionHint : ct("mcpOptional")}</p>
         {mcpCatalog.length > 0 && (
           <div className="chat-mcp-catalog-slot">
             <div className="flex flex-wrap gap-x-3 gap-y-1.5">{mcpCatalog.map((entry) => { const key = `${entry.serverId}:${entry.tool.name}`; const checked = selectedMcpTools.includes(key); return <label key={key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted" ><input type="checkbox" checked={checked} onChange={() => toggleMcpTool(key)} disabled={controlsLocked} /><span className="max-w-52 app-text-wrap" title={`${normalizeDisplayText(entry.serverName)}: ${normalizeDisplayText(entry.tool.name)}`}>{normalizeDisplayText(entry.serverName)} · {normalizeDisplayText(entry.tool.name)}</span></label>; })}</div>

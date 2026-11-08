@@ -168,6 +168,12 @@ const servingEn = {
   usageComplete: 'Complete', usagePartial: 'Partial', usageMissing: 'Not reported', usageInvalid: 'Invalid report',
   setupTitle: 'Setup', resultsTitle: 'Results',
   noneSelected: 'None', warmupShort: 'Warm-up', resultActions: 'Export and manage',
+  admissionPending: 'Checking benchmark support for this target…',
+  admissionUnknown: 'Benchmark support is not verified for this target. Review its model and engine configuration.',
+  admissionFixedOutput: 'This target cannot force an exact output token count. Choose an engine with fixed-output support.',
+  admissionUsage: 'This target cannot report streamed token counts required to verify fixed output.',
+  admissionRequest: 'This target cannot accept the fixed-output chat workload. Review its model and engine configuration.',
+  admissionConfigure: 'Configure benchmark target',
 } as const;
 type ServingCopy = { [K in keyof typeof servingEn]: string };
 const servingCopies: Record<Locale, ServingCopy> = {
@@ -200,6 +206,12 @@ const servingCopies: Record<Locale, ServingCopy> = {
     usageComplete: '완전 보고', usagePartial: '부분 보고', usageMissing: '미보고', usageInvalid: '잘못된 보고',
     setupTitle: '측정 설정', resultsTitle: '결과',
     noneSelected: '없음', warmupShort: '워밍업', resultActions: '내보내기·관리',
+    admissionPending: '이 대상의 벤치마크 지원을 확인하는 중…',
+    admissionUnknown: '이 대상의 벤치마크 지원을 확인하지 못했습니다. 모델과 엔진 설정을 검토하세요.',
+    admissionFixedOutput: '이 대상은 정확한 출력 토큰 수를 강제할 수 없습니다. 고정 출력을 지원하는 엔진을 선택하세요.',
+    admissionUsage: '이 대상은 고정 출력 검증에 필요한 스트리밍 토큰 수를 보고할 수 없습니다.',
+    admissionRequest: '이 대상은 고정 출력 채팅 워크로드를 처리할 수 없습니다. 모델과 엔진 설정을 검토하세요.',
+    admissionConfigure: '벤치마크 대상 설정',
   },
   ja: {
     inputBytes: '入力UTF-8 bytes', outputCap: '最大出力tokenリクエスト', servingTest: '入力bytes / 出力token上限',
@@ -229,6 +241,12 @@ const servingCopies: Record<Locale, ServingCopy> = {
     usageComplete: '完全報告', usagePartial: '部分報告', usageMissing: '未報告', usageInvalid: '無効な報告',
     setupTitle: '測定設定', resultsTitle: '結果',
     noneSelected: 'なし', warmupShort: 'ウォームアップ', resultActions: '書き出し・管理',
+    admissionPending: 'この対象のベンチマーク対応を確認中…',
+    admissionUnknown: 'この対象のベンチマーク対応を確認できません。モデルとエンジン設定を確認してください。',
+    admissionFixedOutput: 'この対象は正確な出力トークン数を強制できません。固定出力対応のエンジンを選択してください。',
+    admissionUsage: 'この対象は固定出力の検証に必要なストリーミングトークン数を報告できません。',
+    admissionRequest: 'この対象は固定出力のチャット処理に対応していません。モデルとエンジン設定を確認してください。',
+    admissionConfigure: 'ベンチマーク対象を設定',
   },
   zh: {
     inputBytes: '输入 UTF-8 bytes', outputCap: '最大输出 token 请求', servingTest: '输入 bytes / 输出 token 上限',
@@ -258,6 +276,12 @@ const servingCopies: Record<Locale, ServingCopy> = {
     usageComplete: '完整报告', usagePartial: '部分报告', usageMissing: '未报告', usageInvalid: '无效报告',
     setupTitle: '测试设置', resultsTitle: '结果',
     noneSelected: '无', warmupShort: '预热', resultActions: '导出与管理',
+    admissionPending: '正在检查此目标的基准测试支持…',
+    admissionUnknown: '尚未验证此目标的基准测试支持。请检查模型和引擎配置。',
+    admissionFixedOutput: '此目标无法强制生成精确的输出令牌数。请选择支持固定输出的引擎。',
+    admissionUsage: '此目标无法报告验证固定输出所需的流式令牌计数。',
+    admissionRequest: '此目标无法接受固定输出聊天工作负载。请检查模型和引擎配置。',
+    admissionConfigure: '配置基准测试目标',
   },
 };
 

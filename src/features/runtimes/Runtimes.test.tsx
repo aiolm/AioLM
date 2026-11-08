@@ -798,6 +798,51 @@ describe('neutral inference engine inventory', () => {
     expect(await screen.findByRole('button', { name: 'Find automatically' })).toBeEnabled();
   });
 
+  it('explains which starting named session blocks Add and offers Library without mutating engines', async () => {
+    mocked.sessionSummaryList.mockResolvedValue([{ id: 'translation', name: 'Translation worker', state: 'starting' }]);
+    const onOpenLibrary = vi.fn();
+    render(panel({ onOpenLibrary }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find automatically' })).toBeDisabled());
+    expect(screen.getByText(/Model sessions are running, starting, or stopping/)).toBeVisible();
+    expect(screen.getByText('Translation worker')).toBeVisible();
+    expect(screen.getByText(/Open Library to stop or cancel/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Library' }));
+    expect(onOpenLibrary).toHaveBeenCalledOnce();
+    expect(runtimeAuto.runtimeAutoDiscover).not.toHaveBeenCalled();
+    mocked.sessionSummaryList.mockResolvedValue([]);
+    notifySessionStatusChanged();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find automatically' })).toBeEnabled());
+    expect(screen.queryByText(/Model sessions are running, starting, or stopping/)).not.toBeInTheDocument();
+  });
+
+  it('explains the lifecycle lock before a session appears in polling', async () => {
+    let release!: () => void;
+    let command!: Promise<void>;
+    render(panel());
+    act(() => { command = withSessionTransition(() => new Promise<void>(resolve => { release = resolve; })); });
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      expect(screen.getByRole('button', { name: 'Find automatically' })).toBeDisabled();
+      expect(screen.getByText(/Model sessions are running, starting, or stopping/)).toBeVisible();
+      expect(screen.getByText(/Open Library to stop or cancel/)).toBeVisible();
+    } finally {
+      await act(async () => { release(); await command; });
+    }
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find automatically' })).toBeEnabled());
+  });
+
+  it('distinguishes an owned runtime operation from a session lock in Add', async () => {
+    render(panel());
+    act(() => registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic CPU installation', interruptible: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+    expect(screen.getByRole('button', { name: 'Find automatically' })).toBeDisabled();
+    expect(screen.getByText(/Another engine operation is in progress/)).toBeVisible();
+    expect(screen.getByText(/Wait for it to finish or cancel it/)).toBeVisible();
+    expect(screen.queryByText(/Model sessions are running, starting, or stopping/)).not.toBeInTheDocument();
+    expect(runtimeAuto.runtimeAutoDiscover).not.toHaveBeenCalled();
+  });
+
   it('refreshes a published engine without announcing success and keeps real sibling locks during help-only recovery', async () => {
     vi.mocked(runtimeHelp.entrypointHelpDiscover).mockReset().mockResolvedValue(HELP_RESULT);
     vi.mocked(runtimeHelp.entrypointManifestPreview).mockReset().mockResolvedValue(REGISTERED);

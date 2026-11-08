@@ -72,3 +72,12 @@ Skipped entries are reported.
 AGENTS.md and loaded skill text become part of the request to the selected chat
 endpoint. They are not copied into the conversation's stored system prompt or
 preference exports.
+
+## Selected MCP tools
+
+Stored project tool choices are not proof that a tool is ready. Undiscovered
+choices show **Not loaded**; choices absent after discovery show **Unavailable**.
+Load tools from the selection row, or open **MCP tools** for server/recovery
+guidance and the catalog. Unavailable choices remain selected until explicitly
+removed, but only resolved tools are sent with a request. Discovery never
+executes a tool call, and existing per-call approval remains required.
