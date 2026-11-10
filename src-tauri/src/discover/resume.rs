@@ -436,6 +436,7 @@ mod tests {
     async fn empty_assets_activate_only_when_the_published_digest_matches() {
         let root = std::env::temp_dir().join(format!("aiolm-empty-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let target = root.join("merges.txt");
         let cancel = AtomicBool::new(false);
         // Git's published identity of an empty blob.
