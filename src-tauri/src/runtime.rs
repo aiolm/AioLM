@@ -9846,7 +9846,9 @@ mod tests {
         let root = test_directory("cpu-preflight");
         fs::create_dir_all(&root).expect("create staged CPU runtime");
         let server = root.join(server_executable_name());
-        fs::write(&server, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) printf 'Available devices:\\n(none)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
+        let devices_path = root.join("devices.txt");
+        fs::write(&devices_path, b"Available devices:\n(none)\n").unwrap();
+        fs::write(&server, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) /bin/cat \"${0%/*}/devices.txt\";;\n*) echo 'help';;\nesac\n").unwrap();
         fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).unwrap();
         let progress: ProgressSink = &|_, _, _| {};
         let cancel = Arc::new(AtomicBool::new(false));
@@ -9865,17 +9867,25 @@ mod tests {
             .await
             .unwrap_err()
             .contains("no accelerator"));
+        // Keep the launched executable immutable while changing reported devices.
         for devices in [
-            "warning: HIP backend could not be loaded\\nAvailable devices:\\n(none)\\n",
-            "Available devices:\\nVulkan0: Synthetic GPU (8192 MiB, 8192 MiB free)\\n",
+            "warning: HIP backend could not be loaded\nAvailable devices:\n(none)\n",
+            "Available devices:\nVulkan0: Synthetic GPU (8192 MiB, 8192 MiB free)\n",
         ] {
-            fs::write(&server, format!("#!/bin/sh\ncase \"$1\" in\n--list-devices) printf '{devices}';;\n*) echo 'help';;\nesac\n")).unwrap();
-            assert!(preflight_staged_runtime(&root, "rocm", progress, &cancel)
+            fs::write(&devices_path, devices).unwrap();
+            let error = preflight_staged_runtime(&root, "rocm", progress, &cancel)
                 .await
-                .unwrap_err()
-                .contains("no accelerator"));
+                .unwrap_err();
+            assert!(
+                error.contains("no accelerator"),
+                "ROCm preflight for {devices:?}: {error}"
+            );
         }
-        fs::write(&server, b"#!/bin/sh\ncase \"$1\" in\n--list-devices) printf 'Available devices:\\nROCm0: Synthetic GPU (8192 MiB, 8192 MiB free)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
+        fs::write(
+            &devices_path,
+            b"Available devices:\nROCm0: Synthetic GPU (8192 MiB, 8192 MiB free)\n",
+        )
+        .unwrap();
         assert!(preflight_staged_runtime(&root, "rocm", progress, &cancel)
             .await
             .is_ok());
