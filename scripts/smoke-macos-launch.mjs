@@ -141,9 +141,11 @@ createInterface({ input: process.stdin }).on("line", line => {
   await waitFor(() => script("return !!document.querySelector('.aiolm-sidebar nav');"), "workspace after onboarding");
   await click(".aiolm-sidebar .aiolm-nav-group:last-child button:last-child");
   await click("#settings-tab-server");
-  await click("#settings-close-to-tray");
+  const trayState = () => script("return document.querySelector('#settings-close-to-tray')?.getAttribute('aria-checked');");
+  await waitFor(async () => ["true", "false"].includes(await trayState()), "tray preference control");
+  if (await trayState() !== "true") await click("#settings-close-to-tray");
   const configPath = join(appEnv.AIOLM_HOME, "config.json");
-  await waitFor(() => JSON.parse(readFileSync(configPath, "utf8")).close_to_tray, "close-to-tray saved");
+  await waitFor(() => JSON.parse(readFileSync(configPath, "utf8")).close_to_tray === true, "close-to-tray saved");
   await script("setTimeout(() => window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'main' }), 100); return true;");
   await waitFor(() => !visible(), "close hides the window");
   assert.ok(alive(), "tray close must keep the app running");

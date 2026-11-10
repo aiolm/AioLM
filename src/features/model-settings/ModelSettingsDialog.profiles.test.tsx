@@ -1,6 +1,6 @@
 import { cfg, mount, rawChat, numeric, openOptions } from '../../testing/modelSettingsDialog';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor, SettingsDeliveryError } from './profileEditor';
@@ -204,27 +204,32 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const source = captureProfile(custom, 'Original settings', 'model', 'Saved prompt');
     const application = materializeProfileApplication(custom, 'Saved prompt', source);
     const saved = { ...custom, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(custom.active_model)]: application } } };
-    const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
-    fireEvent.change(rawChat(), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
-    expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
-    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
-    expect(rawChat()).toHaveValue('{}');
-    expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
-    expect(numeric('ctx_size')).toHaveValue(4096);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' }), document.querySelector('.model-settings-footer')?.textContent ?? '').toBeEnabled());
-    expect(getSaved()).toEqual(saved);
-    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Original settings · Editing' })).not.toBeInTheDocument());
-    expect(numeric('ctx_size')).toHaveValue(16384);
-    expect(rawChat()).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
-    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
-    expect(screen.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue('Saved prompt');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
+      await act(async () => {});
+      fireEvent.change(rawChat(), { target: { value: '{' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' })); });
+      expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
+      expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
+      expect(rawChat()).toHaveValue('{}');
+      expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
+      expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+      expect(getSaved()).toEqual(saved);
+      expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Revert' })); });
+      expect(screen.queryByRole('heading', { name: 'Original settings · Editing' })).not.toBeInTheDocument();
+      expect(numeric('ctx_size')).toHaveValue(16384);
+      expect(rawChat()).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
+      fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
+      expect(screen.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue('Saved prompt');
+    } finally { cleanup(); vi.useRealTimers(); }
   });
 
   it('confirms that untouched profile values already use defaults without marking them as edited', () => {

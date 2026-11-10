@@ -98,8 +98,10 @@ try {
   const settings = '.aiolm-sidebar button[data-view-target="settings"]';
   await click(settings);
   await click("#settings-tab-server");
-  await click("#settings-close-to-tray");
-  await waitFor(() => JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray, "native settings save");
+  const trayState = () => script("return document.querySelector('#settings-close-to-tray')?.getAttribute('aria-checked');");
+  await waitFor(async () => ["true", "false"].includes(await trayState()), "tray preference control");
+  if (await trayState() !== "true") await click("#settings-close-to-tray");
+  await waitFor(() => JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray === true, "enable tray close");
   // Snapshot only after fonts and paint boundaries settle. DOM geometry alone
   // exists while InitialSurface still keeps the actual settings view hidden.
   await request("POST", `/session/${session}/execute/async`, {
@@ -115,8 +117,9 @@ try {
   const second = spawn(executable, [], { env, stdio: "ignore" });
   await new Promise((resolve, reject) => { second.once("error", reject); second.once("exit", code => code === 0 ? resolve() : reject(new Error(`secondary launch: ${code}`))); });
   await waitFor(() => visible(), "secondary launch restores the existing window");
-  await click("#settings-close-to-tray");
-  await waitFor(() => !JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray, "disable tray close");
+  await waitFor(async () => ["true", "false"].includes(await trayState()), "restored tray preference control");
+  if (await trayState() !== "false") await click("#settings-close-to-tray");
+  await waitFor(() => JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray === false, "disable tray close");
   await closeWindow();
   await waitFor(() => exited(app), "ordinary window close exits");
   assert.equal(app.exitCode, 0, `${app.signalCode}\n${log}`);
