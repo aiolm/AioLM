@@ -10,7 +10,10 @@ import * as api from '../../shared/api';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
-vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn(), providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn() }));
+vi.mock('../../shared/api', async original => ({
+  ...await original<typeof api>(), rtProbe: vi.fn(), providerCatalog: vi.fn(async () => []),
+  providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn(),
+}));
 
 const device: DeviceReport = {
   profile: { schema_version: 1, os: 'test', arch: 'x86_64', detection: 'fixture', fingerprint: 'synthetic',
