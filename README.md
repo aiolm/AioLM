@@ -86,6 +86,7 @@ Use the Node, npm and Rust versions pinned in the repository; see [build require
 - `npm run test:coverage` also works without prebuilt benchmark contracts: it builds the workspace package before running coverage. `test:coverage:run` is the shared internal execution step and requires that preparation.
 - `npm run test:direct` runs the explicitly ordered Node assertion scripts in separate processes and stops at the first failure. Before starting a child, it rejects unregistered, missing or duplicate entries. Add a regular `tests/direct/test-*.ts` file to both `DIRECT_TEST_SCRIPTS` in `tests/direct/run.ts` and its individual npm command; the runner harness itself is excluded from the child inventory.
 - `npm run typecheck` checks application and tooling types. For UI changes, also run `npm run test:ui` and `npm run test:i18n`, then `npm run build` for the frontend. Native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
+- `npm run package:tauri` builds both production executables before creating host installers. macOS bundling enables verbose helper diagnostics so DMG failures include the underlying disk-image tool output.
 
 Vitest coverage measures the frontend sources exercised by its suite, not the separate direct Node scripts. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
 

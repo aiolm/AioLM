@@ -29,7 +29,8 @@ export function packagingArgs(platform, stage = "build") {
   // Keep test-fixtures disabled in Cargo and absent from bundle's feature list:
   // bundle uses this list to exclude binaries with required-features.
   if (stage === "build") return ["build", ...common, "--no-bundle", "--", "--locked", "--no-default-features", "--timings"];
-  if (stage === "bundle") return ["bundle", ...common, "--bundles", targets];
+  // Preserve the DMG helper's underlying diagnostics instead of its generic failure.
+  if (stage === "bundle") return ["bundle", ...common, "--bundles", targets, ...(platform === "darwin" ? ["-vv"] : [])];
   throw new Error(`Unknown packaging stage: ${stage}`);
 }
 
