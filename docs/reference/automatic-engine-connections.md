@@ -16,11 +16,20 @@ expanded details kept.
 1. Open **Inference engines → Add inference engine → Find automatically**.
 2. Tell the discovered items apart by their source, entry-point path and listener
    address. Select one, choose **Check selected item**, then select a model.
-   A sole result is checked automatically. After a failed or cancelled check,
-   **Check selected item** checks it again without repeating discovery; full
-   discovery is still available, for example after the process has restarted.
-   Selecting among several items does not run them. If nothing is found, choose
-   the engine's installation folder, not an individual executable or JSON file.
+   A sole running server is checked automatically. A sole item from an
+   installation folder is only preselected, because checking it runs the
+   program; choose **Check selected item** to check it. After a failed or
+   cancelled check, **Check selected item** checks it again without repeating
+   discovery; full discovery is still available, for example after the process
+   has restarted. Selecting among several items does not run them. If nothing is
+   found, choose the engine's installation folder, not an individual executable
+   or JSON file.
+   If the program serves models through a command (for example
+   `engine serve text`), checking it also reads the help of the commands it
+   documents, with `--help` only. When several commands can serve a model,
+   **Launch command** lists them with the program's own descriptions; choose
+   one and **Check selected command**. The chosen command is shown above the
+   model selection.
 3. Choose **Connect**. AioLM registers the engine only after the selected model
    answers a chat request and completes a streaming response. Your existing
    model settings and profiles do not change; choose the new engine and model in
@@ -37,25 +46,69 @@ The progress indicator identifies the operation that failed: discovery,
 inspection or connection verification. A failed rediscovery does not discard an
 already inspected candidate and its model selection.
 
+### Names, options and background loading
+
+Automatic installations are identified by their documented launch command or
+attached server address, rather than an internal connection ID or an unknown
+binary version. Engine names resolve on app startup without first opening engine
+management or settings. Split GGUF models have one display name without the shard
+counter; the original first-shard path is still used to open the model.
+
+For an AioLM-managed connection, model settings show options from the selected
+engine command's own help. Existing connections discover this help when their
+settings are first opened. The executable and connection files must still match
+their recorded hashes; later changes do not silently replace reviewed help.
+Use the option controls or **Import command** for documented options.
+**Additional launch arguments** is directly available below the option controls
+and accepts undocumented options as individual literal tokens, including paths with spaces. It does not evaluate
+shell syntax. Duplicate flags, documented options and app-owned model,
+address, port and authentication bindings are rejected there instead of being
+emitted twice. Attached servers keep their launch settings outside AioLM.
+
+The model settings dialog can be closed during a start. Loading continues as a
+background task; closing is not cancellation. Use the task's explicit cancel
+action to stop it, and check the task or global error message if loading fails.
+
+Starting an unchanged, previously verified automatic model does not first load
+and unload a throwaway verification process. Changed launch options are checked
+in the actual serving process too: the proxy becomes ready only after that
+process passes model identity, chat and streaming checks. An explicit model
+compatibility probe remains a separate verification operation and may load the
+model. Changed engine files or model files require fresh model evidence.
+
+
 ## What a connection checks
 
 - Discovery looks at your own processes, their listening ports and limited
   installation metadata. It does not run every executable, import modules or read
   process environments. The process and listener are checked again before
   connecting, and cancelling a check does not skip it on a later retry.
+- In an installation folder, files are recognized by their executable-format
+  header, never by their names. Files whose header proves they cannot start as a
+  program are not listed: Windows DLLs, shared libraries, object files, core
+  dumps, Mach-O libraries, Java classes and GPU code objects. On Windows only PE
+  programs can be started. Items are listed with proven console programs first,
+  then other launchable images (for example GUI programs or a static PIE), then
+  items that cannot be started as they are; within each group, files closer to
+  the selected folder come first. Folder items are listed before running servers.
 - A running server must answer an OpenAI `/v1` model-list request, and the
   selected model must pass a regular chat request and a complete streaming
   response. This establishes text chat and streaming only. It confirms that
   requests reach the selected model name; it is not proof of which weight files
   the server loaded, and it does not certify images, audio, tools or answer
-  quality.
+  quality. Each sample allows up to 1024 completion tokens so a reasoning
+  model can finish thinking before its visible answer; both samples together
+  must finish within 180 seconds.
 - A server that was already running is attached through a local proxy owned by
   AioLM. Stopping the connection in AioLM stops the proxy and its requests and
   leaves the original server, and any container it runs in, alone.
 - A stopped installation can be started by AioLM only when it has a discoverable
   entry point (or an explicitly declared interpreter) and documented, unambiguous
-  arguments for the model, host and port. A trial launch must confirm the model
-  routing and that the listener belongs to the process AioLM started.
+  arguments for the model, host and port, on the entry point itself or on one
+  documented command at most three levels deep. A trial launch must confirm the
+  model routing and that the listener belongs to the process AioLM started.
+  The engine has up to 7 minutes to load the model and start serving. If it
+  exits first, the error shows the end of the engine's own output.
 - AioLM records checksums of the engine's executable, scripts and connection
   data. If those external files change, register the engine again. After an
   AioLM update, AioLM revalidates its own connection helper.

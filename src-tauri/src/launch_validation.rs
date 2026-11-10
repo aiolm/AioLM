@@ -77,7 +77,7 @@ pub(crate) async fn validate_launch(
 ) -> Result<gpu::ResolvedGpu, String> {
     cfg.normalize();
     cfg.validate()?;
-    crate::providers::adapter::refresh(cfg, cancel.cloned()).await?;
+    crate::providers::adapter::prepare_launch(cfg, cancel.cloned()).await?;
     validate_start_config(cfg)?;
     if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {

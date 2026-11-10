@@ -28,14 +28,26 @@ export interface RuntimeDiscovery {
   truncated: boolean;
 }
 
+/** A command path the program documents for serving, such as `serve llm`.
+ * An empty path is the entry point itself. */
+export interface LaunchCommand {
+  path: string[];
+  summary: string;
+}
+
 export interface PreparedRuntimeConnection {
-  kind: 'attached' | 'managed';
+  /** `choose_command`: several documented commands can serve a model; inspect
+   * again with one of `commands` before any model is offered. */
+  kind: 'attached' | 'managed' | 'choose_command';
   candidate: RuntimeCandidate;
   models: Array<{ id: string; name: string }>;
   detail: string;
   base_url: string | null;
   /** Opaque backend-owned preparation token. */
   plan: string;
+  /** Documented command path a managed launch uses; empty otherwise. */
+  command?: string[];
+  commands?: LaunchCommand[];
 }
 
 export interface AutomaticRuntimeResult {
@@ -51,8 +63,8 @@ export function runtimeAutoDiscover(folder?: string): Promise<RuntimeDiscovery> 
   return invoke('runtime_auto_discover', { folder: folder ?? null });
 }
 
-export function runtimeAutoInspect(candidate: RuntimeCandidate): Promise<PreparedRuntimeConnection> {
-  return invoke('runtime_auto_inspect', { candidate });
+export function runtimeAutoInspect(candidate: RuntimeCandidate, command?: string[]): Promise<PreparedRuntimeConnection> {
+  return invoke('runtime_auto_inspect', { candidate, command: command ?? null });
 }
 
 export function runtimeAutoConnect(prepared: PreparedRuntimeConnection, modelId: string): Promise<AutomaticRuntimeResult> {

@@ -52,6 +52,18 @@ pub(crate) fn shard_name(name: &str) -> Option<(&str, usize, usize)> {
     (total > 1 && index > 0 && index <= total).then_some((base, index, total))
 }
 
+/// The display name of a split GGUF model: the first shard's name without
+/// its `-00001-of-00004` part. Other names are returned unchanged.
+pub(crate) fn grouped_shard_name(name: &str) -> String {
+    match shard_name(name) {
+        Some((base, _, _)) => {
+            let extension = name.rsplit_once('.').map_or("gguf", |(_, ext)| ext);
+            format!("{base}.{extension}")
+        }
+        None => name.to_owned(),
+    }
+}
+
 pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
@@ -95,7 +107,7 @@ fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufMo
             models.push(file);
         }
     }
-    for ((_, base, total), mut parts) in groups {
+    for ((_, _, total), mut parts) in groups {
         check_cancelled(cancel)?;
         parts.sort_by_key(|(index, _)| *index);
         check_cancelled(cancel)?;
@@ -112,7 +124,7 @@ fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufMo
             }
         }
         let mut model = parts[0].1.clone();
-        model.name = format!("{base}.gguf");
+        model.name = grouped_shard_name(&model.name);
         model.size_mb = parts.iter().map(|(_, part)| part.size_mb).sum();
         model.shards = Some(ModelShards {
             files: parts.into_iter().map(|(_, part)| part.path).collect(),

@@ -434,10 +434,10 @@ pub struct AppConfig {
     /// single-server app it was saved from.
     pub stop_existing_sessions_on_load: bool,
     /// Whether closing the window hides the app to the system tray instead of
-    /// quitting it. Defaults to `false` (relying on the container-level
-    /// `#[serde(default)]` above, deliberately with no field-level override) so
-    /// a config file written before the tray existed keeps closing the window
-    /// the way it always has: the app exits and every managed server stops.
+    /// quitting it. Defaults to `true` (relying on the container-level
+    /// `#[serde(default)]` above): a fresh installation, and a config file
+    /// written before the tray existed, keep running servers alive when the
+    /// window closes. A config that saved an explicit `false` keeps quitting.
     pub close_to_tray: bool,
     /// Whether first-run onboarding has been finished. A fresh installation
     /// starts at `false` (see `Default`), but a config file written before
@@ -572,7 +572,7 @@ impl Default for AppConfig {
             sleep_idle_seconds: default_sleep_idle_seconds(),
             lora_adapters: Vec::new(),
             stop_existing_sessions_on_load: true,
-            close_to_tray: false,
+            close_to_tray: true,
             onboarding_completed: false,
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
@@ -1493,20 +1493,20 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_window_still_exits_unless_the_setting_asks_for_the_tray() {
-        assert!(!AppConfig::default().close_to_tray);
+    fn closing_the_window_hides_to_the_tray_unless_the_setting_was_turned_off() {
+        assert!(AppConfig::default().close_to_tray);
         // A configuration written before the tray existed carries no field and
-        // must keep exiting on close.
+        // takes the default.
         let existing: AppConfig = serde_json::from_value(
             serde_json::json!({"config_version": 11, "models_dir": "models"}),
         )
         .unwrap();
-        assert!(!existing.close_to_tray);
-        let opted_in: AppConfig = serde_json::from_value(
-            serde_json::json!({"config_version": 11, "models_dir": "models", "close_to_tray": true}),
+        assert!(existing.close_to_tray);
+        let opted_out: AppConfig = serde_json::from_value(
+            serde_json::json!({"config_version": 11, "models_dir": "models", "close_to_tray": false}),
         )
         .unwrap();
-        assert!(opted_in.close_to_tray);
+        assert!(!opted_out.close_to_tray);
     }
 
     fn write_config(path: &Path, value: &serde_json::Value) {

@@ -54,7 +54,7 @@ export interface AppConfig {
   lora_adapters: LoraAdapterConfig[];
   /** Added by the multi-session config schema; optional for older app builds. */
   stop_existing_sessions_on_load?: boolean;
-  /** Hide the window to the system tray on close instead of quitting; absent on older app builds, which quit. */
+  /** Hide the window to the system tray on close instead of quitting; on unless saved as `false`. */
   close_to_tray?: boolean;
   /** First-run onboarding finished; absent on older app builds, which predate onboarding and count as finished. */
   onboarding_completed?: boolean;
@@ -179,9 +179,29 @@ export interface McpToolPayload {
 export interface ModelDownloadProgress {
   repo_id: string;
   file_path: string;
-  phase: "starting" | "downloading" | "cancelled" | "complete";
+  /** `verifying` re-reads data kept from an earlier, interrupted attempt. */
+  phase: "starting" | "verifying" | "downloading" | "cancelled" | "complete";
   received: number;
   total: number;
+}
+
+/** A model download that stopped before finishing and can be continued. */
+export interface PendingDownload {
+  id: string;
+  repo_id: string;
+  /** The requested GGUF file or selected Safetensors weight; null for a whole snapshot. */
+  file_path: string | null;
+  /** Immutable planned commit; null only for an older recovery record. */
+  revision: string | null;
+  snapshot: boolean;
+  models_dir: string;
+  include_companions: boolean;
+  label: string;
+  total: number;
+  /** Bytes already on disk, measured when the list was read. */
+  received: number;
+  updated_at: number;
+  files: { path: string; size: number }[];
 }
 
 export interface LocalModelInfo {

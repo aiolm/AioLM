@@ -13,7 +13,7 @@ import ProgressBar from "../../shared/ui/ProgressBar";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { useI18n } from "../../shared/i18n/i18n";
 import { providerCopy } from '../../shared/i18n/providerCopy';
-import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
@@ -21,6 +21,10 @@ import { previewExecution } from '../models/modelExecutionState';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
 import { modelActions } from '../../shared/i18n/modelActions';
 import ModelIcon from '../../shared/ui/ModelIcon';
+import { estimateRemainingSeconds } from '../../shared/lib/transfer';
+import { formatDuration } from '../../shared/lib/units';
+import ConfirmDialog from '../../shared/ui/ConfirmDialog';
+import { shouldConfirmDestructive } from '../../shared/config/preferences';
 
 type ArtifactFormat = api.HfSearchFormat;
 
@@ -129,6 +133,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     ? { file_path: downloadTask.label, received: downloadTask.received, total: downloadTask.total ?? 0 }
     : null;
   const speedBps = downloadTask?.speedBps ?? null;
+  const remainingSeconds = progress ? estimateRemainingSeconds(progress.received, progress.total, speedBps) : null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; repo: string; destination: string } | null>(null);
   const searchGeneration = useRef(0);
@@ -147,7 +152,19 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     activeModel: store.cfg.active_model,
     mmproj: store.cfg.mmproj,
   } : null;
-  const downloadBusy = !!downloading || downloadTask?.state === 'running' || downloadTask?.state === 'cancelling';
+  // Interrupted downloads that can continue with one click. Read when the
+  // panel opens and whenever a download stops, so a pause shows up at once.
+  const [pending, setPending] = useState<api.PendingDownload[]>([]);
+  const [resumingId, setResumingId] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState<api.PendingDownload | null>(null);
+  const [discardBusy, setDiscardBusy] = useState(false);
+  const downloadBusy = !!downloading || resumingId !== null || downloadTask?.state === 'running' || downloadTask?.state === 'cancelling';
+  const refreshPending = useCallback(async () => {
+    try { setPending(await api.hfPendingDownloads()); } catch { /* Browser preview and read failures leave the list empty. */ }
+  }, []);
+  useEffect(() => {
+    if (active && !downloadBusy) void refreshPending();
+  }, [active, downloadBusy, refreshPending]);
   const [snapshots, setSnapshots] = useState<{ repo: string; destination: string; artifacts: api.ModelArtifact[] } | null>(null);
   const [checkingSnapshots, setCheckingSnapshots] = useState(false);
   // What the selected repository's own files allow under the chosen filter.
@@ -367,6 +384,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       received: 0,
       total: sizeBytes,
       interruptible: true,
+      pausable: true,
       cancel: cancelDownload,
     });
     setError(null);
@@ -400,7 +418,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         const entries = await api.hfInstalledFiles(repoId, [firstShard(file.path)], destination);
         const first = entries.find(entry => entry.path === firstShard(file.path));
         if (!first || first.missing_shards.length > 0) {
-          if (ownsCurrentRepository(origin)) setNotice({ message: t('ui.downloadedModel', { file: file.path }), repo: repoId, destination });
+          if (ownsCurrentRepository(origin)) setNotice({ message: t('ui.downloadedModel', { file: displayPath }), repo: repoId, destination });
           return;
         }
         modelPath = first.local_path;
@@ -409,7 +427,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         const projector = file.is_mmproj || isMmprojPath(file.path);
         if (ownsCurrentRepository(origin)) {
           setDownloadedChoice({ path: modelPath, projector, repo: repoId, destination });
-          setNotice({ message: t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }), repo: repoId, destination });
+          setNotice({ message: t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: displayPath }), repo: repoId, destination });
         }
         return;
       }
@@ -420,7 +438,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
           await latestStore.current.updateConfig({ mmproj: downloaded.path });
         });
-        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedProjector", { file: file.path }), repo: repoId, destination });
+        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedProjector", { file: displayPath }), repo: repoId, destination });
       } else {
         if (!ownsCurrentDownload(origin)) return;
         const applied = onSelectModel
@@ -434,7 +452,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
             await latestStore.current.updateConfig({ active_model: modelPath });
           });
-        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedModel", { file: file.path }), repo: repoId, destination });
+        if (applied && ownsCurrentDownload(origin)) setNotice({ message: t("ui.downloadedModel", { file: displayPath }), repo: repoId, destination });
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -471,6 +489,44 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     }
   };
 
+  // Starts the same download again with what was recorded for it; the backend
+  // continues each file from the bytes it kept.
+  const resumePending = async (entry: api.PendingDownload) => {
+    if (transferActive()) return;
+    if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state) || latestStore.current.busy) {
+      setError(t('ui.stopBeforeDownload')); return;
+    }
+    const cancelDownload = () => api.hfCancelDownload();
+    registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: entry.label, phase: 'starting',
+      received: entry.received, total: entry.total, interruptible: true, pausable: true, cancel: cancelDownload });
+    setResumingId(entry.id); setError(null); setNotice(null);
+    try {
+      if (entry.snapshot) await api.hfDownloadSnapshot(entry.repo_id, entry.models_dir, entry.file_path ?? undefined, entry.revision ?? '');
+      else await api.hfDownloadModel(entry.repo_id, entry.file_path ?? '', entry.models_dir, entry.include_companions ? true : undefined, entry.revision ?? '');
+      finishTransferTask(cancelDownload, 'completed');
+      invalidateModelCatalog();
+      setInstalledRevision(revision => revision + 1);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      finishTransferTask(cancelDownload, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
+      if (message !== 'model download cancelled') setError(message);
+    } finally {
+      setResumingId(null);
+    }
+  };
+
+  const discardPending = async (entry: api.PendingDownload) => {
+    setDiscardBusy(true);
+    try {
+      await api.hfDiscardDownload(entry.id);
+      await refreshPending();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDiscardBusy(false); setDiscarding(null);
+    }
+  };
+
   const downloadSnapshot = async (group?: HfSafetensorsGroup) => {
     if (!selected || !store.cfg || transferActive()) return;
     if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state) || latestStore.current.busy) {
@@ -500,7 +556,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const cancelDownload = () => api.hfCancelDownload();
     origin.taskCancel = cancelDownload;
     registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: group?.displayPath ?? repo, phase: 'starting',
-      received: 0, total: 0, interruptible: true, cancel: cancelDownload });
+      received: 0, total: 0, interruptible: true, pausable: true, cancel: cancelDownload });
     try {
       const artifact = selectedFile
         ? await api.hfDownloadSnapshot(repo, destination, selectedFile)
@@ -596,7 +652,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       {downloadBusy && progress && (
         <div className="discover-progress-card app-card app-card--accent mb-4" role="status">
           <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t("ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
+            <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t(downloadTask?.phase === 'verifying' ? "ui.downloadVerifying" : "ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent !== undefined ? `${progressPercent}%` : t("extra.downloading")}</span>
           </div>
           <ProgressBar label={t("ui.downloadProgress")} value={progress.total > 0 ? progressPercent : undefined} className="mt-2.5" />
@@ -604,18 +660,45 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             <span className="discover-progress-bytes text-xs tabular-nums ui-color-muted">{progress.total > 0 ? t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) }) : formatBytes(progress.received)}</span>
             <span className="discover-progress-actions flex items-center justify-end gap-2.5">
               <span className="discover-progress-rate text-right text-sm font-semibold tabular-nums ui-color-accent">{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span>
-              <LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton>
+              {remainingSeconds !== null && <span className="discover-progress-remaining text-xs tabular-nums ui-color-muted">{t("ui.timeRemaining", { time: formatDuration(remainingSeconds) })}</span>}
+              <LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("ui.downloadPause")}</LocalTaskCancelButton>
             </span>
           </div>
         </div>
       )}
+      {!downloadBusy && pending.length > 0 && <section className="discover-pending app-card mb-4" aria-labelledby="discover-pending-title">
+        <h2 id="discover-pending-title" className="text-sm font-semibold ui-color-ink">{t("ui.pendingDownloadsTitle")}</h2>
+        <p className="mt-1 text-xs ui-color-muted">{t("ui.pendingDownloadsHint")}</p>
+        <div role="list" className="mt-3 space-y-2">
+          {pending.map(entry => {
+            const label = normalizeDisplayPath(entry.label);
+            const percent = entry.total > 0 ? Math.min(100, Math.round(entry.received / entry.total * 100)) : undefined;
+            return <div key={entry.id} role="listitem" className="app-list-row flex min-w-0 flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-[1_1_14rem]">
+                <div className="app-text-wrap text-sm font-medium ui-color-ink">{label}</div>
+                <div className="mt-0.5 app-text-wrap text-xs ui-color-faint">{entry.repo_id}</div>
+                <ProgressBar label={label} value={percent} className="mt-2" />
+                <div className="mt-1 text-xs tabular-nums ui-color-muted">{t("ui.bytesOfTotal", { received: formatBytes(entry.received), total: formatBytes(entry.total) })}{percent !== undefined ? ` · ${percent}%` : ''}</div>
+              </div>
+              <div className="flex max-w-full flex-wrap items-center gap-2">
+                <button type="button" className="app-button app-button--primary app-button--sm" disabled={store.busy} aria-label={`${t("ui.pendingResume")}: ${label}`} onClick={() => void resumePending(entry)}>{t("ui.pendingResume")}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.pendingDiscard")}: ${label}`} onClick={() => { if (shouldConfirmDestructive()) setDiscarding(entry); else void discardPending(entry); }}>{t("ui.pendingDiscard")}</button>
+              </div>
+            </div>;
+          })}
+        </div>
+      </section>}
       {currentDownloadedChoice && !currentDownloadedChoice.selected_file && <div className="discover-download-complete">
-        <p className="min-w-0 app-text-wrap">{currentDownloadedChoice.path.split(/[\\/]/).pop()}</p>
+        <p className="min-w-0 app-text-wrap">{modelDisplayName(currentDownloadedChoice.path)}</p>
         <button type="button" className="app-button app-button--primary" data-icon="settings" onClick={() => configureDownloaded(currentDownloadedChoice)}>{modelCopy.configure}</button>
       </div>}
 
+      {/* Each scrolling column is its own containing block: otherwise absolutely
+          positioned descendants (screen-reader labels, badge measurers) of rows
+          scrolled out of view resolve against the panel and stretch the page
+          with empty space below the columns. */}
       <div className="discover-columns grid min-h-0 flex-1 gap-4">
-        <section className="discover-results min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>
+        <section className="discover-results relative min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>
           <div className="sticky top-0 z-10 border-b px-4 py-2.5 text-xs font-semibold ui-border-color-border ui-background-surface-muted ui-color-faint" >{t("extra.searchResults")} {results.length ? `(${results.length})` : ""}</div>
           {searching && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.searching")}</div>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed ui-color-faint" >{listed ? t("ui.discoverNoResults") : t("ui.searchHint")}</div>}
@@ -629,7 +712,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           </div>
         </section>
 
-        <section className="discover-detail min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
+        <section className="discover-detail relative min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{providerCopy[locale].discoverSelect}</div>}
           {selected && <>
             <div className="discover-repository border-b px-4 py-3 ui-border-color-border ui-background-surface-muted"><div className="flex min-w-0 items-center gap-2"><ModelIcon model={selected.id} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges mode="detail" model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
@@ -733,6 +816,16 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           </>}
         </section>
       </div>
+      <ConfirmDialog
+        open={discarding !== null}
+        title={t("ui.pendingDiscardTitle")}
+        description={t("ui.pendingDiscardBody", { file: discarding ? normalizeDisplayPath(discarding.label) : "" })}
+        confirmLabel={t("ui.pendingDiscard")}
+        cancelLabel={t("common.cancel")}
+        busy={discardBusy}
+        onConfirm={() => { if (discarding) void discardPending(discarding); }}
+        onCancel={() => { if (!discardBusy) setDiscarding(null); }}
+      />
     </div>
   );
 }

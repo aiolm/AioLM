@@ -11,10 +11,12 @@
 //!
 //! llama.cpp lists integrated GPUs as well (`GGML_BACKEND_DEVICE_TYPE_IGPU` for
 //! a Vulkan integrated device or a CUDA/HIP device with `prop.integrated`), and
-//! the total they report is system memory. They are counted as shared, never
-//! as dedicated capacity. Anything that cannot be established — a listed device
-//! that matches no detected card, a missing memory figure, an id nothing
-//! reports — makes the result `None` rather than a zero or a guess.
+//! the total they report includes system memory. They are counted as shared;
+//! only the memory firmware reserves for them (the driver-reported carve-out,
+//! which the operating system never sees) adds dedicated capacity. Anything
+//! that cannot be established — a listed device that matches no detected
+//! card, a missing memory figure, an id nothing reports — makes the result
+//! `None` rather than a zero or a guess.
 
 use crate::config::{AppConfig, SplitMode};
 use crate::hardware::{GpuDevice, GpuVendor};
@@ -24,12 +26,14 @@ const MIB: u64 = 1024 * 1024;
 /// Memory the selected GPUs contribute to a placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GpuCapacity {
-    /// Total memory of the selected dedicated GPUs, in bytes: the runtime's
-    /// reported total for a runtime id, the driver's for a hardware id.
+    /// GPU memory outside system RAM, in bytes: each selected dedicated GPU's
+    /// total (the runtime's for a runtime id, the driver's for a hardware id)
+    /// plus the firmware carve-out of each selected integrated GPU.
     pub(crate) dedicated_bytes: u64,
     /// Selected GPUs the runtime will place work on, integrated ones included.
     pub(crate) devices: usize,
-    /// A selected GPU is integrated, so what it holds lands in system RAM.
+    /// A selected GPU is integrated, so what it holds beyond its carve-out
+    /// lands in system RAM.
     pub(crate) shared: bool,
 }
 
@@ -38,6 +42,17 @@ pub(crate) struct GpuCapacity {
 struct Selected {
     integrated: bool,
     total_bytes: Option<u64>,
+    /// Firmware-reserved memory of an integrated GPU: outside system RAM,
+    /// so it adds to the shared pool. Zero when the driver reports none.
+    reserved_bytes: u64,
+}
+
+fn reserved(card: &GpuDevice) -> u64 {
+    if card.integrated {
+        card.vram_mb.and_then(|mb| mb.checked_mul(MIB)).unwrap_or(0)
+    } else {
+        0
+    }
 }
 
 /// One entry of the runtime's device list.
@@ -78,6 +93,7 @@ pub(super) fn gpu_capacity(
         Some(Selected {
             integrated: gpu.integrated,
             total_bytes: gpu.vram_mb.and_then(|mb| mb.checked_mul(MIB)),
+            reserved_bytes: reserved(gpu),
         })
     };
 
@@ -127,8 +143,13 @@ pub(super) fn gpu_capacity(
         return None;
     }
     let mut dedicated_bytes = 0u64;
-    for device in selected.iter().filter(|device| !device.integrated) {
-        dedicated_bytes = dedicated_bytes.checked_add(device.total_bytes?)?;
+    for device in &selected {
+        let bytes = if device.integrated {
+            device.reserved_bytes
+        } else {
+            device.total_bytes?
+        };
+        dedicated_bytes = dedicated_bytes.checked_add(bytes)?;
     }
     Some(GpuCapacity {
         dedicated_bytes,
@@ -198,13 +219,14 @@ fn classify(device: &Listed, pool: &[&GpuDevice]) -> Option<Selected> {
     let mut cards = pool
         .iter()
         .filter(|gpu| same_model(&gpu.name, &device.identity));
-    let integrated = cards.next()?.integrated;
-    if cards.any(|gpu| gpu.integrated != integrated) {
+    let first = cards.next()?;
+    if cards.any(|gpu| gpu.integrated != first.integrated) {
         return None;
     }
     Some(Selected {
-        integrated,
+        integrated: first.integrated,
         total_bytes: device.total_bytes,
+        reserved_bytes: reserved(first),
     })
 }
 
@@ -459,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn integrated_gpus_are_shared_memory_not_a_dedicated_pool() {
+    fn integrated_gpus_add_only_their_carve_out_to_a_shared_pool() {
         let machine = amd();
         let reported = lines(&AMD_LINES);
         let mixed = config(
@@ -470,17 +492,38 @@ mod tests {
         );
         assert_eq!(
             gpu_capacity(&mixed, &machine.gpus, &reported),
-            capacity(32_752 * MIB, 2, true)
+            capacity((32_752 + 512) * MIB, 2, true)
         );
+        // The runtime's 16 GiB total for the iGPU is mostly system RAM; only
+        // its 512 MiB firmware reservation lies outside it.
         let integrated = config("rocm", &["runtime:rocm:ROCm0"], None, SplitMode::None);
         assert_eq!(
             gpu_capacity(&integrated, &machine.gpus, &reported),
-            capacity(0, 1, true)
+            capacity(512 * MIB, 1, true)
         );
         let hardware = config("rocm", &["amd-igpu", "amd-1"], None, SplitMode::Layer);
         assert_eq!(
             gpu_capacity(&hardware, &machine.gpus, &reported),
-            capacity(32 * GIB, 2, true)
+            capacity(32 * GIB + 512 * MIB, 2, true)
+        );
+        // An APU with a large carve-out (96 GiB of 128 GiB) and a runtime total
+        // that also counts part of the remaining system RAM.
+        let apu = profile(vec![card(
+            GpuVendor::Amd,
+            "AMD Radeon(TM) 8060S Graphics",
+            "1002:1586#0000",
+            Some(98_304),
+            true,
+        )]);
+        let vulkan =
+            lines(&["Vulkan0: AMD Radeon(TM) 8060S Graphics (114251 MiB, 108538 MiB free)"]);
+        assert_eq!(
+            gpu_capacity(
+                &config("vulkan", &[], None, SplitMode::None),
+                &apu.gpus,
+                &vulkan
+            ),
+            capacity(96 * GIB, 1, true)
         );
     }
 
@@ -502,7 +545,7 @@ mod tests {
         let only_integrated = lines(&AMD_LINES[..2]);
         assert_eq!(
             gpu_capacity(&all, &machine.gpus, &only_integrated),
-            capacity(0, 1, true)
+            capacity(512 * MIB, 1, true)
         );
         // Summing every detected adapter would be a guess.
         assert_eq!(gpu_capacity(&all, &machine.gpus, &[]), None);

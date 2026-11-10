@@ -4,8 +4,9 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import { defaultPreferences } from "../../shared/config/preferences";
 import SettingsPanel from "./Settings";
 import { createTestStore } from "../../testing/appStore";
+import * as api from "../../shared/api/index";
 
-vi.mock("../../shared/api/index", () => ({ isNativeRuntimeAvailable: () => true }));
+vi.mock("../../shared/api/index", () => ({ isNativeRuntimeAvailable: () => true, getLaunchAtLogin: vi.fn(async () => false), setLaunchAtLogin: vi.fn() }));
 
 describe("desktop settings", () => {
   it("keeps API port configuration on the API server page", () => {
@@ -17,19 +18,18 @@ describe("desktop settings", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it("closes to the tray only after the setting is saved, and keeps the old value when saving fails", async () => {
+  it("closes to the tray by default, saves a change before applying it, and keeps the old value when saving fails", async () => {
     const store = createTestStore();
     render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole("tab", { name: "Server" }));
     const toggle = screen.getByRole("switch", { name: "Close to system tray" });
     const description = "Closing the window hides AioLM in the system tray and leaves running servers up. Use the tray icon to bring the window back or to quit.";
     expect(toggle).toHaveAccessibleDescription(description);
-    // A configuration saved before the setting existed carries no field, and
-    // the window still closes the application.
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    // A configuration without the field takes the backend default: on.
+    expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
-    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith({ close_to_tray: true }));
-    expect(store.cfg?.close_to_tray).toBe(true);
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith({ close_to_tray: false }));
+    expect(store.cfg?.close_to_tray).toBe(false);
 
     // The backend puts the tray on screen before it writes the setting, so a
     // machine with no usable tray reports why and changes nothing.
@@ -37,7 +37,23 @@ describe("desktop settings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Close to system tray" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("failed to create the tray icon");
     expect(screen.getByRole("switch", { name: "Close to system tray" })).toHaveAccessibleDescription(description);
-    expect(store.cfg?.close_to_tray).toBe(true);
+    expect(store.cfg?.close_to_tray).toBe(false);
+  });
+
+  it("shows the operating system's startup registration and reports a refused change", async () => {
+    vi.mocked(api.getLaunchAtLogin).mockResolvedValueOnce(false);
+    vi.mocked(api.setLaunchAtLogin).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("access denied"));
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Server" }));
+    const toggle = () => screen.getByRole("switch", { name: "Start when the computer starts" });
+    await waitFor(() => expect(toggle()).toBeEnabled());
+    expect(toggle()).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle());
+    await waitFor(() => expect(toggle()).toHaveAttribute("aria-checked", "true"));
+    expect(api.setLaunchAtLogin).toHaveBeenLastCalledWith(true);
+    fireEvent.click(toggle());
+    expect(await screen.findByRole("alert")).toHaveTextContent("access denied");
+    expect(toggle()).toHaveAttribute("aria-checked", "true");
   });
 
   it("offers the tray setting only where a real tray exists", () => {

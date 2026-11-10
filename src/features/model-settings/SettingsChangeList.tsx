@@ -8,7 +8,7 @@ import type { ServerOption } from '../../shared/config/serverOptions';
 import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
-import { providerOf, type AppConfig } from '../../shared/api';
+import { providerDisplayName, providerOf, type AppConfig } from '../../shared/api';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { profileSchemaCopy } from './profileSchemaCopy';
 import { profileValueMask } from './profileValueMask';
@@ -80,6 +80,7 @@ export default function SettingsChangeList({ saved, current, savedPrompt, curren
       (change.path ?? change.key.split('.')).map((key, index) => {
         if (index === 1 && change.path?.[0] === 'lora_adapters') return normalizeDisplayPath(key);
         if (index === 1 && change.path?.[0] === 'server_args') return key;
+        if (index === 1 && change.path?.[0] === 'provider_options' && key === schema.provider) return providerDisplayName(schema.provider);
         return profileFieldLabel(change.path?.[0] === 'provider_options' ? mask(key) : key, locale);
       }).join(' · '),
       change.path?.[0] === 'provider_options' ? renderOption(change.path, change.before) : change.beforeInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true, previousRuntime: runtimeChanged })} /> : renderBuild(change.key, change.before, saved.active_backend),

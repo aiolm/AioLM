@@ -20,16 +20,22 @@
  .aiolm-server { grid-column: 2; grid-row: 1; }
  .app-feedback { flex-wrap: wrap; }
  .app-task-strip { flex-direction: column; gap: 8px; }
- /* The copy takes the whole row; progress and buttons wrap below it. */
- .app-task-strip__item { flex-wrap: wrap; }
- .app-task-strip__copy { flex: 1 1 100%; }
+ /* Still one block per task: name and action on top, state and progress
+    below, transfer or detail last. */
+ .app-task-strip__list { width: 100%; grid-template-columns: minmax(0, 1fr) minmax(5rem, 120px) max-content; }
+ .app-task-strip__item { grid-template-areas: "label label action" "status progress progress" "info info info"; row-gap: 4px; }
+ .app-task-strip__label { grid-area: label; }
+ .app-task-strip__status { grid-area: status; }
+ .app-task-strip__progress { grid-area: progress; }
+ .app-task-strip__info { grid-area: info; }
+ .app-task-strip__action { grid-area: action; }
  .app-confirm-dialog__panel { padding: 20px; }
  .tuning-sampler-chain__add { flex-wrap: wrap; }
 }
 /* Break at the width of the page, after sidebar, padding and scrollbar space. */
 @container workspace (min-width: 720px) {
- .app-master-detail { grid-template-columns: 256px minmax(0,1fr); }
- .discover-columns { grid-template-columns: minmax(0, .38fr) minmax(0, .62fr); }
+ .app-master-detail { grid-template-columns: clamp(16rem, 22cqi, 22rem) minmax(0,1fr); }
+ .discover-columns { grid-template-columns: clamp(18rem, 30cqi, 34rem) minmax(0,1fr); }
  .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: 200px; padding: 0 16px 0 0; border: 0; border-inline-end: 1px solid var(--ui-border); border-radius: 0; background: transparent; box-shadow: none; }
  .projects-list { max-height: max(200px,calc(100dvh - 240px)); border-block-end: 0; border-inline-end: 1px solid var(--ui-border); padding-inline-end: 16px; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
@@ -38,11 +44,17 @@
 }
 @container workspace (max-width: 719px) {
  .discover-columns { flex: 0 0 auto; }
- .discover-results { min-height: 160px; max-height: 240px; }
+ .discover-results { min-height: 160px; max-height: clamp(10rem, 35dvh, 24rem); }
  .discover-detail { max-height: none; overflow: visible; }
  .chat-message-user { max-width: 90%; }
  .chat-attach-button, .chat-send-button { width: var(--ui-control); min-width: var(--ui-control); padding-inline: 0; }
  .chat-attach-label, .chat-send-label { display: none; }
+}
+/* Keep routine status on the action row when the conversation has room. */
+@container conversation (min-width: 840px) {
+ .chat-composer-toolbar { grid-template-columns: auto minmax(0,1fr) auto; align-items: center; }
+ .chat-composer-status { grid-column: 2; grid-row: 1; text-align: end; }
+ .chat-composer-toolbar > button { grid-column: 3; }
 }
 /* Stack the whole control group, never the picker and settings independently. */
 @container conversation (max-width: 519px) {

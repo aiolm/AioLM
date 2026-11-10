@@ -12,6 +12,7 @@ import { ModelSettingsProvider, useModelSettings, type ModelSettingsContext, typ
 import { applySettingsProfile, captureProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
 import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 
 const mocks = vi.hoisted(() => ({
   dialog: null as ModelSettingsDialogProps | null, native: false, renders: 0, locale: 'en' as 'en' | 'ko',
@@ -96,7 +97,7 @@ beforeEach(() => {
   mocks.sessionStop.mockResolvedValue(undefined);
   mocks.applyRequestSettings.mockImplementation(async (cfg: AppConfig) => executionSettings(cfg));
 });
-afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
+afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 describe('model settings target application', () => {
   it('requires an external candidate to pass the selected runtime preflight before saving or launching', async () => {
@@ -541,6 +542,111 @@ describe('profile actions within an open editor', () => {
 });
 
 describe('model launch preparation', () => {
+  // The app's ES2020 TypeScript target does not include Promise.withResolvers.
+  function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (cause: unknown) => void;
+    const promise = new Promise<T>((finish, fail) => { resolve = finish; reject = fail; });
+    return { promise, resolve, reject };
+  }
+
+  it('closes during preflight without cancelling and keeps the launch visible until it finishes', async () => {
+    const store = createTestStore();
+    const preflight = deferred<AppConfig>();
+    const launch = deferred<string>();
+    mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+    vi.mocked(store.start).mockReturnValueOnce(launch.promise);
+    const dialog = await open(store, { target: { kind: 'default' } });
+    let result!: Promise<void>;
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start'); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+    act(() => mocks.dialog!.onClose());
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    expect(mocks.cancelLaunchPreflight).not.toHaveBeenCalled();
+    const task = getTaskSnapshot().find(item => item.state === 'running')!;
+    expect(task).toMatchObject({ kind: 'other', interruptible: true });
+    expect(task.phase).toBe('Checking the selected engine and model…');
+    act(() => context.open({ target: { kind: 'default' } }));
+    expect(screen.getByText('Wait for the current model operation to finish.')).toBeInTheDocument();
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    await act(async () => { preflight.resolve(dialog.initialConfig); await result; });
+    expect(store.start).toHaveBeenCalledOnce();
+    expect(store.stop).not.toHaveBeenCalled();
+    expect(getTaskSnapshot().find(item => item.id === task.id)).toMatchObject({ state: 'running', interruptible: true });
+    await act(async () => { launch.resolve(''); });
+    expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('completed');
+    act(() => context.open({ target: { kind: 'default' } }));
+    expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
+  });
+
+  it('reports a failed preflight globally after closing its editor', async () => {
+    const store = createTestStore();
+    const preflight = deferred<AppConfig>();
+    mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+    const dialog = await open(store, { target: { kind: 'default' } });
+    let result!: Promise<unknown>;
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+    act(() => mocks.dialog!.onClose());
+    await act(async () => { preflight.reject(new Error('Selected runtime rejected this model')); await result; });
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('Selected runtime rejected this model')).toBeInTheDocument();
+    expect(getTaskSnapshot()).toEqual(expect.arrayContaining([expect.objectContaining({
+      kind: 'other', state: 'failed', detail: 'Selected runtime rejected this model',
+    })]));
+    expect(store.start).not.toHaveBeenCalled();
+    expect(mocks.cancelLaunchPreflight).not.toHaveBeenCalled();
+  });
+
+  it('keeps a closed preflight cancellable from the global task', async () => {
+    const store = createTestStore();
+    const preflight = deferred<AppConfig>();
+    mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+    const dialog = await open(store, { target: { kind: 'default' } });
+    let result!: Promise<unknown>;
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+    act(() => mocks.dialog!.onClose());
+    const task = getTaskSnapshot().find(item => item.state === 'running')!;
+    act(() => { void task.cancel!(); });
+    expect(mocks.cancelLaunchPreflight).toHaveBeenCalledWith(mocks.preflightLaunch.mock.calls[0][1]);
+    await act(async () => { preflight.resolve(dialog.initialConfig); await result; });
+    expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelled');
+    expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
+  it('still prevents closing during an actual save', async () => {
+    const store = createTestStore();
+    const gate = deferred<void>();
+    const save = vi.mocked(store.updateConfig).getMockImplementation()!;
+    vi.mocked(store.updateConfig).mockImplementationOnce(async patch => {
+      await gate.promise;
+      return save(patch);
+    });
+    const dialog = await open(store, { target: { kind: 'default' } });
+    let result!: Promise<void>;
+    act(() => { result = apply(dialog, dialog.initialConfig, 'save'); });
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    act(() => mocks.dialog!.onClose());
+    expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
+    await act(async () => { gate.resolve(); await result; });
+  });
+
+  it('reports a session load failure after its settings dialog has closed', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const launch = deferred<SessionStatus>();
+    mocks.sessionStart.mockReturnValueOnce(launch.promise);
+    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    await act(async () => { launch.reject(new Error('Session engine failed to load the model')); });
+    expect(screen.getByText('Session engine failed to load the model')).toBeInTheDocument();
+    expect(getTaskSnapshot()).toEqual(expect.arrayContaining([expect.objectContaining({
+      kind: 'other', state: 'failed', detail: 'Session engine failed to load the model',
+    })]));
+  });
+
   it('keeps a running model and saved configuration intact when preflight fails', async () => {
     const store = createTestStore();
     const live = running(store.cfg!); store.status = live;

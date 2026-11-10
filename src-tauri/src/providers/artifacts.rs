@@ -448,7 +448,11 @@ pub fn metal_gguf_problem(artifact: &ModelArtifact) -> Option<String> {
         if path.extension().is_none_or(|extension| extension != "gguf") {
             return Err("vllm-metal requires a local file with the .gguf extension".into());
         }
-        if crate::models::shard_name(&artifact.name).is_some() {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| crate::models::shard_name(name).is_some())
+        {
             return Err(
                 "vllm-metal does not load sharded GGUF files; merge the shards first".into(),
             );
@@ -1302,10 +1306,13 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
 
 /// Inspect a GGUF file. Projector files describe the modalities they encode.
 pub fn inspect_gguf(path: &Path, size_bytes: u64, missing_shards: &[usize]) -> ModelArtifact {
-    let name = path
+    // A split model is listed once, by its first shard; its name omits the
+    // `-00001-of-00004` part. The path still selects the first shard.
+    let file_name = path
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let name = crate::models::grouped_shard_name(&file_name);
     let mut notes = Vec::new();
     let metadata = crate::gguf::read_metadata(path)
         .map_err(|error| notes.push(error))
@@ -1530,7 +1537,11 @@ mod tests {
         write(&dir, "config.json", br#"{"model_type":"llama"}"#);
         assert!(metal_gguf_problem(&model).unwrap().contains("match"));
         let mut shard = model.clone();
-        shard.name = "weights-00001-of-00002.gguf".into();
+        shard.path = dir
+            .join("weights-00001-of-00002.gguf")
+            .to_string_lossy()
+            .into_owned();
+        shard.name = "weights.gguf".into();
         assert!(metal_gguf_problem(&shard).unwrap().contains("sharded"));
         let moe = file(
             &[("general.architecture".into(), GgufValue::Str("qwen3"))],

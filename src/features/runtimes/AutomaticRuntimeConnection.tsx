@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState, type Ref } from 'react';
 import {
   runtimeAutoCancel, runtimeAutoConnect, runtimeAutoDiscover, runtimeAutoInspect,
-  type AutomaticRuntimeResult, type PreparedRuntimeConnection, type RuntimeCandidate,
+  type AutomaticRuntimeResult, type LaunchCommand, type PreparedRuntimeConnection, type RuntimeCandidate,
 } from '../../shared/api/runtimeAuto';
 import { pickRuntimePath } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
-import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { normalizeDisplayText, stripModelShardSuffix } from '../../shared/lib/displayPaths';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import DiagnosticDetails, { summarizeDiagnostic } from '../../shared/ui/DiagnosticDetails';
@@ -40,6 +40,9 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   const [truncated, setTruncated] = useState(false);
   const [prepared, setPrepared] = useState<PreparedRuntimeConnection | null>(null);
   const [model, setModel] = useState('');
+  // Serving commands the selected program documents, when it lists several.
+  const [choices, setChoices] = useState<LaunchCommand[]>([]);
+  const [choice, setChoice] = useState('');
   const [error, setError] = useState<{ phase: Phase; message: string } | null>(null);
   const [cancelled, setCancelled] = useState(false);
   const [result, setResult] = useState<AutomaticRuntimeResult | null>(null);
@@ -96,9 +99,14 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   };
 
   const applyInspection = (next: PreparedRuntimeConnection) => {
+    if (next.kind === 'choose_command') {
+      setChoices(next.commands ?? []); setChoice(''); setPrepared(null); setModel('');
+      return;
+    }
     setPrepared(next);
     setModel(next.models.length === 1 ? next.models[0].id : '');
   };
+  const clearChoices = () => { setChoices([]); setChoice(''); };
   const search = (chooseFolder = false) => execute('finding', async current => {
     let folder: string | undefined;
     if (chooseFolder) {
@@ -109,23 +117,33 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     const found = await runtimeAutoDiscover(folder);
     if (!current()) return;
     setCandidates(found.candidates); setWarnings(found.warnings); setTruncated(found.truncated);
-    setSearched(true); setSelected(''); setPrepared(null); setModel('');
+    setSearched(true); setSelected(''); setPrepared(null); setModel(''); clearChoices();
     if (found.candidates.length === 1) {
       const candidate = found.candidates[0];
+      setSelected(candidate.id);
+      // Checking a folder entry runs it (`--help`), so it waits for the user's
+      // explicit check; a running server is only probed over its local API.
+      if (candidate.source !== 'local_process') return;
       activePhase.current = 'inspecting';
-      setSelected(candidate.id); setPhase('inspecting');
+      setPhase('inspecting');
       const next = await runtimeAutoInspect(candidate);
       if (current()) applyInspection(next);
     }
   });
-  const inspect = (candidate: RuntimeCandidate) => execute('inspecting', async current => {
+  const inspect = (candidate: RuntimeCandidate, command?: string[]) => execute('inspecting', async current => {
     setSelected(candidate.id); setPrepared(null); setModel('');
-    const next = await runtimeAutoInspect(candidate);
+    if (!command) clearChoices();
+    const next = await (command ? runtimeAutoInspect(candidate, command) : runtimeAutoInspect(candidate));
     if (current()) applyInspection(next);
   });
   const chooseCandidate = (candidate: RuntimeCandidate) => {
     if (locked || running.current) return;
-    setSelected(candidate.id); setPrepared(null); setModel('');
+    setSelected(candidate.id); setPrepared(null); setModel(''); clearChoices();
+    setError(null); setCancelled(false); setResult(null);
+  };
+  const chooseCommand = (key: string) => {
+    if (locked || running.current) return;
+    setChoice(key); setPrepared(null); setModel('');
     setError(null); setCancelled(false); setResult(null);
   };
   const connect = () => {
@@ -141,6 +159,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
   };
   const disabled = locked || phase !== null;
   const selectedCandidate = candidates.find(candidate => candidate.id === selected);
+  const chosenCommand = choices.find(item => item.path.join(' ') === choice);
   // The visible journey: find → inspect a candidate → choose a model → verify.
   // Verification is complete only once runtimeAutoConnect itself succeeded.
   const displayedPhase = phase ?? error?.phase;
@@ -197,16 +216,37 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
         </label>)}
       </div>
       <div className="app-page-actions">
-        <button type="button" className={`app-button ${stage === 1 ? 'app-button--primary' : 'app-button--secondary'}`} disabled={!selectedCandidate || result !== null} onClick={() => { if (selectedCandidate) void inspect(selectedCandidate); }}>{copy.check}</button>
+        <button type="button" className={`app-button ${stage === 1 && choices.length === 0 ? 'app-button--primary' : 'app-button--secondary'}`} disabled={!selectedCandidate || result !== null} onClick={() => { if (selectedCandidate) void inspect(selectedCandidate); }}>{copy.check}</button>
+      </div>
+    </fieldset>}
+
+    {choices.length > 0 && <fieldset disabled={disabled} className="runtime-auto-stage runtime-auto-commands">
+      <legend className="runtime-auto-stage__title">{copy.commands}</legend>
+      <p className="app-section-hint">{copy.commandHint}</p>
+      <div className="runtime-auto-candidate-list">
+        {choices.map(item => {
+          const key = item.path.join(' ');
+          return <label key={key} className="runtime-auto-candidate">
+            <input type="radio" name={`${id}-command`} value={key} checked={choice === key} onChange={() => chooseCommand(key)} />
+            <span className="runtime-auto-candidate__text">
+              <span className="runtime-auto-candidate__name runtime-auto-candidate__path">{key}</span>
+              {item.summary && <small>{normalizeDisplayText(item.summary)}</small>}
+            </span>
+          </label>;
+        })}
+      </div>
+      <div className="app-page-actions">
+        <button type="button" className={`app-button ${prepared ? 'app-button--secondary' : 'app-button--primary'}`} disabled={!chosenCommand || !selectedCandidate || result !== null} onClick={() => { if (selectedCandidate && chosenCommand) void inspect(selectedCandidate, chosenCommand.path); }}>{copy.checkCommand}</button>
       </div>
     </fieldset>}
 
     {prepared && <form action="#" method="POST" className="runtime-auto-stage runtime-auto-connect" onSubmit={event => { event.preventDefault(); void connect(); }}>
       <p>{prepared.kind === 'attached' ? copy.attached : copy.managed}</p>
+      {prepared.command && prepared.command.length > 0 && <p className="app-section-hint">{copy.launchCommand}: <code>{prepared.command.join(' ')}</code></p>}
       <div className="runtime-auto-field">
         <label htmlFor={`${id}-model`}>{copy.model}</label>
         <CustomSelect id={`${id}-model`} value={model} disabled={disabled || prepared.models.length === 0}
-          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: item.name }))]}
+          options={[{ value: '', label: copy.chooseModel }, ...prepared.models.map(item => ({ value: item.id, label: stripModelShardSuffix(item.name) }))]}
           onChange={setModel} />
       </div>
       {prepared.models.length === 0 && <FeedbackBanner tone="warning">{copy.noModels}</FeedbackBanner>}

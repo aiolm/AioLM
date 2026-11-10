@@ -27,3 +27,9 @@ export function estimateDownloadSpeed(
   if (!Number.isFinite(deltaBytes) || deltaBytes < 0) return null;
   return (deltaBytes / elapsedMs) * 1000;
 }
+
+/** Seconds until `total` at `speedBps`, or null while the rate or size is unknown. */
+export function estimateRemainingSeconds(received: number, total: number, speedBps: number | null | undefined): number | null {
+  if (!speedBps || speedBps <= 0 || !Number.isFinite(speedBps) || !(total > 0) || received < 0) return null;
+  return Math.max(0, total - received) / speedBps;
+}

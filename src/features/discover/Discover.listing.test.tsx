@@ -588,7 +588,7 @@ describe("Discover listing and installed files", () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload("Download: model.gguf");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
     expect(previous?.cancel).toBeTypeOf("function");

@@ -33,6 +33,7 @@ pub(crate) async fn runtime_auto_discover(
 #[tauri::command]
 pub(crate) async fn runtime_auto_inspect(
     candidate: runtime_discovery::RuntimeCandidate,
+    command: Option<Vec<String>>,
 ) -> Result<auto::PreparedConnection, String> {
     let _operation = Operation::acquire()?;
     let local_models = if candidate.endpoints.is_empty() {
@@ -57,7 +58,7 @@ pub(crate) async fn runtime_auto_inspect(
     } else {
         vec![]
     };
-    auto::inspect(&candidate, local_models).await
+    auto::inspect(&candidate, local_models, command).await
 }
 
 #[tauri::command]
@@ -68,7 +69,7 @@ pub(crate) async fn runtime_auto_connect(
 ) -> Result<auto::ConnectedRuntime, String> {
     let _operation = Operation::acquire()?;
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _mutation = state.operation.lock().await;
+    let _mutation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err("stop model sessions before connecting another runtime".into());
     }

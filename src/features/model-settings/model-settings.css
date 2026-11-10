@@ -1,7 +1,7 @@
 /* Model & settings editor: one top context (target, model, steps), a 184px
    option navigation beside the editor, and a footer that keeps the estimate and
    blocking reasons apart from the actions. */
-.model-settings-dialog { width: min(1040px, calc(100vw - 32px)); max-width: none; height: min(880px, calc(100dvh - 32px - var(--app-window-chrome-height, 0px))); max-height: none; overflow: visible; }
+.model-settings-dialog { width: calc(100dvw - 32px); max-width: none; height: calc(100dvh - 32px - var(--app-window-chrome-height, 0px)); max-height: none; overflow: visible; }
 .model-settings-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-radius: inherit; }
 .model-settings-shell [hidden] { display: none !important; }
 /* Header, steps and editor; the footer is a separate region below it. */
@@ -44,7 +44,7 @@
 .model-settings-nav .app-tab { flex-shrink: 0; justify-content: flex-start; width: 100%; text-align: start; white-space: normal; }
 .model-settings-nav .app-tab[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--ui-accent); }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
+.model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); container: profile / inline-size; }
 /* The scrolling layout repeats the model beside the profile after the header leaves view. */
 .model-settings-context-model { display: none; }
 .model-settings-context .app-custom-select-trigger { width: 100%; }
@@ -56,7 +56,7 @@
 .model-settings-context .settings-profile-picker { max-width: none; }
 .settings-profile-selected-name { flex: 1; min-width: 0; color: var(--ui-ink); font-weight: 600; overflow-wrap: anywhere; }
 /* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
-.model-settings-body { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px 32px; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 1em; }
+.model-settings-body { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px 32px; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 1em; container: model-editor / inline-size; }
 .model-settings-body [hidden] { display: none !important; }
 .model-settings-body > h3 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; outline-offset: 4px; }
 .model-settings-body > h3 + .app-section-hint { margin: 4px 0 16px; }
@@ -88,7 +88,7 @@
 .model-settings-fields label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); }
 .model-settings-fields h3 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; }
 .model-settings-fields h4 { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 650; }
-.model-settings-fields fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.model-settings-fields fieldset:not(.schema-option) { min-width: 0; margin: 0; padding: 0; border: 0; }
 .model-settings-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
 .model-settings-grid > div { display: grid; align-content: start; gap: 4px; min-width: 0; }
@@ -131,10 +131,9 @@
 .model-settings-fields > .app-button { align-self: flex-start; }
 
 /* Runtime-reported options (guided editor) */
-.model-settings-options { display: grid; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); }
-.model-settings-options > p { margin: 0; padding: 12px; }
-.model-settings-options > * + * { border-top: 1px solid var(--ui-border); }
-.model-settings-option { min-width: 0; padding: 12px; }
+.model-settings-options { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; }
+.model-settings-options > p { grid-column: 1 / -1; margin: 0; padding: 12px; }
+.model-settings-option { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
 .model-settings-option summary { color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; }
 .model-settings-option summary code { font-family: var(--font-mono); font-weight: 600; }
 .model-settings-option > details[open] > summary { margin-bottom: 8px; }
@@ -159,9 +158,30 @@
 .model-settings-body pre { max-height: 240px; margin: 0; padding: 8px 12px; overflow: auto; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); white-space: pre-wrap; overflow-wrap: anywhere; }
 .model-settings-dialog .schema-option-filter { display: grid; gap: 6px; }
 .model-settings-dialog .schema-option-filter > legend { margin-bottom: 8px; padding: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 650; }
-.model-settings-dialog .schema-option { display: grid; gap: 6px; min-width: 0; }
-.model-settings-dialog .schema-option small { color: var(--ui-muted); font-size: var(--ui-text-caption); }
-.model-settings-dialog .schema-option > legend { padding: 0; }
+/* Each grid item remains a complete name/help/control group. Row-major auto
+   placement follows the DOM and keyboard order; tools stay outside the grid. */
+.model-settings-body .schema-option > :is(.app-input, .app-custom-select-container, .schema-option__single, .schema-option__value) { inline-size: 100%; max-inline-size: 32rem; min-inline-size: 0; }
+.model-settings-body .schema-option > .app-button { justify-self: start; }
+.model-settings-dialog .schema-option-filter > :is(.app-input, label) { max-inline-size: 32rem; }
+@container schema-options (min-width: 58rem) {
+  .model-settings-dialog .schema-option-filter { grid-template-columns: minmax(0, 32rem) minmax(0, 24rem); align-items: end; gap: 8px 16px; }
+  .model-settings-body .schema-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container schema-options (min-width: 88rem) {
+  .model-settings-body .schema-option-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container schema-options (min-width: 118rem) {
+  .model-settings-body .schema-option-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@container model-editor (min-width: 58rem) {
+  .model-settings-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container model-editor (min-width: 88rem) {
+  .model-settings-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container model-editor (min-width: 118rem) {
+  .model-settings-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 
 /* Tuning tabs: one form surface with bordered sub-groups, not cards in cards. */
 .model-settings-body .tuning-subgroup > .app-section-title { font-size: var(--ui-text-group); font-weight: 650; }
@@ -187,7 +207,7 @@
 .model-settings-overlays { position: static; }
 
 @media (max-width: 720px) {
-  .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px - var(--app-window-chrome-height, 0px)); }
+  .model-settings-dialog { width: calc(100dvw - 16px); height: calc(100dvh - 16px - var(--app-window-chrome-height, 0px)); }
   .model-settings-header { padding: 12px 16px 8px; }
   .model-settings-flow { padding: 0 16px 8px; }
   .model-settings-flow ol { gap: 4px; }

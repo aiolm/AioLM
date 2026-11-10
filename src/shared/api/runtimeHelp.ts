@@ -293,6 +293,8 @@ export type HelpState = 'none' | 'current' | 'stale' | 'unchecked';
 export interface EffectiveSchema {
   schema: OptionSchema;
   scope: string[];
+  /** False for attached services whose launch arguments AioLM does not control. */
+  supports_launch_args?: boolean;
   help_state: HelpState;
   help_detail: string;
   accepted_fingerprint?: string | null;

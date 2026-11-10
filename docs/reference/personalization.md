@@ -57,7 +57,9 @@ Identify the main idea and the details needed to understand it.
 When both roots contain the same skill name, the AioLM-specific skill is used.
 Discovery reads the catalog's names and descriptions first. Chat can request the
 full entry point through the read-only `aiolm_read_skill` tool when it needs a
-skill. For manual invocation, choose a skill in the composer or include
+skill. When the running engine does not declare tool-call support, chat leaves
+the catalog and this tool out so messages still work. For manual invocation,
+which works with every engine, choose a skill in the composer or include
 `$concise-summary` in a message. Selecting a skill and naming it in the same
 message includes its instructions once. Refresh the skill list after adding or
 changing files outside the app.
@@ -67,7 +69,9 @@ scripts or add unrestricted file or shell tools. Existing MCP tools keep their
 approval flow. Skill reads accept only discovered identifiers, and file access
 stays within the configured skill entry points. Individual instruction and skill
 files are limited to 64 KiB; the effective catalog is limited to 128 skills.
-Skipped entries are reported.
+Descriptions longer than 1,024 characters are shortened in the catalog; the
+skill stays available and its full entry point can still be read. Skipped
+entries are reported.
 
 AGENTS.md and loaded skill text become part of the request to the selected chat
 endpoint. They are not copied into the conversation's stored system prompt or

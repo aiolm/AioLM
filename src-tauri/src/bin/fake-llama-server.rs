@@ -5,6 +5,35 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+// Opt-in by the integration test's private copied executable name. No ambient
+// variable can change existing fake-server consumers or production binaries.
+fn automatic_options_fixture() -> bool {
+    std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(std::path::Path::file_stem)
+        .is_some_and(|name| name == "aiolm-auto-options-fixture")
+}
+
+fn automatic_options_help(arguments: &[String]) -> bool {
+    if !automatic_options_fixture() || !arguments.iter().any(|arg| arg == "--help") {
+        return false;
+    }
+    let words: Vec<&str> = arguments
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .take_while(|arg| *arg != "--help")
+        .collect();
+    match words.as_slice() {
+        [] => println!("Usage: synthetic <COMMAND>\n\nCommands:\n  serve  Start a server\n"),
+        ["serve"] => println!("Usage: synthetic serve <COMMAND>\n\nCommands:\n  llm  Serve a model\n"),
+        ["serve", "llm"] => println!("Usage: synthetic serve llm [OPTIONS]\n\nOptions:\n  --model PATH  selected model\n  --host HOST  bind address\n  -p, --port PORT  listening port\n  -a, --served-model-name NAME  model identifier exposed by the API\n  --fresh-label TEXT  literal label\n  --fresh-count N  worker count\n"),
+        _ => panic!("unexpected automatic help scope"),
+    }
+    true
+}
+
 fn port_arg() -> u16 {
     let args: Vec<String> = std::env::args().collect();
     args.iter()
@@ -196,6 +225,38 @@ fn handle(mut stream: TcpStream) {
             "Health endpoint must not receive credentials",
         );
         return;
+    }
+    if automatic_options_fixture() {
+        let model = arguments
+            .iter()
+            .position(|arg| arg == "--served-model-name")
+            .and_then(|index| arguments.get(index + 1))
+            .expect("automatic model alias");
+        if method == "GET" && path == "/v1/models" {
+            respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::json!({"data":[{"id":model,"object":"model"}]}).to_string(),
+            );
+            return;
+        }
+        if method == "POST" && path == "/v1/chat/completions" {
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request["model"], model.as_str());
+            if request["stream"] == true {
+                let payload = format!(
+                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                    serde_json::json!({"model":model,"choices":[{"delta":{"role":"assistant","content":"5"},"finish_reason":null}]}),
+                    serde_json::json!({"model":model,"choices":[{"delta":{},"finish_reason":"stop"}]})
+                );
+                respond(&mut stream, "200 OK", "text/event-stream", &payload);
+            } else {
+                respond(&mut stream, "200 OK", "application/json",
+                    &serde_json::json!({"model":model,"choices":[{"message":{"role":"assistant","content":"5"},"finish_reason":"stop"}]}).to_string());
+            }
+            return;
+        }
     }
     match (method, path) {
         ("POST", "/completion") => {
@@ -533,6 +594,23 @@ fn native_auxiliary_receipt(arguments: &[String]) {
 
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if automatic_options_help(&arguments) {
+        return;
+    }
+    if automatic_options_fixture() {
+        assert_eq!(&arguments[1..3], ["serve", "llm"]);
+        let log = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("automatic-launches.jsonl");
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .unwrap();
+        writeln!(log, "{}", serde_json::to_string(&arguments[1..]).unwrap()).unwrap();
+    }
     if portable_inventory_fixture(&arguments) {
         return;
     }

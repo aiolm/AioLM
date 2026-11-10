@@ -246,7 +246,7 @@ describe('selected Safetensors model bundles', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     installed = [{ ...artifact, incomplete: true, missing: ['tokenizer.json'] }];
     await act(async () => reject(new Error('model download cancelled')));
     await waitFor(() => expect(row('4bit/model.safetensors').getByRole('button', { name: 'Retry: 4bit/model.safetensors' })).toBeEnabled());
@@ -266,7 +266,7 @@ describe('selected Safetensors model bundles', () => {
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
     if (failure === 'model download cancelled') {
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
       await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
       expect(screen.getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeDisabled();
     }
@@ -287,7 +287,7 @@ describe('selected Safetensors model bundles', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     await act(async () => finish(artifact));
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();

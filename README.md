@@ -25,6 +25,10 @@ Fixed-output benchmarks (`openai-chat-serving@2`) require an engine that can con
 
 Search shows every repository. In-app downloads support GGUF files and complete HF/MLX safetensors model bundles: choose a weight file to include its required config, tokenizer and split parts without installing other weight variants. Whole-repository data snapshots remain available for repositories with root safetensors weights. Other formats stay visible with their model card; an external engine may still be able to run them. Search results do not select or favor an inference engine.
 
+Downloads show their rate and time left and can be paused. Paused, failed or app-interrupted transfers appear under **Discover → Paused downloads**. **Resume** keeps the original repository revision and verifies the complete file against its published digest; files without a digest restart rather than appending unverified bytes.
+
+Discarding a pending download removes its staged partials, including companion-file partials, but keeps completed files. Inference engines can be installed while a model downloads. Closing the window hides AioLM in the system tray by default, and **Settings → Server** can also start AioLM when you sign in.
+
 Loading a model makes it available to internal chat. To use loaded models from other applications, start **API server** from the sidebar and copy its URL, key and model ID. See [API server and model lifecycle](docs/guides/local-api.md).
 
 To connect another engine, open **Inference engines → Add inference engine → Find automatically**, choose a model and **Connect**. AioLM registers the engine only after a real chat and streaming check. See [external engine connections](docs/reference/automatic-engine-connections.md).
@@ -41,6 +45,8 @@ The sidebar gives everyday use and model operations the same navigation depth:
 | App | Settings |
 
 Collapse the desktop sidebar to an icon rail, or use the navigation drawer in a narrow window. Open panels keep their drafts when changing screens, theme, density or fonts.
+
+Maximized windows expand the chat canvas and workspaces instead of retaining a narrow fixed-width layout. Settings, API panels and model options use multiple columns when space permits, with each option's name, description and input kept together. Model settings adapt to the window's width and height; narrower windows reduce the column count, and shorter windows scroll the content while keeping footer actions available.
 
 Workspace colors retain the original Orchid Periwinkle palette: pale sky-to-lilac navigation in light mode, softer periwinkle surfaces in dark mode, and pastel cyan-blue primary actions with dark labels. Brand gradients are limited to navigation and primary actions. Input boundaries, keyboard focus and success/warning/error states remain distinct.
 

@@ -193,8 +193,9 @@ describe("typography and notification preferences", () => {
 
   it("drops only retired preferences from older saves and imports, keeping real choices and unrelated keys", () => {
     // Synthetic export written before the frontend unload hook, the developer
-    // mode switch, and the timestamp switch were retired. The extra* keys stand
-    // in for backup data this version does not know about.
+    // mode switch, the timestamp switch, and the status polling interval were
+    // retired. The extra* keys stand in for backup data this version does not
+    // know about.
     const legacy = JSON.stringify({ schemaVersion: 1, preferences: {
       locale: "ko", theme: "dark",
       chat: { enterToSend: false, showTimestamps: true, streamResponses: false, extraChat: "kept" },
@@ -202,13 +203,13 @@ describe("typography and notification preferences", () => {
       advanced: { developerMode: true, confirmDestructiveActions: false, extraAdvanced: true },
     } });
     const retired = (values: AppPreferences) => [
-      "showTimestamps" in values.chat, "autoStopOnExit" in values.server, "developerMode" in values.advanced,
+      "showTimestamps" in values.chat, "autoStopOnExit" in values.server, "pollIntervalMs" in values.server, "developerMode" in values.advanced,
     ];
     const kept = (values: AppPreferences) => {
       expect(values.chat).toMatchObject({ enterToSend: false, streamResponses: false, extraChat: "kept" });
-      expect(values.server).toMatchObject({ autoStart: true, pollIntervalMs: 2000, extraServer: { nested: 1 } });
+      expect(values.server).toMatchObject({ autoStart: true, extraServer: { nested: 1 } });
       expect(values.advanced).toMatchObject({ confirmDestructiveActions: false, extraAdvanced: true });
-      expect(retired(values)).toEqual([false, false, false]);
+      expect(retired(values)).toEqual([false, false, false, false]);
     };
 
     const imported = importPreferences(legacy);

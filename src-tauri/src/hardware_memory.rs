@@ -6,17 +6,14 @@ fn capacity(bytes: u64) -> Option<u64> {
     (bytes > 0 && bytes <= MAX_PUBLIC_BYTES).then_some(bytes)
 }
 
+/// Memory Windows can actually use, like Linux `MemTotal`. Installed modules
+/// can be larger: firmware reservations and memory set aside for an integrated
+/// GPU (for example a 96 GB carve-out on a 128 GB machine) never reach the OS,
+/// so counting them would offer RAM that offloaded weights cannot use and
+/// count the GPU's share twice beside its own memory.
 #[cfg(windows)]
 pub(crate) fn system_memory_bytes() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{
-        GetPhysicallyInstalledSystemMemory, GlobalMemoryStatusEx, MEMORYSTATUSEX,
-    };
-    let mut kib = 0;
-    if unsafe { GetPhysicallyInstalledSystemMemory(&mut kib) } != 0 {
-        if let Some(bytes) = kib.checked_mul(1024).and_then(capacity) {
-            return Some(bytes);
-        }
-    }
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // The API requires dwLength and writes every other member on success.
     let mut memory: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
     memory.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;

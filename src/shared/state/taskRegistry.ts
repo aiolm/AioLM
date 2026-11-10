@@ -19,6 +19,8 @@ export interface AppTask {
   finishedAt?: number;
   /** Set false only for work that really cannot survive navigation. */
   interruptible: boolean;
+  /** Stopping keeps the work's progress for a later resume, so it reads as a pause. */
+  pausable?: boolean;
   cancel?: () => Promise<void> | void;
   /**
    * Which completion alert a successful finish may raise. Model downloads and

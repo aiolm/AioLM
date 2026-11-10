@@ -1,4 +1,5 @@
 import { invoke } from './transport.ts';
+import { modelDisplayName } from '../lib/displayPaths.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 import type { CommandSyntax } from './runtimeHelp.ts';
 import type { ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
@@ -47,8 +48,11 @@ export interface RuntimeInstance {
   problems: string[]; backend?: string; build?: string;
   server_flags?: string[];
   variant?: string; plugin_version?: string;
+  /** Present for automatic connections; excludes the surrounding engine display name. */
+  connection_label?: string;
 }
 export function runtimeLabel(runtime: RuntimeInstance): string {
+  if (runtime.connection_label != null) return runtime.connection_label.trim() || 'Automatic connection';
   const version = runtime.version ?? runtime.id;
   const engine = runtime.variant === 'vllm-metal' ? `vllm-metal ${runtime.plugin_version || '?'} · vLLM ${version}` : version;
   const identity = runtime.version && runtime.version !== runtime.id ? `${engine} (${runtime.id})` : engine;
@@ -163,8 +167,10 @@ export async function listModelArtifacts(modelsDir: string, scanId?: string, sel
     const repositoryName = artifact.format !== 'gguf'
       ? /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(artifact.repository ?? '')?.[1]
       : undefined;
+    // The catalog name is display-only, so a split GGUF is named once, without
+    // its `-00001-of-00004` part suffix, on every screen that lists it.
     return {
-      name: artifact.selected_file ? artifact.name : repositoryName ?? artifact.name, path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
+      name: modelDisplayName(artifact.selected_file ? artifact.name : repositoryName ?? artifact.name), path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
       is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
     };
   });

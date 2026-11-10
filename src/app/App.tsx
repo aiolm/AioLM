@@ -83,7 +83,7 @@ export default function App() {
 
 function AppContent() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => loadPreferences());
-  const baseStore = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
+  const baseStore = useAppStore({ autoStart: preferences.server.autoStart });
   const { t } = useI18n();
   if (baseStore.bootState === 'loading') return <SurfaceLoading />;
   if (baseStore.bootState === 'error') return <div className="app-runtime-empty"><EmptyState headingLevel={1} title={t('error.attention')} description={baseStore.bootError ?? t('error.wrong')} action={{ label: t('common.retry'), onClick: () => { void baseStore.loadConfig().catch(() => undefined); } }} /></div>;

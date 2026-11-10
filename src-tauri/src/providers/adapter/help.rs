@@ -103,7 +103,12 @@ pub(crate) fn help_target(
     let key = &selected.key;
     let (program, fixed, prefix, default) = match key.provider {
         ProviderId::Custom(_) => {
-            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let registered = registry::manifest(key.provider, &key.runtime)?;
+            if !super::super::runtime_auto::supports_launch_args(&registered) {
+                return Err("attached services have no launch help or launch options".into());
+            }
+            let manifest =
+                super::super::runtime_auto::option_manifest(&registered)?.unwrap_or(registered);
             let prefix = registry::launch_prefix(&manifest);
             let scope =
                 super::super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?;
@@ -269,7 +274,18 @@ pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
     let mut entry = None;
     let options = match key.provider {
         ProviderId::Custom(_) => {
-            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let registered = registry::manifest(key.provider, &key.runtime)?;
+            if !super::super::runtime_auto::supports_launch_args(&registered) {
+                return Ok(Compat {
+                    explicit_scopes,
+                    options: Vec::new(),
+                    managed_flags: BTreeMap::new(),
+                    metadata: None,
+                    entry: None,
+                });
+            }
+            let manifest =
+                super::super::runtime_auto::option_manifest(&registered)?.unwrap_or(registered);
             entry = Some(CommandEntry::from_manifest(&manifest));
             metadata = manifest
                 .option_metadata

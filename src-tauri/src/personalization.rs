@@ -26,7 +26,9 @@ pub(crate) const MAX_FILE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_SKILLS: usize = 128;
 /// Skill folders examined per root, so a huge folder cannot stall loading.
 const MAX_SKILL_DIRECTORIES: usize = 2 * MAX_SKILLS;
-/// Limits from the Agent Skills format for the catalog metadata.
+/// Limits from the Agent Skills format for the catalog metadata. A longer
+/// description is shortened for the catalog rather than skipping the skill;
+/// the full text stays available through the skill read.
 const MAX_NAME_CHARS: usize = 64;
 const MAX_DESCRIPTION_CHARS: usize = 1024;
 /// Longest skill id the chat accepts, in UTF-16 code units.
@@ -691,11 +693,17 @@ fn metadata(text: &str) -> Result<(String, String), String> {
             "its name must be one line of at most {MAX_NAME_CHARS} characters."
         ));
     }
-    if description.chars().count() > MAX_DESCRIPTION_CHARS {
-        return Err(format!(
-            "its description is longer than {MAX_DESCRIPTION_CHARS} characters."
-        ));
-    }
+    let description = if description.chars().count() > MAX_DESCRIPTION_CHARS {
+        let mut short: String = description
+            .chars()
+            .take(MAX_DESCRIPTION_CHARS - 1)
+            .collect();
+        short.truncate(short.trim_end().len());
+        short.push('…');
+        short
+    } else {
+        description
+    };
     Ok((name, description))
 }
 
@@ -1226,6 +1234,31 @@ mod tests {
                 "Starts here and continues.".to_string()
             )
         );
+    }
+
+    #[test]
+    fn long_descriptions_are_shortened_and_the_skill_stays_available() {
+        let fixture = Fixture::new();
+        let exact = "가".repeat(MAX_DESCRIPTION_CHARS);
+        let long = format!("{} tail", "나".repeat(MAX_DESCRIPTION_CHARS));
+        fixture.skill(Source::Agents, "exact", "exact", &exact);
+        fixture.skill(Source::Agents, "long", "long", &long);
+        let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
+        assert!(loaded.warnings.is_empty(), "{:#?}", loaded.warnings);
+        let description = |name: &str| {
+            loaded
+                .skills
+                .iter()
+                .find(|skill| skill.name == name)
+                .map(|skill| skill.description.clone())
+                .unwrap()
+        };
+        assert_eq!(description("exact"), exact);
+        let short = description("long");
+        assert_eq!(short.chars().count(), MAX_DESCRIPTION_CHARS);
+        assert!(short.starts_with("나") && short.ends_with('…'));
+        // The full entry point, with the whole description, is still readable.
+        assert!(read_skill(&fixture.roots, "agents:long").is_ok());
     }
 
     #[test]

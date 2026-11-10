@@ -379,6 +379,10 @@ export function useChatSend({
         // A retry resends the failed turn's own snapshot; only a new message rereads the files.
         turn.personalization = retry && failed ? failed.personalization ?? null : await prepareTurnPersonalization(text, skillIds, controller.signal, pt);
         controller.signal.throwIfAborted();
+        // The catalog is read on demand through a tool call. A runtime that
+        // declares no tool-call support would reject every turn for it, so the
+        // catalog stays out; skills picked or named with `$name` are inlined.
+        if (turn.personalization?.catalog.length && turn.engine?.tools_auto === false) turn.personalization = { ...turn.personalization, catalog: [] };
         if (turn.personalization?.catalog.length && !turn.toolEntries.has(SKILL_TOOL_NAME)) turn.tools = [...turn.tools, skillToolDefinition()];
       }
 

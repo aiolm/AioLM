@@ -1556,7 +1556,7 @@ fn help_value() -> Value {
             "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
             "runtime list":"list built-in and registered external engine installations",
             "runtime discover [folder]":"find current-user local model APIs and entry points in a selected folder without executing candidates",
-            "runtime connect <candidate-id> <model-id> [folder]":"rediscover, inspect and verify one common automatic connection, then save its registration",
+            "runtime connect <candidate-id> <model-id> [folder] [--command <word>]...":"rediscover, inspect and verify one common automatic connection, then save its registration; --command words select one documented serving command such as `serve llm`",
             "runtime register-manifest <json>":"probe and register a versioned external process adapter; engine files stay external",
             "runtime select <custom.engine> <id>":"select a registered engine without replacing its files",
             "runtime probe <custom.engine> <id>":"probe the exact active model on an external adapter",
@@ -1601,6 +1601,7 @@ enum CliCommand {
         candidate: String,
         model: String,
         folder: Option<String>,
+        command: Vec<String>,
     },
     DeviceProfile,
     RuntimeProbe {
@@ -1644,6 +1645,32 @@ enum CliCommand {
     },
 }
 
+const RUNTIME_CONNECT_USAGE: &str =
+    "usage: runtime connect <candidate-id> <model-id> [folder] [--command <word>]...";
+
+/// `--command` words name one documented serving command in order
+/// (`--command serve --command llm`); one other argument is the folder.
+fn parse_runtime_connect(args: &[String]) -> Result<CliCommand, String> {
+    let mut folder = None;
+    let mut command = Vec::new();
+    let mut rest = args[4..].iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--command" {
+            command.push(rest.next().ok_or(RUNTIME_CONNECT_USAGE)?.clone());
+        } else if folder.is_none() {
+            folder = Some(arg.clone());
+        } else {
+            return Err(RUNTIME_CONNECT_USAGE.into());
+        }
+    }
+    Ok(CliCommand::RuntimeConnect {
+        candidate: args[2].clone(),
+        model: args[3].clone(),
+        folder,
+        command,
+    })
+}
+
 fn parse_command(args: &[String]) -> Result<CliCommand, String> {
     let Some(command) = args.first().map(String::as_str) else {
         return Ok(CliCommand::Help);
@@ -1672,9 +1699,9 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
         "runtime" | "runtimes" => match args.get(1).map(String::as_str) {
             Some("list") if args.len() == 2 => Ok(CliCommand::RuntimesList),
             Some("discover") if (2..=3).contains(&args.len()) => Ok(CliCommand::RuntimeDiscover { folder: args.get(2).cloned() }),
-            Some("connect") if (4..=5).contains(&args.len()) => Ok(CliCommand::RuntimeConnect { candidate: args[2].clone(), model: args[3].clone(), folder: args.get(4).cloned() }),
+            Some("connect") if args.len() >= 4 => parse_runtime_connect(args),
             Some("discover") => Err("usage: runtime discover [folder]".into()),
-            Some("connect") => Err("usage: runtime connect <candidate-id> <model-id> [folder]".into()),
+            Some("connect") => Err(RUNTIME_CONNECT_USAGE.into()),
             Some("register-manifest") if args.len() == 3 => Ok(CliCommand::RuntimeAdapterRegister { manifest: args[2].clone() }),
             Some("register") if args.len() == 4 => Ok(CliCommand::RuntimeRegister { provider: args[2].clone(), python: args[3].clone() }),
             Some("install") if (3..=4).contains(&args.len()) => Ok(CliCommand::RuntimeInstall { provider: args[2].clone(), python: args.get(3).cloned() }),
@@ -1743,6 +1770,7 @@ async fn run(args: &[String]) -> Result<Value, String> {
             candidate,
             model,
             folder,
+            command,
         } => {
             let _lock = acquire_command_lock()?;
             if read_state()?.is_some_and(|state| {
@@ -1785,7 +1813,31 @@ async fn run(args: &[String]) -> Result<Value, String> {
                 } else {
                     vec![]
                 };
-                let prepared = runtime_auto::inspect(&candidate, local_models).await?;
+                let prepared = runtime_auto::inspect(
+                    &candidate,
+                    local_models,
+                    (!command.is_empty()).then_some(command),
+                )
+                .await?;
+                if prepared.kind == "choose_command" {
+                    let choices = prepared
+                        .commands
+                        .iter()
+                        .map(|choice| {
+                            let words = choice
+                                .path
+                                .iter()
+                                .map(|word| format!("--command {word}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!("{words} ({})", choice.summary)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(format!(
+                        "this program documents several commands that can serve a model; repeat with one of: {choices}"
+                    ));
+                }
                 runtime_auto::connect(&prepared, &model, cancel.clone()).await
             };
             let connected = run_interruptible(work, tokio::signal::ctrl_c(), &cancel).await?;
@@ -2319,9 +2371,35 @@ mod tests {
             Ok(CliCommand::RuntimeConnect {
                 candidate: "opaque-id".into(),
                 model: "model name 눈길".into(),
-                folder: Some("folder with spaces".into())
+                folder: Some("folder with spaces".into()),
+                command: vec![],
             })
         );
+        assert_eq!(
+            parse(&[
+                "runtime",
+                "connect",
+                "opaque-id",
+                "model",
+                "--command",
+                "serve",
+                "folder",
+                "--command",
+                "text"
+            ]),
+            Ok(CliCommand::RuntimeConnect {
+                candidate: "opaque-id".into(),
+                model: "model".into(),
+                folder: Some("folder".into()),
+                command: vec!["serve".into(), "text".into()],
+            })
+        );
+        for invalid in [
+            &["runtime", "connect", "opaque-id", "model", "--command"][..],
+            &["runtime", "connect", "opaque-id", "model", "a", "b"][..],
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid:?}");
+        }
         assert!(parse(&["runtime", "connect", "opaque-id"]).is_err());
         assert_eq!(
             parse(&[

@@ -179,6 +179,12 @@ pub fn run() {
         // Permission calls and non-Linux alerts use the official plugin.
         // Linux submissions retain their bus sender for the app's lifetime.
         .plugin(tauri_plugin_notification::init())
+        // Launch at login is set from Settings through `set_launch_at_login`;
+        // no plugin command is exposed to the webview.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         // The tray menu is handled once for the whole process; see
         // `tray::on_menu_event` for why not with each tray icon.
         .on_menu_event(tray::on_menu_event);
@@ -249,6 +255,8 @@ pub fn run() {
             commands::config::migration_paths,
             commands::config::get_config,
             commands::config::save_config,
+            commands::config::launch_at_login,
+            commands::config::set_launch_at_login,
             commands::conversations::conversations_load,
             commands::conversations::conversation_save,
             commands::conversations::conversation_delete,
@@ -271,6 +279,8 @@ pub fn run() {
             commands::discover::hf_download_model,
             commands::discover::hf_download_snapshot,
             commands::discover::hf_cancel_download,
+            commands::discover::hf_pending_downloads,
+            commands::discover::hf_discard_download,
             commands::discover::hf_installed_files,
             commands::discover::hf_installed_snapshots,
             commands::discover::hf_check_model_updates,
@@ -423,8 +433,8 @@ pub fn run() {
         }
     };
 
-    // Only a configuration that asks to close to the tray gets a tray icon, so
-    // nobody who leaves the setting off gains one they never asked for.
+    // Only a configuration that closes to the tray (the default) gets a tray
+    // icon, so someone who turned the setting off does not keep one.
     if let Err(error) = tray::apply(
         app.handle(),
         startup_config.is_some_and(|cfg| cfg.close_to_tray),

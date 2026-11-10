@@ -136,12 +136,45 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('keeps launch cancellation separate from closing the editor', () => {
     const onCancelStart = vi.fn();
-    const { onClose } = mount({ busy: true, liveState: 'starting', onCancelStart });
-    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    const { onClose } = mount({ busy: true, startPending: true, liveState: 'starting', onCancelStart });
+    expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
     expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancelStart).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it.each(['close button', 'Escape'])('dismisses a pending start with %s without cancelling it', method => {
+    const onCancelStart = vi.fn();
+    const { onClose } = mount({ busy: true, startPending: true, liveState: 'stopped', preflightState: 'checking', onCancelStart });
+    const dialog = screen.getByRole('dialog', { name: 'Model & settings' });
+    if (method === 'close button') fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    else fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onCancelStart).not.toHaveBeenCalled();
+    expect(dialog).not.toHaveAttribute('open');
+  });
+
+  it('keeps Close and Escape guarded during a profile save', () => {
+    const { onClose } = mount({ busy: true });
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent(screen.getByRole('dialog', { name: 'Model & settings' }), new Event('cancel', { cancelable: true }));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('allows dismissal as soon as its own start begins, before preflight props arrive', async () => {
+    // Promise.withResolvers is outside this app's ES2020 TypeScript target.
+    let finish!: () => void;
+    const operation = new Promise<void>(resolve => { finish = resolve; });
+    const { onApply, onClose } = mount({ onApply: vi.fn(() => operation) });
+    openOptions();
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    expect(onApply).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    await act(async () => { finish(); });
   });
 
   it('exposes preflight progress and cancellation before a server starts', () => {

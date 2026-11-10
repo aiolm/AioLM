@@ -584,21 +584,63 @@ mod windows_detect {
 }
 
 /// Integrated parts either say so in the name or expose a token carve-out of
-/// shared memory rather than real VRAM.
+/// shared memory rather than real VRAM. A large carve-out alone does not make
+/// a part discrete: AMD APUs such as the Radeon 8060S can reserve 96 GB.
 #[cfg(any(windows, target_os = "linux", test))]
 fn looks_integrated(name: &str, vram_mb: Option<u64>) -> bool {
     let lower = name.to_lowercase();
-    if lower.contains("integrated")
+    if named_integrated(&lower) || amd_apu_name(&lower) {
+        return true;
+    }
+    // A discrete accelerator worth targeting has its own multi-gigabyte pool.
+    matches!(vram_mb, Some(mb) if mb < 1024)
+}
+
+/// Names that say outright that the part is integrated.
+fn named_integrated(lower: &str) -> bool {
+    lower.contains("integrated")
         || lower.contains("igpu")
         || lower.contains(" uhd ")
         || lower.ends_with(" uhd graphics")
         || lower.contains("iris")
         || lower.contains("vega ") && lower.contains("mobile")
-    {
-        return true;
-    }
-    // A discrete accelerator worth targeting has its own multi-gigabyte pool.
-    matches!(vram_mb, Some(mb) if mb < 1024)
+}
+
+/// AMD names its APU graphics "Radeon(TM) Graphics" or by a model number
+/// ending in M or S ("Radeon 780M", "Radeon 8060S Graphics"); every discrete
+/// Radeon carries a series name instead (RX, PRO, Instinct, FirePro).
+fn amd_apu_name(lower: &str) -> bool {
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let has = |wanted: &str| words.contains(&wanted);
+    let apu_model = |word: &&str| {
+        word.len() >= 4
+            && word.ends_with(['m', 's'])
+            && word[..word.len() - 1]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+    };
+    has("radeon")
+        && !["rx", "pro", "instinct", "firepro"]
+            .iter()
+            .any(|series| has(series))
+        && (has("graphics") || words.iter().any(apu_model))
+}
+
+/// An AMD APU identified as integrated by its name alone, while firmware gives
+/// it at least 1 GiB of its own memory. Before APU names were recognised these
+/// parts counted as discrete, and ROCm keeps the verdict it gave them then
+/// (see `backends::recommend`): memory accounting needs them integrated, but
+/// that is no new evidence about ROCm support.
+pub(crate) fn apu_with_carve_out(gpu: &GpuDevice) -> bool {
+    let lower = gpu.name.to_lowercase();
+    gpu.vendor == GpuVendor::Amd
+        && gpu.integrated
+        && amd_apu_name(&lower)
+        && !named_integrated(&lower)
+        && gpu.vram_mb.is_some_and(|mb| mb >= 1024)
 }
 
 #[cfg(target_os = "linux")]
@@ -993,6 +1035,28 @@ mod tests {
         assert!(looks_integrated("Intel(R) Iris(R) Xe Graphics", Some(2048)));
         assert!(!looks_integrated("AMD Radeon AI PRO R9700", Some(32623)));
         assert!(!looks_integrated("NVIDIA GeForce RTX 4090", Some(24564)));
+    }
+
+    #[test]
+    fn amd_apus_with_large_carve_outs_still_read_as_integrated() {
+        // Strix Halo reserves up to 96 GB as "dedicated" memory.
+        for name in [
+            "AMD Radeon(TM) 8060S Graphics",
+            "AMD Radeon(TM) 890M",
+            "AMD Radeon 780M Graphics",
+            "Strix Halo [Radeon Graphics / Radeon 8050S / Radeon 8060S]",
+        ] {
+            assert!(looks_integrated(name, Some(98_304)), "{name}");
+        }
+        for name in [
+            "AMD Radeon RX 7900 XTX",
+            "AMD Radeon RX 7600M XT",
+            "AMD Radeon PRO W7900",
+            "AMD Instinct MI300X",
+            "AMD Radeon VII",
+        ] {
+            assert!(!looks_integrated(name, Some(16_384)), "{name}");
+        }
     }
 
     #[test]

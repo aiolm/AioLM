@@ -317,6 +317,16 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
     }
 }
 
+pub(crate) async fn prepare_launch(
+    cfg: &AppConfig,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<(), String> {
+    if super::registry::prepare_automatic_launch(cfg, cancel.as_deref())? {
+        return Ok(());
+    }
+    refresh(cfg, cancel).await
+}
+
 #[derive(Clone, Copy)]
 pub enum RuntimeFeature {
     DeepVerification,

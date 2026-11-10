@@ -1,6 +1,7 @@
 import ModelName from '../../shared/ui/ModelName';
 import ModelBadges, { unknownFormat } from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { executionConfig, executionSettings, serverSettingsChanged, type ExecutionSettings } from '../../shared/config/executionSettings';
@@ -54,7 +55,7 @@ export interface ModelSettingsDialogProps {
   onProfileCommit: (cfg: api.AppConfig, edit: ProfileEditorResult, applyTarget: boolean) => Promise<ProfileCommitResult>;
   onReloadProfile: (modelPath: string) => Promise<ProfileCommitResult>;
   onClose: () => void; onManageRuntimes?: () => void;
-  busy?: boolean; liveState?: string;
+  busy?: boolean; startPending?: boolean; liveState?: string;
   preflightState?: 'checking' | 'cancelling';
   liveConfig?: api.AppConfig;
   initialApplication?: ProfileApplication; liveApplication?: ProfileApplication; sessionId?: string;
@@ -101,7 +102,7 @@ const modalityLabel: Record<Locale, Record<string, string>> = {
 
 /** A target-scoped editor. No configuration or model-profile writes happen on preview. */
 export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onProfileCommit, onReloadProfile, onClose, onManageRuntimes,
-  busy = false, liveState, liveConfig, initialApplication, liveApplication, sessionId = 'default', executionNotice, onCancelStart, onStop, requireModelSelection = false, preflightState }: ModelSettingsDialogProps) {
+  busy = false, startPending = false, liveState, liveConfig, initialApplication, liveApplication, sessionId = 'default', executionNotice, onCancelStart, onStop, requireModelSelection = false, preflightState }: ModelSettingsDialogProps) {
   const { t, locale } = useI18n();
   const copy = modelSettingsCopy[locale];
   const flowCopy = settingsFlowCopy[locale];
@@ -154,6 +155,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [pathDraft, setPathDraft] = useState(normalizeDisplayPath(initial.current.active_model));
   const [error, setError] = useState('');
   const [applying, setApplying] = useState(false);
+  const [starting, setStarting] = useState(false);
   const applyLock = useRef(false);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const pendingCancel = useRef<(() => void) | null>(null);
@@ -182,6 +184,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const selectedMetadata = useSelectedModelMetadata(llama ? cfg.active_model : '', open && llama);
   const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
+  const closingStart = starting || startPending;
   // The focused Cancel of a pending start is removed when the start settles.
   // Focus then returns to the start action (or the dialog title), not to the
   // page behind this still-open dialog; a focus moved elsewhere is kept.
@@ -351,6 +354,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     setError('');
   };
   const guarded = (action: () => void) => { if (disabled) return; if (dirtyRef.current) setPending(() => action); else action(); };
+  // Starting has captured the draft already; dismissing only releases the UI.
+  // Saves and ordinary edits still use the existing busy/discard guards.
+  const closeEditor = () => { if (closingStart) onClose(); else guarded(onClose); };
   const chooseModel = (path: string) => {
     if (!path.trim() || path === cfg.active_model) return;
     const load = () => {
@@ -427,7 +433,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       await commitProfile(() => ({ config: structuredClone(latest.current), edit: profiles.result(), applyTarget: true })).catch(() => undefined);
       return;
     }
-    applyLock.current = true; setApplying(true); setError('');
+    applyLock.current = true; setApplying(true); setStarting(true); setError('');
     try { await onApply(structuredClone(latest.current), intent, profiles.result()); setBaseline(executionSettings(latest.current)); onClose(); }
     catch (cause) {
       if (cause instanceof SettingsDeliveryError) {
@@ -437,7 +443,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         setError(profileCopy.savedFailure + cause.message);
       } else setError(isLifecycleCancellation(cause) ? '' : String(cause));
     }
-    finally { applyLock.current = false; setApplying(false); }
+    finally { applyLock.current = false; setApplying(false); setStarting(false); }
   };
   const runtimeKnown = llama ? resourcesLoaded : providerReady !== null;
   const runtimeMissing = llama ? !!cfg.active_backend && !resources.runtimes.some(item => item.backend === cfg.active_backend && item.build === cfg.active_build) : providerReady === false;
@@ -514,7 +520,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       if (event.shiftKey && (document.activeElement === first || document.activeElement === heading.current)) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }}
-    onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else guarded(onClose); } }}>
+    onCancel={event => {
+      if (closingStart) { onClose(); return; }
+      event.preventDefault();
+      if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) cancelPending(); else guarded(onClose); }
+    }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
       <div className="model-settings-main" ref={scroller} onFocus={event => {
@@ -538,9 +548,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         });
       }}>
         <header className="model-settings-header"><div className="model-settings-heading"><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2>{(step === 'options' || !!cfg.active_model) && <p className="model-settings-target" title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} /><span><ModelName model={cfg.active_model} empty={copy.model} /></span></p>}{step === 'options' && <ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} />}</div>
-          <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>
+          <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled && !closingStart} onClick={closeEditor}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>
         </header>
-        <div inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={`${api.providerDisplayName(provider)} · ${runtimeSelection || flowCopy.choose}`} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
+        <div inert={!!pending || confirmSave || disabled}><SettingsFlowNav step={step} runtime={runtimeSelection ? <RuntimeSelectionLabel config={cfg} /> : flowCopy.choose} profile={profileDisplayName(profiles.selected, locale)} canProfile={canProfile} canOptions={canOptions} disabled={disabled || profileDirty} onSelect={navigateStep} /></div>
         <div className={`model-settings-layout${step !== 'options' ? ' model-settings-layout--setup' : ''}`} inert={!!pending || confirmSave || disabled}>
           {step === 'options' && <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation={tabOrientation} className="model-settings-nav" />}

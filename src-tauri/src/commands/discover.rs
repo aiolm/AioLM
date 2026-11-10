@@ -1,11 +1,28 @@
 //! Hugging Face model discovery and download IPC.
 use crate::{config, discover, state::AppState};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::State;
+
+/// The global operation lock held for one model transfer, marked as a
+/// download so runtime changes can proceed beside it (see
+/// `runtimes::runtime_change_gate`). The mark clears before the lock is
+/// released.
+struct DownloadGuard<'a> {
+    _operation: tokio::sync::MutexGuard<'a, ()>,
+    active: &'a AtomicBool,
+}
+
+impl Drop for DownloadGuard<'_> {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
 
 /// Reject contention instead of queueing a second transfer that would reset
 /// the first transfer's cancellation flag after the lock becomes available.
-fn begin_download(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+/// A runtime install or removal in progress does not block a download: the
+/// two touch different files, and server starts stay excluded by both.
+fn begin_download(state: &AppState) -> Result<DownloadGuard<'_>, String> {
     let operation = state
         .operation
         .try_lock()
@@ -13,14 +30,15 @@ fn begin_download(state: &AppState) -> Result<tokio::sync::MutexGuard<'_, ()>, S
     if state.exiting.load(Ordering::Acquire) {
         return Err("application is exiting".into());
     }
-    if state.runtime_busy.load(Ordering::Acquire) {
-        return Err("another runtime operation is in progress".into());
-    }
     if super::runtimes::runtime_resources_in_use(state)? {
         return Err("stop model sessions before downloading".into());
     }
     state.discover_cancel.store(false, Ordering::Release);
-    Ok(operation)
+    state.model_download.store(true, Ordering::Release);
+    Ok(DownloadGuard {
+        _operation: operation,
+        active: &state.model_download,
+    })
 }
 
 #[tauri::command]
@@ -47,6 +65,7 @@ pub(crate) async fn hf_download_snapshot(
     repo_id: String,
     models_dir: String,
     file_path: Option<String>,
+    revision: Option<String>,
 ) -> Result<crate::providers::artifacts::ModelArtifact, String> {
     let _operation = begin_download(&state)?;
     let root = if models_dir.trim().is_empty() {
@@ -59,6 +78,7 @@ pub(crate) async fn hf_download_snapshot(
         &repo_id,
         &root,
         file_path.as_deref(),
+        revision.as_deref(),
         &state.discover_cancel,
     )
     .await
@@ -171,6 +191,7 @@ pub(crate) async fn hf_download_model(
     file_path: String,
     models_dir: String,
     include_companions: Option<bool>,
+    revision: Option<String>,
 ) -> Result<discover::DownloadedModel, String> {
     let _operation = begin_download(&state)?;
     let root = if models_dir.trim().is_empty() {
@@ -185,6 +206,7 @@ pub(crate) async fn hf_download_model(
         &root,
         state.discover_cancel.clone(),
         include_companions.unwrap_or(false),
+        revision.as_deref(),
     )
     .await
 }
@@ -192,6 +214,30 @@ pub(crate) async fn hf_download_model(
 #[tauri::command]
 pub(crate) fn hf_cancel_download(state: State<'_, AppState>) {
     state.discover_cancel.store(true, Ordering::Release);
+}
+
+/// Downloads that stopped before finishing, with the bytes already on disk.
+#[tauri::command]
+pub(crate) async fn hf_pending_downloads() -> Result<Vec<discover::PendingDownload>, String> {
+    tokio::task::spawn_blocking(discover::pending_downloads)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Forget an interrupted download and delete its staged bytes. Refused while
+/// a download runs, since it could be the one writing them.
+#[tauri::command]
+pub(crate) async fn hf_discard_download(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let _operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "wait for the current model operation to finish")?;
+    tokio::task::spawn_blocking(move || discover::discard_pending_download(&id))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -218,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn named_model_sessions_exit_and_runtime_operations_block_downloads() {
+    fn named_model_sessions_and_exit_block_downloads_but_runtime_changes_do_not() {
         let state = AppState::default();
         let named = state
             .sessions
@@ -231,8 +277,38 @@ mod tests {
         assert!(begin_download(&state).is_err());
         state.exiting.store(false, Ordering::Release);
         state.runtime_busy.store(true, Ordering::Release);
-        assert!(begin_download(&state).is_err());
-        state.runtime_busy.store(false, Ordering::Release);
-        assert!(begin_download(&state).is_ok());
+        let download = begin_download(&state).unwrap();
+        assert!(state.model_download.load(Ordering::Acquire));
+        drop(download);
+        assert!(!state.model_download.load(Ordering::Acquire));
+        assert!(state.operation.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn runtime_changes_proceed_beside_a_download_but_wait_for_other_operations() {
+        use std::time::Duration;
+        let state = AppState::default();
+        let download = begin_download(&state).unwrap();
+        let gate = tokio::time::timeout(
+            Duration::from_secs(5),
+            super::super::runtimes::runtime_change_gate(&state),
+        )
+        .await
+        .expect("a runtime change must not queue behind a model download");
+        assert!(gate.is_none());
+        drop(download);
+
+        // A server start or other model operation still has to finish first.
+        let operation = state.operation.lock().await;
+        assert!(tokio::time::timeout(
+            Duration::from_millis(200),
+            super::super::runtimes::runtime_change_gate(&state),
+        )
+        .await
+        .is_err());
+        drop(operation);
+        assert!(super::super::runtimes::runtime_change_gate(&state)
+            .await
+            .is_some());
     }
 }

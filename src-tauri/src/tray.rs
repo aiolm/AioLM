@@ -1,11 +1,11 @@
 //! The system-tray presence behind the close-to-tray setting.
 //!
-//! The tray icon exists exactly while `AppConfig::close_to_tray` is on, so a
-//! user who leaves the setting off never gains a tray icon they did not ask
-//! for, and a user who turns it on always has somewhere to click to get the
-//! window back. Everything here is keyed by a fixed id and looked up through
-//! the app handle, so turning the setting on and off does not need a handle
-//! parked in shared state.
+//! The tray icon exists exactly while `AppConfig::close_to_tray` is on (the
+//! default), so a user who turns the setting off loses a tray icon they no
+//! longer need, and a user who keeps it on always has somewhere to click to
+//! get the window back. Everything here is keyed by a fixed id and looked up
+//! through the app handle, so turning the setting on and off does not need a
+//! handle parked in shared state.
 
 use tauri::menu::{Menu, MenuEvent, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

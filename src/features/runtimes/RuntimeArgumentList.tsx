@@ -4,14 +4,14 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 
 /** Explicit argv tokens keep paths with spaces and Unicode in one argument. */
-export default function RuntimeArgumentList({ label, tokens, disabled, onChange, onFile, onError }: {
+export default function RuntimeArgumentList({ label, tokens, disabled, onChange, onFile, onError, descriptionId }: {
   label: string; tokens: string[]; disabled: boolean; onChange: (next: string[]) => void;
-  onFile?: (path: string) => void; onError?: (message: string) => void;
+  onFile?: (path: string) => void; onError?: (message: string) => void; descriptionId?: string;
 }) {
   const id = useId();
   const { locale } = useI18n();
   const copy = entrypointCopy[locale];
-  return <fieldset>
+  return <fieldset aria-describedby={descriptionId}>
     <legend>{label}</legend>
     {tokens.map((token, index) => <span key={index} className="entrypoint-token">
       <input id={`${id}-${index}`} name={`${label}-${index}`} className="app-input" value={token} disabled={disabled}

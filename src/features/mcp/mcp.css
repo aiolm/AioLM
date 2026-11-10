@@ -3,17 +3,17 @@
 .mcp-security-note { margin-bottom: 16px; }
 .mcp-workspace { display: grid; gap: 16px; align-items: start; }
 .mcp-heading { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
-.mcp-hint { margin: 2px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
+.mcp-hint { max-inline-size: 80ch; margin: 2px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
 
 .mcp-servers { display: grid; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
-.mcp-servers__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding-inline: 4px; }
-.mcp-server-list { display: grid; align-content: start; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+.mcp-servers__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px; padding-inline: 4px; }
+.mcp-server-list { display: grid; align-content: start; gap: 4px; min-width: 0; max-height: clamp(12rem, 55dvh, 52rem); margin: 0; padding: 0; list-style: none; overflow-y: auto; }
 .mcp-server-row { display: flex; align-items: center; gap: 4px; padding: 2px; }
 .mcp-server-row__select { flex-direction: column; align-items: flex-start; gap: 4px; min-height: 38px; }
 .mcp-server-row__name { color: var(--ui-ink); font-size: var(--ui-text); font-weight: 550; line-height: 1.4; overflow-wrap: anywhere; }
 
-.mcp-detail { display: grid; gap: 16px; min-width: 0; }
-.mcp-section { display: grid; gap: 16px; }
+.mcp-detail { display: grid; gap: 16px; min-width: 0; container: mcp-detail / inline-size; }
+.mcp-section { display: grid; gap: 16px; min-width: 0; }
 .mcp-section .app-section-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 .mcp-section__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
 .mcp-section__header > div:first-child { flex: 1 1 18rem; min-width: 0; }
@@ -36,16 +36,23 @@
 .mcp-schema > summary { width: fit-content; color: var(--ui-muted); font-size: var(--ui-text-support); cursor: pointer; }
 .mcp-schema > .mcp-code { margin-top: 8px; }
 
-.mcp-code { margin: 0; max-height: 10rem; overflow: auto; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.mcp-code--tall { max-height: 16rem; }
+.mcp-code { margin: 0; max-height: clamp(10rem, 30dvh, 24rem); overflow: auto; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-family: var(--font-mono); font-size: var(--ui-text-support); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-code--tall { max-height: clamp(16rem, 50dvh, 48rem); }
 .mcp-button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .mcp-running { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding-block: 12px; }
 .mcp-running__label { min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
 /* Approval and progress take focus programmatically; keyboard focus still shows a ring. */
 .mcp-focus-target:focus:not(:focus-visible) { outline: none; }
 
+@container workspace (min-width: 720px) {
+  .app-master-detail.mcp-workspace { grid-template-columns: clamp(16rem, 24cqi, 24rem) minmax(0, 1fr); }
+}
+/* Paths get the larger track only when the detail pane itself can fit it. */
+@container mcp-detail (min-width: 640px) {
+  .mcp-section > .app-form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+}
 @container workspace (max-width: 719px) {
-  .mcp-server-list { max-height: 200px; }
+  .mcp-server-list { max-height: clamp(10rem, 35dvh, 24rem); }
 }
 @container workspace (max-width: 479px) {
   .mcp-policy { grid-template-columns: minmax(0, 1fr); }

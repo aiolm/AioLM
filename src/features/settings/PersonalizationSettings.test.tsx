@@ -6,7 +6,7 @@ import { isNativeRuntimeAvailable } from "../../shared/api/index";
 import { PERSONALIZATION_CHANGED_EVENT, readAgentsFile, saveAgentsFile, type AgentInstructionsFile, type PersonalizationSource } from "../../shared/api/personalization";
 import SettingsPanel from "./Settings";
 
-vi.mock("../../shared/api/index", () => ({ isNativeRuntimeAvailable: vi.fn(() => true) }));
+vi.mock("../../shared/api/index", () => ({ isNativeRuntimeAvailable: vi.fn(() => true), getLaunchAtLogin: vi.fn(async () => false), setLaunchAtLogin: vi.fn() }));
 // The conflict check and event name stay real; only the file system calls are faked.
 vi.mock("../../shared/api/personalization", async (importActual) => ({
   ...await importActual<typeof import("../../shared/api/personalization")>(),

@@ -1,8 +1,13 @@
 // Hugging Face Discover/search/download support.
 mod digests;
+mod pending;
+mod resume;
 mod snapshots;
 mod updates;
 use futures_util::StreamExt;
+pub use pending::{
+    discard as discard_pending_download, list as pending_downloads, PendingDownload,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 pub use snapshots::{download_snapshot, installed_snapshots};
@@ -10,6 +15,7 @@ pub(crate) use snapshots::{
     read_snapshot_manifest, read_snapshot_manifest_for_inspection, snapshot_path,
 };
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -371,17 +377,6 @@ fn target_path(models_dir: &str, repo_id: &str, file_path: &str) -> Result<PathB
     ))
 }
 
-fn temporary_download_path(target: &Path) -> Result<PathBuf, String> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| "download destination has no parent".to_string())?;
-    let name = target
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "download filename is invalid".to_string())?;
-    Ok(parent.join(format!(".{name}.{}.part", Uuid::new_v4().simple())))
-}
-
 fn same_path_identity(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -597,6 +592,21 @@ async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, S
         return Err("invalid repository revision".into());
     }
     Ok(revision.into())
+}
+
+async fn download_revision<F>(revision: Option<&str>, latest: F) -> Result<String, String>
+where
+    F: Future<Output = Result<String, String>>,
+{
+    match revision {
+        Some(revision) => {
+            if revision.len() != 40 || !revision.bytes().all(|value| value.is_ascii_hexdigit()) {
+                return Err("interrupted download has no valid immutable revision; staged bytes were retained".into());
+            }
+            Ok(revision.to_owned())
+        }
+        None => latest.await,
+    }
 }
 
 fn tree_next_page(
@@ -900,12 +910,24 @@ where
 ///
 /// Only ever called with proof: either this application just transferred the
 /// file, or the file already there matched the digest the repository publishes.
+/// `digest` is that published identity when one was checked; a later download
+/// of the same unchanged file then skips hashing it again (`verified_before`).
 /// A receipt that cannot be written costs provenance on a later run and nothing
 /// else, so it never turns a finished download into a failure.
-fn note_download(target: &Path, repo_id: &str, file_path: &str) {
+fn note_download(target: &Path, repo_id: &str, file_path: &str, digest: Option<&str>) {
     if let Ok(root) = crate::benchmark::data_root() {
-        let _ = crate::benchmark::download_receipt::record(&root, target, repo_id, file_path);
+        let _ = crate::benchmark::download_receipt::record_verified(
+            &root, target, repo_id, file_path, digest,
+        );
     }
+}
+
+/// Whether this application already proved `target`, unchanged since, against
+/// the published digest `oid`, according to the receipts under `receipts`.
+fn verified_before(receipts: Option<&Path>, target: &Path, oid: &str) -> bool {
+    receipts
+        .and_then(|root| crate::benchmark::download_receipt::verified_digest(root, target))
+        .is_some_and(|recorded| digests::identities_equal(Some(&recorded), Some(oid)))
 }
 
 fn emit_progress(
@@ -1051,10 +1073,11 @@ pub async fn download(
     models_dir: &str,
     cancel: Arc<AtomicBool>,
     include_companions: bool,
+    revision: Option<&str>,
 ) -> Result<DownloadedModel, String> {
     validate_repo_id(repo_id)?;
     validate_repo_path(file_path)?;
-    let revision = immutable_revision(repo_id, &cancel).await?;
+    let revision = download_revision(revision, immutable_revision(repo_id, &cancel)).await?;
     let entries = repository_tree(repo_id, &revision, &cancel).await?;
     let files = listed_gguf_files(repo_id, &revision, &entries)?;
     let plan = model_download_plan(&files, file_path)?;
@@ -1090,6 +1113,34 @@ pub async fn download(
     } else {
         None
     };
+    let target = target_path(models_dir, repo_id, file_path)?;
+    let directory = target
+        .parent()
+        .ok_or("model has no destination directory")?;
+    let mut pending_files = plan
+        .iter()
+        .map(|file| {
+            target_path(models_dir, repo_id, &file.path).map(|path| pending::PendingFile {
+                path: path.to_string_lossy().into_owned(),
+                size: file.size_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(files) = &companions {
+        pending_files.extend(snapshots::pending_gguf_companions(directory, files)?);
+    }
+    // Both plans are known before any transfer, including flattened companions.
+    let pending = pending::PendingDownload::new(
+        (repo_id, &revision),
+        Some(file_path),
+        false,
+        models_dir,
+        include_companions,
+        &label,
+        pending_files,
+    );
+    let pending_id = pending.id.clone();
+    pending::remember(pending);
     // Both plans use the same verified revision. Release its full tree before
     // transferring loading assets or model bytes instead of fetching it again.
     drop(entries);
@@ -1160,6 +1211,7 @@ pub async fn download(
         downloaded.size_bytes,
         downloaded.size_bytes,
     );
+    pending::forget(&pending_id);
     Ok(downloaded)
 }
 
@@ -1174,15 +1226,18 @@ where
     F: FnMut(&'static str, u64, u64),
 {
     if cancel.load(Ordering::Acquire) {
-        return Err("model download cancelled".into());
+        return Err(DOWNLOAD_CANCELLED.into());
     }
     let file_path = file.path.as_str();
     let target = target_path(models_dir, repo_id, file_path)?;
-    let part = temporary_download_path(&target)?;
     let total = file.size_bytes;
     if total > MAX_MODEL_BYTES {
         return Err("model file exceeds the 512 GiB safety limit".into());
     }
+    let oid = file
+        .oid
+        .as_deref()
+        .filter(|oid| digests::valid_oid(Some(oid)));
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("model destination must not be a symbolic link".into());
@@ -1191,15 +1246,22 @@ where
             return Err("model destination is not a regular file".into());
         }
         Ok(metadata) => {
-            if digests::valid_oid(file.oid.as_deref()) {
-                let identity = crate::providers::artifacts::SnapshotFile {
-                    remote_path: None,
-                    path: file.path.clone(),
-                    size: total,
-                    oid: file.oid.clone(),
-                };
-                digests::verify_file_digest(&target, &identity, cancel).await?;
-                note_download(&target, repo_id, file_path);
+            if let Some(oid) = oid {
+                // A file this application already proved against the same
+                // digest, and that has not changed since, is not hashed again.
+                if !verified_before(crate::benchmark::data_root().ok().as_deref(), &target, oid) {
+                    let identity = crate::providers::artifacts::SnapshotFile {
+                        remote_path: None,
+                        path: file.path.clone(),
+                        size: total,
+                        oid: Some(oid.to_owned()),
+                    };
+                    digests::verify_file_digest_with_progress(&target, &identity, cancel, |read| {
+                        progress("verifying", read, total)
+                    })
+                    .await?;
+                }
+                note_download(&target, repo_id, file_path, Some(oid));
                 return Ok(DownloadedModel {
                     repo_id: repo_id.to_owned(),
                     file_path: file_path.to_owned(),
@@ -1228,54 +1290,31 @@ where
             ));
         }
     }
-    progress("starting", 0, total);
-    let response = tokio::select! {
-        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-        response = download_client()?.get(&file.download_url).send() => response.map_err(|error| format!("model download failed: {error}"))?
-    };
-    validate_response_url(&response)?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("model download HTTP status: {status}"));
-    }
-    let response_total = response.content_length().unwrap_or(total);
-    if response
-        .content_length()
-        .is_some_and(|length| length != total)
-    {
-        return Err(format!(
-            "model download length {response_total} does not match repository metadata {total}"
-        ));
-    }
-    if response_total > MAX_MODEL_BYTES {
-        return Err("model download exceeds the 512 GiB safety limit".into());
-    }
-    let received = receive_download(
-        response,
-        &part,
-        response_total,
-        file.oid
-            .as_deref()
-            .filter(|oid| digests::valid_oid(Some(oid))),
+    let part = resume::fetch(
+        &file.download_url,
+        &target,
+        total,
+        oid,
         cancel,
         &mut progress,
     )
     .await?;
     if cancel.load(Ordering::Acquire) {
-        let _ = tokio::fs::remove_file(&part).await;
-        progress("cancelled", received, response_total);
-        return Err("model download cancelled".into());
+        // The complete, verified bytes stay staged; the next attempt only
+        // re-reads them before activating.
+        progress("cancelled", total, total);
+        return Err(DOWNLOAD_CANCELLED.into());
     }
     if let Err(error) = activate_download(&part, &target).await {
         let _ = tokio::fs::remove_file(&part).await;
         return Err(error);
     }
-    note_download(&target, repo_id, file_path);
+    note_download(&target, repo_id, file_path, oid);
     Ok(DownloadedModel {
         repo_id: repo_id.to_owned(),
         file_path: file_path.to_owned(),
         path: target.to_string_lossy().into_owned(),
-        size_bytes: received,
+        size_bytes: total,
     })
 }
 
@@ -1577,22 +1616,6 @@ mod tests {
         assert!(path.starts_with(canonical_root.join("hf").join("org").join("model")));
         assert!(path.ends_with(Path::new("Q4").join("model.gguf")));
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn temporary_download_paths_are_unique_and_not_predictable_target_part_files() {
-        let target = Path::new("C:/models/model.gguf");
-        let first = temporary_download_path(target).expect("temporary path");
-        let second = temporary_download_path(target).expect("temporary path");
-        assert_ne!(first, second);
-        assert!(first
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with(".model.gguf."));
-        assert!(first
-            .extension()
-            .is_some_and(|extension| extension == "part"));
     }
 
     #[test]

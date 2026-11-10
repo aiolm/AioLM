@@ -136,6 +136,23 @@ pub(super) fn gguf_companion_plan(
     Ok(files)
 }
 
+pub(super) fn pending_gguf_companions(
+    directory: &Path,
+    files: &[SnapshotFile],
+) -> Result<Vec<pending::PendingFile>, String> {
+    files
+        .iter()
+        .map(|file| {
+            let name = file.path.rsplit('/').next().ok_or("empty companion path")?;
+            let target = checked_destination(directory, name, false)?;
+            Ok(pending::PendingFile {
+                path: target.to_string_lossy().into_owned(),
+                size: file.size,
+            })
+        })
+        .collect()
+}
+
 pub(super) async fn download_gguf_companions(
     app: &AppHandle,
     repo: &str,
@@ -145,6 +162,7 @@ pub(super) async fn download_gguf_companions(
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let total: u64 = files.iter().map(|file| file.size).sum();
+    let receipts = crate::benchmark::data_root().ok();
     let mut completed = 0;
     for file in files {
         if cancel.load(Ordering::Acquire) {
@@ -152,50 +170,38 @@ pub(super) async fn download_gguf_companions(
         }
         let name = file.path.rsplit('/').next().ok_or("empty companion path")?;
         let target = destination(directory, name)?;
-        if verify_existing(&target, file, cancel, |read| {
-            emit_progress(
-                app,
-                repo,
-                &file.path,
-                "downloading",
-                completed + read,
-                total,
-            )
+        let oid = file
+            .oid
+            .as_deref()
+            .filter(|oid| digests::valid_oid(Some(oid)));
+        if verify_existing(&target, file, receipts.as_deref(), cancel, |read| {
+            emit_progress(app, repo, &file.path, "verifying", completed + read, total)
         })
         .await?
         {
+            if oid.is_some() {
+                note_download(&target, repo, &file.path, oid);
+            }
             completed += file.size;
             continue;
         }
-        let response = tokio::select! {
-            _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-            response = download_client()?.get(download_url_at(repo, &file.path, revision)).send() => response.map_err(|error| error.to_string())?
-        };
-        validate_response_url(&response)?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "GGUF companion {}: HTTP {}",
-                file.path,
-                response.status()
-            ));
-        }
-        let temporary = temporary_download_path(&target)?;
-        let received = receive_download(
-            response,
-            &temporary,
+        let part = resume::fetch(
+            &download_url_at(repo, &file.path, revision),
+            &target,
             file.size,
-            file.oid.as_deref(),
+            oid,
             cancel,
             |phase, received, _| {
                 emit_progress(app, repo, &file.path, phase, completed + received, total)
             },
         )
         .await?;
-        if let Err(error) = activate_download(&temporary, &target).await {
-            let _ = tokio::fs::remove_file(&temporary).await;
+        if let Err(error) = activate_download(&part, &target).await {
+            let _ = tokio::fs::remove_file(&part).await;
             return Err(error);
         }
-        completed += received;
+        note_download(&target, repo, &file.path, oid);
+        completed += file.size;
     }
     Ok(())
 }
@@ -492,6 +498,7 @@ fn read_snapshot_manifest_with_policy(
 async fn verify_existing<F: FnMut(u64)>(
     target: &Path,
     file: &SnapshotFile,
+    receipts: Option<&Path>,
     cancel: &AtomicBool,
     progress: F,
 ) -> Result<bool, String> {
@@ -511,7 +518,13 @@ async fn verify_existing<F: FnMut(u64)>(
             file.path
         ));
     }
-    if file.oid.is_some() {
+    // A file this application already proved against the same digest, and
+    // that has not changed since, is not hashed again.
+    if file
+        .oid
+        .as_deref()
+        .is_some_and(|oid| !verified_before(receipts, target, oid))
+    {
         verify_file_digest_with_progress(target, file, cancel, progress)
             .await
             .map_err(|error| {
@@ -526,6 +539,26 @@ async fn verify_existing<F: FnMut(u64)>(
             })?;
     }
     Ok(true)
+}
+
+/// Note under `receipts` that `target` holds `file` from `repository`, checked
+/// against its published digest `oid`, so a later resume need not hash it.
+fn record(
+    receipts: Option<&Path>,
+    target: &Path,
+    repository: &str,
+    file: &SnapshotFile,
+    oid: &str,
+) {
+    if let Some(root) = receipts.filter(|_| digests::valid_oid(Some(oid))) {
+        let _ = crate::benchmark::download_receipt::record_verified(
+            root,
+            target,
+            repository,
+            file.remote_path.as_deref().unwrap_or(&file.path),
+            Some(oid),
+        );
+    }
 }
 
 /// Prefer a ready install at this revision, even when its stable folder names
@@ -585,10 +618,11 @@ pub async fn download_snapshot(
     repo: &str,
     models_dir: &str,
     file_path: Option<&str>,
+    revision: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<crate::providers::artifacts::ModelArtifact, String> {
     validate_repo_id(repo)?;
-    let revision = immutable_revision(repo, cancel).await?;
+    let revision = download_revision(revision, immutable_revision(repo, cancel)).await?;
     let entries = repository_tree(repo, &revision, cancel).await?;
     let (selected_file, files) = if let Some(selected) = file_path {
         let (canonical, files) =
@@ -607,13 +641,40 @@ pub async fn download_snapshot(
         files,
         complete: false,
     };
-    download_snapshot_files(
+    // Remembered until it completes, so a pause or restart can continue it.
+    let pending = pending::PendingDownload::new(
+        (repo, &revision),
+        file_path,
+        true,
+        models_dir,
+        false,
+        file_path.unwrap_or(repo),
+        manifest
+            .files
+            .iter()
+            .map(|file| pending::PendingFile {
+                path: file
+                    .path
+                    .split('/')
+                    .fold(snapshot.clone(), |path, part| path.join(part))
+                    .to_string_lossy()
+                    .into_owned(),
+                size: file.size,
+            })
+            .collect(),
+    );
+    let pending_id = pending.id.clone();
+    pending::remember(pending);
+    let artifact = download_snapshot_files(
         &snapshot,
         &mut manifest,
+        crate::benchmark::data_root().ok().as_deref(),
         cancel,
         |file, phase, received, total| emit_progress(&app, repo, file, phase, received, total),
     )
-    .await
+    .await?;
+    pending::forget(&pending_id);
+    Ok(artifact)
 }
 
 /// Keep metadata resolution and the app event adapter outside the install loop,
@@ -621,6 +682,7 @@ pub async fn download_snapshot(
 async fn download_snapshot_files<F>(
     snapshot: &Path,
     manifest: &mut SnapshotManifest,
+    receipts: Option<&Path>,
     cancel: &AtomicBool,
     mut progress: F,
 ) -> Result<crate::providers::artifacts::ModelArtifact, String>
@@ -674,12 +736,15 @@ where
             }
         };
         // A resumed download re-verifies without changing a ready manifest.
-        match verify_existing(&target, file, cancel, |read| {
-            progress(&file.path, "downloading", completed + read, total)
+        match verify_existing(&target, file, receipts, cancel, |read| {
+            progress(&file.path, "verifying", completed + read, total)
         })
         .await
         {
             Ok(true) => {
+                if let Some(oid) = file.oid.as_deref() {
+                    record(receipts, &target, &manifest.repository, file, oid);
+                }
                 completed += file.size;
                 progress(&file.path, "downloading", completed, total);
                 continue;
@@ -702,52 +767,24 @@ where
             .extend(manifest.repository.split('/'))
             .extend(["resolve", manifest.revision.as_str()])
             .extend(file.remote_path.as_deref().unwrap_or(&file.path).split('/'));
-        let response = tokio::select! { _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()), response = download_client()?.get(url).send() => response.map_err(|error| error.to_string())? };
-        validate_response_url(&response)?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "snapshot file {}: HTTP {}",
-                file.path,
-                response.status()
-            ));
-        }
-        let temporary = temporary_download_path(&target)?;
-        let mut hash = file
-            .oid
-            .as_deref()
-            .map(|oid| FileDigest::new(oid, file.size))
-            .transpose()?;
-        let mut output = create_staging_file(&temporary).await?;
-        let mut stream = response.bytes_stream();
-        let mut received = 0u64;
-        let mut last_progress = std::time::Instant::now();
-        let result = async {
-            loop {
-                let chunk = tokio::select! { _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.to_owned()), chunk = stream.next() => chunk };
-                let Some(chunk) = chunk else { break; };
-                let chunk = chunk.map_err(|error| error.to_string())?;
-                received = received.saturating_add(chunk.len() as u64);
-                if received > file.size { return Err(format!("snapshot file exceeds declared size: {}", file.path)); }
-                if let Some(hash) = &mut hash { hash.update(&chunk); }
-                output.write_all(&chunk).await.map_err(|error| error.to_string())?;
-                if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL { progress(&file.path, "downloading", completed + received, total); last_progress = std::time::Instant::now(); }
-            }
-            if received != file.size { return Err(format!("snapshot file is truncated: {}", file.path)); }
-            if hash.is_some_and(|hash| !hash.matches()) { return Err(format!("snapshot checksum mismatch: {}", file.path)); }
-            output.sync_all().await.map_err(|error| error.to_string())?;
-            Ok::<(), String>(())
-        }.await;
-        drop(output);
-        if let Err(error) = result {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(error);
-        }
+        let part = resume::fetch(
+            url.as_str(),
+            &target,
+            file.size,
+            file.oid.as_deref(),
+            cancel,
+            |phase, received, _| progress(&file.path, phase, completed + received, total),
+        )
+        .await?;
         // Activation never replaces a file that appeared at the destination.
-        if let Err(error) = activate_download(&temporary, &target).await {
-            let _ = tokio::fs::remove_file(&temporary).await;
+        if let Err(error) = activate_download(&part, &target).await {
+            let _ = tokio::fs::remove_file(&part).await;
             return Err(error);
         }
-        completed += received;
+        if let Some(oid) = file.oid.as_deref() {
+            record(receipts, &target, &manifest.repository, file, oid);
+        }
+        completed += file.size;
         progress(&file.path, "downloading", completed, total);
     }
     // An index can reference a shard absent from the repository listing. Do
@@ -870,6 +907,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_after_main_moves_activates_original_staged_weights_and_empty_assets() {
+        for selected in [None, Some("model.safetensors")] {
+            let root = temporary("pinned-recovery").canonicalize().unwrap();
+            let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
+            manifest.selected_file = selected.map(str::to_owned);
+            manifest.format = if selected.is_some() { 2 } else { 1 };
+            manifest.files.push(SnapshotFile {
+                remote_path: None,
+                path: "merges.txt".into(),
+                size: 0,
+                oid: Some("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".into()),
+            });
+            let mut header = serde_json::to_vec(&serde_json::json!({
+                "weight": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}
+            }))
+            .unwrap();
+            header.resize(header.len().div_ceil(8) * 8, b' ');
+            let mut weight_bytes = (header.len() as u64).to_le_bytes().to_vec();
+            weight_bytes.extend_from_slice(&header);
+            weight_bytes.extend_from_slice(&1f32.to_le_bytes());
+            fs::write(snapshot.join("model.safetensors"), &weight_bytes).unwrap();
+            let weights = manifest
+                .files
+                .iter_mut()
+                .find(|file| file.path == "model.safetensors")
+                .unwrap();
+            weights.size = weight_bytes.len() as u64;
+            weights.oid = Some(format!("{:x}", Sha256::digest(&weight_bytes)));
+            let weights = manifest
+                .files
+                .iter()
+                .find(|file| file.path == "model.safetensors")
+                .unwrap();
+            let target = snapshot.join("model.safetensors");
+            let part = resume::part_path(&target, weights.size, weights.oid.as_deref()).unwrap();
+            fs::rename(&target, &part).unwrap();
+            fs::write(
+                snapshot.join(SNAPSHOT_MANIFEST),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            let pending = pending::PendingDownload::new(
+                ("owner/model", &manifest.revision),
+                selected,
+                true,
+                root.to_str().unwrap(),
+                false,
+                "model",
+                vec![pending::PendingFile {
+                    path: target.to_string_lossy().into_owned(),
+                    size: weights.size,
+                }],
+            );
+            let saved = serde_json::to_vec(&pending).unwrap();
+            let pending: pending::PendingDownload = serde_json::from_slice(&saved).unwrap();
+            let upstream_main = "b".repeat(40);
+            let revision = download_revision(
+                pending.revision.as_deref(),
+                std::future::ready(Ok(upstream_main.clone())),
+            )
+            .await
+            .unwrap();
+            let destination =
+                snapshot_directory(&root, "owner/model", &revision, selected).unwrap();
+            assert_eq!(destination, snapshot);
+            let mut verifying_weights = false;
+            let artifact = download_snapshot_files(
+                &destination,
+                &mut manifest,
+                None,
+                &AtomicBool::new(false),
+                |file, phase, _, _| {
+                    if file == "model.safetensors" && phase == "verifying" {
+                        verifying_weights = true;
+                    }
+                },
+            )
+            .await
+            .unwrap();
+            assert!(artifact.ready_files());
+            assert_eq!(
+                artifact.revision.as_deref(),
+                Some(manifest.revision.as_str())
+            );
+            assert!(
+                verifying_weights,
+                "the saved weight bytes are verified before activation"
+            );
+            assert_eq!(fs::read(target).unwrap(), weight_bytes);
+            assert_eq!(fs::read(snapshot.join("merges.txt")).unwrap(), b"");
+            assert!(!part.exists());
+            assert!(!snapshot.parent().unwrap().join(&upstream_main).exists());
+            assert_eq!(
+                download_revision(None, std::future::ready(Ok(upstream_main.clone())))
+                    .await
+                    .unwrap(),
+                upstream_main,
+                "a new download still resolves the latest main"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn updated_snapshot_keeps_its_folder_and_repeat_download_reuses_it() {
         let root = temporary("stable-revision").canonicalize().unwrap();
         let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
@@ -898,6 +1039,7 @@ mod tests {
         let artifact = download_snapshot_files(
             &selected,
             &mut manifest,
+            None,
             &AtomicBool::new(false),
             |_, _, _, _| {},
         )
@@ -954,16 +1096,16 @@ mod tests {
             oid: Some("ce013625030ba8dba906f756967f9e9ca394464a".into()),
         };
         let cancel = AtomicBool::new(false);
-        assert!(verify_existing(&target, &file, &cancel, |_| {})
+        assert!(verify_existing(&target, &file, None, &cancel, |_| {})
             .await
             .unwrap());
         fs::write(&target, b"world\n").unwrap();
-        assert!(verify_existing(&target, &file, &cancel, |_| {})
+        assert!(verify_existing(&target, &file, None, &cancel, |_| {})
             .await
             .is_err());
         assert_eq!(fs::read(&target).unwrap(), b"world\n");
         file.oid = None;
-        assert!(verify_existing(&target, &file, &cancel, |_| {})
+        assert!(verify_existing(&target, &file, None, &cancel, |_| {})
             .await
             .unwrap());
         fs::remove_dir_all(root).unwrap();
@@ -978,11 +1120,17 @@ mod tests {
             let original = fs::read(&manifest_path).unwrap();
             let cancel = AtomicBool::new(false);
             assert_eq!(
-                download_snapshot_files(&snapshot, &mut manifest, &cancel, |file, _, _, _| {
-                    if file == cancellation_file {
-                        cancel.store(true, Ordering::Release);
+                download_snapshot_files(
+                    &snapshot,
+                    &mut manifest,
+                    None,
+                    &cancel,
+                    |file, _, _, _| {
+                        if file == cancellation_file {
+                            cancel.store(true, Ordering::Release);
+                        }
                     }
-                })
+                )
                 .await
                 .unwrap_err(),
                 DOWNLOAD_CANCELLED
@@ -1005,13 +1153,14 @@ mod tests {
         let (snapshot, mut manifest) = repeat_snapshot_fixture(&root);
         fs::write(snapshot.join("model.safetensors"), b"z").unwrap();
         let cancel = AtomicBool::new(false);
-        let error = download_snapshot_files(&snapshot, &mut manifest, &cancel, |file, _, _, _| {
-            if file == "model.safetensors" {
-                cancel.store(true, Ordering::Release);
-            }
-        })
-        .await
-        .unwrap_err();
+        let error =
+            download_snapshot_files(&snapshot, &mut manifest, None, &cancel, |file, _, _, _| {
+                if file == "model.safetensors" {
+                    cancel.store(true, Ordering::Release);
+                }
+            })
+            .await
+            .unwrap_err();
         assert!(cancel.load(Ordering::Acquire));
         assert!(error.contains("failed verification"), "{error}");
         assert!(
@@ -1043,6 +1192,7 @@ mod tests {
                 download_snapshot_files(
                     &snapshot,
                     &mut manifest,
+                    None,
                     &AtomicBool::new(true),
                     |_, _, _, _| {},
                 )
@@ -1627,13 +1777,13 @@ mod tests {
             oid: Some(digest.clone()),
         };
         let idle = AtomicBool::new(false);
-        assert!(!verify_existing(&target, &file, &idle, |_| {})
+        assert!(!verify_existing(&target, &file, None, &idle, |_| {})
             .await
             .unwrap());
         fs::write(&target, &bytes).unwrap();
         let mut reported = 0;
         assert!(
-            verify_existing(&target, &file, &idle, |read| reported = read)
+            verify_existing(&target, &file, None, &idle, |read| reported = read)
                 .await
                 .unwrap()
         );
@@ -1642,18 +1792,18 @@ mod tests {
             oid: Some(format!("sha256:{digest}")),
             ..file.clone()
         };
-        assert!(verify_existing(&target, &prefixed, &idle, |_| {})
+        assert!(verify_existing(&target, &prefixed, None, &idle, |_| {})
             .await
             .unwrap());
         assert_eq!(
-            verify_existing(&target, &file, &AtomicBool::new(true), |_| {})
+            verify_existing(&target, &file, None, &AtomicBool::new(true), |_| {})
                 .await
                 .unwrap_err(),
             DOWNLOAD_CANCELLED
         );
         let different = b"synthetic weightz".to_vec();
         fs::write(&target, &different).unwrap();
-        assert!(verify_existing(&target, &file, &idle, |_| {})
+        assert!(verify_existing(&target, &file, None, &idle, |_| {})
             .await
             .is_err());
         assert_eq!(
@@ -1662,7 +1812,7 @@ mod tests {
             "a mismatching file is reported, not replaced"
         );
         fs::write(&target, b"short").unwrap();
-        assert!(verify_existing(&target, &file, &idle, |_| {})
+        assert!(verify_existing(&target, &file, None, &idle, |_| {})
             .await
             .is_err());
         let unverifiable = SnapshotFile {
@@ -1671,12 +1821,12 @@ mod tests {
             size: 5,
             oid: None,
         };
-        assert!(verify_existing(&target, &unverifiable, &idle, |_| {})
+        assert!(verify_existing(&target, &unverifiable, None, &idle, |_| {})
             .await
             .unwrap());
         fs::remove_file(&target).unwrap();
         fs::create_dir(&target).unwrap();
-        assert!(verify_existing(&target, &file, &idle, |_| {})
+        assert!(verify_existing(&target, &file, None, &idle, |_| {})
             .await
             .is_err());
         fs::remove_dir_all(root).unwrap();

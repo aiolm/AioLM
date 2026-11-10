@@ -24,7 +24,7 @@ import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessi
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
-import { isModelFilePath, modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { isModelFilePath, modelDisplayName, normalizeDisplayPath, stripModelShardSuffix } from "../../shared/lib/displayPaths";
 import { titleFromMessage, unfinishedReply } from "./chatHistory";
 import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
 import { diagnoseRetryTools, restorableRetryTools } from "./chatRetryTools";
@@ -426,7 +426,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
                       ...speechSessions.map(session => {
                         const rawModel = session.model ?? '';
                         const shortened = isModelFilePath(rawModel);
-                        const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : rawModel;
+                        const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : stripModelShardSuffix(rawModel);
                         return {
                           value: session.id,
                           label: `${session.name || session.id} · ${modelLabel}`,

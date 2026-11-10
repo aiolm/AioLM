@@ -26,7 +26,9 @@ use std::{
 /// Version 5 fingerprints every declared artifact alias and its resolved target.
 /// Version 6 keeps wrapped descriptions separate from positional declarations.
 /// Version 7 distinguishes whole choice metavars from choice sets with prose tails.
-pub const PARSER_VERSION: u32 = 7;
+/// Version 8 reads clap long-only rows aligned under `-m, --model` rows as
+/// options and ends `--flag <VALUE> Prose` specs at the single space.
+pub const PARSER_VERSION: u32 = 8;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 

@@ -1072,7 +1072,13 @@ fn read_tensor_bytes<R: Read + Seek>(
         .div_ceil(alignment)
         .checked_mul(alignment)
         .ok_or_else(|| "GGUF header declares an implausible data offset".to_string())?;
-    let Some(data_len) = file_len.checked_sub(data_start) else {
+    // A split model's first file can hold only metadata (`gguf-split
+    // --no-tensor-first-split`). With no tensors there is no data section to
+    // align, so such a file may end before the next alignment boundary.
+    let Some(data_len) = file_len
+        .checked_sub(data_start)
+        .or(entries.is_empty().then_some(0))
+    else {
         return Ok(TensorScan {
             bytes: None,
             tensor_types: collect_tensor_types.then(|| {
@@ -1877,6 +1883,26 @@ mod tests {
                 .tensors,
             None
         );
+    }
+
+    #[test]
+    fn a_metadata_only_first_split_has_known_empty_tensor_sizes() {
+        use fixture::Value;
+        // `gguf-split --no-tensor-first-split` writes a first file with no
+        // tensors that ends right after its header, short of the alignment.
+        let mut first = fixture::file(
+            &[("general.architecture".to_string(), Value::Str("qwen3"))],
+            &[],
+        );
+        while first.last() == Some(&0) {
+            first.pop();
+        }
+        assert_ne!(first.len() % 32, 0);
+        let tensors = in_temporary_file(&first, read_model_facts)
+            .unwrap()
+            .tensors
+            .expect("a split's metadata file must not make the model's sizes unknown");
+        assert_eq!(tensors.total(), 0);
     }
 
     #[test]

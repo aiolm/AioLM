@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isModelFilePath, modelDisplayName } from "./displayPaths";
+import { isModelFilePath, modelDisplayName, stripModelShardSuffix } from "./displayPaths";
 
 const qwen = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
 
@@ -46,5 +46,23 @@ describe("modelDisplayName", () => {
     ["https://example.invalid/models/voice.bin", false],
   ])("recognizes explicit path syntax without guessing native model IDs: %s", (value, expected) => {
     expect(isModelFilePath(value)).toBe(expected);
+  });
+});
+
+describe("stripModelShardSuffix", () => {
+  it.each([
+    ["org/model-00001-of-00004.gguf", "org/model.gguf"],
+    ["org/model-00004-of-00004.GGUF", "org/model.GGUF"],
+    ["model-00001-of-00004", "model"],
+    ["org/model", "org/model"],
+    ["org/model.gguf", "org/model.gguf"],
+    ["org/model-00000-of-00004.gguf", "org/model-00000-of-00004.gguf"],
+    ["org/model-00005-of-00004.gguf", "org/model-00005-of-00004.gguf"],
+    ["org/model-00001-of-00001.gguf", "org/model-00001-of-00001.gguf"],
+    ["org/model-1-of-4.gguf", "org/model-1-of-4.gguf"],
+    ["org/model-00001-of-00004.bin", "org/model-00001-of-00004.bin"],
+    ["org/model-00001-of-00004.gguf-extra", "org/model-00001-of-00004.gguf-extra"],
+  ])("groups only valid shard suffixes without shortening model IDs: %s", (value, expected) => {
+    expect(stripModelShardSuffix(value)).toBe(expected);
   });
 });

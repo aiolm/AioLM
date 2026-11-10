@@ -2,6 +2,7 @@
 //! generated registration and owned app proxy path. This proves plumbing only;
 //! it makes no inference, hardware or named-engine compatibility claim.
 use aiolm_lib::{config, providers, server, AppConfig, ErrBuf};
+use base64::Engine;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -22,7 +23,7 @@ const APP_KEY: &str = "synthetic-app-connection-key";
 
 struct Home {
     path: PathBuf,
-    previous: Option<std::ffi::OsString>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 impl Home {
     fn new() -> Self {
@@ -31,17 +32,37 @@ impl Home {
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(path.join("profile")).unwrap();
-        let previous = std::env::var_os("AIOLM_HOME");
-        // This integration binary has one test and owns its environment.
-        std::env::set_var("AIOLM_HOME", &path);
+        let profile = path.join("profile");
+        // This single combined test owns and restores every data-root variable
+        // before even the parent process calls config::load_result.
+        let environment = [
+            ("AIOLM_HOME", path.clone()),
+            ("HOME", profile.clone()),
+            ("USERPROFILE", profile.clone()),
+            ("APPDATA", profile.join("roaming")),
+            ("LOCALAPPDATA", profile.join("local")),
+            ("XDG_CONFIG_HOME", profile.join("config")),
+            ("XDG_DATA_HOME", profile.join("data")),
+            ("XDG_CACHE_HOME", profile.join("cache")),
+        ];
+        let previous = environment
+            .iter()
+            .map(|(name, value)| {
+                let previous = std::env::var_os(name);
+                std::env::set_var(name, value);
+                (*name, previous)
+            })
+            .collect();
         Self { path, previous }
     }
 }
 impl Drop for Home {
     fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => std::env::set_var("AIOLM_HOME", value),
-            None => std::env::remove_var("AIOLM_HOME"),
+        for (name, previous) in &self.previous {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
         }
         let _ = fs::remove_dir_all(&self.path);
     }
@@ -67,7 +88,9 @@ async fn cli(home: &Path, args: &[&str]) -> Value {
         .expect("spawn real CLI");
     assert!(
         output.status.success(),
-        "CLI {args:?}: {}",
+        "CLI {args:?}: status={} stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout)
@@ -250,6 +273,11 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
     // Helper migration must see the real CLI executable, not this test runner.
     cli(&home.path, &["runtime", "probe", engine, runtime]).await;
     let cfg: AppConfig = config::load_result().unwrap();
+    let attached_schema =
+        providers::runtime_schema::effective(&providers::registry::root(), &cfg, true).unwrap();
+    assert!(!attached_schema.supports_launch_args);
+    assert!(attached_schema.schema.options.is_empty());
+    assert!(attached_schema.entry.is_none());
     let errors = Arc::new(ErrBuf::default());
     let server::SpawnedServer {
         child,
@@ -349,4 +377,258 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
         "the application credential must not reach the independent upstream server"
     );
     serving.abort();
+    managed_options_and_probe_cache_journey(&home.path).await;
+}
+
+/// Read a legacy managed spec through settings, then exercise the real helper
+/// and engine on probe and serve. The copied fake executable is opt-in only.
+async fn managed_options_and_probe_cache_journey(home: &Path) {
+    let folder = home.join("managed engine");
+    fs::create_dir(&folder).unwrap();
+    let engine_program = folder.join(format!(
+        "aiolm-auto-options-fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &engine_program).unwrap();
+    // GNU Windows links the shared app library's WebView loader dynamically.
+    // Keep the copied fixture executable's existing runtime dependency beside it.
+    #[cfg(windows)]
+    {
+        let loader = Path::new(env!("CARGO_BIN_EXE_fake-llama-server"))
+            .parent()
+            .unwrap()
+            .join("WebView2Loader.dll");
+        if loader.is_file() {
+            fs::copy(loader, folder.join("WebView2Loader.dll")).unwrap();
+        }
+    }
+    let model = folder.join("synthetic-model.gguf");
+    fs::write(&model, b"synthetic model data, not an inference claim").unwrap();
+    let engine = "custom.auto-0123456789abcdee";
+    let runtime = "connection-0123456789abcdee";
+    let directory = providers::registry::root().join(engine).join(runtime);
+    fs::create_dir_all(&directory).unwrap();
+    let spec_path = directory.join("connection.json");
+    let launch = json!({
+        "program": engine_program,
+        "args": ["serve","llm","--model","{model}","--port","{port}",
+            "--host","{host}","--served-model-name","{model_alias}"],
+        "env":{}, "working_directory":folder,
+    });
+    // Exactly the original v1 target shape; no profile values or schema are
+    // added to immutable connection metadata to make old connections work.
+    let spec = serde_json::to_vec(&json!({
+        "version":1,"engine_id":engine,"runtime_id":runtime,
+        "target":{"kind":"managed","launch":launch,"artifacts":[]},
+        "model_path":model,"upstream_model":null,
+    }))
+    .unwrap();
+    fs::write(&spec_path, &spec).unwrap();
+    let address = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(spec_path.to_str().unwrap().as_bytes());
+    let manifest = json!({
+        "schema_version":1,"adapter_version":1,"engine_id":engine,"runtime_id":runtime,
+        "display_name":"Synthetic managed options","compute_ownership":"descendant",
+        "platforms":[{"os":std::env::consts::OS,"arch":std::env::consts::ARCH}],
+        "protocol":"openai-v1",
+        "probe":{"program":env!("CARGO_BIN_EXE_aiolm-cli"),
+            "args":["--internal-runtime-auto","probe",address,"{model}"],
+            "env":{},"working_directory":null},
+        "launch":{"program":env!("CARGO_BIN_EXE_aiolm-cli"),
+            "args":["--internal-runtime-auto","serve",address,"{model}","{port}"],
+            "env":{"AIO_CONNECT_KEY":"{api_key}"},"working_directory":null},
+        "options":[],"model_formats":["unknown"],
+        "models":[{"path":model,"name":"Synthetic model"}],
+        "artifacts":[spec_path,engine_program],"health_path":"/health",
+        "health_authenticated":false,
+    });
+    let manifest_path = folder.join("owned-manifest.json");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    cli(
+        home,
+        &[
+            "runtime",
+            "register-manifest",
+            manifest_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    cli(home, &["runtime", "select", engine, runtime]).await;
+    cli(
+        home,
+        &["config", "set", "active_model", model.to_str().unwrap()],
+    )
+    .await;
+    let cfg = config::load_result().unwrap();
+    let root = providers::registry::root();
+    assert!(!directory.join("help/accepted.json").exists());
+    let schema = providers::runtime_schema::effective(&root, &cfg, true).unwrap();
+    assert!(schema.supports_launch_args);
+    assert_eq!(schema.scope, ["serve", "llm"]);
+    assert_eq!(
+        schema.help_state,
+        providers::runtime_schema::HelpState::Current
+    );
+    let key_for = |flag: &str| {
+        schema
+            .schema
+            .options
+            .iter()
+            .find(|option| {
+                option
+                    .spellings
+                    .iter()
+                    .any(|spelling| spelling.flag == flag)
+            })
+            .unwrap()
+            .key
+            .clone()
+    };
+    let label_key = key_for("--fresh-label");
+    let count_key = key_for("--fresh-count");
+    let log = folder.join("automatic-launches.jsonl");
+    assert!(!log.exists(), "settings help must not load the model");
+    assert_eq!(fs::read(&spec_path).unwrap(), spec);
+    let accepted = fs::read(directory.join("help/accepted.json")).unwrap();
+    providers::runtime_schema::effective(&root, &cfg, true).unwrap();
+    assert_eq!(
+        fs::read(directory.join("help/accepted.json")).unwrap(),
+        accepted
+    );
+    let saved_options = |count: u64, raw: &str| {
+        json!({
+            engine: {
+                label_key.clone(): "{port}",
+                count_key.clone(): count.to_string(),
+                "extra_args": ["--not-in-help",raw],
+            }
+        })
+        .to_string()
+    };
+    cli(
+        home,
+        &[
+            "config",
+            "set",
+            "provider_options",
+            &saved_options(3, "{model}"),
+        ],
+    )
+    .await;
+    let launches = || {
+        fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Vec<String>>(line).unwrap())
+            .collect::<Vec<_>>()
+    };
+    cli(home, &["runtime", "probe", engine, runtime]).await;
+    assert_eq!(launches().len(), 1);
+    let check_options = |argv: &[String], count: &str, raw: &str| {
+        assert_eq!(&argv[..2], ["serve", "llm"]);
+        for (flag, value) in [
+            ("--model", model.to_str().unwrap()),
+            ("--host", "127.0.0.1"),
+            ("--served-model-name", "aiolm-connection-0123456789abcdee"),
+            ("--fresh-label", "{port}"),
+            ("--fresh-count", count),
+            ("--not-in-help", raw),
+        ] {
+            assert_eq!(
+                argv.iter().filter(|token| token.as_str() == flag).count(),
+                1,
+                "{flag} must reach the engine exactly once: {argv:?}"
+            );
+            let index = argv.iter().position(|token| token == flag).unwrap();
+            assert_eq!(argv[index + 1], value, "{flag}");
+        }
+        assert_eq!(
+            argv.len(),
+            16,
+            "no helper transport tokens leak to the engine"
+        );
+    };
+    check_options(&launches()[0], "3", "{model}");
+    cli(home, &["server", "start"]).await;
+    cli(home, &["server", "stop"]).await;
+    let first = launches();
+    assert_eq!(
+        first.len(),
+        2,
+        "matching probe must not load the model again before serving"
+    );
+    check_options(&first[1], "3", "{model}");
+    cli(home, &["server", "start"]).await;
+    cli(home, &["server", "stop"]).await;
+    assert_eq!(
+        launches().len(),
+        3,
+        "unchanged repeated start loads only its serving engine"
+    );
+    cli(
+        home,
+        &[
+            "config",
+            "set",
+            "provider_options",
+            &saved_options(7, "{model}"),
+        ],
+    )
+    .await;
+    cli(home, &["server", "start"]).await;
+    cli(home, &["server", "stop"]).await;
+    let changed = launches();
+    assert_eq!(
+        changed.len(),
+        4,
+        "changed options are verified in the serving load, not a throwaway load"
+    );
+    check_options(&changed[3], "7", "{model}");
+    cli(
+        home,
+        &[
+            "config",
+            "set",
+            "provider_options",
+            &saved_options(7, "path with spaces/{host}"),
+        ],
+    )
+    .await;
+    cli(home, &["server", "start"]).await;
+    cli(home, &["server", "stop"]).await;
+    let raw_changed = launches();
+    assert_eq!(
+        raw_changed.len(),
+        5,
+        "changed raw options are verified in the serving load"
+    );
+    check_options(&raw_changed[4], "7", "path with spaces/{host}");
+    cli(home, &["runtime", "probe", engine, runtime]).await;
+    assert_eq!(
+        launches().len(),
+        6,
+        "an explicit model probe still checks changed options"
+    );
+    assert_eq!(fs::read(&spec_path).unwrap(), spec);
+    assert_eq!(
+        fs::read(directory.join("help/accepted.json")).unwrap(),
+        accepted
+    );
+    // Accepted evidence stays pinned; changed executable bytes never become
+    // silently accepted or launchable through the automatic-owned exception.
+    let mut changed_engine = fs::read(&engine_program).unwrap();
+    changed_engine.push(0);
+    fs::write(&engine_program, changed_engine).unwrap();
+    let cfg = config::load_result().unwrap();
+    let stale = providers::runtime_schema::effective(&root, &cfg, true).unwrap();
+    assert_eq!(
+        stale.help_state,
+        providers::runtime_schema::HelpState::Stale
+    );
+    assert_eq!(
+        fs::read(directory.join("help/accepted.json")).unwrap(),
+        accepted
+    );
+    assert!(providers::registry::command(&cfg, cfg.port, "").is_err());
+    cli(home, &["runtime", "remove", engine, runtime]).await;
 }

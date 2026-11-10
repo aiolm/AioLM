@@ -17,7 +17,13 @@ const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const MODEL_LIMIT: usize = 256;
 const OUTPUT_LIMIT: usize = 4096;
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(2);
-const VERIFY_TIMEOUT: Duration = Duration::from_secs(120);
+/// Both verification requests share this budget. Reasoning models think
+/// before answering, so it covers two full sample budgets on modest hardware.
+pub(crate) const VERIFY_SECS: u64 = 180;
+const VERIFY_TIMEOUT: Duration = Duration::from_secs(VERIFY_SECS);
+/// Reasoning models spend completion tokens before the visible answer; a
+/// small cap ends them mid-thought with an empty reply.
+const SAMPLE_MAX_TOKENS: u32 = 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -414,7 +420,7 @@ fn request_body(model: &str, streaming: bool) -> Value {
         "model": model,
         "messages": [{"role":"user", "content":"What is 2 + 3? Reply with only the digit."}],
         "temperature": 0,
-        "max_tokens": 32,
+        "max_tokens": SAMPLE_MAX_TOKENS,
         "stream": streaming
     })
 }
@@ -876,6 +882,63 @@ mod tests {
                 assert!(!body.as_object().unwrap().contains_key("tools"));
             }
         }
+    }
+
+    /// A thinking model spends completion tokens on reasoning before its
+    /// visible answer; a cap below that leaves the answer empty (`length`).
+    #[tokio::test]
+    async fn a_reasoning_model_gets_enough_budget_to_answer_after_thinking() {
+        const REASONING_TOKENS: u64 = 200;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                let body = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .and_then(|end| serde_json::from_slice::<Value>(&request[end + 4..]).ok());
+                let reply = match body {
+                    None => response("200 OK", "application/json", &model_list()),
+                    Some(body) => {
+                        let answers = body["max_tokens"].as_u64().unwrap() > REASONING_TOKENS;
+                        let (content, finish) = if answers {
+                            ("5", "stop")
+                        } else {
+                            ("", "length")
+                        };
+                        if body["stream"] == true {
+                            let events = format!(
+                                "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                                json!({"model":MODEL,"choices":[{"delta":{"role":"assistant","reasoning_content":"Two plus three."},"finish_reason":null}]}),
+                                json!({"model":MODEL,"choices":[{"delta":{"content":content},"finish_reason":finish}]})
+                            );
+                            response("200 OK", "text/event-stream", &events)
+                        } else {
+                            let completion = json!({
+                                "model":MODEL,
+                                "choices":[{"message":{"role":"assistant","reasoning_content":"Two plus three.","content":content},"finish_reason":finish}],
+                                "usage":{"completion_tokens":REASONING_TOKENS + 1}
+                            });
+                            response("200 OK", "application/json", &completion.to_string())
+                        }
+                    }
+                };
+                socket.write_all(&reply).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        verify(ProbeRequest {
+            base_url: url,
+            model: MODEL.into(),
+            api_key: None,
+        })
+        .await
+        .unwrap();
+        task.await.unwrap();
     }
 
     #[tokio::test]

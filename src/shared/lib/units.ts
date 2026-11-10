@@ -37,6 +37,21 @@ export function formatSpeedBps(bytesPerSecond: number): string {
 }
 
 /**
+ * A countdown such as `1h 05m`, `3m 07s` or `42s`, rounded up to whole seconds
+ * so a transfer never claims to be done while bytes remain.
+ */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const total = Math.ceil(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+  return `${rest}s`;
+}
+
+/**
  * `8 Core / 16 Thread`, or `16 Thread` alone when the physical core count was
  * not detected. Hardware detection only reports logical processors on some
  * platforms, and calling those "cores" overstates the machine, so the physical

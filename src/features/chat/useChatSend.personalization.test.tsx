@@ -45,7 +45,7 @@ function context(overrides: Partial<ChatPersonalization> = {}): ChatPersonalizat
 
 const thread: ChatThread = { id: "t1", title: "Project chat", systemPrompt: "PROJECT-PROMPT", messages: [], createdAt: 1, updatedAt: 1 } as unknown as ChatThread;
 
-function setup(options: { input?: string; selected?: string[]; ctxSize?: number; withMcp?: boolean } = {}) {
+function setup(options: { input?: string; selected?: string[]; ctxSize?: number; withMcp?: boolean; engine?: Parameters<typeof useChatSend>[0]["engine"] } = {}) {
   const store = createTestStore(options.ctxSize ? { ctx_size: options.ctxSize } : {});
   const accepted = vi.fn();
   const hook = renderHook(() => {
@@ -56,7 +56,7 @@ function setup(options: { input?: string; selected?: string[]; ctxSize?: number;
     const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
     const atBottomRef = useRef(true);
     const send = useChatSend({
-      store, effectiveConfig: store.cfg, modelProfile: null,
+      store, effectiveConfig: store.cfg, modelProfile: null, engine: options.engine,
       sessionId: "skills-session", baseUrl: "http://127.0.0.1:8080", apiKey: "test-key", model: "model.gguf",
       activeThread: thread, msgs, setMsgs, input, setInput, phase, setPhase,
       attachments, setAttachments, documents, setDocuments, atBottomRef,
@@ -121,6 +121,20 @@ describe("chat personalization", () => {
     await act(async () => { await result.current.send(); });
     expect(systemText(0)).toBe("PROJECT-PROMPT");
     expect(streamMock.mock.calls[0][4].tools).toEqual([]);
+  });
+
+  it("leaves the automatic skill catalog out for a runtime without tool calls but keeps chosen skills", async () => {
+    const engine = { provider: "custom.synthetic" as const, runtime_id: "synthetic", upstream_model: "model.gguf",
+      modalities: { text: true, image: false, audio: false, video: false }, tasks: ["generate"], request_fields: {},
+      chat_supported: true, tools_auto: false };
+    answers("Done");
+    const { result } = setup({ input: "Use $pdf", engine });
+    await act(async () => { await result.current.send(); });
+    expect(streamMock.mock.calls[0][4].tools).toEqual([]);
+    expect(systemText(0)).not.toContain("aiolm_read_skill");
+    expect(systemText(0)).not.toContain("id: agents:review");
+    expect(systemText(0)).toContain("BODY-OF-aiolm:pdf");
+    expect(systemText(0)).toContain("AGENTS-RULE");
   });
 
   it("includes a skill picked and referenced with $name once, and leaves amounts and code alone", async () => {

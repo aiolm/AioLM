@@ -120,6 +120,12 @@ pub enum HelpState {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct EffectiveSchema {
     pub schema: OptionSchema,
+    /// Validation-only spellings, including accepted rows shadowed by the
+    /// declaration. They do not widen the structured resolver's syntax.
+    #[serde(skip)]
+    pub(crate) additional_arg_flags: BTreeMap<String, Option<ManagedBinding>>,
+    /// Attached services cannot accept process launch controls.
+    pub supports_launch_args: bool,
     /// Canonical public names, excluding every member of an identity collision.
     pub benchmark_names: BTreeMap<String, String>,
     /// Subcommand scope the accepted help describes.
@@ -283,6 +289,8 @@ pub fn manifest_help_command(
     manifest: &registry::RuntimeManifest,
     request: &HelpRequest,
 ) -> Result<HelpCommand, String> {
+    let underlying = super::runtime_auto::option_manifest(manifest)?;
+    let manifest = underlying.as_ref().unwrap_or(manifest);
     let program = request
         .program
         .clone()
@@ -1406,6 +1414,74 @@ pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<Effective
     effective_for(root, cfg, &Selected::from_config(cfg)?, verify)
 }
 
+/// New automatic connections and legacy specs without accepted help use one
+/// explicit, shell-free help run of their validated underlying launch entry.
+/// Existing acceptance (including stale evidence) is never silently replaced.
+pub(crate) fn ensure_automatic_help(
+    root: &Path,
+    cfg: &AppConfig,
+    manifest: &registry::RuntimeManifest,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let Some(engine) = super::runtime_auto::option_manifest(manifest)? else {
+        return Ok(());
+    };
+    if load_accepted(root, manifest.engine_id.as_str(), &manifest.runtime_id)?.is_some() {
+        return Ok(());
+    }
+    let prefix = registry::launch_prefix(&engine);
+    registry::check_automatic_help_files(manifest)?;
+    let mut args = prefix.clone();
+    args.push("--help".into());
+    let request = HelpRequest {
+        program: None,
+        args,
+        scope: super::runtime_command::scope(engine.command_layout.as_ref(), &prefix)?,
+        encoding: None,
+        locale: None,
+        working_directory: None,
+    };
+    let command = manifest_help_command(manifest, &request)?;
+    let report = super::runtime_help::discover(&command, cancel)?;
+    let schema = super::runtime_help_parse::parse_help_report(
+        &report,
+        super::runtime_options::SchemaBinding {
+            engine: manifest.engine_id.as_str().into(),
+            runtime: manifest.runtime_id.clone(),
+            fingerprint: report.identity.fingerprint.clone(),
+        },
+    )?;
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("help discovery cancelled".into());
+    }
+    let snapshot = HelpSnapshot { report, schema };
+    runtime_help_store::save_snapshot(
+        root,
+        manifest.engine_id.as_str(),
+        &manifest.runtime_id,
+        &snapshot,
+    )?;
+    accept(root, cfg, &snapshot.report.identity.fingerprint, &request)?;
+    Ok(())
+}
+
+pub(crate) fn additional_launch_args(root: &Path, cfg: &AppConfig) -> Result<Vec<String>, String> {
+    let selected = Selected::from_config(cfg)?;
+    let values = super::launch::provider_options(cfg, selected.key.provider);
+    if !matches!(selected.key.provider, ProviderId::Custom(_)) {
+        return Ok(Vec::new());
+    }
+    let effective = effective_for(root, cfg, &selected, true)?;
+    if !effective.supports_launch_args {
+        return if values.contains_key("extra_args") {
+            Err("attached services do not accept launch arguments".into())
+        } else {
+            Ok(Vec::new())
+        };
+    }
+    super::runtime_raw_args::validated(&effective.schema, &effective.additional_arg_flags, &values)
+}
+
 pub fn effective_for(
     root: &Path,
     cfg: &AppConfig,
@@ -1423,8 +1499,23 @@ fn build_effective(
     with_supplement: bool,
 ) -> Result<EffectiveSchema, String> {
     let key = &selected.key;
+    let supports_launch_args = match key.provider {
+        ProviderId::Custom(_) => {
+            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let supports = super::runtime_auto::supports_launch_args(&manifest);
+            if verify {
+                ensure_automatic_help(root, cfg, &manifest, &AtomicBool::new(false))?;
+            }
+            supports
+        }
+        _ => true,
+    };
     let mut compat = compat(selected)?;
-    let accepted = load_accepted(root, &key.engine, &key.runtime)?;
+    let accepted = if supports_launch_args {
+        load_accepted(root, &key.engine, &key.runtime)?
+    } else {
+        None
+    };
     let snapshot: Option<HelpSnapshot> = match &accepted {
         Some(accepted) => runtime_help_store::load_snapshot(
             root,
@@ -1605,8 +1696,28 @@ fn build_effective(
     lock_private_benchmark_options(&mut schema);
     let benchmark_names = benchmark_names(&schema);
     schema.validate()?;
+    let mut additional_arg_flags: BTreeMap<_, _> = compat
+        .managed_flags
+        .into_iter()
+        .map(|(flag, binding)| (flag, Some(binding)))
+        .collect();
+    if let Some(snapshot) = &snapshot {
+        for option in &snapshot.schema.options {
+            if shadowed.contains(&option.key) {
+                for spelling in &option.spellings {
+                    if !compat_flags.contains(&spelling.flag) {
+                        additional_arg_flags
+                            .entry(spelling.flag.clone())
+                            .or_insert(option.managed);
+                    }
+                }
+            }
+        }
+    }
     Ok(EffectiveSchema {
+        supports_launch_args,
         schema,
+        additional_arg_flags,
         benchmark_names,
         scope,
         help_state,
@@ -2127,7 +2238,15 @@ pub fn saved_issues_for(
     values: &Map<String, Value>,
     reported: &BTreeSet<String>,
 ) -> Vec<options::OptionIssue> {
-    let has_generic = generic_entries(values).next().is_some();
+    let raw = values.contains_key("extra_args")
+        && matches!(
+            selected
+                .as_ref()
+                .map(|selected| selected.key.provider)
+                .unwrap_or_else(|_| super::provider_of(cfg)),
+            ProviderId::Custom(_),
+        );
+    let has_generic = generic_entries(values).next().is_some() || raw;
     let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
         key: key.into(),
         code,
@@ -2144,6 +2263,11 @@ pub fn saved_issues_for(
         Ok(effective) => effective,
         Err(error) => {
             return generic_entries(values)
+                .chain(
+                    values
+                        .iter()
+                        .filter(|(key, _)| raw && key.as_str() == "extra_args"),
+                )
                 .filter(|(key, _)| !reported.contains(key.as_str()))
                 .map(|(key, _)| {
                     issue(
@@ -2156,6 +2280,20 @@ pub fn saved_issues_for(
         }
     };
     let mut issues = Vec::new();
+    if raw {
+        let validation = if !effective.supports_launch_args {
+            Err("attached services do not accept launch arguments".into())
+        } else {
+            super::runtime_raw_args::validated(
+                &effective.schema,
+                &effective.additional_arg_flags,
+                values,
+            )
+        };
+        if let Err(message) = validation {
+            issues.push(issue("extra_args", "type", message));
+        }
+    }
     let mut describable = Map::new();
     let mut blocked = BTreeSet::new();
     for (key, value) in generic_entries(values) {
@@ -3591,6 +3729,237 @@ mod tests {
     }
 
     #[test]
+    fn accepted_shadowed_aliases_refuse_raw_overrides_and_preserve_literal_arguments() {
+        const CHILD: &str = "AIOLM_PROTECTED_ALIAS_FIXTURE";
+        const FILTER: &str = "providers::runtime_schema::tests::accepted_shadowed_aliases_refuse_raw_overrides_and_preserve_literal_arguments";
+        if std::env::var_os(CHILD).is_none() {
+            let previous = std::env::var_os("AIOLM_HOME");
+            let home = owned_fixture_home();
+            let output = crate::procutil::std_command(std::env::current_exe().unwrap())
+                .args(["--exact", FILTER, "--nocapture"])
+                .env(CHILD, &home)
+                .env("AIOLM_HOME", &home)
+                .output()
+                .unwrap();
+            assert_eq!(std::env::var_os("AIOLM_HOME"), previous);
+            assert!(
+                output.status.success(),
+                "isolated alias fixture failed; retained home: {}\nstdout:{}\nstderr:{}",
+                home.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed"));
+            remove_owned_fixture_home(&home);
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os(CHILD).unwrap());
+        assert_eq!(std::env::var_os("AIOLM_HOME").unwrap(), home.as_os_str());
+        let root = registry::root();
+        let (engine, runtime, secret) = synthetic_engine_ids();
+        let mut manifest = manifest_with_static_prefix(&engine, &runtime, &home, &secret);
+        manifest.command_layout = Some(super::super::runtime_command::CommandLayout {
+            version: 1,
+            subcommands: vec![0],
+            options: vec![],
+        });
+        manifest.launch.args = [
+            "serve",
+            "--weights",
+            "{model}",
+            "--listen-port",
+            "{port}",
+            "--listen-host",
+            "{host}",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let bindings = manifest.launch_bindings.as_mut().unwrap();
+        bindings.prefix_len = 1;
+        bindings.bindings = [
+            ("model", "--weights"),
+            ("port", "--listen-port"),
+            ("host", "--listen-host"),
+        ]
+        .map(|(name, flag)| registry::BoundArgument {
+            name: name.into(),
+            argument: registry::ArgBinding::Flag {
+                flag: flag.into(),
+                equals: false,
+            },
+        })
+        .to_vec();
+        manifest.options = serde_json::from_value(json!([
+            {"key":"workers", "flag":"--threads", "target":"launch", "kind":{"type":"integer", "min":1, "max":64}},
+            {"key":"checkpoint", "flag":"--checkpoint", "target":"launch", "kind":{"type":"path"}},
+            {"key":"address", "flag":"--address", "target":"launch", "kind":{"type":"text", "max_len":256}},
+            {"key":"endpoint", "flag":"--endpoint", "target":"launch", "kind":{"type":"integer", "min":1, "max":65535}}
+        ]))
+        .unwrap();
+        manifest.probe.args.push("{options_json}".into());
+        registry::validate_manifest(&manifest).unwrap();
+        for program in [&manifest.launch.program, &manifest.probe.program] {
+            std::fs::write(program, b"synthetic engine bytes").unwrap();
+        }
+        let request = HelpRequest {
+            encoding: None,
+            locale: None,
+            working_directory: None,
+            program: None,
+            args: vec!["serve".into(), "--help".into()],
+            scope: vec!["serve".into()],
+        };
+        let identity = manifest_help_command(&manifest, &request)
+            .unwrap()
+            .identity(&AtomicBool::new(false))
+            .unwrap();
+        let mut report = complete_help_report(&identity.fingerprint);
+        report.identity = identity.clone();
+        report.scope = request.scope.clone();
+        report.stdout.text = "Options:\n  -j, --threads N                         worker count\n  -q, --checkpoint, --weights FILE        model path\n  -a, --address, --listen-host HOST       listen address\n  -p, --endpoint, --listen-port PORT      listen port\n".into();
+        report.stdout.clean_text = report.stdout.text.clone();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: engine.clone(),
+                runtime: runtime.clone(),
+                fingerprint: identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        let record = json!({"manifest":manifest, "executable_sha256":"e".repeat(64), "probe_sha256":"f".repeat(64)});
+        let registration = root.join(&engine).join(&runtime).join("registration.json");
+        std::fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        std::fs::write(&registration, serde_json::to_vec(&record).unwrap()).unwrap();
+        runtime_help_store::save_snapshot(
+            &root,
+            &engine,
+            &runtime,
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap();
+        write_accepted(
+            &root,
+            &engine,
+            &runtime,
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                working_directory: None,
+                fingerprint: identity.fingerprint,
+                request,
+            },
+        )
+        .unwrap();
+        let mut cfg = AppConfig {
+            active_provider: engine.clone(),
+            active_runtime: runtime,
+            ..Default::default()
+        };
+        let template = [
+            "serve",
+            "--weights",
+            "/synthetic/model.bin",
+            "--listen-port",
+            "8080",
+            "--listen-host",
+            "127.0.0.1",
+        ]
+        .map(str::to_owned);
+        // Shadowed aliases remain validation evidence, not new syntax for a
+        // manifest value whose declaration still controls serialization.
+        cfg.provider_options.insert(
+            engine.clone(),
+            json!({"workers":{"spelling":"-j", "occurrences":[[4]]}})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(assemble_registered_arguments(&root, &cfg, &manifest, &template).is_err());
+        for raw in [
+            json!(["-j", "16"]),
+            json!(["-j16"]),
+            json!(["--threads=16"]),
+            json!(["-q", "other.bin"]),
+            json!(["-qother.bin"]),
+            json!(["-q=other.bin"]),
+            json!(["--checkpoint=other.bin"]),
+            json!(["-a0.0.0.0"]),
+            json!(["--address=0.0.0.0"]),
+            json!(["-p9000"]),
+            json!(["--endpoint=9000"]),
+        ] {
+            let values = json!({"workers":4, "extra_args":raw})
+                .as_object()
+                .unwrap()
+                .clone();
+            cfg.provider_options.insert(engine.clone(), values.clone());
+            assert!(additional_launch_args(&root, &cfg).is_err(), "{raw}");
+            let issues = saved_issues_for(
+                &root,
+                &cfg,
+                Selected::from_config(&cfg),
+                &values,
+                &BTreeSet::new(),
+            );
+            assert!(
+                issues.iter().any(|issue| issue.key == "extra_args"),
+                "{raw}: {issues:?}"
+            );
+            assert_eq!(cfg.provider_options[&engine], values);
+        }
+        for (key, value) in [
+            ("checkpoint", json!("other.bin")),
+            ("address", json!("0.0.0.0")),
+            ("endpoint", json!(9000)),
+        ] {
+            let values = Map::from_iter([(key.into(), value)]);
+            cfg.provider_options.insert(engine.clone(), values.clone());
+            assert!(assemble_registered_arguments(&root, &cfg, &manifest, &template).is_err());
+            assert!(saved_issues_for(
+                &root,
+                &cfg,
+                Selected::from_config(&cfg),
+                &values,
+                &BTreeSet::new(),
+            )
+            .iter()
+            .any(|issue| issue.key == key));
+        }
+        let values = json!({"workers":4, "extra_args":["--experimental-cache", "path with spaces/{model}", "--offset=-4"]})
+            .as_object()
+            .unwrap()
+            .clone();
+        cfg.provider_options.insert(engine.clone(), values.clone());
+        assert!(saved_issues_for(
+            &root,
+            &cfg,
+            Selected::from_config(&cfg),
+            &values,
+            &BTreeSet::new(),
+        )
+        .is_empty());
+        let mut argv = assemble_registered_arguments(&root, &cfg, &manifest, &template).unwrap();
+        argv.extend(additional_launch_args(&root, &cfg).unwrap());
+        assert_eq!(
+            argv,
+            [
+                "serve",
+                "--weights",
+                "/synthetic/model.bin",
+                "--listen-port",
+                "8080",
+                "--listen-host",
+                "127.0.0.1",
+                "--threads",
+                "4",
+                "--experimental-cache",
+                "path with spaces/{model}",
+                "--offset=-4",
+            ]
+        );
+    }
+
+    #[test]
     fn accepted_native_model_source_options_cannot_replace_app_bindings() {
         let temporary = std::env::temp_dir().canonicalize().unwrap();
         let root = temporary.join(format!("aiolm-model-source-help-{}", uuid::Uuid::new_v4()));
@@ -4766,6 +5135,8 @@ mod tests {
             flag.position = None;
             schema_options.push(flag);
             EffectiveSchema {
+                supports_launch_args: true,
+                additional_arg_flags: BTreeMap::new(),
                 schema: OptionSchema {
                     schema_version: SCHEMA_VERSION,
                     binding: super::super::runtime_options::SchemaBinding {

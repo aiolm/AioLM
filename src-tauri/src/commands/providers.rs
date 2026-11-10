@@ -67,7 +67,7 @@ pub(crate) async fn provider_register(
     python: String,
 ) -> Result<providers::python_env::PythonRuntimeManifest, String> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _operation = state.operation.lock().await;
+    let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err("stop model sessions before changing runtimes".into());
     }
@@ -83,7 +83,7 @@ pub(crate) async fn provider_install(
 ) -> Result<providers::python_env::PythonRuntimeManifest, String> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = state.operation.lock().await;
+        let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
             return Err("stop model sessions before changing runtimes".into());
         }
@@ -108,7 +108,7 @@ pub(crate) async fn provider_remove(
     runtime_id: String,
 ) -> Result<(), String> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _operation = state.operation.lock().await;
+    let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err("stop model sessions before removing runtimes".into());
     }
@@ -141,7 +141,7 @@ pub(crate) async fn provider_portable_export(
     providers::python_env::validate_id(&runtime_id)?;
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = state.operation.lock().await;
+        let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
             return Err("stop model sessions before exporting a runtime".into());
         }
@@ -200,7 +200,7 @@ pub(crate) async fn provider_portable_import(
 ) -> Result<providers::python_env::PythonRuntimeManifest, String> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
-        let _operation = state.operation.lock().await;
+        let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
             return Err("stop model sessions before importing a runtime".into());
         }
@@ -744,7 +744,7 @@ pub(crate) async fn runtime_adapter_register(
     manifest_path: String,
 ) -> Result<providers::registry::RuntimeManifest, String> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _operation = state.operation.lock().await;
+    let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err("stop model sessions before registering a runtime".into());
     }
@@ -822,7 +822,7 @@ pub(crate) async fn runtime_entrypoint_register(
     resume_help: Option<bool>,
 ) -> Result<providers::registry::RuntimeManifest, EntrypointRegisterError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _operation = state.operation.lock().await;
+    let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err(EntrypointRegisterError::Message(
             "stop model sessions before registering a runtime".into(),

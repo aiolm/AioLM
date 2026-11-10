@@ -47,6 +47,7 @@ pub mod runtime_metadata;
 pub mod runtime_options;
 pub mod runtime_ordered;
 pub mod runtime_positional;
+pub(crate) mod runtime_raw_args;
 pub mod runtime_schema;
 pub(crate) mod sse;
 pub use resolve_python_runtime as selected_python_runtime;
@@ -267,6 +268,9 @@ pub struct RuntimeInstance {
     pub variant: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_version: Option<String>,
+    /// Human-readable command or endpoint for an automatic connection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_label: Option<String>,
     /// Compute backend, e.g. `cuda`, `vulkan`, `rocm`, `cpu`, `metal`; empty
     /// when it has not been probed.
     pub accelerator: String,
@@ -349,6 +353,7 @@ fn llama_runtime_instances(
             accelerator: runtime.backend.clone(),
             variant: None,
             plugin_version: None,
+            connection_label: None,
             installation: "managed",
             location: runtime.dir,
             available: true,
@@ -386,6 +391,7 @@ pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
                     .as_ref()
                     .filter(|probe| !probe.metal_version.is_empty())
                     .map(|probe| probe.metal_version.clone()),
+                connection_label: None,
                 accelerator: manifest
                     .probe
                     .as_ref()

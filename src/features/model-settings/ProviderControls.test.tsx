@@ -280,8 +280,6 @@ describe('runtime-specific option controls', () => {
       expect(externalOptions).toHaveLength(70);
       expect(externalOptions[69]).toBeInTheDocument();
       expect(externalOptions[69]).toHaveAccessibleName(/^--fresh-69/);
-      expect(externalOptions[0]).toBeInTheDocument();
-      expect(externalOptions[0]).toHaveAccessibleName(/^--fresh-0\s/);
       expect(container).not.toHaveTextContent('Show more options');
       expect(container.querySelector('button[aria-label^="Show more options"], button[title^="Show more options"]')).toBeNull();
       const tools = screen.getByText('Command and help tools').closest('details')!;

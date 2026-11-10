@@ -1,7 +1,7 @@
 /* API server: status + one Start/Stop, available models, connection values,
    then closed settings/reference disclosures. */
 .api-server-page { height: 100%; min-height: 0; }
-.api-server-content { width: 100%; max-width: 880px; padding-bottom: 32px; }
+.api-server-content { width: 100%; min-width: 0; padding-bottom: 32px; }
 .api-page-heading h1 { margin: 0; }
 .api-page-heading p { max-width: 72ch; margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.55; }
 .api-server-control { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; margin: 24px 0 8px; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
@@ -13,9 +13,9 @@
 .api-section h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.4; }
 .api-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .api-inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.api-hint { margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
+.api-hint { max-inline-size: 80ch; margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
 
-.api-model-list { max-height: 240px; overflow: auto; margin: 12px 0 0; padding: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); list-style: none; }
+.api-model-list { max-height: clamp(12rem, 40dvh, 40rem); overflow: auto; margin: 12px 0 0; padding: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); list-style: none; }
 .api-model-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 12px; }
 .api-model-list li + li { border-top: 1px solid var(--ui-border); }
 .api-model-list code { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
@@ -49,13 +49,22 @@
 .api-example-toolbar button { margin-inline-start: auto; }
 /* Code keeps its own lines and scrolls inside the block instead of breaking
    shell continuations and URLs at arbitrary characters. */
-.api-code { margin: 12px 0; padding: 16px; max-height: 400px; overflow: auto; overscroll-behavior-inline: contain; border: 0; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-size: var(--ui-text-support); line-height: 1.6; white-space: pre; }
+.api-code { margin: 12px 0; padding: 16px; max-height: clamp(16rem, 55dvh, 48rem); overflow: auto; overscroll-behavior-inline: contain; border: 0; border-radius: var(--ui-radius-control); background: var(--ui-mono-bg); color: var(--ui-mono-ink); font-size: var(--ui-text-support); line-height: 1.6; white-space: pre; }
 .api-code:focus-visible { outline-offset: -2px; }
 .api-endpoints { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--ui-text-support); text-align: start; }
 .api-endpoints th, .api-endpoints td { padding: 8px; border-bottom: 1px solid var(--ui-border); overflow-wrap: break-word; text-align: start; vertical-align: top; }
 .api-endpoints th { color: var(--ui-muted); font-weight: 500; }
 .api-endpoints th:first-child { width: 112px; }
 .api-endpoints code { overflow-wrap: anywhere; }
+
+/* Keep model inventory beside connection values only when both panes fit;
+   disclosures and feedback retain the full workspace width. */
+@container workspace (min-width: 1100px) {
+  .api-server-content { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); column-gap: 24px; align-items: start; }
+  .api-server-content > * { grid-column: 1 / -1; min-width: 0; }
+  .api-server-content > .api-models { grid-column: 1; }
+  .api-server-content > .api-connection { grid-column: 2; }
+}
 
 @container workspace (max-width: 599px) {
   .api-server-control { align-items: stretch; flex-direction: column; }

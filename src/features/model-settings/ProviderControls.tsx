@@ -26,6 +26,8 @@ import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { profileSchemaCopy } from './profileSchemaCopy';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
+import RuntimeArgumentList from '../runtimes/RuntimeArgumentList';
+import { rawArgumentsCopy } from './rawArgumentsCopy';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -133,6 +135,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
   const [runtimeFlags, setRuntimeFlags] = useState<string[] | undefined>();
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const issueId = useId();
+  const rawArgumentsHintId = useId();
   const issueDescriptions = useMemo(() => {
     const descriptions = new Map<string, string>();
     issues.forEach((issue, index) => descriptions.set(issue.key, [descriptions.get(issue.key), `${issueId}-${index}`].filter(Boolean).join(' ')));
@@ -345,6 +348,12 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
+    {advanced && external && effective && effective.supports_launch_args !== false && <div>
+      <p id={rawArgumentsHintId} className="app-section-hint">{rawArgumentsCopy[locale].hint}</p>
+      <RuntimeArgumentList label={rawArgumentsCopy[locale].title} descriptionId={rawArgumentsHintId}
+        tokens={Array.isArray(values.extra_args) ? values.extra_args.filter((value): value is string => typeof value === 'string') : []}
+        disabled={disabled} onChange={tokens => update('extra_args', tokens.length ? tokens : undefined)} />
+    </div>}
     {advanced && <OptionTools collapsed={collapseTools} label={modelSettingsCopy[locale].optionTools}>
     {managedOptions.length > 0 && <section aria-label={modelSettingsCopy[locale].managedArguments}>
       <h4>{modelSettingsCopy[locale].managedArguments}</h4>
@@ -431,9 +440,10 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
       invalidRef.current = false; setInvalid(false); onInvalid(`provider:${option.key}`, false); onChange(parsed);
     } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
-  const label = <>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small></>;
-  return <div className="model-settings-provider-option">
+  const label = <code className="schema-option__name">{option.flag ?? option.key}</code>;
+  return <div className="model-settings-provider-option schema-option">
     {selection ? <span>{label}</span> : <label htmlFor={controlId}>{label}</label>}
+    <p className="schema-option__facts">{option.target === 'request' ? `${copy.request} · ` : ''}{copy.inherit}: {option.runtime_default ?? copy.modelDefault}</p>
     {option.help && <p className="app-section-hint">{option.help}</p>}
     {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
     {readOnly && <small>{modelSettingsCopy[locale].benchmarkRequest}</small>}

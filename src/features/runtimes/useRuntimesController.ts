@@ -11,6 +11,7 @@ import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { useSessionTransitionInProgress } from "../../shared/state/sessionTransitions";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { updateTask, useTasks } from "../../shared/state/taskRegistry";
+import { estimateDownloadSpeed, type DownloadSample } from "../../shared/lib/transfer";
 import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
 import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest } from "./runtimesActions";
 
@@ -176,6 +177,9 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   // must not drop progress events from a still-running PR build.
   useEffect(() => {
     let mounted = true;
+    // Same sliding window as model downloads, so the task strip can show a
+    // rate and time left for an engine download too.
+    let samples: DownloadSample[] = [];
     void api.onRuntimeProgress((progress) => {
       if (!mounted) return;
       if (progress.backend === "import" || progress.backend === "export") {
@@ -183,7 +187,13 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
       } else {
         setRows((previous) => previous.map((row) => row.backend === progress.backend ? { ...row, progress } : row));
       }
-      updateTask("runtime-operation", { phase: progress.phase, received: progress.received, total: progress.total });
+      samples = progress.phase === "downloading" && progress.total > 0
+        ? [...samples, { received: progress.received, at: Date.now() }].slice(-30)
+        : [];
+      updateTask("runtime-operation", {
+        phase: progress.phase, received: progress.received, total: progress.total,
+        speedBps: estimateDownloadSpeed(samples) ?? undefined,
+      });
     }).then((unlisten) => {
       if (mounted) unsubRef.current = unlisten;
       else unlisten();

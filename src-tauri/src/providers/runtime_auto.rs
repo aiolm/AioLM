@@ -19,6 +19,12 @@ use std::{
 pub const INTERNAL: &str = "--internal-runtime-auto";
 const KEY_ENV: &str = "AIO_CONNECT_KEY";
 const SPEC_LIMIT: u64 = 262_144;
+/// Loading a large local model can take minutes. Readiness plus verification
+/// fits the 600 s that session start waits for the helper it launches.
+const MANAGED_READY_SECS: u64 = 420;
+/// The app-owned probe launches the engine, waits for it and verifies it.
+pub(crate) const OWNED_PROBE_TIMEOUT: Duration =
+    Duration::from_secs(MANAGED_READY_SECS + probe::VERIFY_SECS + 60);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelChoice {
@@ -34,6 +40,14 @@ pub struct PreparedConnection {
     pub base_url: Option<String>,
     /// Opaque application-owned preparation token, never executable metadata.
     pub plan: String,
+    /// Documented command path of a managed launch (`serve llm`); empty for
+    /// the entry point itself and for attached servers.
+    #[serde(default)]
+    pub command: Vec<String>,
+    /// With kind `choose_command`, the documented commands that can serve a
+    /// model. The user selects one and inspects again.
+    #[serde(default)]
+    pub commands: Vec<super::runtime_auto_plan::LaunchCommand>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectedRuntime {
@@ -191,6 +205,7 @@ fn known_candidate(
 pub async fn inspect(
     candidate: &discovery::RuntimeCandidate,
     local_models: Vec<ModelChoice>,
+    command: Option<Vec<String>>,
 ) -> Result<PreparedConnection, String> {
     let candidate = known_candidate(candidate)?;
     discovery::revalidate_with_cancel(&candidate, &cancellation())?;
@@ -237,7 +252,7 @@ pub async fn inspect(
                 .into(),
         );
     }
-    let (kind, models, detail, base_url, target) = if let Some(endpoint) = found.pop() {
+    let (kind, models, detail, base_url, target, command) = if let Some(endpoint) = found.pop() {
         let models = endpoint
             .models
             .into_iter()
@@ -254,11 +269,31 @@ pub async fn inspect(
             Target::Attached {
                 base_url: endpoint.base_url,
             },
+            vec![],
         )
     } else {
-        let plan = super::runtime_auto_plan::plan_with_cancel(&candidate, &cancellation())?;
-        let launch = plan.launch()?;
-        ("managed",local_models,"AioLM will test this installation with the selected model, then manage its own serving process.",None,Target::Managed {launch,artifacts:plan.artifacts.clone()})
+        match super::runtime_auto_plan::plan_with_cancel(
+            &candidate,
+            &cancellation(),
+            command.as_deref(),
+        )? {
+            super::runtime_auto_plan::PlanOutcome::Choose(commands) => {
+                return Ok(PreparedConnection {
+                    kind: "choose_command".into(),
+                    models: vec![],
+                    candidate,
+                    detail: "This program documents several commands that can serve a model. Choose the one to launch.".into(),
+                    base_url: None,
+                    plan: String::new(),
+                    command: vec![],
+                    commands,
+                });
+            }
+            super::runtime_auto_plan::PlanOutcome::Ready { plan, command } => {
+                let launch = plan.launch()?;
+                ("managed",local_models,"AioLM will test this installation with the selected model, then manage its own serving process.",None,Target::Managed {launch,artifacts:plan.artifacts.clone()},command.path)
+            }
+        }
     };
     let prepared = PreparedConnection {
         kind: kind.into(),
@@ -267,6 +302,8 @@ pub async fn inspect(
         detail: detail.into(),
         base_url,
         plan: uuid::Uuid::new_v4().to_string(),
+        command,
+        commands: vec![],
     };
     let mut state = inventory()
         .lock()
@@ -325,10 +362,8 @@ fn decoded_spec_path(encoded: &str) -> Result<PathBuf, String> {
 /// Recognize only the complete app-generated helper contract. This also lets
 /// a later trusted app/CLI build revalidate its own helper without changing
 /// the external installation or its captured file hashes.
-pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
-    let Some(suffix) = manifest.engine_id.as_str().strip_prefix("custom.auto-") else {
-        return false;
-    };
+fn owned_spec(manifest: &registry::RuntimeManifest) -> Option<ConnectionSpec> {
+    let suffix = manifest.engine_id.as_str().strip_prefix("custom.auto-")?;
     if suffix.len() != 16
         || !suffix
             .bytes()
@@ -347,7 +382,7 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
                 arch: std::env::consts::ARCH.into(),
             }]
     {
-        return false;
+        return None;
     }
     let directory = registry::root()
         .join(manifest.engine_id.as_str())
@@ -357,7 +392,7 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
         .to_string_lossy()
         .into_owned();
     let Ok(address) = encoded_spec_path(Path::new(&expected)) else {
-        return false;
+        return None;
     };
     let probe = vec![
         INTERNAL.to_owned(),
@@ -388,16 +423,16 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
         || manifest.launch_resources.is_some()
         || manifest.option_metadata.is_some()
     {
-        return false;
+        return None;
     }
     let Ok(spec) = read_spec(Path::new(&expected)) else {
-        return false;
+        return None;
     };
     if spec.engine_id != manifest.engine_id
         || spec.runtime_id != manifest.runtime_id
         || spec.model_path != manifest.models[0].path
     {
-        return false;
+        return None;
     }
     let mut expected_artifacts = std::collections::BTreeSet::from([expected.as_str()]);
     match &spec.target {
@@ -410,7 +445,7 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
                         && !model.chars().any(char::is_control)
                 })
             {
-                return false;
+                return None;
             }
         }
         Target::Managed { launch, artifacts } => {
@@ -423,7 +458,7 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
                 || artifacts.len() > 256
                 || artifacts.iter().any(|path| !Path::new(path).is_absolute())
             {
-                return false;
+                return None;
             }
             expected_artifacts.insert(&launch.program);
             expected_artifacts.extend(artifacts.iter().map(String::as_str));
@@ -436,7 +471,240 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
         .collect::<std::collections::BTreeSet<_>>();
     // A missing source hash must never become trusted merely because a helper
     // was migrated. Additional or duplicate artifacts are not our contract.
-    actual_artifacts.len() == manifest.artifacts.len() && actual_artifacts == expected_artifacts
+    if actual_artifacts.len() != manifest.artifacts.len() || actual_artifacts != expected_artifacts
+    {
+        return None;
+    }
+    Some(spec)
+}
+
+pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
+    owned_spec(manifest).is_some()
+}
+
+/// Inspect the underlying command only after the complete helper contract has
+/// been checked. This derived view never replaces the stored helper manifest.
+pub(crate) fn option_manifest(
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<registry::RuntimeManifest>, String> {
+    let Some(spec) = owned_spec(manifest) else {
+        return Ok(None);
+    };
+    let Target::Managed { launch, .. } = spec.target else {
+        return Ok(None);
+    };
+    let mut engine = manifest.clone();
+    engine.launch = launch;
+    let first = engine
+        .launch
+        .args
+        .iter()
+        .position(|token| binding_token(token))
+        .ok_or("automatic launch has no registered bindings")?;
+    let prefix_len = if engine.launch.args[first].starts_with('-') {
+        first
+    } else if first > 0 && engine.launch.args[first - 1].starts_with('-') {
+        first - 1
+    } else {
+        first
+    };
+    let bindings = engine
+        .launch
+        .args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            if !binding_token(token) {
+                return None;
+            }
+            let (flag, placeholder, equals) = match token.split_once('=') {
+                Some((flag, placeholder)) if flag.starts_with('-') => {
+                    (flag.to_owned(), placeholder, true)
+                }
+                _ => (
+                    engine.launch.args.get(index.checked_sub(1)?)?.clone(),
+                    token.as_str(),
+                    false,
+                ),
+            };
+            Some(registry::BoundArgument {
+                name: placeholder.trim_matches(['{', '}']).into(),
+                argument: registry::ArgBinding::Flag { flag, equals },
+            })
+        })
+        .collect();
+    engine.launch_bindings = Some(registry::LaunchBindings {
+        version: 1,
+        prefix_len,
+        bindings,
+        options_separator: None,
+    });
+    let prefix = registry::launch_prefix(&engine);
+    // The planner only emits an optional absolute interpreter script followed
+    // by documented command words. Deriving these roles also supports v1 specs.
+    let subcommands = prefix
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| (!Path::new(token).is_absolute()).then_some(index))
+        .collect();
+    let layout = super::runtime_command::CommandLayout {
+        version: 1,
+        subcommands,
+        options: vec![],
+    };
+    layout.validate(&prefix)?;
+    engine.command_layout = Some(layout);
+    Ok(Some(engine))
+}
+
+pub(crate) fn supports_launch_args(manifest: &registry::RuntimeManifest) -> bool {
+    !owned_spec(manifest).is_some_and(|spec| matches!(spec.target, Target::Attached { .. }))
+}
+
+pub(crate) fn connection_presentation(
+    manifest: &registry::RuntimeManifest,
+) -> Option<(String, String)> {
+    let spec = owned_spec(manifest)?;
+    match spec.target {
+        Target::Attached { base_url } => Some((base_url.clone(), base_url)),
+        Target::Managed { launch, .. } => {
+            let engine = option_manifest(manifest).ok()??;
+            let prefix = registry::launch_prefix(&engine);
+            let scope = engine.command_layout.as_ref()?.scope(&prefix).ok()?;
+            Some((scope.join(" "), launch.program))
+        }
+    }
+}
+
+const ARGV_HEADER: &str = "aiolm-auto-argv-v1";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OptionTransport {
+    version: u32,
+    argv: Vec<String>,
+    /// Only these registered template slots may expand. Saved strings that
+    /// happen to contain `{model}` or `{port}` always remain literal.
+    bindings: BTreeMap<usize, String>,
+}
+
+fn binding_token(value: &str) -> bool {
+    ["{model}", "{port}", "{host}", "{model_alias}"]
+        .iter()
+        .any(|token| has_binding(value, token))
+}
+
+/// Shared by registry probe and serve; append this tail to the helper header,
+/// never pass it through template expansion or the ordinary helper resolver.
+pub(crate) fn resolved_option_transport(
+    root: &Path,
+    cfg: &crate::config::AppConfig,
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<Vec<String>>, String> {
+    if cfg.active_model.is_empty() {
+        return Ok(None);
+    }
+    let Some(engine) = option_manifest(manifest)? else {
+        if !supports_launch_args(manifest)
+            && !super::launch::provider_options(cfg, manifest.engine_id).is_empty()
+        {
+            return Err("attached services do not accept launch arguments".into());
+        }
+        return Ok(None);
+    };
+    let selected = super::runtime_schema::Selected::from_config(cfg)?;
+    let effective = super::runtime_schema::effective_for(root, cfg, &selected, false)?;
+    let values = super::launch::provider_options(cfg, manifest.engine_id);
+    let raw = super::runtime_raw_args::validated(
+        &effective.schema,
+        &effective.additional_arg_flags,
+        &values,
+    )?;
+    let saved = serde_json::to_string(&values).map_err(|error| error.to_string())?;
+    let nonce = loop {
+        let candidate = format!("aiolm-binding-{}", uuid::Uuid::new_v4());
+        if !saved.contains(&candidate)
+            && !engine
+                .launch
+                .args
+                .iter()
+                .any(|arg| arg.contains(&candidate))
+        {
+            break candidate;
+        }
+    };
+    let mut template = engine.launch.args.clone();
+    let mut markers = BTreeMap::new();
+    for (index, token) in template.iter_mut().enumerate() {
+        if binding_token(token) {
+            let marker = format!("{nonce}-{index}");
+            markers.insert(marker.clone(), token.clone());
+            *token = marker;
+        }
+    }
+    let mut argv =
+        super::runtime_schema::assemble_registered_arguments(root, cfg, &engine, &template)?;
+    argv.extend(raw);
+    let mut bindings = BTreeMap::new();
+    for (index, token) in argv.iter_mut().enumerate() {
+        if let Some(original) = markers.get(token) {
+            *token = original.clone();
+            bindings.insert(index, original.clone());
+        }
+    }
+    let transport = OptionTransport {
+        version: 1,
+        argv,
+        bindings,
+    };
+    Ok(Some(vec![
+        "--".into(),
+        ARGV_HEADER.into(),
+        serde_json::to_string(&transport).map_err(|error| error.to_string())?,
+    ]))
+}
+
+fn transported_arguments(
+    launch: &registry::ProcessSpec,
+    transport: Option<&OptionTransport>,
+    model: &str,
+    port: u16,
+    alias: &str,
+) -> Result<Vec<String>, String> {
+    let Some(transport) = transport else {
+        return launch
+            .args
+            .iter()
+            .map(|arg| expand(arg, model, port, alias))
+            .collect();
+    };
+    let expected: Vec<&String> = launch
+        .args
+        .iter()
+        .filter(|arg| binding_token(arg))
+        .collect();
+    if transport.version != 1
+        || transport.bindings.values().collect::<Vec<_>>() != expected
+        || transport
+            .bindings
+            .iter()
+            .any(|(index, token)| transport.argv.get(*index) != Some(token))
+        || transport.argv.iter().any(|arg| arg.contains('\0'))
+    {
+        return Err("invalid automatic option binding transport".into());
+    }
+    transport
+        .argv
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if transport.bindings.contains_key(&index) {
+                expand(arg, model, port, alias)
+            } else {
+                Ok(arg.clone())
+            }
+        })
+        .collect()
 }
 
 pub async fn connect(
@@ -567,13 +835,14 @@ pub async fn connect(
             health_path: "/health".into(),
             health_authenticated: false,
         };
-        registry::register_manifest(manifest, Some(cancel.clone())).await?;
+        registry::register_manifest(manifest.clone(), Some(cancel.clone())).await?;
         let cfg = crate::config::AppConfig {
             active_provider: engine.as_str().into(),
             active_runtime: runtime.clone(),
             active_model: model_path.clone(),
             ..Default::default()
         };
+        super::runtime_schema::ensure_automatic_help(&registry::root(), &cfg, &manifest, &cancel)?;
         registry::refresh(&cfg, Some(cancel)).await?;
         check_cancel()?;
         Ok(ConnectedRuntime {
@@ -679,6 +948,7 @@ fn expand(value: &str, model: &str, port: u16, alias: &str) -> Result<String, St
 async fn upstream(
     spec: &ConnectionSpec,
     model: &str,
+    transport: Option<&OptionTransport>,
 ) -> Result<(String, String, Option<ChildGuard>), String> {
     if model != spec.model_path {
         return Err("selected model differs from automatic connection".into());
@@ -704,13 +974,9 @@ async fn upstream(
                 .any(|arg| has_binding(arg, "{model_alias}"));
             let mut command = crate::procutil::std_command(&launch.program);
             command
-                .args(
-                    launch
-                        .args
-                        .iter()
-                        .map(|arg| expand(arg, model, port, &alias))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )
+                .args(transported_arguments(
+                    launch, transport, model, port, &alias,
+                )?)
                 .env_clear()
                 .envs(crate::runtime::child_environment());
             for (name, value) in &launch.env {
@@ -727,7 +993,7 @@ async fn upstream(
             // here would let cancellation leave the engine behind.
             let mut child = ChildGuard::spawn(&mut command)?;
             let url = format!("http://127.0.0.1:{port}/v1");
-            let deadline = Instant::now() + Duration::from_secs(90);
+            let deadline = Instant::now() + Duration::from_secs(MANAGED_READY_SECS);
             loop {
                 if child.try_wait()?.is_some() {
                     return Err("discovered entry point exited before serving a model API; see the engine diagnostics".into());
@@ -762,10 +1028,44 @@ pub fn is_internal(args: &[String]) -> bool {
     args.first().is_some_and(|arg| arg == INTERNAL)
 }
 pub async fn run_internal(args: &[String]) -> Result<(), String> {
-    if !is_internal(args) || !(args.len() == 4 || args.len() == 5) {
+    if !is_internal(args) || args.len() < 4 {
         return Err("invalid internal automatic connection command".into());
     }
+    let header = match args[1].as_str() {
+        "probe" => 4,
+        "serve" => 5,
+        _ => return Err("unknown internal connection operation".into()),
+    };
+    if args.len() < header {
+        return Err("invalid internal automatic connection header".into());
+    }
+    let assigned_port = if header == 5 {
+        Some(
+            args[4]
+                .parse::<u16>()
+                .map_err(|_| "invalid assigned port")?,
+        )
+    } else {
+        None
+    };
+    let transport = match &args[header..] {
+        [] => None,
+        [separator, tag, payload] if separator == "--" && tag == ARGV_HEADER => Some(
+            serde_json::from_str::<OptionTransport>(payload)
+                .map_err(|_| "invalid automatic option transport")?,
+        ),
+        _ => return Err("invalid automatic option transport header".into()),
+    };
+    if transport
+        .as_ref()
+        .is_some_and(|transport| transport.version != 1)
+    {
+        return Err("unsupported automatic option transport version".into());
+    }
     let spec = read_spec(&decoded_spec_path(&args[2])?)?;
+    if matches!(spec.target, Target::Attached { .. }) && transport.is_some() {
+        return Err("attached services do not accept launch arguments".into());
+    }
     let model = &args[3];
     if args[1] == "probe" && model.is_empty() {
         let result = registry::ProbeResult {
@@ -795,10 +1095,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
-    if args[1] != "probe" && args[1] != "serve" {
-        return Err("unknown internal connection operation".into());
-    }
-    let (url, upstream_model, mut child) = upstream(&spec, model).await?;
+    let (url, upstream_model, mut child) = upstream(&spec, model, transport.as_ref()).await?;
     probe::verify(probe::ProbeRequest {
         base_url: url.clone(),
         model: upstream_model.clone(),
@@ -839,11 +1136,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
-    let port = args
-        .get(4)
-        .ok_or("missing assigned port")?
-        .parse::<u16>()
-        .map_err(|_| "invalid assigned port")?;
+    let port = assigned_port.ok_or("missing assigned port")?;
     // The existing headless CLI uses a private loopback listener without a
     // credential. GUI launches supply their nonempty app-owned key.
     let key = std::env::var(KEY_ENV).unwrap_or_default();
@@ -889,7 +1182,7 @@ mod tests {
             .candidates
             .insert(candidate.id.clone(), candidate.clone());
         cancellation().store(true, Ordering::Release);
-        let result = inspect(&candidate, vec![]).await;
+        let result = inspect(&candidate, vec![], None).await;
         cancellation().store(false, Ordering::Release);
         inventory().lock().unwrap().candidates.remove(&candidate.id);
         assert_eq!(result.unwrap_err(), "runtime discovery cancelled");
@@ -904,6 +1197,8 @@ mod tests {
             detail: String::new(),
             base_url: Some("http://127.0.0.1:43121/v1".into()),
             plan: "synthetic-cancelled-plan".into(),
+            command: vec![],
+            commands: vec![],
         };
         inventory().lock().unwrap().preparations.insert(
             prepared.plan.clone(),
@@ -1024,6 +1319,8 @@ mod tests {
             detail: "Captured detail".into(),
             base_url: Some("http://127.0.0.1:43121/v1".into()),
             plan: "synthetic-immutable-plan".into(),
+            command: vec![],
+            commands: vec![],
         };
         inventory().lock().unwrap().preparations.insert(
             prepared.plan.clone(),
@@ -1441,10 +1738,14 @@ mod tests {
                 program: engine.to_string_lossy().into_owned(),
                 args: vec![
                     script.to_string_lossy().into_owned(),
+                    "serve".into(),
+                    "llm".into(),
                     "--model".into(),
                     "{model}".into(),
                     "--port={port}".into(),
                     "--host={host}".into(),
+                    "--alias".into(),
+                    "{model_alias}".into(),
                 ],
                 env: BTreeMap::new(),
                 working_directory: Some(area.to_string_lossy().into_owned()),
@@ -1472,7 +1773,179 @@ mod tests {
         }
         let managed_record = record_bytes(&managed_manifest);
         fs::write(&registration_path, &managed_record).unwrap();
+        // A legacy spec (launch/artifacts only) derives the real scoped help
+        // head, never the AioLM proxy's internal command.
+        let mut options_cfg = crate::config::AppConfig {
+            active_model: managed.model_path.clone(),
+            ..cfg.clone()
+        };
+        let root = registry::root();
+        let target = super::super::runtime_schema::help_target(&root, &options_cfg).unwrap();
+        assert_eq!(target.program, engine.to_string_lossy());
+        assert_eq!(
+            target.prefix,
+            [
+                script.to_string_lossy().into_owned(),
+                "serve".into(),
+                "llm".into()
+            ]
+        );
+        assert_eq!(target.request.scope, ["serve", "llm"]);
+        assert_eq!(
+            connection_presentation(&managed_manifest),
+            Some(("serve llm".into(), engine.to_string_lossy().into_owned()))
+        );
+        let help =
+            super::super::runtime_schema::manifest_help_command(&managed_manifest, &target.request)
+                .unwrap();
+        let identity = help.identity(&AtomicBool::new(false)).unwrap();
+        let output = |text: &str| super::super::runtime_help::TextOutput {
+            text: text.into(),
+            clean_text: text.into(),
+            encoding: "utf-8".into(),
+            decoding_loss: false,
+            truncated: false,
+            read_error: None,
+            raw_bytes_base64: None,
+        };
+        let report = super::super::runtime_help::HelpReport {
+            identity, scope: vec!["serve".into(), "llm".into()],
+            stdout: output("Options:\n  -m, --model PATH  model path\n  -p, --port PORT  listening port\n  --host HOST  bind address\n  -a, --alias NAME  served model name\n  --fresh-label TEXT  literal label\n  --fresh-count N  worker count\n"),
+            stderr: output(""), exit_code: Some(0), success: true,
+            cancelled: false, timed_out: false, error: None, elapsed_ms: 1,
+        };
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: managed.engine_id.as_str().into(),
+                runtime: managed.runtime_id.clone(),
+                fingerprint: report.identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        super::super::runtime_help_store::save_snapshot(
+            &root,
+            managed.engine_id.as_str(),
+            &managed.runtime_id,
+            &super::super::runtime_help_store::HelpSnapshot {
+                report: report.clone(),
+                schema,
+            },
+        )
+        .unwrap();
+        super::super::runtime_schema::accept(
+            &root,
+            &options_cfg,
+            &report.identity.fingerprint,
+            &target.request,
+        )
+        .unwrap();
+        let effective = super::super::runtime_schema::effective(&root, &options_cfg, true).unwrap();
+        assert!(effective.supports_launch_args);
+        let label_key = effective
+            .schema
+            .options
+            .iter()
+            .find(|option| option.spellings.iter().any(|s| s.flag == "--fresh-label"))
+            .unwrap()
+            .key
+            .clone();
+        let alias = effective
+            .schema
+            .options
+            .iter()
+            .find(|option| option.spellings.iter().any(|s| s.flag == "-a"))
+            .unwrap();
+        assert_eq!(
+            alias.managed,
+            Some(super::super::runtime_options::ManagedBinding::Model)
+        );
+        options_cfg.provider_options.insert(
+            managed.engine_id.as_str().into(),
+            serde_json::json!({label_key: "{port}", "extra_args": ["--unlisted", "{model}"]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let tail = resolved_option_transport(&root, &options_cfg, &managed_manifest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(&tail[..2], ["--", ARGV_HEADER]);
+        let transport: OptionTransport = serde_json::from_str(&tail[2]).unwrap();
+        let Target::Managed { launch, .. } = &managed.target else {
+            unreachable!()
+        };
+        let actual = transported_arguments(
+            launch,
+            Some(&transport),
+            &managed.model_path,
+            43123,
+            "owned-alias",
+        )
+        .unwrap();
+        assert_eq!(
+            actual,
+            [
+                script.to_string_lossy().into_owned(),
+                "serve".into(),
+                "llm".into(),
+                "--model".into(),
+                managed.model_path.clone(),
+                "--port=43123".into(),
+                "--host=127.0.0.1".into(),
+                "--alias".into(),
+                "owned-alias".into(),
+                "--fresh-label".into(),
+                "{port}".into(),
+                "--unlisted".into(),
+                "{model}".into(),
+            ]
+        );
+        let mut invalid: OptionTransport = serde_json::from_str(&tail[2]).unwrap();
+        invalid.bindings.clear();
+        assert!(transported_arguments(
+            launch,
+            Some(&invalid),
+            &managed.model_path,
+            43123,
+            "owned-alias"
+        )
+        .is_err());
+        options_cfg
+            .provider_options
+            .get_mut(managed.engine_id.as_str())
+            .unwrap()
+            .insert(alias.key.clone(), serde_json::json!("not-owned"));
+        assert!(resolved_option_transport(&root, &options_cfg, &managed_manifest).is_err());
+        options_cfg.provider_options.insert(
+            managed.engine_id.as_str().into(),
+            serde_json::json!({"extra_args":["-anot-owned"]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let values = &options_cfg.provider_options[managed.engine_id.as_str()];
+        let issues = super::super::runtime_schema::saved_issues(
+            &root,
+            &options_cfg,
+            values,
+            &std::collections::BTreeSet::new(),
+        );
+        assert!(issues.iter().any(|issue| issue.key == "extra_args"));
+        assert!(super::super::runtime_schema::additional_launch_args(&root, &options_cfg).is_err());
+        // An app update replaces the helper (AioLM itself). The inventory keeps
+        // offering the connection; the next probe adopts the running build.
+        // Changed engine-side files still make it unusable.
+        fs::write(&helper, b"synthetic updated app build").unwrap();
+        let reports = |problem: &str| {
+            registry::runtime_instances().iter().any(|instance| {
+                instance.id == managed.runtime_id
+                    && instance.problems.iter().any(|text| text.contains(problem))
+            })
+        };
+        assert!(!reports("changed"));
         fs::write(&script, b"updated external entry script").unwrap();
+        assert!(reports("artifact changed"));
         let managed_cfg = crate::config::AppConfig {
             active_model: managed.model_path.clone(),
             ..cfg.clone()
@@ -1488,5 +1961,50 @@ mod tests {
             fs::read(&attached.model_path).unwrap(),
             b"synthetic model reference"
         );
+    }
+
+    #[tokio::test]
+    async fn automatic_helper_rejects_malformed_transport_before_opening_metadata() {
+        for (args, error) in [
+            (
+                vec![INTERNAL, "probe", "not-an-address", "model", "extra"],
+                "invalid automatic option transport header",
+            ),
+            (
+                vec![INTERNAL, "serve", "not-an-address", "model"],
+                "invalid internal automatic connection header",
+            ),
+            (
+                vec![INTERNAL, "serve", "not-an-address", "model", "not-a-port"],
+                "invalid assigned port",
+            ),
+            (
+                vec![
+                    INTERNAL,
+                    "probe",
+                    "not-an-address",
+                    "model",
+                    "--",
+                    ARGV_HEADER,
+                    "{}",
+                ],
+                "invalid automatic option transport",
+            ),
+            (
+                vec![
+                    INTERNAL,
+                    "probe",
+                    "not-an-address",
+                    "model",
+                    "--",
+                    ARGV_HEADER,
+                    r#"{"version":2,"argv":[],"bindings":{}}"#,
+                ],
+                "unsupported automatic option transport version",
+            ),
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(run_internal(&args).await.unwrap_err(), error);
+        }
     }
 }

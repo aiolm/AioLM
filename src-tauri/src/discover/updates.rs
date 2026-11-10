@@ -1144,6 +1144,7 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
                     &snapshot_path(&plan.installed.root, &file.local),
                     &plan.installed.repository,
                     &file.remote,
+                    None,
                 );
             }
         }

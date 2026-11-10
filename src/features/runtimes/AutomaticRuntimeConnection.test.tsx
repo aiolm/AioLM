@@ -96,6 +96,45 @@ it('uses one installation-folder selection as the discovery fallback', async () 
   await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
 });
 
+it('preselects a sole installation-folder entry but runs it only after an explicit check', async () => {
+  const installed = { ...candidate, source: 'selected_folder' as const, endpoints: [], pid: null, process_identity: null };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [installed], warnings: [], truncated: false });
+  vi.mocked(api.runtimeAutoInspect).mockResolvedValue({ ...prepared, candidate: installed, kind: 'managed' });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose installation folder' }));
+  expect(await screen.findByRole('radio', { name: /Example local service/ })).toBeChecked();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Check selected item' })).toBeEnabled());
+  expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  await waitFor(() => expect(api.runtimeAutoInspect).toHaveBeenCalledExactlyOnceWith(installed));
+});
+
+it('offers the serving commands a program documents and checks only the chosen one', async () => {
+  const installed = { ...candidate, source: 'selected_folder' as const, endpoints: [], pid: null, process_identity: null };
+  vi.mocked(api.runtimeAutoDiscover).mockResolvedValue({ candidates: [installed], warnings: [], truncated: false });
+  vi.mocked(api.runtimeAutoInspect)
+    .mockResolvedValueOnce({ ...prepared, kind: 'choose_command', candidate: installed, models: [], plan: '', commands: [
+      { path: ['serve', 'text'], summary: 'Serve text endpoints' },
+      { path: ['serve', 'video'], summary: 'Serve video endpoints' },
+    ] })
+    .mockResolvedValueOnce({ ...prepared, kind: 'managed', candidate: installed, command: ['serve', 'text'] });
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose installation folder' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Check selected item' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));
+  const text = await screen.findByRole('radio', { name: /serve text/ });
+  expect(screen.getByRole('radio', { name: /serve video/ })).toBeInTheDocument();
+  expect(screen.getByText('Serve text endpoints')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check selected command' })).toBeDisabled();
+  fireEvent.click(text);
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected command' }));
+  await waitFor(() => expect(api.runtimeAutoInspect).toHaveBeenLastCalledWith(installed, ['serve', 'text']));
+  expect(api.runtimeAutoInspect).toHaveBeenCalledTimes(2);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled());
+  expect(screen.getByText('serve text', { selector: 'code' })).toBeInTheDocument();
+});
+
 it('does not start discovery when the folder dialog is dismissed', async () => {
   vi.mocked(pickRuntimePath).mockResolvedValue(null);
   show();
@@ -159,6 +198,26 @@ it('requires a choice when several models are available', async () => {
   fireEvent.click(screen.getByRole('option', { name: 'Other model' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledWith(expect.anything(), 'other-model'));
+});
+
+it.each([
+  ['org/model-00001-of-00004.gguf', 'org/model.gguf'],
+  ['model-00001-of-00004', 'model'],
+  ['org/model', 'org/model'],
+  ['org/model-00005-of-00004.gguf', 'org/model-00005-of-00004.gguf'],
+  ['org/model-00001-of-00004.bin', 'org/model-00001-of-00004.bin'],
+])('displays the model label without changing the selected connection ID %s', async (id, label) => {
+  const inspected = { ...prepared, models: [...prepared.models, { id, name: id }] };
+  vi.mocked(api.runtimeAutoInspect).mockResolvedValue(inspected);
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
+  const picker = await screen.findByRole('combobox', { name: 'Model to use' });
+  await waitFor(() => expect(picker).toBeEnabled());
+  fireEvent.click(picker);
+  fireEvent.click(screen.getByRole('option', { name: label }));
+  expect(picker).toHaveTextContent(label);
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(api.runtimeAutoConnect).toHaveBeenCalledExactlyOnceWith(inspected, id));
 });
 
 it('blocks connect if no model can be selected', async () => {

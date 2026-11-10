@@ -60,6 +60,7 @@ export function useModelDownloadTask(): void {
           kind: "model-download",
           label: "",
           interruptible: true,
+          pausable: true,
           cancel: () => api.hfCancelDownload(),
           ...patch,
         });

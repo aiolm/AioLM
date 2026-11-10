@@ -1,6 +1,7 @@
 //! Application configuration and migration IPC.
 use crate::{branding, config, state::AppState};
 use tauri::State;
+use tauri_plugin_autostart::ManagerExt;
 
 #[tauri::command]
 pub(crate) fn get_config() -> Result<config::AppConfig, String> {
@@ -45,4 +46,30 @@ pub(crate) async fn save_config(
 #[tauri::command]
 pub(crate) fn migration_paths() -> Vec<branding::MigratedPath> {
     branding::managed_paths()
+}
+
+/// Whether AioLM starts when the user signs in. The operating system's own
+/// startup registration is the source of truth rather than a saved setting,
+/// so turning the entry off in the OS startup list is reflected here.
+#[tauri::command]
+pub(crate) fn launch_at_login(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| format!("failed to read the startup registration: {error}"))
+}
+
+/// Add or remove AioLM's startup registration and report the state that took
+/// effect.
+#[tauri::command]
+pub(crate) fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    let launcher = app.autolaunch();
+    if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    }
+    .map_err(|error| format!("failed to update the startup registration: {error}"))?;
+    launcher
+        .is_enabled()
+        .map_err(|error| format!("failed to read the startup registration: {error}"))
 }

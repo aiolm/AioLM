@@ -14,6 +14,23 @@ Open **Model settings**, choose the runtime, select a profile, then adjust its o
 
 Model loading and memory options such as mmap, mlock, DirectIO, load-mode, lazy-mode, NUMA, cache RAM, KV/operation offload, repacking, automatic fitting and SWA appear when reported by that runtime. Defaults are inherited by omitting an override; the reference catalog does not impose defaults from another version. Other engines use their own discovered schema instead of the llama.cpp field catalog.
 
+Automatic external connections use the selected engine command's discovered
+options, not the llama.cpp catalog. Their option editor also accepts
+undocumented launch arguments as separate literal tokens. Documented options
+belong in their controls or command import; app-managed bindings and duplicate
+flags cannot be added through the raw editor. Accepted help aliases keep these
+protections even when a manifest supplies the displayed option definition.
+Attached services cannot be
+reconfigured through launch arguments. See [External engine connections](automatic-engine-connections.md).
+
+Shared runtime-option fields group each option name, description and controls
+inside one bordered area, with the name above its own input. Descriptions use
+readable body-sized text rather than captions. Routine launch-timing labels,
+provenance and unknown-default/type notices are omitted; request-only settings
+retain their distinction. Known defaults, numeric limits, sensitive-value
+masking, syntax confirmation and validation still apply.
+
+
 ## Numeric limits and special values
 
 Temperature controls sampling randomness, not a probability. Values above `1` are valid; the app retains its `0–2` slider policy rather than incorrectly limiting it to `1`. The selected runtime's contract still takes precedence over the offline reference.

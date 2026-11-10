@@ -14,6 +14,19 @@ describe('document embedding target', () => {
     expect(embeddingSessionLabel(first)).toContain('candidate-a');
     expect(embeddingSessionLabel(second)).toContain('candidate-b');
   });
+  it.each([
+    ['org/encoder-00001-of-00004.gguf', 'org/encoder.gguf'],
+    ['encoder-00004-of-00004', 'encoder'],
+    ['org/encoder', 'org/encoder'],
+    ['org/encoder-00005-of-00004.gguf', 'org/encoder-00005-of-00004.gguf'],
+    ['org/encoder-00001-of-00004.bin', 'org/encoder-00001-of-00004.bin'],
+  ])('groups embedding model labels without changing target model IDs: %s', (model, label) => {
+    const target = session('candidate');
+    target.engine = { ...target.engine!, embedding_model: model };
+    expect(embeddingSessionLabel(target)).toBe(`candidate · ${label}`);
+    expect(selectEmbeddingSession([target], 'answering', 'candidate')?.engine?.embedding_model).toBe(model);
+    expect(embeddingSessionLabel({ ...target, engine: undefined, model })).toBe(`candidate · ${label}`);
+  });
   it('prefers the answering session and never picks an arbitrary engine when multiple other targets are running', () => {
     const own = session('answering'); const other = session('other');
     expect(selectEmbeddingSession([other, own], 'answering', 'auto')).toBe(own);

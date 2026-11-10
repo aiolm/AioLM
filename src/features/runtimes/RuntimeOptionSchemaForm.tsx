@@ -46,29 +46,6 @@ function optionName(option: OptionSchemaDefinition) {
   return option.spellings[0]?.flag ?? option.key;
 }
 
-/** Where the option's established facts come from: observed help, an
- * adapter's catalog or metadata (by id and revision), or the user. Unknown
- * facts have no source and are marked separately. */
-function factSources(option: OptionSchemaDefinition, copy: Copy): string | undefined {
-  const facts = [option.kind, option.arity, option.repeatable, option.choices, option.range, option.unit,
-    option.runtime_default, option.request_field, option.restart_required, option.sensitive, option.local_path];
-  let help = false;
-  let user = false;
-  const adapters: string[] = [];
-  for (const fact of facts) {
-    if (!fact || fact.certainty === 'unknown' || !fact.source || typeof fact.source !== 'object') continue;
-    const source = fact.source as { kind?: string; id?: string; revision?: string };
-    if (source.kind === 'help') help = true;
-    else if (source.kind === 'user') user = true;
-    else if (source.kind === 'adapter') {
-      const label = `${copy.sourceAdapter} ${source.id} (${source.revision})`;
-      if (!adapters.includes(label)) adapters.push(label);
-    }
-  }
-  const labels = [...(help ? [copy.sourceHelp] : []), ...adapters, ...(user ? [copy.sourceUser] : [])];
-  return labels.length ? `${copy.documentedBy}: ${labels.join(', ')}` : undefined;
-}
-
 interface ValueInputProps {
   /** Set when a visible label element names this input. */
   inputId?: string;
@@ -235,24 +212,18 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const defaultValue = supported(option.runtime_default);
   const defaultDescription = inheritLabel ?? (defaultValue
     ? (supported(option.sensitive) === true ? '•••' : display(defaultValue.literal)) : undefined);
-  const confirmed = option.arity.certainty === 'user_confirmed' || option.repeatable.certainty === 'user_confirmed';
   const facts = [
-    option.target === 'request' ? copy.request : copy.launch,
+    option.target === 'request' ? copy.request : undefined,
     // A secret option's documented default is a secret too; it is never shown.
-    defaultDescription === undefined ? copy.defaultUnknown : `${copy.inherit}: ${defaultDescription}`,
+    defaultDescription === undefined ? undefined : `${copy.inherit}: ${defaultDescription}`,
     supported(option.unit),
     supported(option.restart_required) === true ? copy.restartRequired : undefined,
     supported(option.sensitive) === true ? copy.secretValue : undefined,
-    option.kind.certainty === 'unknown' && !isSwitch(option) ? copy.unverifiedType : undefined,
     option.arity.certainty === 'unknown' && option.target === 'launch' ? copy.unconfirmedArity : undefined,
-    confirmed ? copy.confirmedByYou : undefined,
-    factSources(option, copy),
   ].filter(Boolean).join(' · ');
-  const header = (
-    <span className="schema-option__header">
-      <span id={`${id}-name`}>{name}</span> <small>{facts}</small>
-    </span>
-  );
+  const header = <code id={`${id}-name`} className="schema-option__name">{name}</code>;
+  const metadata = facts ? <p className="schema-option__facts">{facts}</p> : null;
+  const description = option.help && <p id={helpId} className="app-section-hint">{option.help}</p>;
   const syntaxUnknown = option.target === 'launch' && !option.managed
     && (option.arity.certainty === 'unknown' || option.repeatable.certainty === 'unknown');
   const help = (
@@ -262,7 +233,6 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
         <button type="button" className="app-button app-button--secondary" disabled={disabled}
           onClick={() => onStore(undefined)}>{copy.useDefault}</button>
       )}
-      {option.help && <p id={helpId} className="app-section-hint">{option.help}</p>}
       {!applicable && <p className="app-section-hint">{copy.notApplicable}</p>}
       {onConfirmSyntax && syntaxUnknown && <ConfirmSyntax option={option} name={name} disabled={disabled} copy={copy} onConfirm={onConfirmSyntax} />}
     </>
@@ -270,8 +240,10 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   if (option.managed) {
     return (
       <div className="schema-option">
-        <p>{name} <small>· {option.managed === 'entry_point' ? copy.managedEntryPoint : option.managed === 'reserved' ? copy.managedReserved
-          : option.managed === 'discovery' && option.position !== null && option.position !== undefined ? copy.managedPositional : copy.managed}</small></p>
+        {header}
+        <p className="schema-option__facts">{option.managed === 'entry_point' ? copy.managedEntryPoint : option.managed === 'reserved' ? copy.managedReserved
+          : option.managed === 'discovery' && option.position !== null && option.position !== undefined ? copy.managedPositional : copy.managed}</p>
+        {description}
         {help}
       </div>
     );
@@ -293,6 +265,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     return (
       <div className="schema-option">
         {header}
+        {metadata}
+        {description}
         {rangeHint}
         <CustomSelect
           ariaLabel={name}
@@ -318,6 +292,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     return (
       <div className="schema-option">
         <label htmlFor={`${id}-single`}>{header}</label>
+        {metadata}
+        {description}
         {rangeHint}
         {explicitEmpty ? (
           <span className="schema-option__value">
@@ -346,6 +322,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   return (
     <fieldset className="schema-option">
       <legend>{header}</legend>
+      {metadata}
+      {description}
       {rangeHint}
       {rows.map((row, rowIndex) => (
         <div key={rowIndex} className="schema-option__row" role="group" aria-label={`${name} ${copy.occurrence} ${rowIndex + 1}`}>
@@ -642,9 +620,10 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const navigation = (
         <fieldset className="schema-option-filter">
           <legend>{copy.legend}</legend>
-          <label htmlFor={`${formId}-search`}>{copy.search}</label>
-          <input id={`${formId}-search`} name="schema-search" className="app-input" type="search" value={search}
-            autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => { setSearch(event.target.value); setLimit(64); }} />
+          <label htmlFor={`${formId}-search`}>{copy.search}
+            <input id={`${formId}-search`} name="schema-search" className="app-input" type="search" value={search}
+              autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => { setSearch(event.target.value); setLimit(64); }} />
+          </label>
           <label>{copy.group}
             <CustomSelect ariaLabel={copy.group} value={group} disabled={disabled}
               options={[{ value: '', label: copy.allGroups }, ...groups.map(name => ({ value: name, label: name }))]} onChange={next => { setGroup(next); setLimit(64); }} />
@@ -653,10 +632,11 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   );
   const more = !showAll && visible.length > limit && <button type="button" className="app-button app-button--secondary" disabled={disabled}
     onClick={() => setLimit(current => current + 64)}>{copy.more} ({visible.length - limit})</button>;
-  if (compact) return <div className="model-settings-fields">{navigation}{fields}{more}{showNoMatch && visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
+  const fieldGrid = fields.length > 0 && <div className="schema-option-grid">{fields}</div>;
+  if (compact) return <div className="model-settings-fields schema-option-form">{navigation}{fieldGrid}{more}{showNoMatch && visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
 
   return (
-    <div className="model-settings-fields">
+    <div className="model-settings-fields schema-option-form">
       {navigation}
       {issues.map((issue, index) => <div key={`${issue.key}:${index}`} id={`${formId}-issue-${index}`}><FeedbackBanner tone="error">{issue.message}</FeedbackBanner></div>)}
       {unknownKeys.map(key => (
@@ -666,7 +646,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
         </FeedbackBanner>
       ))}
       {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
-      {fields}
+      {fieldGrid}
       <OccurrenceOrder schema={schema} values={values} disabled={disabled} onChange={onChange} />
       {more}
       {showNoMatch && visible.length === 0 && <p className="app-section-hint">{copy.noMatch}</p>}

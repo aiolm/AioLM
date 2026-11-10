@@ -6,7 +6,7 @@ import StatusBadge from "../../shared/ui/StatusBadge";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import TabNav, { type TabNavItem } from "../../shared/ui/TabNav";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import { isNativeRuntimeAvailable } from "../../shared/api/index";
+import { getLaunchAtLogin, isNativeRuntimeAvailable, setLaunchAtLogin } from "../../shared/api/index";
 import { localeOptions, useI18n } from "../../shared/i18n/i18n";
 import { clearChatWorkspace } from "../chat/chatHistory";
 import { clearDocumentIndex } from "../chat/documentIndex";
@@ -37,6 +37,12 @@ const closeToTrayText = {
   ja: { label: "閉じるときにシステムトレイへ", description: "ウィンドウを閉じるとAioLMはシステムトレイに隠れ、実行中のサーバーはそのまま動きます。トレイアイコンからウィンドウを戻すか終了できます。", failed: "システムトレイを利用できないため、設定を変更できませんでした。" },
   zh: { label: "关闭时最小化到系统托盘", description: "关闭窗口后AioLM会隐藏到系统托盘，正在运行的服务器继续运行。可通过托盘图标恢复窗口或退出。", failed: "系统托盘不可用，设置未更改。" },
 };
+const launchAtLoginText = {
+  en: { label: "Start when the computer starts", description: "Open AioLM automatically when you sign in to this computer.", failed: "The startup registration could not be changed." },
+  ko: { label: "컴퓨터 켤 때 자동으로 시작", description: "이 컴퓨터에 로그인하면 AioLM을 자동으로 엽니다.", failed: "시작 프로그램 등록을 변경하지 못했습니다." },
+  ja: { label: "コンピューター起動時に自動で開始", description: "このコンピューターにサインインするとAioLMを自動で開きます。", failed: "スタートアップ登録を変更できませんでした。" },
+  zh: { label: "开机时自动启动", description: "登录此计算机时自动打开AioLM。", failed: "无法更改开机启动设置。" },
+};
 // Reset and data deletion sit in their own group, away from everyday preferences.
 const dangerText = {
   en: { title: "Reset and delete" },
@@ -64,6 +70,39 @@ function Row({ id, label, description, children }: { id: string; label: string; 
     ? cloneElement(children, { "aria-describedby": descriptionId, "aria-labelledby": labelId })
     : children;
   return <div className="settings-row" data-setting=""><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{control}</div></div>;
+}
+
+/**
+ * Launch at login reads and writes the operating system's startup entry
+ * directly, so a change made in the OS startup list shows up here too.
+ */
+function LaunchAtLoginRow({ onSaved }: { onSaved: () => void }) {
+  const { locale } = useI18n();
+  const copy = launchAtLoginText[locale];
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    getLaunchAtLogin().then(value => { if (current) setEnabled(value); }, (reason: unknown) => {
+      if (current) { setEnabled(false); setError(reason instanceof Error ? reason.message : String(reason)); }
+    });
+    return () => { current = false; };
+  }, []);
+  const save = async (value: boolean) => {
+    setSaving(true); setError(null);
+    try {
+      setEnabled(await setLaunchAtLogin(value));
+      onSaved();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : copy.failed); }
+    finally { setSaving(false); }
+  };
+  return <Row id="settings-launch-at-login" label={copy.label} description={copy.description}>
+    <div className="settings-control-stack">
+      <Switch id="settings-launch-at-login" aria-describedby="settings-launch-at-login-description" checked={enabled === true} disabled={enabled === null || saving} onChange={(value) => { void save(value); }} />
+      {error && <FeedbackBanner tone="error">{normalizeDisplayText(error)}</FeedbackBanner>}
+    </div>
+  </Row>;
 }
 
 /** A row whose controls are buttons that keep their own names. */
@@ -288,16 +327,14 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           <NotificationSettings preferences={preferences} patch={patch} />
         </Group>}
         {(normalizedQuery || section === "server") && <Group id="server" title={t("settings.server")}>
+          {isNativeRuntimeAvailable() && <LaunchAtLoginRow onSaved={() => showSaved("saved")} />}
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div className="settings-control-stack">
-              <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
+              <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray !== false} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
               {trayError && <FeedbackBanner tone="error">{normalizeDisplayText(trayError)}</FeedbackBanner>}
             </div>
           </Row>}
-          <Row id="settings-polling" label={t("settings.polling")} description={t("settings.pollingDesc")}>
-            <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="settings-select" />
-          </Row>
           {isNativeRuntimeAvailable() && <div className="settings-note"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>}
         </Group>}
         {(normalizedQuery || section === "advanced") && <Group id="advanced" title={t("settings.advanced")}>

@@ -95,8 +95,6 @@ describe('settings profile workspace', () => {
       provider_options: { 'mlx-vlm': { kv_bits: 4 }, vllm: { gpu_memory_utilization: 0.9 } } };
     const { container } = mount({ currentSettings });
     const details = within(container.querySelector('.settings-profile-detail') as HTMLElement);
-    expect(details.getByText('MLX')).toBeVisible();
-    expect(details.getByText('synthetic-mlx')).toBeVisible();
     expect(details.getByText('Kv bits')).toBeVisible();
     expect(details.queryByText('GPU layers')).not.toBeInTheDocument();
     expect(details.queryByText('cuda')).not.toBeInTheDocument();

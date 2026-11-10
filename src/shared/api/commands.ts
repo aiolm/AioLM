@@ -7,13 +7,17 @@ import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfModel, HfRepositoryInspection, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata,
+  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata, PendingDownload,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
   PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress, PerformanceBenchmarkAdmission,
 } from "./types.ts";
 
 export const getConfig = () => invoke<AppConfig>("get_config");
+/** Whether the operating system starts AioLM at sign-in. */
+export const getLaunchAtLogin = () => invoke<boolean>("launch_at_login");
+/** Registers or removes AioLM's startup entry and returns the state that took effect. */
+export const setLaunchAtLogin = (enabled: boolean) => invoke<boolean>("set_launch_at_login", { enabled });
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
 export const projectExportJson = (contents: string, fileName?: string) =>
   invoke<boolean>("project_export_json", { contents, fileName });
@@ -33,12 +37,16 @@ export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: str
 export const hfModelFiles = (repoId: string) => invoke<HfRepositoryInspection>("hf_model_files", { repoId });
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 /** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
-export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean) =>
-  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}) });
+export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean, revision?: string) =>
+  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}), ...(revision !== undefined ? { revision } : {}) });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
+/** Interrupted model downloads, most recent first. */
+export const hfPendingDownloads = () => invoke<PendingDownload[]>("hf_pending_downloads");
+/** Delete an interrupted download's staged data and forget it. */
+export const hfDiscardDownload = (id: string) => invoke<void>("hf_discard_download", { id });
 /** A selected weight includes its required model assets; omission downloads the whole snapshot. */
-export const hfDownloadSnapshot = (repoId: string, modelsDir: string, filePath?: string) =>
-  invoke<ModelArtifact>('hf_download_snapshot', { repoId, modelsDir, ...(filePath !== undefined ? { filePath } : {}) });
+export const hfDownloadSnapshot = (repoId: string, modelsDir: string, filePath?: string, revision?: string) =>
+  invoke<ModelArtifact>('hf_download_snapshot', { repoId, modelsDir, ...(filePath !== undefined ? { filePath } : {}), ...(revision !== undefined ? { revision } : {}) });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export interface AttachmentDropNotice {
   id: string | null;

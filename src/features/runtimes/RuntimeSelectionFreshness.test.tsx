@@ -6,6 +6,7 @@ import * as api from '../../shared/api';
 import { testConfig } from '../../testing/appStore';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import { publishInstalledRuntimes, resetInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
+import { publishRuntimeCatalog } from '../../shared/api/providers';
 import ExternalRuntimeRegistration from './ExternalRuntimeRegistration';
 import ProviderEnvironments from './ProviderEnvironments';
 
@@ -31,9 +32,43 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   resetInstalledRuntimes();
+  publishRuntimeCatalog([]);
+  vi.mocked(api.providerCatalog).mockResolvedValue([]);
 });
 
 describe('runtime labels follow the current inventory (U2)', () => {
+  it.each(['serve llm', 'http://127.0.0.1:8123/v1'])('shows the automatic connection instead of probe metadata: %s', async connection_label => {
+    const connected = {
+      ...synthetic('OpenAI v1; binary version unknown'), provider: 'custom.auto-synthetic' as const,
+      id: 'connection-opaque', connection_label, accelerator: 'unverified',
+    };
+    let completeCatalog!: (catalog: api.ProviderDescription[]) => void;
+    const catalogReady = new Promise<api.ProviderDescription[]>(resolve => { completeCatalog = resolve; });
+    vi.mocked(api.providerCatalog).mockImplementationOnce(async () => {
+      const catalog = await catalogReady;
+      publishRuntimeCatalog(catalog);
+      return catalog;
+    });
+    vi.mocked(api.providerRuntimes).mockResolvedValue([connected]);
+    render(<I18nProvider initialLocale="en">
+      <p data-testid="selection"><RuntimeSelectionLabel config={{ ...customConfig, active_provider: connected.provider, active_runtime: connected.id }} /></p>
+    </I18nProvider>);
+    const selection = screen.getByTestId('selection');
+    expect(selection).not.toHaveTextContent(connected.id);
+    expect(selection).not.toHaveTextContent(connected.provider);
+    await waitFor(() => expect(selection).toHaveTextContent(connection_label));
+    expect(selection).not.toHaveTextContent(connected.provider);
+    await act(async () => {
+      completeCatalog([{ id: connected.provider, engine: 'Synthetic engine', server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+      await catalogReady;
+    });
+    await waitFor(() => expect(selection).toHaveTextContent('Synthetic engine'));
+    expect(selection).not.toHaveTextContent(connected.id);
+    expect(selection).not.toHaveTextContent(connected.version!);
+    expect(selection).not.toHaveTextContent(connected.accelerator);
+    expect(selection).not.toHaveTextContent('Registered installation');
+  });
+
   it('names the re-registered runtime version, not the one read before re-registration', async () => {
     vi.mocked(api.providerRuntimes).mockResolvedValue([synthetic('synthetic-1.0')]);
     render(<I18nProvider initialLocale="en">

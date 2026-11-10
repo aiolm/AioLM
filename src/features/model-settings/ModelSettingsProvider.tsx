@@ -6,7 +6,7 @@ import type { AppStore } from '../../shared/state/store';
 import { executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, ExecutionConflictError } from '../../shared/config/executionSettings';
 import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 import { anySessionActivity, sessionHasActivity } from '../../shared/state/sessionActivity';
-import { getTaskSnapshot } from '../../shared/state/taskRegistry';
+import { finishTask, getTaskSnapshot, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { useI18n } from '../../shared/i18n/i18n';
 import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, profileTargetConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ModelProfile, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
 import { ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
@@ -17,6 +17,9 @@ import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { MANAGE_MODEL_RUNTIMES, modelSettingsContext as Context, type ModelSettingsRequest } from './modelSettingsContext';
+import { modelSettingsCopy } from './modelSettingsCopy';
+import { profileStatusCopy } from './profileStatusCopy';
+import { isLifecycleCancellation } from '../../shared/lib/serverLifecycle';
 
 export { MANAGE_MODEL_RUNTIMES, useModelSettings } from './modelSettingsContext';
 export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from './modelSettingsContext';
@@ -47,7 +50,7 @@ const messages = {
 };
 
 export function ModelSettingsProvider({ store, children }: { store: AppStore; children: ReactNode }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const copy = messages[locale];
   const latest = useRef(store); latest.current = store;
   const counter = useRef(0);
@@ -68,6 +71,8 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     setSessions([...next]);
   }, []);
   const lock = useRef(false);
+  const startInFlight = useRef(false);
+  const closedStart = useRef<number | null>(null);
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
   const runningProfile = useRef<{ key: string; application?: ProfileApplication }>(undefined);
@@ -76,6 +81,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (!owner || owner.cancelled) return;
     owner.cancelled = true;
     setPreflightState('cancelling');
+    updateTask(owner.id, { state: 'cancelling', phase: modelSettingsCopy[locale].preflightCancelling });
     void api.cancelLaunchPreflight(owner.id).catch(cause => {
       if (preflightOwner.current === owner) setError(String(cause));
     });
@@ -91,7 +97,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     return current;
   }, []);
   const open = useCallback((request: ModelSettingsRequest) => {
-    if (lock.current) return;
+    if (lock.current) { setError(copy.busy); return; }
     const cfg = latest.current.getConfig();
     if (!cfg) return;
     const target = request.target;
@@ -131,7 +137,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     setEditor({ request, base: structuredClone(base), baseDefinition: definition ? structuredClone(definition) : undefined, initial: structuredClone(initial), key: ++counter.current,
       existingSession: !!definition && !!cfg.sessions?.some(item => item.id === definition.id) });
     setSuspended(false); setError('');
-  }, [copy.missing]);
+  }, [copy.busy, copy.missing]);
   const pollingActive = editor !== null && !suspended && api.isNativeRuntimeAvailable();
   useSessionPolling({
     active: pollingActive,
@@ -212,10 +218,16 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   };
   const persist = async (draft: api.AppConfig, intent: 'save' | 'start', profile: ProfileEditorResult, close: boolean, applyTarget = true): Promise<ProfileCommitResult> => {
     if (!editor || lock.current) throw new Error(copy.busy);
-    lock.current = true; setBusy(true);
+    lock.current = true; startInFlight.current = intent === 'start'; setBusy(true);
     let persisted: api.AppConfig | undefined;
     let application = profile.application;
     let launchOwner: LaunchCancellation | undefined;
+    const taskId = intent === 'start' && ['default', 'session'].includes(editor.request.target.kind)
+      ? registerTask({ id: crypto.randomUUID(), kind: 'other', label: targetLabel, phase: modelSettingsCopy[locale].preflightChecking, interruptible: true })
+      : undefined;
+    let handedOff = false;
+    let taskOutcome: 'completed' | 'cancelled' | 'failed' = 'completed';
+    let taskDetail: string | undefined;
     try {
       const current = latest.current.getConfig();
       if (!current) throw new Error(copy.loading);
@@ -295,14 +307,16 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       if (status?.state === 'running' && !liveProfiles.current.has(id)) liveProfiles.current.set(id, { model: live.active_model, pid: status.pid,
         application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id, providerOf(live))).application) });
       if (intent === 'start') {
-        const owner = { id: crypto.randomUUID(), cancelled: false };
+        const owner = { id: taskId!, cancelled: false };
         preflightOwner.current = owner;
         setPreflightState('checking');
+        updateTask(owner.id, { interruptible: true, cancel: cancelPreflight });
         try {
           next = await api.preflightLaunch(next, owner.id);
           if (owner.cancelled) throw new Error('server start cancelled');
         } finally {
           if (preflightOwner.current === owner) { preflightOwner.current = null; setPreflightState(null); }
+          updateTask(owner.id, { cancel: undefined });
         }
       }
       application = { ...profile.application, model: next.active_model, settings: profileSettingsSnapshot(next) };
@@ -345,22 +359,21 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         } };
         launchOwner = owner; setLaunching(owner);
         liveProfiles.current.set(id, { model: saved.active_model, application: structuredClone(application) });
-        // Reading a model into VRAM takes minutes. Awaiting it here held a modal
-        // dialog over the whole app and kept the lock that gates reopening it, so
-        // nothing could be touched until the load finished. The launch is handed
-        // off instead; the status badge, the header's stop button and the task
-        // strip already report it, and the store records a default-target failure
-        // as its own banner rather than one this dialog has to still be open for.
-        // A stop requested for this loading session, from here or elsewhere, ends
-        // it with the native canonical message. That is the requested outcome,
-        // not a failure; other diagnostics mentioning cancellation stay visible.
+        if (taskId) updateTask(taskId, { phase: t('ui.sessionStarting'), interruptible: true, cancel: owner.cancel });
+        // The provider and task own the load, not the dialog that started it.
+        // Default-target failures also reach the store's global error banner.
         void (target.kind === 'session'
-          ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => {
+          ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load)
+          : latest.current.start(saved, status?.state === 'running'))
+          .then(() => { if (taskId) finishTask(taskId, 'completed'); })
+          .catch(cause => {
+            const cancelled = isLifecycleCancellation(cause);
             const message = cause instanceof Error ? cause.message : String(cause);
-            if (message !== 'server start cancelled') setError(message);
+            if (taskId) finishTask(taskId, cancelled ? 'cancelled' : 'failed', cancelled ? undefined : message);
+            if (target.kind === 'session' && !cancelled) setError(message);
           })
-          : latest.current.start(saved, status?.state === 'running').catch(() => undefined))
           .finally(() => { setLaunching(current => current === owner ? null : current); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
+        handedOff = true;
       } else if (requestOnly) {
         await api.applyRequestSettings(saved, id);
         liveProfiles.current.set(id, { model: saved.active_model, pid: status?.pid, application: structuredClone(application) });
@@ -370,10 +383,15 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       if (close) setEditor(null);
       return structuredClone(result);
     } catch (cause) {
+      const cancelled = isLifecycleCancellation(cause);
+      taskOutcome = cancelled ? 'cancelled' : 'failed';
+      taskDetail = cancelled ? undefined : cause instanceof Error ? cause.message : String(cause);
+      if (closedStart.current === editor.key && !cancelled) setError((persisted ? profileStatusCopy[locale].savedFailure : '') + taskDetail);
       if (persisted) throw new SettingsDeliveryError(String(cause), persisted, application);
       throw cause;
     } finally {
-      lock.current = false; setBusy(false);
+      if (taskId && !handedOff) finishTask(taskId, taskOutcome, taskDetail);
+      lock.current = false; startInFlight.current = false; setBusy(false);
       // Only this active launch can supply the editor's cancellation action.
       // Its handed-off load continues after closing or editing another target.
       if (launchOwner) setLaunching(current => current === launchOwner ? null : current);
@@ -419,7 +437,11 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
     {editor && <Suspense fallback={<div role="status">{copy.loading}</div>}><ModelSettingsDialog key={editor.key} open={!suspended} initialConfig={editor.initial} targetLabel={targetLabel} mode={editor.request.target.kind}
       requireModelSelection={editor.request.target.kind === 'default' && !editor.request.config && !editor.initial.active_model.trim() && !['running', 'starting', 'stopping'].includes(store.status.state)}
-      initialSection={editor.request.section} busy={busy} liveState={liveState} liveConfig={store.cfg && liveStatus?.execution ? executionConfig(store.cfg, liveStatus.execution) : undefined} onApply={apply} onClose={() => { if (!lock.current) setEditor(null); }}
+      initialSection={editor.request.section} busy={busy} startPending={busy && startInFlight.current} liveState={liveState} liveConfig={store.cfg && liveStatus?.execution ? executionConfig(store.cfg, liveStatus.execution) : undefined} onApply={apply} onClose={() => {
+        if (lock.current && !startInFlight.current) return;
+        if (startInFlight.current) closedStart.current = editor.key;
+        setEditor(null);
+      }}
       onProfileCommit={commitProfile} onReloadProfile={reloadProfile}
       sessionId={id} initialApplication={editor.request.application ?? (editor.request.target.kind === 'project' || editor.request.target.kind === 'benchmark'
         ? assignedTarget(editor.initial, { model: editor.initial.active_model, settings: profileSettingsSnapshot(editor.initial), system_prompt: editor.request.systemPrompt ?? '' }).application : appliedProfile(editor.initial, id))}

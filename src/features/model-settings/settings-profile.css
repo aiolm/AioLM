@@ -1,4 +1,4 @@
-.settings-profile-control { min-width: 0; margin: 0 0 24px; color: var(--ui-ink); }
+.settings-profile-control { min-width: 0; margin: 0 0 24px; color: var(--ui-ink); container: profile / inline-size; }
 /* Profile toolbar: state, name and the profile's own actions on one row. */
 .settings-profile-banner { display: flex; align-items: center; gap: 12px; }
 .settings-profile-state-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: var(--ui-radius-pill); background: var(--ui-muted); }
@@ -31,7 +31,8 @@
 .settings-profile-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .settings-profile-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-detail > .settings-profile-hint { margin: 12px 0 0; }
-.settings-profile-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px 32px; margin-top: 16px; }
+.settings-profile-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); align-items: start; gap: 16px 32px; margin-top: 16px; }
+.settings-profile-values > p { grid-column: 1 / -1; margin: 0; }
 .settings-profile-value-group { min-width: 0; }
 .settings-profile-value-group h4 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-border); color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-value-group dl { display: grid; gap: 2px; margin: 0; }
@@ -68,16 +69,16 @@
 .settings-profile-action p { margin: 0; overflow-wrap: break-word; }
 .settings-profile-action label { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-action .app-input { min-width: 0; }
+.settings-profile-action > .app-input { max-inline-size: 32rem; }
 .settings-profile-action > .settings-profile-buttons { justify-content: flex-start; }
 .settings-profile-scope { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
-@media (max-width: 900px) {
+@container profile (max-width: 56rem) {
   .settings-profile-banner { flex-wrap: wrap; }
   .settings-profile-banner > .settings-profile-buttons { flex-basis: 100%; justify-content: flex-start; padding-left: 20px; }
   .settings-profile-detail-heading { flex-wrap: wrap; }
   .settings-profile-detail-heading > .settings-profile-buttons { justify-content: flex-start; }
 }
-@media (max-width: 600px) {
-  .settings-profile-values { grid-template-columns: minmax(0, 1fr); }
+@container profile (max-width: 37.5rem) {
   .settings-profile-banner { gap: 8px; }
   .settings-profile-banner > .settings-profile-buttons { padding-left: 0; }
   .settings-profile-value { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

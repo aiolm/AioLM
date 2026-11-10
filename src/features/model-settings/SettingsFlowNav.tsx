@@ -1,10 +1,11 @@
+import type { ReactNode } from 'react';
 import { useI18n } from '../../shared/i18n/i18n';
 import { settingsFlowCopy } from './settingsFlowCopy';
 
 export type SettingsStep = 'runtime' | 'profile' | 'options';
 
 export default function SettingsFlowNav({ step, runtime, profile, canProfile, canOptions, disabled, onSelect }: {
-  step: SettingsStep; runtime: string; profile: string; canProfile: boolean; canOptions: boolean;
+  step: SettingsStep; runtime: ReactNode; profile: string; canProfile: boolean; canOptions: boolean;
   disabled: boolean; onSelect: (step: SettingsStep) => void;
 }) {
   const { locale } = useI18n(); const copy = settingsFlowCopy[locale];
@@ -16,7 +17,7 @@ export default function SettingsFlowNav({ step, runtime, profile, canProfile, ca
           disabled={disabled || value === 'profile' && !canProfile || value === 'options' && !canOptions}
           onClick={() => onSelect(value)}>
           <span className="model-settings-step-number" aria-hidden="true">{index + 1}</span>
-          <span><strong>{copy[value]}</strong>{summary && <small title={summary}>{summary}</small>}</span>
+          <span><strong>{copy[value]}</strong>{summary && <small title={typeof summary === 'string' ? summary : undefined}>{summary}</small>}</span>
         </button>
       </li>;
     })}</ol>

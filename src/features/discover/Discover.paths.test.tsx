@@ -271,12 +271,12 @@ describe('Discover runtime journeys', () => {
     expect(progress).not.toHaveAttribute('value');
     expect(card.getByText('1.0 KiB')).toBeVisible();
     expect(card.queryByText(/%|of 0 B/)).not.toBeInTheDocument();
-    expect(card.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(card.getByRole('button', { name: 'Pause' })).toBeEnabled();
     act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 4096 }));
     expect(progress).toHaveAttribute('value', '25');
     expect(card.getByText('25%')).toBeVisible();
     expect(card.getByText('1.0 KiB of 4.0 KiB')).toBeVisible();
-    fireEvent.click(card.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(card.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     await act(async () => rejectDownload(new Error('model download cancelled')));
     expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
@@ -312,7 +312,7 @@ describe('Discover runtime journeys', () => {
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     expect(download).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     expect(download).toBeDisabled();
     await act(async () => rejectDownload(new Error('model download cancelled')));

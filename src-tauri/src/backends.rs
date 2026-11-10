@@ -63,7 +63,13 @@ pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
     }
 
     let nvidia = profile.has_vendor(GpuVendor::Nvidia);
-    let amd_discrete = profile.has_discrete(GpuVendor::Amd);
+    // ROCm's verdict does not follow `integrated` alone: that flag serves
+    // memory accounting, and an APU with its own firmware carve-out keeps the
+    // recommendation it had before APUs were recognised by name.
+    let amd_discrete = profile.gpus.iter().any(|gpu| {
+        gpu.vendor == GpuVendor::Amd
+            && (!gpu.integrated || crate::hardware::apu_with_carve_out(gpu))
+    });
     let amd_any = profile.has_vendor(GpuVendor::Amd);
     let intel = profile.has_vendor(GpuVendor::Intel);
     // Integrated parts still count here: Vulkan drives them, so a machine with
@@ -276,6 +282,26 @@ mod tests {
         assert_eq!(shown_by_default(&list), vec!["vulkan"]);
         assert_eq!(fit_of(&list, "rocm"), BackendFit::Compatible);
         assert_eq!(fit_of(&list, "cpu"), BackendFit::Compatible);
+    }
+
+    #[test]
+    fn an_apu_with_its_own_carve_out_keeps_rocm_recommended() {
+        let mut apu = gpu(GpuVendor::Amd, "AMD Radeon(TM) 8060S Graphics", true);
+        apu.vram_mb = Some(98_304);
+        let list = recommend(&profile("x86_64", vec![apu.clone()]));
+        assert_eq!(shown_by_default(&list), vec!["rocm", "vulkan"]);
+        // A token carve-out still leaves ROCm as merely compatible, and so does
+        // a part whose name already said it was integrated.
+        for (name, vram) in [
+            ("AMD Radeon(TM) 8060S Graphics", 512),
+            ("AMD Radeon Vega 8 Mobile Graphics", 2048),
+        ] {
+            let mut small = apu.clone();
+            small.name = name.into();
+            small.vram_mb = Some(vram);
+            let list = recommend(&profile("x86_64", vec![small]));
+            assert_eq!(fit_of(&list, "rocm"), BackendFit::Compatible, "{name}");
+        }
     }
 
     #[test]

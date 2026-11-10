@@ -806,6 +806,7 @@ mod tests {
         let artifact = download_snapshot_files(
             &root,
             &mut manifest,
+            None,
             &AtomicBool::new(false),
             |_, _, _, _| {},
         )
@@ -902,6 +903,7 @@ mod tests {
             let artifact = download_snapshot_files(
                 &root,
                 &mut manifest,
+                None,
                 &AtomicBool::new(false),
                 |_, _, _, _| {},
             )
@@ -986,6 +988,7 @@ mod tests {
             let installed = download_snapshot_files(
                 &directory,
                 &mut manifest,
+                None,
                 &AtomicBool::new(false),
                 |_, _, _, _| {},
             )
@@ -1065,6 +1068,7 @@ mod tests {
         let artifact = download_snapshot_files(
             &directory,
             &mut manifest,
+            None,
             &AtomicBool::new(false),
             |_, _, _, _| {},
         )
@@ -1087,13 +1091,14 @@ mod tests {
         manifest.complete = false;
         let before = fs::read(directory.join(SNAPSHOT_MANIFEST)).unwrap();
         let cancel = AtomicBool::new(false);
-        let error = download_snapshot_files(&directory, &mut manifest, &cancel, |file, _, _, _| {
-            if file == "model.safetensors" {
-                cancel.store(true, Ordering::Release);
-            }
-        })
-        .await
-        .unwrap_err();
+        let error =
+            download_snapshot_files(&directory, &mut manifest, None, &cancel, |file, _, _, _| {
+                if file == "model.safetensors" {
+                    cancel.store(true, Ordering::Release);
+                }
+            })
+            .await
+            .unwrap_err();
         assert_eq!(error, DOWNLOAD_CANCELLED);
         assert_eq!(fs::read(directory.join(SNAPSHOT_MANIFEST)).unwrap(), before);
         assert!(
@@ -1107,6 +1112,7 @@ mod tests {
         let error = download_snapshot_files(
             &directory,
             &mut manifest,
+            None,
             &AtomicBool::new(false),
             |_, _, _, _| {},
         )

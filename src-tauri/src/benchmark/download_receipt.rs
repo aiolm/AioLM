@@ -7,9 +7,10 @@
 //! repository's artifact never inherits that repository's name.
 //!
 //! A receipt records the file stamp, so replacing or rewriting the file
-//! invalidates the claim, and holds only the public repository id and the
-//! repo-relative artifact path. The local path is never stored: it only names
-//! the receipt file, through a digest, exactly as the identity cache does.
+//! invalidates the claim, and holds only the public repository id, the
+//! repo-relative artifact path and, when one was checked, the published digest
+//! the bytes matched. The local path is never stored: it only names the
+//! receipt file, through a digest, exactly as the identity cache does.
 
 use super::identity::{stamp, Stamp};
 use serde::{Deserialize, Serialize};
@@ -18,8 +19,10 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// A receipt holds two short public strings; anything larger is not one.
+/// A receipt holds three short public strings; anything larger is not one.
 const MAX_RECEIPT_BYTES: u64 = 4 * 1024;
+/// Longest published digest: a prefixed SHA256 in hex.
+const MAX_DIGEST_CHARS: usize = 80;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct DownloadReceipt {
@@ -33,6 +36,10 @@ pub(crate) struct DownloadReceipt {
 struct StampedReceipt {
     stamp: Stamp,
     receipt: DownloadReceipt,
+    /// The published digest the bytes were checked against when they were
+    /// recorded. Receipts written before digests were kept have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    digest: Option<String>,
 }
 
 fn receipt_path(root: &Path, path: &Path) -> PathBuf {
@@ -42,19 +49,42 @@ fn receipt_path(root: &Path, path: &Path) -> PathBuf {
     ))
 }
 
-/// Records that `path` holds `artifact` as served by `repository`.
-///
-/// Both values are checked against the same rules the downloader applies to a
-/// repository id and a repository path, so a malformed claim is refused here
-/// rather than stored and filtered later.
+/// Records that `path` holds `artifact` as served by `repository`, with no
+/// digest. Production code always states whether one was checked.
+#[cfg(test)]
 pub(crate) fn record(
     root: &Path,
     path: &Path,
     repository: &str,
     artifact: &str,
 ) -> Result<(), String> {
+    record_verified(root, path, repository, artifact, None)
+}
+
+/// Records that `path` holds `artifact` as served by `repository`, and the
+/// published `digest` the bytes were just checked against, if any, so an
+/// unchanged file need not be hashed again.
+///
+/// Both names are checked against the same rules the downloader applies to a
+/// repository id and a repository path, so a malformed claim is refused here
+/// rather than stored and filtered later.
+pub(crate) fn record_verified(
+    root: &Path,
+    path: &Path,
+    repository: &str,
+    artifact: &str,
+    digest: Option<&str>,
+) -> Result<(), String> {
     crate::discover::validate_repo_id(repository)?;
     crate::discover::validate_repo_path(artifact)?;
+    if digest.is_some_and(|digest| {
+        digest.len() > MAX_DIGEST_CHARS
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b':')
+    }) {
+        return Err("a download receipt digest must be a short hex identity".into());
+    }
     let path = path
         .canonicalize()
         .map_err(|error| format!("cannot resolve the downloaded model: {error}"))?;
@@ -64,14 +94,14 @@ pub(crate) fn record(
             repository: repository.trim().to_owned(),
             artifact: artifact.trim().to_owned(),
         },
+        digest: digest.map(str::to_owned),
     })
     .map_err(|error| error.to_string())?;
     crate::config::atomic_write(&receipt_path(root, &path), &encoded)
 }
 
-/// The recorded origin of `path`, or `None` when there is none, the file has
-/// changed since, or the receipt cannot be read as one.
-pub(crate) fn read(root: &Path, path: &Path) -> Option<DownloadReceipt> {
+/// The receipt for `path` while the file is unchanged since it was written.
+fn current(root: &Path, path: &Path) -> Option<StampedReceipt> {
     let path = path.canonicalize().ok()?;
     let current = stamp(&path).ok()?;
     let mut bytes = Vec::new();
@@ -84,7 +114,18 @@ pub(crate) fn read(root: &Path, path: &Path) -> Option<DownloadReceipt> {
         return None;
     }
     let stamped: StampedReceipt = serde_json::from_slice(&bytes).ok()?;
-    (stamped.stamp == current).then_some(stamped.receipt)
+    (stamped.stamp == current).then_some(stamped)
+}
+
+/// The recorded origin of `path`, or `None` when there is none, the file has
+/// changed since, or the receipt cannot be read as one.
+pub(crate) fn read(root: &Path, path: &Path) -> Option<DownloadReceipt> {
+    current(root, path).map(|stamped| stamped.receipt)
+}
+
+/// The published digest `path` was checked against, while it is unchanged.
+pub(crate) fn verified_digest(root: &Path, path: &Path) -> Option<String> {
+    current(root, path).and_then(|stamped| stamped.digest)
 }
 
 #[cfg(test)]
@@ -133,6 +174,35 @@ mod tests {
         );
         fs::write(&fixture.model, b"different synthetic weights").unwrap();
         assert!(read(&fixture.root, &fixture.model).is_none());
+    }
+
+    #[test]
+    fn a_verified_digest_lasts_only_while_the_file_is_unchanged() {
+        let fixture = Fixture::new();
+        let repository = "synthetic-org/synthetic-model";
+        record(&fixture.root, &fixture.model, repository, "synthetic.gguf").unwrap();
+        assert_eq!(verified_digest(&fixture.root, &fixture.model), None);
+        let digest = "a".repeat(64);
+        record_verified(
+            &fixture.root,
+            &fixture.model,
+            repository,
+            "synthetic.gguf",
+            Some(&digest),
+        )
+        .unwrap();
+        assert_eq!(verified_digest(&fixture.root, &fixture.model), Some(digest));
+        assert!(read(&fixture.root, &fixture.model).is_some());
+        fs::write(&fixture.model, b"rewritten synthetic weights").unwrap();
+        assert_eq!(verified_digest(&fixture.root, &fixture.model), None);
+        assert!(record_verified(
+            &fixture.root,
+            &fixture.model,
+            repository,
+            "synthetic.gguf",
+            Some("not a digest")
+        )
+        .is_err());
     }
 
     #[test]

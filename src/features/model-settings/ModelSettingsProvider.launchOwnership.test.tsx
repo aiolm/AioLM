@@ -6,6 +6,7 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { createTestStore } from '../../testing/appStore';
 import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 // Compile the real lazy dependency before the interaction's ordinary DOM waits.
 import './ModelSettingsDialog';
 
@@ -71,7 +72,7 @@ function profileActions(editor: HTMLElement) {
 }
 
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
-afterEach(cleanup);
+afterEach(() => { cleanup(); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 it('keeps an unrelated save free of launch cancellation after another target is handed off', async () => {
   const store = targets();

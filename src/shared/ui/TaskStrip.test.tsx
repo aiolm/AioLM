@@ -227,7 +227,7 @@ describe("task cancellation ownership", () => {
     expect(document.querySelector("details.app-diagnostic-disclosure")).not.toBeInTheDocument();
   });
 
-  it("shows transferred bytes and speed while a download is running", () => {
+  it("shows transferred bytes, speed and time left while a download is running", () => {
     registerTask({
       id: "model-download",
       kind: "model-download",
@@ -241,8 +241,13 @@ describe("task cancellation ownership", () => {
     render(<View taskId="model-download" />);
     const transfer = screen.getByTestId("task-transfer-model-download").textContent ?? "";
     expect(transfer).toContain("/");
-    expect(transfer).toMatch(/\/s$/);
+    expect(transfer).toContain("/s");
+    // 1.5 GB left at 88 MB/s is 17.05 s, rounded up so it never reads as done early.
+    expect(transfer).toMatch(/· 18s left$/);
+    const left = (time: string) => `${time} left`;
+    // Before a rate is known there is no countdown to show.
+    expect(transferLabel({ ...getTaskSnapshot()[0], speedBps: undefined }, left)).not.toContain("left");
     // A task with no byte counts shows no transfer line at all.
-    expect(transferLabel({ ...getTaskSnapshot()[0], received: undefined })).toBeNull();
+    expect(transferLabel({ ...getTaskSnapshot()[0], received: undefined }, left)).toBeNull();
   });
 });

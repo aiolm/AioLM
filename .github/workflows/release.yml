@@ -738,32 +738,32 @@ jobs:
           body: |
             ## What's changed
 
-            - Refreshed desktop workspaces, conversation controls, model settings and the
-              theme-aware title strip. macOS keeps its native traffic lights; keyboard
-              navigation and compact-window actions remain clear of window controls.
-            - Fixed-output benchmarks use openai-chat-serving@2 and verify the exact selected
-              completion-token count for every request. Output choices are 1k, 4k, 8k, 16k,
-              32k, 64k, 128k and 200k (1k=1024). A declared force control and streamed usage
-              are required; unsupported targets are blocked before creating failed history.
-              Legacy cap-based results retain their original history, exports and sharing.
-            - Select individual Safetensors weight variants or shard groups together with
-              their required loading assets. Variant labels retain their repository-relative
-              names. Native Mistral/Llama tensors are not mistaken for HF/MLX weights by
-              renaming files; their archives remain intact with explicit compatibility limits.
-            - Downloaded models can check for updates and reuse unchanged files. Changed
-              single-file weights still require a full-file transfer.
-            - Project saving/importing and unrelated deletion preserve live conversation
-              instructions and tool selections. Saved-session startup can be cancelled from
-              Chat or Library without reporting ordinary cancellation as a failed request.
-            - Runtime removal explains the affected selections and distinguishes registration
-              removal from deleting an app-owned installation. Locked engine setup identifies
-              the responsible sessions and links to Library.
-            - Unloaded or unavailable MCP choices remain explicit and removable; only resolved
-              tools enter requests. Detailed guidance stays in the tool panel, keeping the
-              message composer and Send control visible in compact windows.
-            - Shared and AioLM-specific AGENTS.md sources can be selected independently.
-              Engine-specific option bounds, model setup guidance and failure recovery
-              preserve saved settings, conversations and completed snapshot files.
+            - Engine-folder discovery lists launchable commands instead of DLLs and support
+              files. Concise command/address labels resolve on startup without exposing
+              internal connection IDs or repetitive unknown-version metadata.
+            - External engines expose help-derived option controls and literal custom launch
+              arguments, with duplicate and app-managed flag protection. Flag names,
+              descriptions and inputs stay together in readable groups; attached servers
+              cannot be reconfigured through launch arguments.
+            - Closing model settings no longer cancels an ongoing load. Explicit cancellation
+              remains available. Startup avoids a redundant model load/unload cycle while
+              retaining model-identity and real serving checks before reporting readiness.
+            - Split GGUF models use one readable display name across selectors while preserving
+              actual shard paths and all required files.
+            - Model downloads show rate and time remaining and support pause/resume at the
+              original repository revision. Published digests validate complete resumed
+              files; files without a digest restart rather than append unverified bytes.
+              Zero-byte assets no longer block completion. Discarding a transfer removes
+              companion-file partials without deleting completed files. Engine installation
+              can run alongside downloads.
+            - Maximized windows use wider chat and workspaces. Settings, API and model options
+              gain responsive columns; complete option groups, compact-window scrolling and
+              model-settings footer actions remain usable at smaller sizes.
+            - Shared-memory GPU capacity accounting avoids overlapping memory pools, and
+              system-memory estimates and displayed byte units are consistent.
+            - Plain chat remains usable when an engine does not declare tool calling. Manual
+              skill invocation stays available; long catalog descriptions are shortened
+              without removing access to the full skill entry point.
 
             ## Packages and verification
 

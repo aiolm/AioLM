@@ -1,4 +1,5 @@
-import { providerDisplayName, type ProviderId } from '../../shared/api/providers';
+import type { ProviderId } from '../../shared/api/providers';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import type { OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -42,7 +43,8 @@ export default function RuntimeProfileValues({ settings, provider, prompt, mode,
   };
   const appKeys = (['request_timeout_seconds', 'sleep_idle_seconds'] as const).filter(key => settings[key] !== undefined);
   return <div className="settings-profile-values">
-    {showRuntime && <p><span>{providerDisplayName(provider)}</span>{(settings.active_runtime || selected && schema.runtime) && <> · <span>{settings.active_runtime || schema.runtime}</span></>}</p>}
+    {showRuntime && <p><RuntimeSelectionLabel config={{ ...settings, active_provider: provider,
+      active_runtime: settings.active_runtime ?? (selected ? schema.runtime : '') }} /></p>}
     {selected && schema.pending ? <p role="status">{copy.checking}</p>
       : !view ? <p role="status">{copy.unavailable} {selected && schema.runtime && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={schema.retry}>{copy.retry}</button>}</p>
         : !current ? <p role="status">{copy.stale}</p> : null}
@@ -50,11 +52,9 @@ export default function RuntimeProfileValues({ settings, provider, prompt, mode,
       <h4>{copy.options}</h4><p className="app-section-hint">{copy.declared}</p>
       <dl>{confirmed.map(key => {
         const option = known.get(key)!;
-        const fromHelp = view?.help_keys.includes(key);
         return <div key={key} className="settings-profile-value">
-          <dt><span>{name(option)}</span><small> · {option.target === 'request' ? optionsCopy.request : optionsCopy.launch}
-            {` · ${fromHelp ? optionsCopy.sourceHelp : optionsCopy.sourceAdapter}`}
-            {option.kind.certainty === 'unknown' ? ` · ${optionsCopy.unverifiedType}` : ''}</small></dt>
+          <dt><code className="schema-option__name">{name(option)}</code>
+            {option.target === 'request' && <span className="schema-option__facts">{optionsCopy.request}</span>}</dt>
           <dd>{shown(option)}</dd>
         </div>;
       })}</dl>

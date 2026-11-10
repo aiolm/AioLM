@@ -1317,8 +1317,17 @@ describe('saved names for running chat targets', () => {
     expect(mocked.sessionStart).not.toHaveBeenCalled();
   });
 
-  it.each(['openai/whisper-large-v3', 'acme/voice.gguf', 'acme/voice.bin', 'https://example.invalid/models/voice.bin'])(
-    'shortens explicit transcription paths while retaining native identifier %s', async modelId => {
+  it.each([
+    ['openai/whisper-large-v3', 'openai/whisper-large-v3'],
+    ['acme/voice.gguf', 'acme/voice.gguf'],
+    ['acme/voice.bin', 'acme/voice.bin'],
+    ['https://example.invalid/models/voice.bin', 'https://example.invalid/models/voice.bin'],
+    ['voice-00001-of-00004.gguf', 'voice.gguf'],
+    ['acme/voice-00001-of-00004.gguf', 'acme/voice.gguf'],
+    ['acme/voice-00005-of-00004.gguf', 'acme/voice-00005-of-00004.gguf'],
+    ['acme/voice-00001-of-00004.bin', 'acme/voice-00001-of-00004.bin'],
+  ])(
+    'groups transcription shards and shortens only explicit paths for %s', async (modelId, modelLabel) => {
     const localSaved = definition('speech-local', 'My local speech engine');
     const orgSaved = definition('speech-org', 'Cloud speech engine');
     mocked.sessionList.mockResolvedValue([
@@ -1327,13 +1336,13 @@ describe('saved names for running chat targets', () => {
         name: 'runtime-speech-file',
         state: 'running',
         port: 8093,
-        model: 'C:/models/whisper-large-v3.gguf',
+        model: 'C:/models/whisper-large-v3-00001-of-00004.gguf',
         url: 'http://127.0.0.1:8093',
         api_key: 'synthetic-speech-key',
         engine: {
           provider: 'custom.speech',
           runtime_id: 'synthetic-build',
-          upstream_model: 'C:/models/whisper-large-v3.gguf',
+          upstream_model: 'C:/models/whisper-large-v3-00001-of-00004.gguf',
           modalities: { text: false, image: false, audio: false, video: false },
           tasks: ['transcription'],
           request_fields: {},
@@ -1362,15 +1371,15 @@ describe('saved names for running chat targets', () => {
     const picker = await screen.findByLabelText("Session for converting audio to text");
     fireEvent.click(picker);
     const fileOption = await screen.findByRole('option', { name: 'My local speech engine · whisper-large-v3.gguf' });
-    expect(fileOption).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
-    const orgOption = await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` });
+    expect(fileOption).toHaveAttribute('title', 'C:/models/whisper-large-v3-00001-of-00004.gguf');
+    const orgOption = await screen.findByRole('option', { name: `Cloud speech engine · ${modelLabel}` });
     expect(orgOption).toBeInTheDocument();
     fireEvent.click(fileOption);
     expect(picker).toHaveTextContent('My local speech engine · whisper-large-v3.gguf');
-    expect(picker).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
+    expect(picker).toHaveAttribute('title', 'C:/models/whisper-large-v3-00001-of-00004.gguf');
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` }));
-    expect(picker).toHaveTextContent(`Cloud speech engine · ${modelId}`);
+    fireEvent.click(await screen.findByRole('option', { name: `Cloud speech engine · ${modelLabel}` }));
+    expect(picker).toHaveTextContent(`Cloud speech engine · ${modelLabel}`);
     expect(picker).not.toHaveAttribute('title');
     expect(mocked.sessionStart).not.toHaveBeenCalled();
     expect(mocked.chatStream).not.toHaveBeenCalled();

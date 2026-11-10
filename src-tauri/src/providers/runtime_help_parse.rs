@@ -255,11 +255,56 @@ fn arity_for_metavar(metavar: &str) -> Option<Arity> {
     None
 }
 
+/// clap prints `--name <ID> Description` with a single space when the spec is
+/// wider than its help column. An angle- or square-bracketed value name that
+/// is followed by one space and an alphanumeric word ends the spec there. Only
+/// text before the first wide gap is considered, so wrapped prose that merely
+/// mentions `<tags>` never moves a split chosen by the column gap.
+fn single_space_spec_end(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let wide = line
+        .find("  ")
+        .into_iter()
+        .chain(line.find('\t'))
+        .min()
+        .unwrap_or(line.len());
+    let mut depth = 0_i32;
+    let mut bracketed = false;
+    for (index, &byte) in bytes[..wide].iter().enumerate() {
+        match byte {
+            b'<' => {
+                depth += 1;
+                bracketed = true;
+            }
+            b'[' | b'{' => depth += 1,
+            b'>' | b']' | b'}' => depth -= 1,
+            b' ' if depth == 0
+                && bracketed
+                && index > 0
+                && matches!(bytes[index - 1], b'>' | b']')
+                && bytes.get(index + 1).is_some_and(u8::is_ascii_alphanumeric) =>
+            {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn split_spec_help(
     line: &str,
     group: &str,
     start_line: u32,
 ) -> (String, String, Option<PendingOption>) {
+    if let Some(end) = single_space_spec_end(line) {
+        let left = line[..end].trim_end();
+        if left.len() <= 1024 {
+            if let Some(parsed) = parse_option_spec(left, group, start_line) {
+                return (left.into(), line[end..].trim().into(), Some(parsed));
+            }
+        }
+    }
     // Help separates the flag spec from prose with two or more spaces, but the
     // same gap also separates aliases (`-t,    --threads N`). The boundary is
     // the first gap whose left side is a complete explicit option spec: an
@@ -516,17 +561,9 @@ fn parse_positional(
     })
 }
 
-/// Parse observed help output into a conservative option schema.
-///
-/// Every fact derived from help syntax carries a `Help` source with exact raw
-/// spans. Anything the syntax does not show stays `Unknown`: kinds for valued
-/// options, ranges, defaults, request fields and repeatability. A failed or
-/// truncated report never parses; callers must rediscover instead of reusing a
-/// static fallback as verified.
-pub fn parse_help_report(
-    report: &HelpReport,
-    binding: SchemaBinding,
-) -> Result<OptionSchema, String> {
+/// The complete help text and the stream it came from. Failed, truncated or
+/// lossy reports never parse, so callers cannot treat partial help as facts.
+fn complete_help_text(report: &HelpReport) -> Result<(&'static str, &str), String> {
     if report.stdout.decoding_loss || report.stderr.decoding_loss {
         return Err("help output is incomplete because decoding lost bytes; choose the engine's help encoding and discover again".into());
     }
@@ -546,23 +583,126 @@ pub fn parse_help_report(
     if report.identity.parser_version != PARSER_VERSION {
         return Err("help report uses an unsupported parser version".into());
     }
-    if binding.fingerprint != report.identity.fingerprint {
-        return Err("schema binding must match the discovered help fingerprint".into());
-    }
     let stdout_text = report.stdout.clean_text.as_str();
     let stderr_text = report.stderr.clean_text.as_str();
     // Complete help may live on either stream: some CLIs print `--help` to
     // stderr with an empty stdout. An empty stream never shadows a documented
     // one. Truncated/lossy/failed reports were rejected above, so the chosen
     // text is exact and every span below names its real source stream.
-    let (document, text): (&str, &str) =
-        if stdout_text.trim().is_empty() && !stderr_text.trim().is_empty() {
-            ("stderr", stderr_text)
-        } else {
-            ("stdout", stdout_text)
-        };
+    let (document, text) = if stdout_text.trim().is_empty() && !stderr_text.trim().is_empty() {
+        ("stderr", stderr_text)
+    } else {
+        ("stdout", stdout_text)
+    };
     if text.len() > 2 * 1024 * 1024 {
         return Err("help output exceeds its schema limit".into());
+    }
+    Ok((document, text))
+}
+
+/// One command row from a help section that lists commands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpSubcommand {
+    pub name: String,
+    pub summary: String,
+}
+
+const MAX_SUBCOMMANDS: usize = 64;
+
+fn subcommand_name(token: &str) -> bool {
+    (1..=64).contains(&token.len())
+        && token
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric())
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+}
+
+/// Commands a program documents under a header that names commands
+/// (`Commands:`, `Available Commands:`, `Subcommands:`). A row is its first
+/// word, then the summary after it; deeper lines wrap that summary. Options,
+/// usage lines and prose outside such a section are never command names.
+pub fn parse_subcommands(report: &HelpReport) -> Result<Vec<HelpSubcommand>, String> {
+    let (_, text) = complete_help_text(report)?;
+    let mut commands: Vec<HelpSubcommand> = Vec::new();
+    let mut header_indent: Option<usize> = None;
+    let mut row_indent: Option<usize> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if is_section_header(trimmed) {
+            let group = normalize_group(trimmed);
+            let lists_commands = group
+                .split_whitespace()
+                .any(|word| matches!(word, "commands" | "subcommands" | "sub-commands"));
+            header_indent = lists_commands.then_some(indent);
+            row_indent = None;
+            continue;
+        }
+        let Some(header) = header_indent else {
+            continue;
+        };
+        if indent <= header {
+            header_indent = None;
+            continue;
+        }
+        let row = *row_indent.get_or_insert(indent);
+        if indent > row {
+            if let Some(last) = commands.last_mut() {
+                if last.summary.len() + trimmed.len() < 1024 {
+                    if !last.summary.is_empty() {
+                        last.summary.push(' ');
+                    }
+                    last.summary.push_str(trimmed);
+                }
+            }
+            continue;
+        }
+        if indent < row {
+            header_indent = None;
+            continue;
+        }
+        let mut words = trimmed.splitn(2, char::is_whitespace);
+        let name = words.next().unwrap_or_default();
+        if !subcommand_name(name) || commands.iter().any(|command| command.name == name) {
+            continue;
+        }
+        if commands.len() == MAX_SUBCOMMANDS {
+            break;
+        }
+        commands.push(HelpSubcommand {
+            name: name.into(),
+            summary: words
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(512)
+                .collect(),
+        });
+    }
+    Ok(commands)
+}
+
+/// Parse observed help output into a conservative option schema.
+///
+/// Every fact derived from help syntax carries a `Help` source with exact raw
+/// spans. Anything the syntax does not show stays `Unknown`: kinds for valued
+/// options, ranges, defaults, request fields and repeatability. A failed or
+/// truncated report never parses; callers must rediscover instead of reusing a
+/// static fallback as verified.
+pub fn parse_help_report(
+    report: &HelpReport,
+    binding: SchemaBinding,
+) -> Result<OptionSchema, String> {
+    let (document, text) = complete_help_text(report)?;
+    if binding.fingerprint != report.identity.fingerprint {
+        return Err("schema binding must match the discovered help fingerprint".into());
     }
     let mut options: Vec<PendingOption> = Vec::new();
     let mut current_group = "runtime".to_string();
@@ -574,6 +714,9 @@ pub fn parse_help_report(
     let mut positional_slot: u16 = 0;
     let mut last_option: Option<usize> = None;
     let mut last_option_indent = 0;
+    // Where the long spelling starts on a `-m, --model` row. clap aligns
+    // long-only rows (`    --mmproj`) under it, deeper than the short row.
+    let mut last_option_long_column: Option<usize> = None;
     let mut end_of_options = Fact::default();
 
     for (index, line) in text.lines().enumerate() {
@@ -588,8 +731,15 @@ pub fn parse_help_report(
         // JSON, flag examples or `--`. Its deeper indent keeps that prose on
         // the option instead of inventing another option or positional slot.
         if let Some(idx) = last_option.filter(|_| indent > last_option_indent) {
-            options[idx].append_help(trimmed, line_no);
-            continue;
+            let aligned_option = last_option_long_column == Some(indent)
+                && trimmed.starts_with("--")
+                && split_spec_help(trimmed, &current_group, line_no)
+                    .2
+                    .is_some();
+            if !aligned_option {
+                options[idx].append_help(trimmed, line_no);
+                continue;
+            }
         }
         // A bare `--` line documents an explicitly supported delimiter.
         if trimmed == "--" {
@@ -661,6 +811,9 @@ pub fn parse_help_report(
                     options.push(pending);
                     last_option = Some(options.len() - 1);
                     last_option_indent = indent;
+                    last_option_long_column = (!trimmed.starts_with("--"))
+                        .then(|| spec.find(", --").map(|at| indent + at + 2))
+                        .flatten();
                 } else {
                     last_option = None;
                 }
@@ -684,6 +837,7 @@ pub fn parse_help_report(
                     options.push(pending);
                     last_option = Some(options.len() - 1);
                     last_option_indent = indent;
+                    last_option_long_column = None;
                 } else {
                     last_option = None;
                 }
@@ -2245,5 +2399,99 @@ mod tests {
         });
         let applied = apply_overlay(base, overlay).unwrap();
         assert!(applied.schema.constraints.is_empty());
+    }
+
+    /// Verbatim clap long-help layout: long-only rows align under the long
+    /// spelling of `-m, --model` rows, and wide specs use one space.
+    const CLAP_SERVE_HELP: &str = "Usage: engine serve text [OPTIONS]\n\nModel:\n  -m, --model <PATH>         Path to model file (required)\n      --sidecar <PATH>       Optional sidecar file\n      --served-model-name <ID> Model identifier exposed by the OpenAI API (repeatable; the first is primary)\n  -c, --context <N>          Context tokens per session\n\nServer:\n  -i, --host <IP>            Bind address\n  -p, --port <N>             Port to listen on\n  -j, --sessions <N>         Preallocated request sessions\n      --max-connections <N>  Maximum simultaneous HTTP connections\n      --reasoning-budget <N> Reasoning tokens before </think> is forced: -1 unlimited\n";
+
+    #[test]
+    fn clap_long_only_rows_and_single_space_specs_are_separate_one_value_options() {
+        let schema = parse(CLAP_SERVE_HELP);
+        let option = |flag: &str| {
+            schema
+                .options
+                .iter()
+                .find(|o| o.spellings.iter().any(|s| s.flag == flag))
+                .unwrap_or_else(|| panic!("{flag} was not parsed as its own option"))
+        };
+        for flag in [
+            "--model",
+            "--sidecar",
+            "--served-model-name",
+            "--context",
+            "--host",
+            "--port",
+            "--sessions",
+            "--max-connections",
+            "--reasoning-budget",
+        ] {
+            assert_eq!(
+                option(flag).arity.supported(),
+                Some(&Arity {
+                    min: 1,
+                    max: Some(1)
+                }),
+                "{flag}"
+            );
+        }
+        assert_eq!(option("--model").help, "Path to model file (required)");
+        assert_eq!(
+            option("--served-model-name").help,
+            "Model identifier exposed by the OpenAI API (repeatable; the first is primary)"
+        );
+        assert!(option("--reasoning-budget")
+            .help
+            .contains("</think> is forced"));
+    }
+
+    #[test]
+    fn subcommands_come_only_from_command_sections() {
+        let top = report("Usage: engine <COMMAND> [OPTIONS]\n\nCommands:\n  serve          Start the server\n  bench          Benchmark prompt processing and token\n                 generation\n  embedding Serve embeddings with a long name\n  help           Print help for a specific command\n\nRun 'engine help <COMMAND>' for details\n\nOptions:\n  -h, --help     Print help\n  --run-anything VALUE  not a command\n");
+        assert_eq!(
+            parse_subcommands(&top).unwrap(),
+            vec![
+                HelpSubcommand {
+                    name: "serve".into(),
+                    summary: "Start the server".into()
+                },
+                HelpSubcommand {
+                    name: "bench".into(),
+                    summary: "Benchmark prompt processing and token generation".into()
+                },
+                HelpSubcommand {
+                    name: "embedding".into(),
+                    summary: "Serve embeddings with a long name".into()
+                },
+                HelpSubcommand {
+                    name: "help".into(),
+                    summary: "Print help for a specific command".into()
+                },
+            ]
+        );
+        let cobra = report("Available Commands:\n  completion  Generate completion script\n  run         Run a model\n\nFlags:\n  -h, --help   help\n");
+        assert_eq!(
+            parse_subcommands(&cobra)
+                .unwrap()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["completion", "run"]
+        );
+        // Options, positional choice lists and prose never name commands.
+        for text in [
+            "Options:\n  --serve        start\n",
+            "positional arguments:\n  {serve,bench}\n    serve        start the server\n",
+            "serve   Start the server\n",
+            CLAP_SERVE_HELP,
+        ] {
+            assert!(
+                parse_subcommands(&report(text)).unwrap().is_empty(),
+                "{text}"
+            );
+        }
+        let mut failed = report("Commands:\n  serve  Start\n");
+        failed.success = false;
+        assert!(parse_subcommands(&failed).is_err());
     }
 }

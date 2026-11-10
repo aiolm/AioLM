@@ -162,11 +162,12 @@ describe('runtime model selection', () => {
       artifact,
       { ...artifact, name: 'custom-folder', path: '/synthetic/models/custom-folder' },
       { ...artifact, name: 'weights.Q4_K_M.gguf', format: 'gguf', repository: 'org/repository-name' },
+      { ...artifact, name: 'Synthetic-UD-Q4_K_XL-00001-of-00004.gguf', format: 'gguf', path: '/synthetic/models/Synthetic-UD-Q4_K_XL-00001-of-00004.gguf' },
       { ...artifact, repository: 'invalid/repository/extra' },
     ];
     vi.mocked(invoke).mockResolvedValue({ models: artifacts.map(value => ({ artifact: value, compatibility: [] })), truncated: false });
     const result = await listModelArtifacts('/synthetic/models');
-    expect(result.models.map(value => value.name)).toEqual(['synthetic-model', 'synthetic-mlx', revision, 'custom-folder', 'weights.Q4_K_M.gguf', revision]);
+    expect(result.models.map(value => value.name)).toEqual(['synthetic-model', 'synthetic-mlx', revision, 'custom-folder', 'weights.Q4_K_M.gguf', 'Synthetic-UD-Q4_K_XL.gguf', revision]);
   });
   it('labels the vllm-metal plugin and core versions while retaining the existing provider', () => {
     const runtime: RuntimeInstance = { provider: 'vllm', id: 'synthetic-metal', engine: 'vllm', server: 'vllm',

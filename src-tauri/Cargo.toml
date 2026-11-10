@@ -1,6 +1,6 @@
 [package]
 name = "aiolm"
-version = "0.4.0"
+version = "0.4.1"
 default-run = "aiolm"
 description = "AioLM: Tauri desktop manager for local inference runtimes"
 authors = ["aiolm contributors"]
@@ -127,6 +127,10 @@ tauri-build = { version = "2", features = ["codegen"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "~2.4"
+# Registers AioLM to start at login (Windows Run key, macOS LaunchAgent,
+# Linux XDG autostart entry); driven only from the app's own commands.
+# 2.5 is the last line that accepts the locked tauri 2.11.
+tauri-plugin-autostart = "~2.5"
 serde = { version = "1", features = ["derive"] }
 # Journal replay must preserve the exact observed f64, not a nearby parse.
 serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::{
     collections::BTreeSet,
     fs,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
@@ -24,6 +24,14 @@ const MAX_DEPTH: usize = 4;
 const MAX_COMMAND_BYTES: usize = 128 * 1024;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 const MAX_ARGUMENTS: usize = 256;
+/// Leading bytes read from every selected-folder file to recognize its format.
+const HEADER_PREFIX_BYTES: u64 = 512;
+/// Upper bound for any later header table read (PE header, ELF program
+/// headers, Mach-O slice header). Larger tables are left unproven.
+const MAX_IMAGE_TABLE_BYTES: usize = 256 * 1024;
+/// Fat Mach-O files list one slice per CPU type, far fewer than this. Java
+/// class files share the fat magic, but their version word is at least 45.
+const MAX_FAT_ARCHES: u32 = 30;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -288,12 +296,18 @@ pub fn discover(folder: Option<&Path>, cancel: &AtomicBool) -> Result<DiscoveryR
     cancelled(cancel)?;
     let mut report = DiscoveryReport::default();
     discover_processes(&mut report, cancel)?;
-    if let Some(folder) = folder {
-        discover_folder(folder, &mut report, cancel)?;
-    }
     report
         .candidates
         .sort_by(|a, b| a.display_name.cmp(&b.display_name).then(a.id.cmp(&b.id)));
+    if let Some(folder) = folder {
+        // A chosen folder is the user's explicit target: its ranked entries
+        // come first, and running servers follow within the same bound.
+        let processes = std::mem::take(&mut report.candidates);
+        discover_folder(folder, &mut report, cancel)?;
+        for process in processes {
+            push(&mut report, process);
+        }
+    }
     Ok(report)
 }
 
@@ -655,6 +669,188 @@ fn discover_processes(report: &mut DiscoveryReport, _: &AtomicBool) -> Result<()
     Ok(())
 }
 
+/// Header evidence about a native file found in a selected folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeImage {
+    /// The header declares a process image: a console PE program, a Mach-O
+    /// executable, or an ELF executable or PIE with a program interpreter.
+    Program,
+    /// It may still start, but the header does not prove it: a GUI or other
+    /// non-console PE subsystem, an ELF shared object without an interpreter
+    /// (a static PIE looks like this), or a header that could not be read.
+    Unproven,
+}
+
+fn u16_at(bytes: &[u8], offset: usize, big: bool) -> Option<u16> {
+    let raw = bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
+    Some(if big {
+        u16::from_be_bytes(raw)
+    } else {
+        u16::from_le_bytes(raw)
+    })
+}
+
+fn u32_at(bytes: &[u8], offset: usize, big: bool) -> Option<u32> {
+    let raw = bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+    Some(if big {
+        u32::from_be_bytes(raw)
+    } else {
+        u32::from_le_bytes(raw)
+    })
+}
+
+fn u64_at(bytes: &[u8], offset: usize, big: bool) -> Option<u64> {
+    let raw = bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
+    Some(if big {
+        u64::from_be_bytes(raw)
+    } else {
+        u64::from_le_bytes(raw)
+    })
+}
+
+fn read_table(file: &mut fs::File, offset: u64, size: usize) -> Option<Vec<u8>> {
+    if size > MAX_IMAGE_TABLE_BYTES {
+        return None;
+    }
+    let mut bytes = vec![0; size];
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    file.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Classifies a file by its executable-format header, never by its name.
+/// `None` means the header proves the file cannot be started as a process
+/// (a DLL, shared library, object file, core dump, GPU code object or Java
+/// class) or that it is not a native image at all. Uncertain headers stay
+/// listed as unproven.
+fn native_image(file: &mut fs::File, prefix: &[u8]) -> Option<NativeImage> {
+    if prefix.starts_with(b"MZ") {
+        pe_image(file, prefix)
+    } else if prefix.starts_with(b"\x7fELF") {
+        elf_image(file, prefix)
+    } else if prefix.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+        || prefix.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+    {
+        macho_image(macho_filetype(prefix))
+    } else if prefix.starts_with(&[0xca, 0xfe, 0xba, 0xbe]) {
+        fat_macho_image(file, prefix)
+    } else {
+        None
+    }
+}
+
+fn pe_image(file: &mut fs::File, prefix: &[u8]) -> Option<NativeImage> {
+    const IMAGE_FILE_DLL: u16 = 0x2000;
+    const IMAGE_SUBSYSTEM_WINDOWS_CUI: u16 = 3;
+    // Signature (4) + COFF header (20) + optional header through Subsystem (70).
+    let header = u32_at(prefix, 0x3c, false)
+        .and_then(|offset| read_table(file, offset.into(), 4 + 20 + 70))
+        .filter(|header| header.starts_with(b"PE\0\0"));
+    let Some(header) = header else {
+        return Some(NativeImage::Unproven);
+    };
+    if u16_at(&header, 22, false).is_some_and(|flags| flags & IMAGE_FILE_DLL != 0) {
+        return None;
+    }
+    let optional = matches!(u16_at(&header, 24, false), Some(0x10b | 0x20b));
+    if optional && u16_at(&header, 24 + 68, false) == Some(IMAGE_SUBSYSTEM_WINDOWS_CUI) {
+        Some(NativeImage::Program)
+    } else {
+        Some(NativeImage::Unproven)
+    }
+}
+
+fn elf_image(file: &mut fs::File, prefix: &[u8]) -> Option<NativeImage> {
+    const ET_REL: u16 = 1;
+    const ET_EXEC: u16 = 2;
+    const ET_DYN: u16 = 3;
+    const ET_CORE: u16 = 4;
+    // Accelerator code objects (GPU kernels loaded by a host runtime) share
+    // the ELF container but are never host processes.
+    const EM_CUDA: u16 = 190;
+    const EM_AMDGPU: u16 = 224;
+    let (wide, big) = match (prefix.get(4), prefix.get(5)) {
+        (Some(1), Some(1)) => (false, false),
+        (Some(1), Some(2)) => (false, true),
+        (Some(2), Some(1)) => (true, false),
+        (Some(2), Some(2)) => (true, true),
+        _ => return Some(NativeImage::Unproven),
+    };
+    if matches!(u16_at(prefix, 18, big), Some(EM_CUDA | EM_AMDGPU)) {
+        return None;
+    }
+    match u16_at(prefix, 16, big) {
+        Some(ET_REL | ET_CORE) => None,
+        Some(ET_EXEC) => Some(NativeImage::Program),
+        // Shared libraries and PIE programs are both ET_DYN. Only a program
+        // interpreter proves a program; a static PIE has none, so it stays.
+        Some(ET_DYN) if elf_has_interpreter(file, prefix, wide, big) => Some(NativeImage::Program),
+        _ => Some(NativeImage::Unproven),
+    }
+}
+
+fn elf_has_interpreter(file: &mut fs::File, prefix: &[u8], wide: bool, big: bool) -> bool {
+    const PT_INTERP: u32 = 3;
+    let (table, entry_size, count, minimum) = if wide {
+        (
+            u64_at(prefix, 32, big),
+            u16_at(prefix, 54, big),
+            u16_at(prefix, 56, big),
+            56,
+        )
+    } else {
+        (
+            u32_at(prefix, 28, big).map(u64::from),
+            u16_at(prefix, 42, big),
+            u16_at(prefix, 44, big),
+            32,
+        )
+    };
+    let (Some(table), Some(entry_size), Some(count)) = (table, entry_size, count) else {
+        return false;
+    };
+    let entry_size = usize::from(entry_size);
+    // PN_XNUM (0xffff) moves the real count elsewhere; leave that unproven.
+    if entry_size < minimum || count == 0 || count == u16::MAX {
+        return false;
+    }
+    read_table(file, table, entry_size * usize::from(count)).is_some_and(|headers| {
+        headers
+            .chunks_exact(entry_size)
+            .any(|entry| u32_at(entry, 0, big) == Some(PT_INTERP))
+    })
+}
+
+fn macho_filetype(header: &[u8]) -> Option<u32> {
+    let big = match header.get(..4)? {
+        [0xfe, 0xed, 0xfa, 0xce | 0xcf] => true,
+        [0xce | 0xcf, 0xfa, 0xed, 0xfe] => false,
+        _ => return None,
+    };
+    u32_at(header, 12, big)
+}
+
+fn macho_image(filetype: Option<u32>) -> Option<NativeImage> {
+    const MH_EXECUTE: u32 = 2;
+    match filetype {
+        Some(MH_EXECUTE) => Some(NativeImage::Program),
+        Some(_) => None,
+        None => Some(NativeImage::Unproven),
+    }
+}
+
+fn fat_macho_image(file: &mut fs::File, prefix: &[u8]) -> Option<NativeImage> {
+    match u32_at(prefix, 4, true) {
+        Some(1..=MAX_FAT_ARCHES) => {}
+        Some(_) => return None,
+        None => return Some(NativeImage::Unproven),
+    }
+    // Every slice of a universal binary has the same file type; the first
+    // slice header (offset field of the first fat_arch) decides.
+    let slice = u32_at(prefix, 16, true).and_then(|offset| read_table(file, offset.into(), 16));
+    macho_image(slice.as_deref().and_then(macho_filetype))
+}
+
 fn discover_folder(
     folder: &Path,
     report: &mut DiscoveryReport,
@@ -666,9 +862,14 @@ fn discover_folder(
     if !root.is_dir() {
         return Err("Select an existing installation folder.".into());
     }
+    // Every entry is ranked before publication so the bound keeps the most
+    // useful ones: (launch tier, folder depth, path). Tier 0 is a launchable
+    // proven program or executable script, tier 1 a launchable unproven image,
+    // tier 2 an entry that cannot be launched from here as it stands.
+    let mut found: Vec<(u8, usize, RuntimeCandidate)> = Vec::new();
     let mut pending = vec![(root.clone(), 0usize)];
     let mut count = 0;
-    while let Some((directory, depth)) = pending.pop() {
+    'scan: while let Some((directory, depth)) = pending.pop() {
         cancelled(cancel)?;
         let Ok(entries) = fs::read_dir(&directory) else {
             report
@@ -681,7 +882,7 @@ fn discover_folder(
             count += 1;
             if count > MAX_ENTRIES {
                 report.truncated = true;
-                return Ok(());
+                break 'scan;
             }
             let Ok(kind) = entry.file_type() else {
                 continue;
@@ -701,21 +902,20 @@ fn discover_folder(
                 continue;
             }
             let path = entry.path();
-            let mut prefix = vec![0; 512];
+            let mut prefix = Vec::new();
             let Ok(mut file) = fs::File::open(&path) else {
                 continue;
             };
-            let Ok(length) = file.read(&mut prefix) else {
+            if (&mut file)
+                .take(HEADER_PREFIX_BYTES)
+                .read_to_end(&mut prefix)
+                .is_err()
+            {
                 continue;
-            };
-            prefix.truncate(length);
-            let native = prefix.starts_with(b"\x7fELF")
-                || prefix.starts_with(b"MZ")
-                || prefix.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
-                || prefix.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
-                || prefix.starts_with(&[0xca, 0xfe, 0xba, 0xbe]);
+            }
+            let image = native_image(&mut file, &prefix);
             let script = prefix.starts_with(b"#!");
-            if native || script {
+            if image.is_some() || script {
                 let Some(program) = text_path(&path) else {
                     continue;
                 };
@@ -727,9 +927,11 @@ fn discover_folder(
                             .metadata()
                             .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
                     }
+                    // Windows starts only PE images; ELF and Mach-O files
+                    // found here belong to another host.
                     #[cfg(not(unix))]
                     {
-                        native
+                        image.is_some() && prefix.starts_with(b"MZ")
                     }
                 };
                 let command = executable.then_some(ObservedCommand {
@@ -742,7 +944,12 @@ fn discover_folder(
                         ArgvSource::ExecutableFile
                     },
                 });
-                push(report, candidate(DiscoverySource::SelectedFolder, text_path(&path), command, vec![], if script { EntrypointKind::Interpreter } else { EntrypointKind::Native }, None, vec!["Entry-point file only: arguments, host compatibility, protocol, model and lifecycle must be verified before launch.".into()]));
+                let tier = match (&command, image) {
+                    (None, _) => 2,
+                    (Some(_), Some(NativeImage::Unproven)) => 1,
+                    (Some(_), _) => 0,
+                };
+                found.push((tier, depth, candidate(DiscoverySource::SelectedFolder, text_path(&path), command, vec![], if script { EntrypointKind::Interpreter } else { EntrypointKind::Native }, None, vec!["Entry-point file only: arguments, host compatibility, protocol, model and lifecycle must be verified before launch.".into()])));
             } else if entry.file_name() == "config.json" {
                 // OCI is a public runtime contract, independent of any engine,
                 // implementation language or chosen container manager.
@@ -757,10 +964,21 @@ fn discover_folder(
                         .pointer("/process/args")
                         .is_some_and(serde_json::Value::is_array)
                 {
-                    push(report, candidate(DiscoverySource::SelectedFolder, text_path(&path), None, vec![], EntrypointKind::Container, None, vec!["OCI bundle found. A container manager and verified container lifecycle are required; container paths are not host executables.".into()]));
+                    found.push((2, depth, candidate(DiscoverySource::SelectedFolder, text_path(&path), None, vec![], EntrypointKind::Container, None, vec!["OCI bundle found. A container manager and verified container lifecycle are required; container paths are not host executables.".into()])));
                 }
             }
         }
+    }
+    found.sort_by(|(tier, depth, a), (other_tier, other_depth, b)| {
+        (tier, depth, &a.entrypoint_path, &a.id).cmp(&(
+            other_tier,
+            other_depth,
+            &b.entrypoint_path,
+            &b.id,
+        ))
+    });
+    for (_, _, value) in found {
+        push(report, value);
     }
     Ok(())
 }
@@ -899,6 +1117,131 @@ mod tests {
         discover_folder(&folder.0, &mut report, &AtomicBool::new(false)).unwrap();
         assert_eq!(report.candidates.len(), MAX_CANDIDATES);
         assert!(report.truncated);
+    }
+
+    fn pe(characteristics: u16, subsystem: u16) -> Vec<u8> {
+        let mut bytes = vec![0; 0x200];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x80 + 22..0x80 + 24].copy_from_slice(&characteristics.to_le_bytes());
+        bytes[0x80 + 24..0x80 + 26].copy_from_slice(&0x20bu16.to_le_bytes());
+        bytes[0x80 + 92..0x80 + 94].copy_from_slice(&subsystem.to_le_bytes());
+        bytes
+    }
+
+    fn elf(kind: u16, interpreter: bool) -> Vec<u8> {
+        let mut bytes = vec![0; 64 + 56];
+        bytes[..6].copy_from_slice(b"\x7fELF\x02\x01");
+        bytes[16..18].copy_from_slice(&kind.to_le_bytes());
+        bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+        bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&1u16.to_le_bytes());
+        let segment: u32 = if interpreter { 3 } else { 1 };
+        bytes[64..68].copy_from_slice(&segment.to_le_bytes());
+        bytes
+    }
+
+    fn macho(filetype: u32) -> Vec<u8> {
+        let mut bytes = vec![0; 32];
+        bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        bytes[12..16].copy_from_slice(&filetype.to_le_bytes());
+        bytes
+    }
+
+    fn fat(filetype: u32) -> Vec<u8> {
+        let mut bytes = vec![0; 64];
+        bytes[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        bytes[4..8].copy_from_slice(&1u32.to_be_bytes());
+        bytes[16..20].copy_from_slice(&64u32.to_be_bytes());
+        bytes.extend(macho(filetype));
+        bytes
+    }
+
+    fn found_names(report: &DiscoveryReport) -> Vec<String> {
+        report
+            .candidates
+            .iter()
+            .map(|c| c.display_name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn folder_scan_drops_only_files_whose_headers_prove_they_are_not_programs() {
+        let folder = Folder::new();
+        let mut gpu_kernel = elf(3, true);
+        gpu_kernel[18..20].copy_from_slice(&224u16.to_le_bytes());
+        // Names deliberately contradict the headers: only the header decides.
+        for (name, bytes) in [
+            ("server.exe", pe(0x2022, 3)),
+            ("helper.dll", pe(0x0022, 3)),
+            ("window", pe(0x0022, 2)),
+            ("truncated-pe", b"MZ".to_vec()),
+            ("object", elf(1, false)),
+            ("core", elf(4, false)),
+            ("plain", elf(2, false)),
+            ("pie", elf(3, true)),
+            ("static-pie.so", elf(3, false)),
+            ("library", macho(6)),
+            ("tool.dylib", macho(2)),
+            ("universal-library", fat(6)),
+            ("universal", fat(2)),
+            ("Main.class", vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52]),
+            ("kernel-launcher", gpu_kernel),
+        ] {
+            fs::write(folder.0.join(name), bytes).unwrap();
+        }
+        let mut report = DiscoveryReport::default();
+        discover_folder(&folder.0, &mut report, &AtomicBool::new(false)).unwrap();
+        let mut names = found_names(&report);
+        names.sort();
+        // GUI PE, unreadable PE and interpreter-less ELF stay listed: their
+        // headers do not prove they cannot start.
+        assert_eq!(
+            names,
+            [
+                "helper.dll",
+                "pie",
+                "plain",
+                "static-pie.so",
+                "tool.dylib",
+                "truncated-pe",
+                "universal",
+                "window"
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_entries_are_ranked_by_launchability_then_depth_then_path() {
+        let folder = Folder::new();
+        fs::create_dir(folder.0.join("nested")).unwrap();
+        for (name, bytes) in [
+            ("a-window", pe(0x0022, 2)),
+            ("nested/console", pe(0x0022, 3)),
+            ("z-console", pe(0x0022, 3)),
+        ] {
+            let path = folder.0.join(name);
+            fs::write(&path, bytes).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        fs::write(
+            folder.0.join("config.json"),
+            br#"{"ociVersion":"1.1.0","process":{"args":["/container-only/server"]}}"#,
+        )
+        .unwrap();
+        let mut report = DiscoveryReport::default();
+        discover_folder(&folder.0, &mut report, &AtomicBool::new(false)).unwrap();
+        // Proven programs first (shallower before deeper), then unproven
+        // launchable images, then entries that need other tooling to start.
+        assert_eq!(
+            found_names(&report),
+            ["z-console", "console", "a-window", "config.json"]
+        );
     }
 
     #[cfg(target_os = "linux")]

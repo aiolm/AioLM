@@ -32,11 +32,16 @@ export function snapshotModelName(value: string): string | undefined {
 export function modelDisplayName(value: string): string {
   const path = normalizeDisplayPath(value);
   const name = snapshotModelName(path) ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-  const shard = /^(.+)-(\d{5})-of-(\d{5})(\.gguf)?$/i.exec(name);
-  if (!shard) return name;
+  return stripModelShardSuffix(name);
+}
+
+/** Groups shard labels without treating namespaced model IDs as file paths. */
+export function stripModelShardSuffix(value: string): string {
+  const shard = /^(.+)-(\d{5})-of-(\d{5})(\.gguf)?$/i.exec(value);
+  if (!shard) return value;
   const index = Number(shard[2]);
   const total = Number(shard[3]);
-  return total > 1 && index > 0 && index <= total ? `${shard[1]}${shard[4] ?? ""}` : name;
+  return total > 1 && index > 0 && index <= total ? `${shard[1]}${shard[4] ?? ""}` : value;
 }
 
 /** Recognises explicit path syntax for display only. Bare relative strings and

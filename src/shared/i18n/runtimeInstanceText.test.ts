@@ -16,6 +16,29 @@ describe('runtime inventory wording', () => {
     expect(runtimeLabel(runtime)).toBe('1.2 (build-one) · unverified · external');
   });
 
+  it.each(['serve llm', 'http://127.0.0.1:8123/v1'])('names automatic connections by their command or endpoint: %s', connection_label => {
+    const connected = { ...runtime, id: 'connection-opaque', version: 'OpenAI v1; binary version unknown', connection_label };
+    const original = structuredClone(connected);
+    for (const locale of ['en', 'ko', 'ja', 'zh'] as const) {
+      expect(runtimeInstanceLabel(connected, locale)).toBe(connection_label);
+    }
+    expect(runtimeLabel(connected)).toBe(connection_label);
+    expect(connected).toEqual(original);
+  });
+
+  it('keeps automatic connections readable when their saved label is empty', () => {
+    const connected = { ...runtime, id: 'connection-opaque', connection_label: ' ' };
+    const labels = (['en', 'ko', 'ja', 'zh'] as const).map(locale => runtimeInstanceLabel(connected, locale));
+    for (const label of labels) {
+      expect(label.trim()).not.toBe('');
+      expect(label).not.toContain(connected.id);
+      expect(label).not.toContain(connected.version);
+      expect(label).not.toContain(' · ');
+    }
+    expect(new Set(labels).size).toBe(4);
+    expect(runtimeLabel(connected)).not.toContain(connected.id);
+  });
+
   it('preserves future adapter markers and different build identities', () => {
     const future = { ...runtime, accelerator: 'future-device', installation: 'future-installation' };
     expect(runtimeInstanceLabel(future, 'ja')).toContain('future-device · future-installation');

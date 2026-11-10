@@ -950,12 +950,46 @@ fn check_files(r: &Registration) -> Result<(), String> {
     {
         return Err("adapter executable changed; register the updated build explicitly".into());
     }
+    check_artifacts(r)
+}
+fn check_artifacts(r: &Registration) -> Result<(), String> {
     for (path, expected) in &r.artifacts_sha256 {
         if digest(Path::new(path))? != *expected {
             return Err("adapter artifact changed; register the updated build explicitly".into());
         }
     }
     Ok(())
+}
+
+/// Help may execute the underlying automatic engine, but never trusts a
+/// changed registration artifact or a caller-supplied replacement manifest.
+pub(crate) fn check_automatic_help_files(manifest: &RuntimeManifest) -> Result<(), String> {
+    let registration = read_registration(manifest.engine_id, &manifest.runtime_id)?;
+    if registration.manifest != *manifest
+        || !super::runtime_auto::is_owned_manifest(manifest)
+        || manifest.artifacts.len() != registration.artifacts_sha256.len()
+        || manifest
+            .artifacts
+            .iter()
+            .any(|path| !registration.artifacts_sha256.contains_key(path))
+    {
+        return Err(
+            "automatic connection artifact identity is incomplete; find the installation again"
+                .into(),
+        );
+    }
+    check_artifacts(&registration)
+}
+/// What the inventory reports. An automatic connection's helper is AioLM
+/// itself, so an app update replaces it; the next probe or launch adopts the
+/// running build after rechecking every engine and connection file
+/// (`refresh`). Only those engine-side files can make it unusable here.
+fn check_inventory_files(r: &Registration) -> Result<(), String> {
+    if super::runtime_auto::is_owned_manifest(&r.manifest) {
+        check_artifacts(r)
+    } else {
+        check_files(r)
+    }
 }
 fn fingerprint(model: &str) -> String {
     if model.is_empty() {
@@ -1014,6 +1048,9 @@ fn run_probe(
             &super::launch::served_model_name(&cfg.active_model),
         )?);
     }
+    if let Some(tail) = super::runtime_auto::resolved_option_transport(&root(), cfg, m)? {
+        command.args(tail);
+    }
     for (name, value) in &m.probe.env {
         command.env(
             name,
@@ -1046,7 +1083,7 @@ fn run_probe(
         &mut command,
         if super::runtime_auto::is_owned_manifest(m) {
             // The app-owned probe may load a model and test JSON plus SSE.
-            Duration::from_secs(240)
+            super::runtime_auto::OWNED_PROBE_TIMEOUT
         } else {
             Duration::from_secs(30)
         },
@@ -1061,14 +1098,17 @@ fn run_probe(
         }
     })?;
     if !output.status.success() {
+        // Engines log progress first and their failure last; keep the end.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let tail = stderr
+            .char_indices()
+            .rev()
+            .nth(2047)
+            .map_or(stderr, |(start, _)| &stderr[start..]);
         return Err(format!(
-            "adapter probe exited unsuccessfully ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(2048)
-                .collect::<String>()
-                .trim()
+            "adapter probe exited unsuccessfully ({}): {tail}",
+            output.status
         ));
     }
     let probe: ProbeResult = serde_json::from_slice(&output.stdout)
@@ -1208,43 +1248,89 @@ pub async fn register_manifest(
     }
     Ok(r.manifest)
 }
+fn prepare_owned_helper(
+    r: &mut Registration,
+    cfg: &AppConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    if r.manifest.artifacts.len() != r.artifacts_sha256.len()
+        || r.manifest
+            .artifacts
+            .iter()
+            .any(|path| !r.artifacts_sha256.contains_key(path))
+    {
+        return Err(
+            "automatic connection artifact identity is incomplete; find the installation again"
+                .into(),
+        );
+    }
+    check_artifacts(r)?;
+    let helper = std::env::current_exe().map_err(|e| e.to_string())?;
+    let hash = digest(&helper)?;
+    if r.manifest.launch.program != helper.to_string_lossy()
+        || r.executable_sha256 != hash
+        || r.probe_sha256 != hash
+    {
+        r.manifest.launch.program = helper.to_string_lossy().into_owned();
+        r.manifest.probe.program = r.manifest.launch.program.clone();
+        r.executable_sha256 = hash.clone();
+        r.probe_sha256 = hash;
+        save(r)?;
+    }
+    super::runtime_schema::ensure_automatic_help(
+        &root(),
+        cfg,
+        &r.manifest,
+        cancel.unwrap_or(&AtomicBool::new(false)),
+    )?;
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err("server start cancelled".into());
+    }
+    Ok(())
+}
+
+/// A known automatic model is verified in its actual serving process, before
+/// the proxy becomes ready. Do not load and unload it merely for preflight.
+/// This does not publish a fresh probe for changed options.
+pub(crate) fn prepare_automatic_launch(
+    cfg: &AppConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<bool, String> {
+    if !super::provider_of(cfg).is_custom() {
+        return Ok(false);
+    }
+    let mut r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
+    if !super::runtime_auto::is_owned_manifest(&r.manifest) {
+        return Ok(false);
+    }
+    prepare_owned_helper(&mut r, cfg, cancel)?;
+    if !r.probe.as_ref().is_some_and(|probe| {
+        probe.model_supported && probe.model == cfg.active_model && !cfg.active_model.is_empty()
+    }) || r.model_fingerprint != fingerprint(&cfg.active_model)
+    {
+        return Ok(false);
+    }
+    super::runtime_auto::resolved_option_transport(&root(), cfg, &r.manifest)?;
+    Ok(true)
+}
+
 pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result<(), String> {
     let mut r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
     if super::runtime_auto::is_owned_manifest(&r.manifest) {
-        // The helper belongs to this running app/CLI, not the engine. A normal
-        // app update may replace it. Retain and verify every engine/spec hash,
-        // then run a fresh model probe through the current trusted executable.
-        if r.manifest.artifacts.len() != r.artifacts_sha256.len()
-            || r.manifest
-                .artifacts
-                .iter()
-                .any(|path| !r.artifacts_sha256.contains_key(path))
-        {
-            return Err(
-                "automatic connection artifact identity is incomplete; find the installation again"
-                    .into(),
-            );
-        }
-        for (path, expected) in &r.artifacts_sha256 {
-            if digest(Path::new(path))? != *expected {
-                return Err(
-                    "adapter artifact changed; register the updated build explicitly".into(),
-                );
-            }
-        }
-        let helper = std::env::current_exe().map_err(|e| e.to_string())?;
-        let hash = digest(&helper)?;
-        if r.manifest.launch.program != helper.to_string_lossy()
-            || r.executable_sha256 != hash
-            || r.probe_sha256 != hash
-        {
-            r.manifest.launch.program = helper.to_string_lossy().into_owned();
-            r.manifest.probe.program = r.manifest.launch.program.clone();
-            r.executable_sha256 = hash.clone();
-            r.probe_sha256 = hash;
-            r.probe = None;
-            r.model_fingerprint.clear();
-            r.launch_fingerprint.clear();
+        prepare_owned_helper(&mut r, cfg, cancel.as_deref())?;
+        // This probe starts the engine and loads the whole model only to
+        // check chat and streaming, which the launch helper repeats every time
+        // it serves. A successful probe of this exact model file through this
+        // helper is reused, so a start (or a compatibility check) does not load
+        // the model twice and leave GPU memory filling and emptying.
+        if let Some(probe) = r.probe.clone().filter(|probe| {
+            !cfg.active_model.is_empty()
+                && probe.model_supported
+                && probe.model == cfg.active_model
+                && r.model_fingerprint == fingerprint(&cfg.active_model)
+                && r.launch_fingerprint == launch_fingerprint(&r.manifest, cfg)
+        }) {
+            return store_model_probe(&r, cfg, Ok(probe));
         }
     }
     let copy = r.clone();
@@ -1384,7 +1470,7 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
         .into_iter()
         .map(|r| {
             let mut problems = Vec::new();
-            if let Err(e) = check_files(&r) {
+            if let Err(e) = check_inventory_files(&r) {
                 problems.push(e);
             }
             if let Some(e) = r.error {
@@ -1398,6 +1484,7 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
             {
                 problems.push("unsupported OS/architecture".into());
             }
+            let presentation = super::runtime_auto::connection_presentation(&r.manifest);
             super::RuntimeInstance {
                 provider: r.manifest.engine_id,
                 id: r.manifest.runtime_id,
@@ -1406,13 +1493,14 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
                 version: r.probe.as_ref().map(|p| p.version.clone()),
                 variant: None,
                 plugin_version: None,
+                connection_label: presentation.as_ref().map(|(label, _)| label.clone()),
                 accelerator: r
                     .probe
                     .as_ref()
                     .map(|p| p.accelerator.clone())
                     .unwrap_or_default(),
                 installation: "external",
-                location: r.manifest.launch.program,
+                location: presentation.map_or(r.manifest.launch.program, |(_, location)| location),
                 available: problems.is_empty() && r.probe.is_some(),
                 problems,
                 backend: None,
@@ -1461,7 +1549,12 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             if let Some(error) = &r.error {
                 return Err(error.clone());
             }
-            if r.launch_fingerprint != launch_fingerprint(&r.manifest, cfg) {
+            // Automatic helpers verify these settings on the actual serving
+            // process before readiness. This metadata is prior model evidence,
+            // not a claim that changed launch options have already run.
+            if !super::runtime_auto::is_owned_manifest(&r.manifest)
+                && r.launch_fingerprint != launch_fingerprint(&r.manifest, cfg)
+            {
                 return Err("selected model requires a fresh adapter probe".into());
             }
             (
@@ -1556,10 +1649,15 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
     // Manifest options and options only the runtime's accepted help
     // describes resolve together through the common schema; unknown keys block
     // launch with their values retained.
-    if m.command_layout.is_some() {
-        args = super::runtime_schema::assemble_registered_arguments(&root(), cfg, &m, &args)?;
+    if let Some(tail) = super::runtime_auto::resolved_option_transport(&root(), cfg, &m)? {
+        args.extend(tail);
     } else {
-        args = super::runtime_schema::registered_arguments(&root(), cfg, &m, &args)?;
+        if m.command_layout.is_some() {
+            args = super::runtime_schema::assemble_registered_arguments(&root(), cfg, &m, &args)?;
+        } else {
+            args = super::runtime_schema::registered_arguments(&root(), cfg, &m, &args)?;
+        }
+        args.extend(super::runtime_schema::additional_launch_args(&root(), cfg)?);
     }
     let mut env = m
         .launch
@@ -1699,6 +1797,13 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
         .join(" ");
     let help = super::runtime_schema::launch_identity(&root(), cfg, &manifest_keys(manifest));
     let mut binding = serde_json::json!({"options":values,"help":help,"context":templates.contains("{ctx_size}").then_some(cfg.ctx_size),"parallel":templates.contains("{parallel}").then_some(cfg.parallel)});
+    if let Some(raw) = cfg
+        .provider_options
+        .get(&cfg.active_provider)
+        .and_then(|values| values.get(super::options::EXTRA_ARGS_KEY))
+    {
+        binding["extra_args"] = raw.clone();
+    }
     if let Some(launch_bindings) = &manifest.launch_bindings {
         binding["launch_bindings"] =
             serde_json::to_value(launch_bindings).expect("serializable bindings");
@@ -1766,7 +1871,7 @@ fn model_bindings(
             let path = Path::new(&model.path);
             if let Ok(mut artifact) = super::execution::inspect(path) {
                 if artifact.format != super::artifacts::ArtifactFormat::Unknown {
-                    artifact.name = model.name;
+                    artifact.name = crate::models::grouped_shard_name(&model.name);
                     models.push(artifact);
                     continue;
                 }
@@ -3049,6 +3154,19 @@ mod tests {
         assert_eq!(
             launch_fingerprint(&manifest, &cfg),
             launch_fingerprint(&manifest, &request_changed)
+        );
+        let mut raw_changed = cfg.clone();
+        raw_changed
+            .provider_options
+            .get_mut("custom.example")
+            .unwrap()
+            .insert(
+                "extra_args".into(),
+                serde_json::json!(["--undocumented-cache", "small"]),
+            );
+        assert_ne!(
+            launch_fingerprint(&manifest, &cfg),
+            launch_fingerprint(&manifest, &raw_changed)
         );
         request_changed
             .provider_options

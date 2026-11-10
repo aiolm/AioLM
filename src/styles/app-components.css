@@ -68,6 +68,16 @@
 .app-input::placeholder, .app-textarea::placeholder { color: var(--ui-muted); opacity: 1; }
 /* Native number spinners stay visible so a filled value keeps its stepper. */
 .app-input[type="number"]::-webkit-inner-spin-button, .app-input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
+/* A visible boundary keeps each name, description and control in one option. */
+.schema-option-form { container: schema-options / inline-size; }
+.schema-option-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; min-inline-size: 0; }
+.schema-option-grid > * { min-inline-size: 0; }
+.schema-option { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.schema-option > legend { max-inline-size: 100%; padding: 0; }
+.schema-option__name { display: block; min-width: 0; color: var(--ui-ink); font-family: var(--font-mono); font-size: max(1rem, var(--ui-text)); font-weight: 650; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.schema-option__facts { display: block; margin: 0; color: var(--ui-muted); font-size: max(.875rem, var(--ui-text)); font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.schema-option :is(.app-section-hint, small) { margin: 0; color: var(--ui-muted); font-size: max(.875rem, var(--ui-text)); line-height: 1.5; }
+.schema-option .app-section-hint { max-inline-size: 80ch; }
 .app-tab-list { display: flex; gap: 4px; min-width: 0; }
 .app-tab-list[aria-orientation="vertical"] { flex-direction: column; }
 .app-tab, .app-nav-item { display: inline-flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); border: 1px solid transparent; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-muted); font-size: var(--ui-text); font-weight: 500; line-height: 1.5; text-align: start; }
