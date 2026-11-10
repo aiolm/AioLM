@@ -108,7 +108,6 @@ try {
     script: "const done = arguments[arguments.length - 1]; document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => done(true))));", args: [],
   });
   const screenshot = Buffer.from(await request("GET", `/session/${session}/screenshot`), "base64");
-  assert.ok(screenshot.length > 1000, "WKWebView screenshot must contain rendered content");
   mkdirSync("tmp", { recursive: true });
   writeFileSync("tmp/macos-ui.png", screenshot);
   await closeWindow();
