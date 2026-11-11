@@ -738,32 +738,32 @@ jobs:
           body: |
             ## What's changed
 
-            - Engine-folder discovery lists launchable commands instead of DLLs and support
-              files. Concise command/address labels resolve on startup without exposing
-              internal connection IDs or repetitive unknown-version metadata.
-            - External engines expose help-derived option controls and literal custom launch
-              arguments, with duplicate and app-managed flag protection. Flag names,
-              descriptions and inputs stay together in readable groups; attached servers
-              cannot be reconfigured through launch arguments.
-            - Closing model settings no longer cancels an ongoing load. Explicit cancellation
-              remains available. Startup avoids a redundant model load/unload cycle while
-              retaining model-identity and real serving checks before reporting readiness.
-            - Split GGUF models use one readable display name across selectors while preserving
-              actual shard paths and all required files.
-            - Model downloads show rate and time remaining and support pause/resume at the
-              original repository revision. Published digests validate complete resumed
-              files; files without a digest restart rather than append unverified bytes.
-              Zero-byte assets no longer block completion. Discarding a transfer removes
-              companion-file partials without deleting completed files. Engine installation
-              can run alongside downloads.
-            - Maximized windows use wider chat and workspaces. Settings, API and model options
-              gain responsive columns; complete option groups, compact-window scrolling and
-              model-settings footer actions remain usable at smaller sizes.
-            - Shared-memory GPU capacity accounting avoids overlapping memory pools, and
-              system-memory estimates and displayed byte units are consistent.
-            - Plain chat remains usable when an engine does not declare tool calling. Manual
-              skill invocation stays available; long catalog descriptions are shortened
-              without removing access to the full skill entry point.
+            - Available installed runtimes are selected automatically. Runtime version labels
+              describe installed or registered executables rather than uninstalled catalog entries.
+            - Save profile and start accepts the saved configuration, then closes the editor
+              before engine/model checks and loading finish. A dedicated background task shows
+              the current stage, explicit cancellation and saved-settings recovery on failure.
+              Unknown loading progress remains indeterminate rather than showing a guessed percentage.
+            - Launch cancellation follows the original operation and native process generation.
+              Late cancellation cannot stop a replacement model, and loading preserves its
+              captured settings and session-replacement policy without overwriting later edits.
+            - Runtime inventory no longer exposes redundant manual capability checks.
+              Automatic installation, registration, settings and launch checks remain in place.
+            - Execution options use responsive columns, primary CLI flag names and secondary
+              translated meanings. Compound editors retain full width, and command/help tools
+              are grouped away from routine controls.
+            - Stale runtime options offer an inline recheck, explicit review and acceptance,
+              and retry after a failed lookup. Read-only defaults do not duplicate those controls.
+              Accepting refreshed options rechecks benchmark readiness without starting a run.
+            - Switching engines keeps drafts and compares saves against stored values.
+              Profile rename, deletion and restore preserve the selected engine, runtime, model
+              and workflow step. Additional generation controls and raw request JSON stay synchronized.
+            - MCP executable paths retain spaces while typing. Creating or switching server
+              definitions protects unsaved drafts with explicit keep-editing or discard actions.
+            - Tool approvals, streaming state, errors and context warnings stay with their
+              conversation. Browsing another conversation provides a visible return-to-owner action.
+            - Failed background work remains visible. Repository-file inspection can be retried
+              in place, and revealing matching supporting model files preserves search and engine filters.
 
             ## Packages and verification
 

@@ -10,7 +10,8 @@ pub const MEDIA_SOURCE_SHA256: &str =
     "d03b8894026cf212973095b2182347f621c035c7061b3b0547d35c54179e7045";
 pub const MLX_VERSION: &str = "0.32.1";
 pub const MLX_LM_COMMIT: &str = "9e6acca691e64d6d8bb808c328fcdea459099cca";
-pub const REQUIREMENTS: &str = "vllm-metal requires Apple Silicon macOS 15 or later and native arm64 CPython 3.12.";
+pub const REQUIREMENTS: &str =
+    "vllm-metal requires Apple Silicon macOS 15 or later and native arm64 CPython 3.12.";
 
 // Hash fragments make pip verify the release asset bytes, even if a tag's
 // downloadable assets are replaced later. Both digests are release API metadata.
