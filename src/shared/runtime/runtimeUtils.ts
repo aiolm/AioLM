@@ -1,8 +1,6 @@
 import { formatRuntimeVersionLabel } from "@aiolm/benchmark-contracts";
 import type { LegacyPerformanceBenchmarkResult } from '../api/types.ts';
 
-export type CapabilityState = "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
-
 export interface LoadingProfile {
   id: string;
   name: string;
@@ -66,25 +64,6 @@ export function extractFlagNames(help: string): string[] {
 
 export function parseDeviceLines(output: string): string[] {
   return output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && line.length <= 256).slice(0, 100);
-}
-
-/** Count the indexed entries in llama.cpp's device list, retaining raw probe output separately. */
-export function countRuntimeDeviceEntries(lines: readonly string[]): number {
-  const ids = lines.flatMap(line => {
-    const id = line.trim().match(/^([A-Za-z][A-Za-z0-9_-]*\d+):\s+\S/)?.[1];
-    return id ? [id] : [];
-  });
-  return new Set(ids).size;
-}
-
-export function capabilityLabel(state: CapabilityState): string {
-  switch (state) {
-    case "available": return "Available";
-    case "failed preflight": return "Preflight failed";
-    case "not installed": return "Not installed";
-    case "unsupported by this runtime build": return "Unsupported by build";
-    default: return "Unknown";
-  }
 }
 
 function profileString(value: unknown, max = 512): value is string {

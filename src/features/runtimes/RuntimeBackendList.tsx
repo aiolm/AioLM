@@ -14,12 +14,9 @@ interface Props {
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
-  probeBusy: boolean;
-  probeTarget: { backend: string; build: string } | null;
   onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;
-  onProbe: (backend: string, build: string) => void;
   onUninstall: (backend: string, build: string) => void;
 }
 

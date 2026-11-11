@@ -18,9 +18,8 @@ import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, 
 /** Owns all Runtimes panel state: backend catalog rows, device detection, the
  * two-step pull-request build flow, portable bundle import/export, and the native install-progress subscription.
  *
- * The panel manages installed builds and nothing else: it probes exactly the
- * build the user asks about and never reads the execution configuration, which
- * belongs to the profile a model is launched with. */
+ * The panel manages installed builds and never reads the execution configuration,
+ * which belongs to the profile a model is launched with. */
 export function useRuntimesController(store: AppStore, active: boolean, native = true) {
   const { locale, t } = useI18n();
   const [rows, setRows] = useState<BackendRow[]>(initialRows);
@@ -29,11 +28,6 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   // read a preflight diagnostic, let alone act on it.
   const [failure, setFailure] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [capabilities, setCapabilities] = useState<api.RuntimeCapabilities | null>(null);
-  // The build the shown capabilities describe, so the card never reports one
-  // build's flags under another build's name.
-  const [probeTarget, setProbeTarget] = useState<{ backend: string; build: string } | null>(null);
-  const [probeBusy, setProbeBusy] = useState(false);
   const [prBackend, setPrBackend] = useState(() => defaultPrBackendForDevice(null));
   const [prSource, setPrSource] = useState("");
   const [prBusy, setPrBusy] = useState(false);
@@ -53,7 +47,6 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const [showAll, setShowAll] = useState(readShowAll);
   const unsubRef = useRef<(() => void) | null>(null);
   const refreshGeneration = useRef(0);
-  const probeGeneration = useRef(0);
   const prBackendTouched = useRef(false);
   const [sessionsInUse, setSessionsInUse] = useState<api.SessionSummary[]>([]);
   const transitionInProgress = useSessionTransitionInProgress();
@@ -65,33 +58,6 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const ownedRuntimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
   const runtimeBusy = ownedRuntimeBusy
     || tasks.some(task => task.id === 'runtime-operation' && (task.state === 'running' || task.state === 'cancelling'));
-
-  // A probe names the build it describes, so a later one always wins and a
-  // result can never be read as belonging to a different build.
-  const probe = useCallback(async (backend: string, build: string) => {
-    const generation = ++probeGeneration.current;
-    setProbeTarget({ backend, build });
-    setProbeBusy(true);
-    try {
-      const result = await api.rtProbe(backend, build);
-      if (generation !== probeGeneration.current) return;
-      setCapabilities(result);
-      setLoadError(null);
-    } catch (error) {
-      if (generation !== probeGeneration.current) return;
-      setCapabilities(null);
-      setLoadError(`${t("ui.preflightFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      if (generation === probeGeneration.current) setProbeBusy(false);
-    }
-  }, [t]);
-
-  // Leaving the panel abandons an in-flight probe rather than applying its
-  // result to a card the user is no longer looking at.
-  useEffect(() => {
-    if (!active) setProbeBusy(false);
-    return () => { probeGeneration.current += 1; };
-  }, [active]);
 
   const fail = (label: string, error: unknown) => {
     setFailure(`${label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -286,12 +252,12 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   };
 
   return {
-    locale, rows, flash, flashT, failure, setFailure, loadError, capabilities, probeBusy,
+    locale, rows, flash, flashT, failure, setFailure, loadError,
     prBackend, setPrBackend, prBackendTouched,
     prSource, setPrSource, prBusy, bundleBusy, bundleProgress, activePrBackend, prReviewBusy,
     prPreview, setPrPreview, pendingUninstall, setPendingUninstall, uninstallBusy, cancelBusy,
-    device, showAll, toggleShowAll, probeTarget, serverRunning, sessionsInUse, runtimeBusy, ownedRuntimeBusy,
-    probe, refresh,
+    device, showAll, toggleShowAll, serverRunning, sessionsInUse, runtimeBusy, ownedRuntimeBusy,
+    refresh,
     cancelInstall, exportRuntime, importRuntime, install,
     reviewPullRequest, installPullRequest, uninstall, confirmUninstall,
   };

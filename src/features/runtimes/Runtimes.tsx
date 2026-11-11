@@ -13,7 +13,6 @@ import { adapterCatalogCopy, fillAdapterCopy } from '../../shared/i18n/adapterCa
 import { useRuntimesController } from "./useRuntimesController";
 import { computeVisibleRows, deviceSummaryOf } from "./runtimeRowPresentation";
 import RuntimeDeviceCard from "./RuntimeDeviceCard";
-import RuntimeCapabilitiesCard from "./RuntimeCapabilitiesCard";
 import RuntimePullRequestCard from "./RuntimePullRequestCard";
 import RuntimePortableBundle from "./RuntimePortableBundle";
 import RuntimeBackendList from "./RuntimeBackendList";
@@ -80,7 +79,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
-  const busy = rt.ownedRuntimeBusy || rt.probeBusy || providerBusy || adapterBusy;
+  const busy = rt.ownedRuntimeBusy || providerBusy || adapterBusy;
   const operationBusy = busy || rt.prReviewBusy || rt.uninstallBusy || rt.cancelBusy;
   useEffect(() => { onBusyChange?.(operationBusy); }, [operationBusy, onBusyChange]);
   const inventoryRevision = useRuntimeInventoryRevision();
@@ -272,24 +271,15 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
             prBusy={rt.prBusy}
             bundleBusy={rt.bundleBusy}
             cancelBusy={rt.cancelBusy}
-            probeBusy={rt.probeBusy}
-            probeTarget={rt.probeTarget}
             onBlockedAction={(msg) => rt.setFailure(msg)}
             onCancelInstall={() => void rt.cancelInstall()}
             onInstall={(backend) => void rt.install(backend)}
-            onProbe={(backend, build) => void rt.probe(backend, build)}
             onUninstall={(backend, build) => void rt.uninstall(backend, build)}
           />
 
           <details className="runtime-advanced">
             <summary>{t("settings.advanced")}</summary>
             <div className="runtime-advanced__body">
-              <RuntimeCapabilitiesCard
-                locale={locale}
-                t={t}
-                capabilities={rt.capabilities}
-                probeTarget={rt.probeTarget}
-              />
               <RuntimePullRequestCard
                 t={t}
                 prBackend={rt.prBackend}

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { translate, type UnifiedKey, type TranslationVars } from "../../shared/i18n/i18nUnified";
-import type { RuntimeCapabilities, PullRequestPreview } from "../../shared/api/types";
-import RuntimeCapabilitiesCard from "./RuntimeCapabilitiesCard";
+import type { PullRequestPreview } from "../../shared/api/types";
 import RuntimePullRequestProvenance from "./RuntimePullRequestProvenance";
 
 const path = String.raw`\\?\C:\runtimes\llama-server.exe`;
@@ -34,22 +33,6 @@ describe("runtime path presentation", () => {
     expect(container).toHaveTextContent(String.raw`Cannot write C:\runtimes\llama-server.exe`);
     expectReadableMarkup(container);
     expect(preview.title).toBe(`Fix loading ${networkPath}`);
-  });
-
-  it("cleans runtime output, expanded diagnostics and tooltips without changing the probe result", () => {
-    const capabilities: RuntimeCapabilities = {
-      backend: "cpu", build: "b123", executable: path, state: "available",
-      version: `loaded ${path}`, flags: [`--model=${networkPath}`],
-      devices: [`plugin ${path}`], diagnostics: [`Failed to open ${path}`, JSON.stringify({ path: networkPath })],
-    };
-    const original = structuredClone(capabilities);
-    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeTarget={{ backend: "cpu", build: "b123" }} />);
-
-    fireEvent.click(container.querySelector("summary")!);
-    expect(container.querySelector("pre")).toHaveTextContent(String.raw`Failed to open C:\runtimes\llama-server.exe`);
-    expect(screen.getByText(`--model=${displayNetworkPath}`)).toBeInTheDocument();
-    expectReadableMarkup(container);
-    expect(capabilities).toEqual(original);
   });
 
 });

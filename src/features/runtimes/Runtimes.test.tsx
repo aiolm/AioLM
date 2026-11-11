@@ -32,7 +32,6 @@ vi.mock("../../shared/api/index", () => ({
   rtImport: vi.fn(),
   rtCancel: vi.fn(),
   rtUninstall: vi.fn(),
-  rtProbe: vi.fn(),
   deviceProfile: vi.fn(),
   onRuntimeProgress: vi.fn(),
   providerInstall: vi.fn(),
@@ -235,33 +234,6 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(mocked.rtList).not.toHaveBeenCalled();
     expect(updateConfig).not.toHaveBeenCalled();
   });
-  it("probes only the build the user picks and reports the result under that build", async () => {
-    // Nothing is probed on entry: the panel has no runtime of its own to
-    // describe, and which build matters is the user's choice, not a setting.
-    mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
-    mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
-    let finish!: (value: api.RuntimeCapabilities) => void;
-    mocked.rtProbe.mockImplementation(() => new Promise<api.RuntimeCapabilities>((resolve) => { finish = resolve; }));
-    renderPanel();
-
-    const advanced = (await screen.findByText("Advanced")).closest("details")!;
-    fireEvent.click(advanced.querySelector("summary")!);
-    expect(advanced).toHaveTextContent("Choose an installed build to probe.");
-    expect(screen.queryByRole("button", { name: "Probe again" })).not.toBeInTheDocument();
-    expect(mocked.rtProbe).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
-    await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledWith("cuda", "b10638"));
-    await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: ["--ctx-size"], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
-
-    expect(advanced).toHaveTextContent("Showing cuda b10638.");
-    // The build row remains the single entrance for checking that build again.
-    expect(screen.queryByRole("button", { name: "Probe again" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
-    await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
-    expect(mocked.rtProbe).toHaveBeenLastCalledWith("cuda", "b10638");
-  });
-
   it("groups installed runtimes at row-update time after the published inventory can change", async () => {
     localStorage.setItem("aiolm.show-all-backends.v1", "1");
     const installed = [{ backend: "cuda", build: "b10638", dir: "C:/runtimes/cuda-b10638", size_mb: 512 }] satisfies api.InstalledRuntime[];
@@ -395,7 +367,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel build" });
     expect(cancel.closest("details")).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel install" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove: CUDA (NVIDIA) b10638" })).toBeDisabled();
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
   });

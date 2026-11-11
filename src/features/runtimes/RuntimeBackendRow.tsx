@@ -21,21 +21,18 @@ export interface RuntimeBackendRowProps {
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
-  probeBusy: boolean;
-  probeTarget: { backend: string; build: string } | null;
   onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;
-  onProbe: (backend: string, build: string) => void;
   onUninstall: (backend: string, build: string) => void;
 }
 
 /** One backend as a group: name, fit and status inline, the latest release and
  * its install action on the same line, then installed versions as indented rows
- * with an aligned size and inline Probe and Remove actions. */
+ * with an aligned size and inline Remove action. */
 export default function RuntimeBackendRow({
-  t, locale, row, device, serverRunning, runtimeBusy, prBusy, bundleBusy, cancelBusy, probeBusy, probeTarget,
-  onBlockedAction, onCancelInstall, onInstall, onProbe, onUninstall,
+  t, locale, row, device, serverRunning, runtimeBusy, prBusy, bundleBusy, cancelBusy,
+  onBlockedAction, onCancelInstall, onInstall, onUninstall,
 }: RuntimeBackendRowProps) {
   const state = stateOf(locale, row);
   const info = row.latest;
@@ -54,7 +51,6 @@ export default function RuntimeBackendRow({
       : bundleBusy
         ? t("ui.runtimeBundleWorking")
         : runtimeBusy && !row.busy ? t("ui.runtimeOperationInProgress") : !info ? t("ui.noLatestResolved") : null;
-  const probeBlockedReason = serverRunning ? t("ui.stopBeforeSelect") : null;
   return (
     <section className={`runtime-group${row.busy ? " is-busy" : ""}`} aria-labelledby={`runtime-${row.backend}`} aria-busy={row.busy}>
       <div className="runtime-group__header">
@@ -89,17 +85,15 @@ export default function RuntimeBackendRow({
 
       {row.installed.length > 0 && <ul className="runtime-versions" aria-label={t("ui.installedBuilds", { label: backendName })}>
         {row.installed.map((item) => {
-          const probed = probeTarget?.backend === row.backend && probeTarget.build === item.build;
           const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : runtimeBusy ? t("ui.runtimeOperationInProgress") : null;
           const version = normalizeDisplayText(formatRuntimeVersion(item.build, item.version));
-          return <li key={item.build} className={`runtime-version${probed ? " is-selected" : ""}`} title={normalizeDisplayPath(item.dir)}>
+          return <li key={item.build} className="runtime-version" title={normalizeDisplayPath(item.dir)}>
             <span className="runtime-version__name" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>
               {item.source && <span className="runtime-version__tag">{t("ui.runtimePrBuild", { pr: item.source.pull_request })}</span>}
               <span className="runtime-version__label">{item.source ? `${item.source.commit.slice(0, 7)} · ` : ""}{version}</span>
             </span>
             <span className="runtime-version__size">{formatMebibytes(item.size_mb)}</span>
             <span className="runtime-version__actions">
-              <button type="button" data-icon="probe" onClick={() => onProbe(row.backend, item.build)} disabled={row.busy || probeBusy || serverRunning} title={probeBlockedReason ?? undefined} aria-label={`${t("ui.probeBuild")}: ${backendName} ${version}`} className="app-button app-button--secondary app-button--sm">{t("ui.probeBuild")}</button>
               <button type="button" data-icon="delete" onClick={() => uninstallBlockedReason ? onBlockedAction?.(uninstallBlockedReason) : onUninstall(row.backend, item.build)} disabled={row.busy} aria-disabled={uninstallBlockedReason ? "true" : undefined} title={uninstallBlockedReason ?? undefined} aria-label={`${t("panel.remove")}: ${backendName} ${version}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.remove")}</button>
             </span>
           </li>;
