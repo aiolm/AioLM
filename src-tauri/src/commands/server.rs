@@ -398,13 +398,13 @@ pub(super) async fn run_start_server(
         return Err("server start cancelled".into());
     }
     ensure_no_active_requests(
-        &state,
+        state,
         session::DEFAULT_SESSION_ID,
         cfg.stop_existing_sessions_on_load,
     )?;
     let prepared = prepare_launch(state, cfg, persist.unwrap_or(true), &launch_cancel).await?;
     ensure_no_active_requests(
-        &state,
+        state,
         session::DEFAULT_SESSION_ID,
         prepared.cfg.stop_existing_sessions_on_load,
     )?;

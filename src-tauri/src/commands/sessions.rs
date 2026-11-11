@@ -64,7 +64,7 @@ pub(super) async fn run_session_start(
         Some(explicit) => explicit,
         None => config::load_result()?.stop_existing_sessions_on_load,
     };
-    ensure_no_active_requests(&state, &id, policy)?;
+    ensure_no_active_requests(state, &id, policy)?;
     let name = Path::new(cfg.active_model.trim())
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
@@ -72,13 +72,13 @@ pub(super) async fn run_session_start(
         .unwrap_or_else(|| id.clone());
 
     let prepared = prepare_launch(
-        &state,
+        state,
         cfg,
         persist.unwrap_or(id == session::DEFAULT_SESSION_ID),
         &launch_cancel,
     )
     .await?;
-    ensure_no_active_requests(&state, &id, policy)?;
+    ensure_no_active_requests(state, &id, policy)?;
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
     }
