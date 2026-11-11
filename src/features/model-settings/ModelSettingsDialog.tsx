@@ -503,7 +503,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     activeBuild: llama ? cfg.active_build : cfg.active_runtime ?? '',
     modelIncomplete: incomplete,
     ...(runtimeKnown ? { runtimeInstalled: !runtimeMissing } : {}),
-  });
+  }).filter((gap): gap is 'modelShards' | 'runtimeMissing' => gap === 'modelShards' || gap === 'runtimeMissing');
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
     <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
@@ -563,7 +563,6 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <h3 id={`${id}-step-title`} ref={flowHeading} tabIndex={-1}>{flowCopy[step]}</h3>
             <p className="app-section-hint">{flowCopy[`${step}Hint`]}</p>
               <div className="model-settings-runtime-selection" hidden={step !== 'runtime'}>
-              {!runtimeSelection && <FeedbackBanner tone="info">{runSetupGapMessage('runtime', locale)}</FeedbackBanner>}
               <ProviderRuntimeControl cfg={cfg} disabled={disabled} onProvider={chooseProvider} onChange={change} onReady={setProviderReady} revision={resourceRevision} />
               {onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" disabled={disabled} onClick={manageRuntimes}>{copy.manageRuntime}</button>}
               {runtimeSelected && runtimeKnown && runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
@@ -650,8 +649,6 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || (compatibility?.status === 'unknown' ? copy.unverifiedModel : copy.unavailable)}</FeedbackBanner>}
               {step === 'options' && !benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
                 {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
-                  {gap === 'model' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => showSection('model')}>{executionCopy.needModelAction}</button>}
-                  {gap === 'runtime' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => navigateStep('runtime')}>{executionCopy.needRuntimeAction}</button>}
                   {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="settings" onClick={manageRuntimes}>{executionCopy.manageRuntime}</button>}
                 </li>)}
               </ul></FeedbackBanner>}</div>

@@ -183,14 +183,14 @@ describe("Model library configuration and file operations", () => {
     expect(screen.getByRole("button", { name: "Start: partial.gguf" })).toBeDisabled();
   });
 
-  it("explains an unselected runtime beside the start buttons it disables", async () => {
+  it("disables direct start buttons without a runtime banner when no runtime is selected", async () => {
     const model = { name: "ready.gguf", path: "C:/models/ready.gguf", size_mb: 100, is_vision: false };
     mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models", active_backend: "", active_build: "" }) }) }));
-    expect(await screen.findByText("No runtime is selected.")).toBeVisible();
-    // Without a provider the panel still offers the way to the runtime list.
-    expect(screen.getByRole("button", { name: "Inference engines" })).toBeVisible();
-    expect(await screen.findByRole("button", { name: "Start: ready.gguf" })).toBeDisabled();
+    const startButton = await screen.findByRole("button", { name: "Start: ready.gguf" });
+    expect(startButton).toBeDisabled();
+    expect(startButton).toHaveAttribute("title", "No runtime is selected.");
+    expect(screen.queryByText("No runtime is selected.")).not.toBeInTheDocument();
   });
 
   it("keeps loaded models visible after a rescan fails and replaces the toolbar action with Retry", async () => {

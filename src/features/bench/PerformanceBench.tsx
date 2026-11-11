@@ -40,8 +40,7 @@ import { modelActions } from '../../shared/i18n/modelActions';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { withoutCancelledTrials } from './benchmarkCancellation';
 import { formatBenchmarkRuntimeVersion } from '../../shared/runtime/runtimeUtils';
-import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
-import { executionText } from '../../shared/i18n/executionI18n';
+import { runSetupGaps } from '../../shared/runtime/runReadiness';
 import { useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { formatBytes, formatCpuCores } from '../../shared/lib/units';
 import BenchmarkExplorerActions, { useBenchmarkProfileImport } from './BenchmarkExplorerActions';
@@ -138,7 +137,6 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const explorerCopy = benchmarkExplorerCopy(locale);
   const profileImport = useBenchmarkProfileImport(store);
   const modelCopy = modelActions(locale);
-  const runCopy = executionText[locale];
   const modelSettings = useModelSettings();
   const [targetApplication, setTargetApplication] = useState<ProfileApplication | null>(() => store.cfg ? benchmarkTarget(store.cfg).application : null);
   const installedRuntimes = useInstalledRuntimes(providerOf(targetApplication?.settings ?? store.cfg ?? {}) === 'llama.cpp');
@@ -475,10 +473,6 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
         : admission.reason === 'fixed_output' ? copy.admissionFixedOutput
         : admission.reason === 'stream_usage' ? copy.admissionUsage : copy.admissionRequest}</span>
       {admission?.detail && <details><summary>{copy.details}</summary>{normalizeDisplayText(admission.detail)}</details>}
-    </FeedbackBanner>}
-    {setupGaps.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice"
-      action={modelSettings ? { label: setupGaps.includes('runtime') ? runCopy.needRuntimeAction : runCopy.needModelAction, onClick: () => editModel(setupGaps.includes('runtime') ? 'runtime' : 'model') } : undefined}>
-      {setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ')}
     </FeedbackBanner>}
     {serverRunning && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: copy.stopServer, disabled: store.busy, onClick: () => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught))) }}>{copy.stopHint}</FeedbackBanner>}
     {blockingSessions.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: modelCopy.stopSessions, disabled: stoppingSessions, onClick: () => void stopSessions() }}>{`${modelCopy.sessionsHint} ${blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}`}</FeedbackBanner>}

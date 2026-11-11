@@ -354,7 +354,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · Installed by AioLM'))).toBe(true);
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
-    expect(screen.getByText('No runtime is selected.')).toBeVisible();
+    expect(screen.queryByText('No runtime is selected.')).not.toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /^b123/ })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
   });
@@ -405,8 +405,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
     vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
     const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: '' } });
-    expect(await screen.findByText('No runtime is selected.')).toBeVisible();
     await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
+    expect(screen.queryByText('No runtime is selected.')).not.toBeInTheDocument();
     expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
     expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();

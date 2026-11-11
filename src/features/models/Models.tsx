@@ -29,7 +29,7 @@ import { startModelScan } from '../../shared/runtime/modelScan';
 import { memorySourceText, statusDisplayCopy } from '../../shared/i18n/statusDisplayCopy';
 import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
-import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { modelActions } from '../../shared/i18n/modelActions';
@@ -417,11 +417,6 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
       </div>
       <p className="mb-2 text-xs ui-color-muted">{updatesCopy.incremental}</p>
 
-      {runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
-        if (modelSettings && cfg) modelSettings.open({ target: { kind: 'default' }, config: cfg, section: 'runtime' });
-        else window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES));
-      } }}>{runSetupGapMessage('runtime', locale)}</FeedbackBanner>}
-
       <ConfirmDialog
         open={pendingConfirm !== null}
         title={pendingConfirm?.title ?? t("panel.confirmAction")}
@@ -482,7 +477,7 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
                 {running && <StatusBadge label={copy.running} tone="success" />}
                 {onSelectModel && <button type="button" data-icon="settings" onClick={() => void selectModel(model)} disabled={incomplete || modelUpdates.busy} aria-label={`${modelActions(locale).settings}: ${displayName}`} className="app-button app-button--secondary app-button--sm">{modelActions(locale).settings}</button>}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={modelUpdates.busy || incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={modelUpdates.busy || incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={modelUpdates.busy || incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={!modelSettings && runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
               <div className="models-model-path">
                 <code>{normalizeDisplayPath(model.path)}</code>
