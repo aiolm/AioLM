@@ -25,6 +25,7 @@ import { estimateRemainingSeconds } from '../../shared/lib/transfer';
 import { formatDuration } from '../../shared/lib/units';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import { shouldConfirmDestructive } from '../../shared/config/preferences';
+import { discoverRecoveryCopy } from './discoverRecoveryCopy';
 
 type ArtifactFormat = api.HfSearchFormat;
 
@@ -111,6 +112,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   // The selected repository's file tree, stamped with the repository it was
   // read for. Only this answer establishes what can be downloaded in-app.
   const [inspection, setInspection] = useState<(api.HfRepositoryInspection & { repo: string }) | null>(null);
+  const [inspectionError, setInspectionError] = useState<{ repo: string; generation: number; message: string } | null>(null);
   const [searching, setSearching] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -171,6 +173,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   // Tags, the configured engine and a missing, loading or failed inspection
   // never make an action available.
   const inspected = selected && inspection?.repo === selected.id ? inspection : null;
+  const currentInspectionError = selected && inspectionError?.repo === selected.id && inspectionError.generation === inspectGeneration.current ? inspectionError : null;
   const files = inspected && format !== 'safetensors' && format !== 'mlx' ? inspected.gguf_files : null;
   const snapshotCandidate = !!inspected && format !== 'gguf' && inspected.has_root_safetensors;
   const safetensorsFiles = inspected && format !== 'gguf' ? inspected.safetensors_files : null;
@@ -195,6 +198,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setDownloadedChoice(null);
     setSelected(null);
     setInspection(null);
+    setInspectionError(null);
     setLoadingFiles(false);
     setSearching(true);
     try {
@@ -248,6 +252,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setSelected(model);
     setIncludeCompanions(false);
     setInspection(null);
+    setInspectionError(null);
     setError(null);
     setNotice(null);
     setDownloadedChoice(null);
@@ -256,7 +261,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       const next = await api.hfModelFiles(model.id);
       if (generation === inspectGeneration.current) setInspection({ ...next, repo: model.id });
     } catch (caught) {
-      if (generation === inspectGeneration.current) setError(caught instanceof Error ? caught.message : String(caught));
+      if (generation === inspectGeneration.current) setInspectionError({ repo: model.id, generation, message: caught instanceof Error ? caught.message : String(caught) });
     } finally {
       if (generation === inspectGeneration.current) setLoadingFiles(false);
     }
@@ -736,6 +741,8 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
               {installedSnapshot && <button type="button" className="app-button app-button--ghost" onClick={() => configureDownloaded({ path: installedSnapshot.path, projector: false })}>{modelCopy.configure}</button>}
               {wholeSnapshots.some(artifact => artifact.incomplete || artifact.missing.length > 0) && <p role="status" className="px-3 text-xs ui-color-warning">{providerCopy[locale].files}</p>}</>}
             {loadingFiles && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.readingFiles")}</div>}
+            {!loadingFiles && currentInspectionError && <FeedbackBanner tone="error" className="m-3" title={discoverRecoveryCopy[locale]}
+              action={{ label: t("panel.retry"), onClick: () => void inspect(selected) }}>{currentInspectionError.message}</FeedbackBanner>}
             {!loadingFiles && noInAppDownload && <div className="p-6 text-center text-xs ui-color-faint" role="status">{providerCopy[locale].noInAppDownload}</div>}
             {!loadingFiles && safetensorsFiles && safetensorsFiles.length > 0 && <>
               <p className="px-3 py-2 text-xs ui-color-muted">{providerCopy[locale].safetensorsBundle}</p>

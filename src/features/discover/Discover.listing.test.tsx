@@ -232,6 +232,72 @@ describe("Discover listing and installed files", () => {
     expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/second", "model.gguf", "models");
   });
 
+  it("recovers repository files in place without rerunning the search or downloading automatically", async () => {
+    // The project's ES2020 library predates Promise.withResolvers.
+    let finishFiles!: (value: api.HfRepositoryInspection) => void;
+    let finishInstalled!: (value: api.HfInstalledFile[]) => void;
+    vi.mocked(api.hfModelFiles)
+      .mockRejectedValueOnce(new Error("Repository connection failed"))
+      .mockImplementationOnce(() => new Promise(resolve => { finishFiles = resolve; }));
+    vi.mocked(api.hfInstalledFiles).mockImplementationOnce(() => new Promise(resolve => { finishInstalled = resolve; }));
+    const store = createTestStore({ models_dir: "D:/library" });
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
+    const detail = within(screen.getByRole("region", { name: "Repository files" }));
+    expect(await detail.findByRole("alert")).toHaveTextContent("Repository connection failed");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "unsent search" } });
+    fireEvent.click(detail.getByRole("button", { name: "Retry" }));
+    expect(detail.getByText("Reading repository files")).toBeVisible();
+    expect(detail.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => { finishFiles(ggufOnly([
+      { path: "present.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" },
+      { path: "available.gguf", size_bytes: 2000, is_mmproj: false, download_url: "" },
+    ])); });
+    expect(detail.getByRole("button", { name: "Download: available.gguf" })).toBeDisabled();
+    await act(async () => { finishInstalled([
+      { path: "present.gguf", local_path: "D:/library/present.gguf", size_bytes: 1000, missing_shards: [] },
+    ]); });
+    expect(detail.getByRole("button", { name: "Installed: present.gguf" })).toBeDisabled();
+    expect(detail.getByRole("button", { name: "Download: available.gguf" })).toBeEnabled();
+    expect(screen.getByRole("textbox")).toHaveValue("unsent search");
+    expect(screen.getByRole("button", { name: /owner\/model/ })).toHaveAttribute("aria-current", "true");
+    expect(api.hfModelFiles).toHaveBeenNthCalledWith(2, "owner/model");
+    expect(api.hfSearchModels).toHaveBeenCalledOnce();
+    expect(api.hfDownloadModel).not.toHaveBeenCalled();
+    expect(api.hfDownloadSnapshot).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"] as const)("ignores a retired retry's late %s after another repository recovers", async outcome => {
+    // The project's ES2020 library predates Promise.withResolvers.
+    let finishRetired!: (value: api.HfRepositoryInspection) => void;
+    let failRetired!: (cause: Error) => void;
+    vi.mocked(api.hfSearchModels).mockResolvedValue([listed("owner/first"), listed("owner/current")]);
+    vi.mocked(api.hfModelFiles)
+      .mockRejectedValueOnce(new Error("First repository unavailable"))
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { finishRetired = resolve; failRetired = reject; }))
+      .mockRejectedValueOnce(new Error("Current repository unavailable"))
+      .mockResolvedValueOnce(ggufOnly([{ path: "current.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    const detail = within(screen.getByRole("region", { name: "Repository files" }));
+    fireEvent.click(await screen.findByRole("button", { name: /owner\/first/ }));
+    fireEvent.click(await detail.findByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: /owner\/current/ }));
+    expect(await detail.findByRole("alert")).toHaveTextContent("Current repository unavailable");
+    fireEvent.click(detail.getByRole("button", { name: "Retry" }));
+    const download = await detail.findByRole("button", { name: "Download: current.gguf" });
+    await waitFor(() => expect(download).toBeEnabled());
+    await act(async () => {
+      if (outcome === "success") finishRetired(ggufOnly([{ path: "retired.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]));
+      else failRetired(new Error("Retired repository failed"));
+    });
+    expect(detail.queryByRole("alert")).not.toBeInTheDocument();
+    expect(detail.queryByText("retired.gguf")).not.toBeInTheDocument();
+    expect(detail.getByRole("button", { name: "Download: current.gguf" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /owner\/current/ })).toHaveAttribute("aria-current", "true");
+    expect(api.hfModelFiles).toHaveBeenNthCalledWith(4, "owner/current");
+  });
+
   it("does not attach a slow file listing to a repository that is no longer selected", async () => {
     let releaseFiles: (value: api.HfRepositoryInspection) => void = () => undefined;
     vi.mocked(api.hfSearchModels).mockResolvedValue([listed("owner/slow")]);

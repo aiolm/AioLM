@@ -38,6 +38,7 @@ import { useModelUpdates, type ModelUpdateCatalog } from './useModelUpdates';
 import { formatBytes } from '../discover/discoverUtils';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 import { MODEL_DOWNLOAD_TASK_ID } from '../../shared/state/modelDownloadTask';
+import { matchingSupportingFilesCopy } from './modelLibraryCopy';
 
 
 /** `sessions` comes from a parent that already holds the detailed session
@@ -180,13 +181,13 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
   }, [active, scanRequest, scan, folderAction]);
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
-  const visible = (models ?? []).filter((model) => {
+  const matchingModels = (models ?? []).filter((model) => {
     if (providerFilter !== 'all' && !api.modelCompatibleForLibrary(model, providerFilter)) return false;
-    if (!showVision && model.is_vision) return false;
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
-  const onlyHiddenVision = visible.length === 0 && !showVision && models !== null && models.length > 0 && models.every(model => model.is_vision);
+  const visible = showVision ? matchingModels : matchingModels.filter(model => !model.is_vision);
+  const onlyHiddenVision = visible.length === 0 && !showVision && matchingModels.length > 0;
   const hasModelFilters = normalizedQuery.length > 0 || providerFilter !== 'all';
   const clearModelFilters = () => {
     setModelQuery('');
@@ -436,8 +437,8 @@ export default function ModelsPanel({ store, onSelectModel, onDiscoverModels, on
             {onDiscoverModels && <button type="button" className="app-button app-button--primary min-w-0 max-w-full" onClick={onDiscoverModels}>{modelActions(locale).find}</button>}
             <button type="button" className="app-button app-button--secondary min-w-0 max-w-full" onClick={() => void browse()} disabled={modelUpdates.busy || folderAction !== 'idle'}>{t("panel.chooseFolder")}</button>
           </div></EmptyState>
-            : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={t("ui.modelsVisionHiddenBody")}
-              action={{ label: t(hasModelFilters ? "ui.modelsClearAndShowVision" : "ui.modelsShowVision"), onClick: () => { clearModelFilters(); setShowVision(true); } }} />
+            : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={hasModelFilters ? matchingSupportingFilesCopy[locale] : t("ui.modelsVisionHiddenBody")}
+              action={{ label: t("ui.modelsShowVision"), onClick: () => { setShowVision(true); modelFilterInput.current?.focus(); } }} />
               : <EmptyState title={t("ui.modelsNoMatches")} description={t("ui.modelsNoMatchesBody")}
                 action={{ label: t("ui.modelsClearFilters"), onClick: clearModelFilters }} />
         )}

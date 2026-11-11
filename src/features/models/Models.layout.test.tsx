@@ -303,15 +303,42 @@ describe('model library empty results and filter recovery', () => {
     expect(await screen.findByRole('heading', { name: 'Supporting model files are hidden' })).toBeVisible();
     expect(screen.getByRole('checkbox', { name: panelText.en.visionModels })).not.toBeChecked();
   });
+  it.each(localCopy)('reveals matching hidden sidecars in a mixed library without clearing search or engine in $locale', async ({ locale, checkbox }) => {
+    const { base, before } = await library(structuredClone([primary, sidecar]), locale);
+    const input = screen.getByRole('textbox', { name: panelText[locale].searchModels });
+    const engine = screen.getByRole('combobox', { name: providerCopy[locale].engine });
+    fireEvent.click(engine);
+    fireEvent.click(await screen.findByRole('option', { name: api.providerDisplayName('llama.cpp') }));
+    fireEvent.change(input, { target: { value: 'mmproj' } });
+    const recover = await screen.findByRole('button', { name: checkbox });
+    expect(screen.queryByRole('button', { name: panelText[locale].chooseFolder })).not.toBeInTheDocument();
+    recover.focus();
+    fireEvent.click(recover);
+    const list = within(screen.getByTestId('models-list'));
+    expect(list.getAllByRole('listitem')).toHaveLength(1);
+    expect(list.getByText(sidecar.name)).toBeVisible();
+    expect(list.queryByText(primary.name)).not.toBeInTheDocument();
+    expect(input).toHaveValue('mmproj');
+    expect(input).toHaveFocus();
+    expect(engine).toHaveTextContent(api.providerDisplayName('llama.cpp'));
+    expect(screen.getByRole('checkbox', { name: checkbox })).toBeChecked();
+    expect(base.cfg).toEqual(before);
+    expect(base.updateConfig).not.toHaveBeenCalled();
+    expect(api.listModels).toHaveBeenCalledOnce();
+  });
 
-  it('makes combined-filter sidecar recovery explicit and restores rows in one local action', async () => {
+
+  it('clears genuinely unmatched filters before offering a separate sidecar reveal', async () => {
     const { base, before } = await library(structuredClone([sidecar]));
     await filterToVllm();
     const input = screen.getByRole('textbox', { name: panelText.en.searchModels });
     fireEvent.change(input, { target: { value: 'nothing matches' } });
-    const recover = await screen.findByRole('button', { name: 'Clear filters and show supporting model files' });
+    const recover = await screen.findByRole('button', { name: 'Clear filters' });
     recover.focus();
     fireEvent.click(recover);
+    expect(screen.getByRole('checkbox', { name: panelText.en.visionModels })).not.toBeChecked();
+    expect(input).toHaveValue('');
+    fireEvent.click(await screen.findByRole('button', { name: 'Show supporting model files' }));
     expect(await screen.findByRole('button', { name: 'Configure & run: mmproj-vision.gguf' })).toBeVisible();
     expect(input).toHaveValue('');
     expect(input).toHaveFocus();
