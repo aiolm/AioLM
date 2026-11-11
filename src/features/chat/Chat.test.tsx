@@ -667,15 +667,29 @@ describe("ChatPanel document context warning", () => {
     });
     renderPanel();
     await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    await attachDocument("owner-context.txt", OVERSIZED_DOCUMENT);
     const log = () => within(screen.getByRole("log", { name: "Conversation" }));
     await sendMessage("Question");
     await waitFor(() => expect(log().getByText(answer)).toBeInTheDocument());
+    await findTruncationWarning();
 
     fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(log().queryByText("Question")).not.toBeInTheDocument();
     expect(log().queryByText(answer)).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Context warning" })).not.toBeInTheDocument();
+    expect(screen.queryByText("owner-context.txt", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Chat message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop generation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Return to Question" }));
+    expect(log().getByText(answer)).toBeInTheDocument();
+    await findTruncationWarning();
+    expect(screen.getByRole("button", { name: "Stop generation" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
 
     await act(async () => { finish(); });
     // The conversation being read stays empty; the answer belongs to the older one.

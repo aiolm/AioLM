@@ -48,6 +48,7 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { chatPersistenceCopy } from './chatPersistenceCopy';
 import { finishTask, getTaskSnapshot, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
+import { chatTurnOwnerCopy } from './chatTurnOwnerCopy';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onDiscoverModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onDiscoverModels?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -142,7 +143,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   };
 
   const {
-    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
     saveFailed, retrySave,
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
@@ -167,12 +168,18 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
       namespace: embeddingChoice.engine!.embedding_namespace ?? `${embeddingChoice.engine!.provider}:${embeddingChoice.model}` }
       : selectedStatus.engine || embeddingSelection !== 'auto' ? { model: '', baseUrl: '', apiKey: '', namespace: '' } : undefined,
-    sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+    sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread: liveThread, msgs, setMsgs,
     modelProfile: effectiveConfig ? modelSettings?.getRequestProfile(selectedSessionId, effectiveConfig) : undefined,
     input, setInput, attachments, documents, setAttachments, setDocuments,
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
     selectedSkillIds: skills.selectedSkillIds, onSkillsAccepted: skills.clearSelectedSkills, locale,
   });
+
+  const visiblePhase = viewingLiveThread ? phase : 'idle';
+  const visibleDraft = viewingLiveThread ? streamingDraft : null;
+  const visibleError = viewingLiveThread ? error : null;
+  const ownerCopy = chatTurnOwnerCopy[locale];
+  const ownerTitle = displayChatTitle(liveThread?.title, ct('newConversation'));
 
   const openModelSettings = () => {
     if (!requireIdle()) return;
@@ -272,18 +279,18 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   const generates = selectedStatus.engine?.tasks?.includes('generate') ?? true;
   // A session that serves only other tasks (embeddings, transcription) is explained by those tasks, not as a missing chat template.
   const chatUnavailable = !serverOn ? null : !generates ? chatTaskCopy(locale, selectedStatus.engine?.tasks ?? []) : !chatSupported ? chatTemplateCopy[locale] : null;
-  const canSend = serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const canSend = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
   const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
   useNativeAttachmentDrop({ targetRef: composerDropRef, active,
-    enabled: !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
+    enabled: viewingLiveThread && !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
       && !(documents.length >= 4 && attachments.length >= 4),
     onDrop: addDroppedAttachments, setError });
 
   // An empty idle conversation shows its guidance from the top; like the
   // message effect below, resizing does not pin it to the bottom.
   const followLatestRef = useRef(false);
-  followLatestRef.current = viewMessages.length > 0 || phase !== "idle";
+  followLatestRef.current = viewMessages.length > 0 || visiblePhase !== "idle";
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -300,12 +307,12 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || !atBottomRef.current || (msgs.length === 0 && phase === "idle")) return;
+    if (!element || !atBottomRef.current || (viewMessages.length === 0 && visiblePhase === "idle")) return;
     const frame = window.requestAnimationFrame(() => {
       if (atBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [msgs, phase, streamingDraft]);
+  }, [viewMessages, visiblePhase, visibleDraft]);
 
   // Stable identity (not the inline `ct` closure) so MessageBubble's memo bailout
   // survives streaming re-renders of ChatPanel; see MessageBubble.tsx's doc comment.
@@ -341,7 +348,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   };
 
   const lastMessage = viewMessages.at(-1);
-  const responseState = error || lastMessage?.failed ? 'failed'
+  const responseState = visibleError || lastMessage?.failed ? 'failed'
     : lastMessage?.interrupted ? 'interrupted'
     : lastMessage?.finishReason === 'tool_calls' || lastMessage?.toolRound ? 'tool-request'
     : lastMessage?.role === 'assistant' ? 'complete' : 'none';
@@ -355,7 +362,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
   // keeping the user's other choices; any call the retry makes is approved again.
   const restoreRetryTools = async () => {
     const missing = retryToolsMissing;
-    if (!missing || !requireIdle()) return;
+    if (!viewingLiveThread || !missing || !requireIdle()) return;
     const scope = retryScope.current;
     // This is an explicit choice, so a first discovery must not select every listed tool.
     setSelectedMcpTools(current => current);
@@ -463,21 +470,21 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             serverOn={serverOn}
             canGenerate={chatSupported && generates}
             msgs={viewMessages}
-            streamingDraft={viewingLiveThread ? streamingDraft : null}
-            phase={viewingLiveThread ? phase : 'idle'}
+            streamingDraft={visibleDraft}
+            phase={visiblePhase}
             copiedIndex={copied}
             compactMessages={preferences?.chat.compactMessages ?? false}
             locale={locale}
             onCopy={copyMessage}
-            error={error}
+            error={visibleError}
             canRetry={viewingLiveThread && canRetry}
             recoverable={recoverable}
-            retryNotice={retryUnavailable ? chatRetryCopy[locale][retryUnavailable] : null}
-            retryToolsAction={retryTools ? {
+            retryNotice={viewingLiveThread && retryUnavailable ? chatRetryCopy[locale][retryUnavailable] : null}
+            retryToolsAction={viewingLiveThread && retryTools ? {
               notice: chatRetryToolsCopy[locale][retryTools.state].replace('{tools}', retryTools.tools.map(tool => `${tool.serverName} · ${tool.toolName}`).join(', ')),
               label: chatRetryToolsCopy[locale].reload, onClick: () => void restoreRetryTools(), disabled: loadingMcpTools,
             } : null}
-            onRetry={() => void send(true)}
+            onRetry={() => { if (viewingLiveThread && recoverable && canRetry) void send(true); }}
             ct={ct}
             onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}
             onDiscoverModels={selectedSessionId === "default" && !configuredModel ? onDiscoverModels : undefined}
@@ -489,10 +496,16 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
           <PanelFeedback>
             {saveFailed && <FeedbackBanner tone="error" action={{ label: chatPersistenceCopy[locale].retry, onClick: retrySave }}>{chatPersistenceCopy[locale].failed}</FeedbackBanner>}
             {mcpError && <FeedbackBanner tone="error">{mcpError}</FeedbackBanner>}
-            {projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
-            {projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
+            {viewingLiveThread && projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
+            {viewingLiveThread && projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
           </PanelFeedback>
-          <ChatComposer
+          {!viewingLiveThread && liveThread && <FeedbackBanner tone={pendingToolCall ? 'warning' : 'info'}
+            action={{ label: ownerCopy.returnTo.replace('{title}', () => ownerTitle), onClick: () => selectThread(liveThread) }}>
+            {(pendingToolCall ? ownerCopy.approval : ownerCopy.working).replace('{title}', () => ownerTitle)}
+          </FeedbackBanner>}
+          {/* The composer and its approval/context state belong to the live buffer,
+              not the conversation being browsed. Keep that buffer intact on return. */}
+          {viewingLiveThread && <ChatComposer
             dropTargetRef={composerDropRef}
             locale={locale}
             contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, chatUnavailable].filter(Boolean).join(' ') || null}
@@ -506,8 +519,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             mcpDefinitions={mcpDefinitions}
             pendingToolCall={pendingToolCall}
             toolCallInProgress={toolCallInProgress}
-            onApproveTool={() => void approvePendingTool()}
-            onRejectTool={rejectPendingTool}
+            onApproveTool={() => { if (viewingLiveThread) void approvePendingTool(); }}
+            onRejectTool={() => { if (viewingLiveThread) rejectPendingTool(); }}
             attachments={attachments}
             onRemoveAttachment={removeAttachment}
             attachmentStatus={attachmentStatus}
@@ -536,7 +549,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             skillsLocked={phase !== "idle" || pendingToolCall !== null}
             selectedSkillsLabel={pt("selectedSkills")}
             removeSkillLabel={pt("removeSkill")}
-          />
+          />}
         </div>
       </div>
 

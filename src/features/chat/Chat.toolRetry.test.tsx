@@ -8,6 +8,8 @@ import { projectFromConfig, setActiveProjectId, writeProjects } from '../project
 import ChatPanel from './Chat';
 import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type ChatThread } from './chatHistory';
 import { mcpToolDefinition } from './useChatMcpTools';
+import { chatText } from '../../shared/i18n/chatI18n';
+import { PanelFeedbackActivity, PanelFeedbackOutlet, PanelFeedbackProvider } from '../../shared/ui/PanelFeedback';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/index', () => ({
@@ -42,11 +44,15 @@ function savedToolTurn(): ChatHistoryMessage[] {
   ];
 }
 
-async function renderSaved(thread: ChatThread = { ...createChatThread(1, 'saved-tool-turn'), title: 'Saved tool turn', messages: savedToolTurn() }, heading = thread.title, others: ChatThread[] = []) {
+async function renderSaved(thread: ChatThread = { ...createChatThread(1, 'saved-tool-turn'), title: 'Saved tool turn', messages: savedToolTurn() }, heading = thread.title, others: ChatThread[] = [], withActivityDrawer = false) {
   saveChatWorkspace({ activeThreadId: thread.id, threads: [thread, ...others] });
   const store = createTestStore({ active_model: '/synthetic/chat-model' });
   store.status = { state: 'running', model: 'synthetic-chat', url: 'http://127.0.0.1:1/v1', api_key: 'synthetic-key' };
-  render(<I18nProvider initialLocale="en"><ChatPanel store={store} /></I18nProvider>);
+  const panel = <ChatPanel store={store} />;
+  render(<I18nProvider initialLocale="en">{withActivityDrawer ? <PanelFeedbackProvider>
+    {panel}
+    <PanelFeedbackActivity hasActivity><summary>Activity</summary><PanelFeedbackOutlet /></PanelFeedbackActivity>
+  </PanelFeedbackProvider> : panel}</I18nProvider>);
   await screen.findByRole('heading', { name: heading });
   fireEvent.click(screen.getByText('MCP tools'));
   return { thread, log: within(screen.getByRole('log', { name: 'Conversation' })) };
@@ -102,6 +108,74 @@ it('after a restart, offers to reload the tools a saved tool turn used instead o
   expect(await log.findByText('The archive answered amber-0000.')).toBeInTheDocument();
   expect(api.mcpCallTool).toHaveBeenCalledExactlyOnceWith('fixture', 'slow_lookup', { key: 'synthetic-key' }, expect.any(String));
   expect(streamMock.mock.calls[1][3].at(-1)).toEqual({ role: 'tool', tool_call_id: 'call-retry', name: functionName, content: '{"text":"synthetic-key: amber-0000"}' });
+});
+
+it.each(['approve', 'reject'] as const)('keeps a pending tool turn with its conversation while browsing another, then lets the owner %s it', async decision => {
+  const other: ChatThread = { ...createChatThread(2, 'other-thread'), title: 'Other conversation',
+    messages: [{ role: 'user', content: 'Another question' }, { role: 'assistant', content: 'Finished answer' }] };
+  const { thread, log } = await renderSaved(undefined, undefined, [other], true);
+  fireEvent.click(await log.findByRole('button', { name: 'Reload MCP tools for Retry' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), { target: { value: 'Unsent owner follow-up' } });
+  requestsTool();
+  fireEvent.click(await log.findByRole('button', { name: 'Retry last message' }));
+  await screen.findByRole('button', { name: 'Approve once' });
+
+  // A blocked action produces a real owner-local error without ending approval.
+  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+  fireEvent.click(screen.getByRole('button', { name: `Delete conversation: ${thread.title}` }));
+  expect(log.getByText(chatText.en.stopCurrentResponseFirst)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: other.title }));
+  expect(screen.getByRole('heading', { name: other.title })).toBeInTheDocument();
+  expect(log.getByText('Finished answer')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Approve once' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: chatText.en.rejectTool })).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: 'Chat message' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Send message' })).not.toBeInTheDocument();
+  expect(screen.queryByText(chatText.en.stopCurrentResponseFirst)).not.toBeInTheDocument();
+
+  const drawer = screen.getByText('Activity').closest('details')!;
+  if (drawer.open) fireEvent.click(screen.getByText('Activity'));
+  expect(drawer).toHaveProperty('open', false);
+  expect(screen.getByRole('button', { name: `Return to ${thread.title}` })).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: `Return to ${thread.title}` }));
+  expect(screen.getByRole('heading', { name: thread.title })).toBeInTheDocument();
+  expect(log.getByText(chatText.en.stopCurrentResponseFirst)).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue('Unsent owner follow-up');
+  if (decision === 'approve') {
+    // The application's ES2020 library does not expose Promise.withResolvers.
+    let finishTool!: (value: unknown) => void;
+    vi.mocked(api.mcpCallTool).mockImplementationOnce(() => new Promise(resolve => { finishTool = resolve; }));
+    answers('Owner-only completed answer.');
+    fireEvent.click(screen.getByRole('button', { name: 'Approve once' }));
+    await screen.findByText(chatText.en.waitingMcpTool);
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: other.title }));
+    expect(log.getByText('Finished answer')).toBeInTheDocument();
+    expect(screen.queryByText(chatText.en.waitingMcpTool)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop generation' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `Return to ${thread.title}` }));
+    expect(screen.getByText(chatText.en.waitingMcpTool)).toBeInTheDocument();
+    await act(async () => { finishTool({ content: [{ type: 'text', text: 'Owner tool result' }] }); });
+    expect(await log.findByText('Owner-only completed answer.')).toBeInTheDocument();
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: chatText.en.rejectTool }));
+    expect(await log.findByText('MCP tool call rejected by the user.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve once' })).not.toBeInTheDocument();
+  }
+
+  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+  fireEvent.click(screen.getByRole('button', { name: other.title }));
+  expect(log.getByText('Finished answer')).toBeInTheDocument();
+  expect(log.queryByText('Owner-only completed answer.')).not.toBeInTheDocument();
+  expect(log.queryByText('MCP tool call rejected by the user.')).not.toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
+  if (decision === 'approve') {
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: thread.title }));
+    expect(await log.findByText('Owner-only completed answer.')).toBeInTheDocument();
+  }
 });
 
 it.each([

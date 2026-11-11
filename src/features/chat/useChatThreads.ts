@@ -256,11 +256,12 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
 
   // What the log renders: the live buffer for the conversation that owns it,
   // and the stored messages for any other one the reader opens meanwhile.
+  const liveThread = workspace.threads.find((thread) => thread.id === msgsThreadId);
   const viewingLiveThread = msgsThreadId === activeThread?.id;
   const viewMessages = viewingLiveThread ? msgs : activeThread?.messages ?? [];
 
   return {
-    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
     saveFailed, retrySave: () => setSaveAttempt(attempt => attempt + 1),
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
