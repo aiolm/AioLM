@@ -16,6 +16,7 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
+import ProgressBar from '../../shared/ui/ProgressBar';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
@@ -26,20 +27,25 @@ import { sensitiveStaticIndices } from './sensitiveEntryTokens';
 
 /** Discover, review and accept the selected runtime's help. Help runs only on
  * the explicit button; acceptance pins this exact runtime build. */
-export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted, draftPrefixSecrets }: {
+export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted, draftPrefixSecrets, compact = false, actionLabel, notice }: {
   cfg: AppConfig;
   effective: EffectiveSchema;
   disabled: boolean;
   onAccepted: () => void;
+  compact?: boolean;
+  actionLabel?: string;
+  notice?: string;
   /** Unsaved draft secret prefix indices from the positional layout sibling.
    * Display-only, same sourced rule; never persisted or applied to launch. */
   draftPrefixSecrets?: Iterable<number>;
 }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const id = useId();
   const taskId = `runtime-help-review-${id}`;
   const [target, setTarget] = useState<HelpTarget | null>(null);
+  const [targetAttempt, setTargetAttempt] = useState(0);
+  const [targetLoading, setTargetLoading] = useState(true);
   const [extra, setExtra] = useState<string[]>([]);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [textChoice, setTextChoice] = useState<HelpTextChoice>({});
@@ -51,9 +57,13 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const generation = useRef(0);
   const pending = useRef<AppConfig | null>(null);
   const cancelRequested = useRef(false);
+  const recheckButton = useRef<HTMLButtonElement>(null);
+  const retryFocus = useRef<string | null>(null);
+  const targetBinding = `${cfg.active_provider}:${cfg.active_runtime}:${cfg.active_backend}:${cfg.active_build}`;
   useEffect(() => {
     let active = true;
     setTarget(null); setFound(null); setError(''); setBusy(false); setAccepting(false); setRequest(null);
+    setTargetLoading(true);
     void runtimeHelpTarget(cfg).then(next => {
       if (!active) return;
       setTarget(next);
@@ -61,7 +71,8 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       setWorkingDirectory(next.request.working_directory ?? next.accepted?.working_directory ?? '');
       setTextChoice({ ...(next.request.encoding ? { encoding: next.request.encoding } : {}),
         ...(next.request.locale ? { locale: next.request.locale } : {}) });
-    }).catch(cause => { if (active) setError(String(cause)); });
+    }).catch(cause => { if (active) setError(String(cause)); })
+      .finally(() => { if (active) setTargetLoading(false); });
     return () => {
       active = false;
       generation.current += 1;
@@ -71,11 +82,17 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     };
     // The target depends only on the selected runtime identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build]);
+  }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, targetAttempt]);
+  useEffect(() => {
+    if (target && !targetLoading && retryFocus.current === targetBinding) {
+      retryFocus.current = null;
+      recheckButton.current?.focus();
+    }
+  }, [target, targetLoading, targetBinding]);
   const state = effective.help_state;
   const status = state === 'current' ? copy.helpCurrent : state === 'stale' ? copy.helpStale : state === 'unchecked' ? copy.helpUnchecked : copy.helpNone;
   const discover = async () => {
-    if (!target || busy || accepting) return;
+    if (disabled || !target || busy || accepting) return;
     const next: HelpRequest = target.fixed ? { ...target.request } : {
       ...target.request,
       program: target.request.program ?? null,
@@ -120,6 +137,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       setFound(null);
       if (accepted?.working_directory) setWorkingDirectory(accepted.working_directory);
       onAccepted();
+      if (compact) recheckButton.current?.focus();
     } catch (cause) {
       if (ownGeneration === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -140,53 +158,75 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const commandTokens = target
     ? [target.program, ...target.prefix.map((token, index) => (secretPrefix.has(index) ? '•••' : token))]
     : [];
+  const settings = <>
+    <p role="status">{status}</p>
+    {state === 'stale' && effective.help_detail && <FeedbackBanner tone="warning">{effective.help_detail}</FeedbackBanner>}
+    {target && (
+      <p className="app-section-hint">
+        {copy.command}: {commandTokens.map(token => JSON.stringify(token)).join(' ')}
+      </p>
+    )}
+    {target && !target.fixed && (
+      <RuntimeArgumentList label={entrypointCopy[locale].helpArgs} tokens={extra} disabled={disabled || busy || accepting}
+        onChange={next => { setExtra(next); setFound(null); setRequest(null); }} />
+    )}
+    {target && <div className="mt-3">
+      <label htmlFor={`${id}-cwd`}>{copy.workingDirectory}</label>
+      <div className="entrypoint-path mt-2">
+        <input id={`${id}-cwd`} name="execution-directory" className="app-input" value={workingDirectory}
+          disabled={disabled || busy || accepting} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+          aria-describedby={`${id}-cwd-hint`} onChange={event => {
+            generation.current += 1;
+            setWorkingDirectory(event.target.value); setFound(null); setRequest(null); setError('');
+          }} />
+        <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting}
+          onClick={() => {
+            const ownGeneration = ++generation.current;
+            void pickRuntimePath('folder').then(path => {
+              if (generation.current !== ownGeneration) return;
+              if (!path) return;
+              setWorkingDirectory(path); setFound(null); setRequest(null); setError('');
+            }).catch(cause => { if (generation.current === ownGeneration) setError(String(cause)); });
+          }}>{copy.chooseDirectory}</button>
+      </div>
+      <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
+    </div>}
+    {target && <HelpTextSettings value={textChoice} disabled={disabled || busy || accepting} onChange={next => {
+      generation.current += 1;
+      setTextChoice(next); setFound(null); setRequest(null); setError('');
+    }} />}
+  </>;
+  const Container = compact ? 'div' : 'section';
   return (
-    <section className="app-card app-card--tight mt-3" aria-labelledby={`${id}-title`}>
-      <h4 id={`${id}-title`}>{copy.helpTitle}</h4>
-      <p role="status">{status}</p>
-      {state === 'stale' && effective.help_detail && <FeedbackBanner tone="warning">{effective.help_detail}</FeedbackBanner>}
-      {target && (
-        <p className="app-section-hint">
-          {copy.command}: {commandTokens.map(token => JSON.stringify(token)).join(' ')}
-        </p>
-      )}
-      {target && !target.fixed && (
-        <RuntimeArgumentList label={entrypointCopy[locale].helpArgs} tokens={extra} disabled={disabled || busy || accepting}
-          onChange={next => { setExtra(next); setFound(null); setRequest(null); }} />
-      )}
-      {target && <div className="mt-3">
-        <label htmlFor={`${id}-cwd`}>{copy.workingDirectory}</label>
-        <div className="entrypoint-path mt-2">
-          <input id={`${id}-cwd`} name="execution-directory" className="app-input" value={workingDirectory}
-            disabled={disabled || busy || accepting} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
-            aria-describedby={`${id}-cwd-hint`} onChange={event => {
-              generation.current += 1;
-              setWorkingDirectory(event.target.value); setFound(null); setRequest(null); setError('');
-            }} />
-          <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting}
-            onClick={() => {
-              const ownGeneration = ++generation.current;
-              void pickRuntimePath('folder').then(path => {
-                if (generation.current !== ownGeneration || !path) return;
-                setWorkingDirectory(path); setFound(null); setRequest(null); setError('');
-              }).catch(cause => { if (generation.current === ownGeneration) setError(String(cause)); });
-            }}>{copy.chooseDirectory}</button>
-        </div>
-        <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
-      </div>}
-      {target && <HelpTextSettings value={textChoice} disabled={disabled || busy || accepting} onChange={next => {
-        generation.current += 1;
-        setTextChoice(next); setFound(null); setRequest(null); setError('');
-      }} />}
-      <div className="app-page-actions mt-3">
-        <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting || !target} onClick={() => void discover()}>{copy.discover}</button>
+    <Container className={compact ? undefined : "app-card app-card--tight mt-3"}
+      role={compact ? 'group' : undefined}
+      aria-label={compact ? actionLabel ?? copy.discover : undefined}
+      aria-labelledby={compact ? undefined : `${id}-title`}>
+      {!compact && <><h4 id={`${id}-title`}>{copy.helpTitle}</h4>{settings}</>}
+      <div className="app-page-actions runtime-help-actions mt-3">
+        {compact && notice && <p id={`${id}-notice`} className="runtime-help-notice" role="status">{notice}</p>}
+        <button ref={recheckButton} type="button" className="app-button app-button--secondary"
+          disabled={!compact && (disabled || busy || accepting || !target)}
+          aria-disabled={compact ? disabled || busy || accepting || !target : undefined}
+          aria-describedby={compact && notice ? `${id}-notice` : undefined}
+          onClick={() => void discover()}>{actionLabel ?? copy.discover}</button>
         {busy && (
           <LocalTaskCancelButton taskId={taskId} onClick={() => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); void runtimeHelpCancelSelected(cfg).catch(cause => setError(String(cause))); }}>
             {copy.cancel}
           </LocalTaskCancelButton>
         )}
+        {compact && <details className="runtime-help-advanced"><summary>{t('settings.advanced')}</summary>{settings}</details>}
       </div>
-      {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+      {(busy || accepting) && <ProgressBar label={copy.helpTitle} className="mt-3" />}
+      {error && <FeedbackBanner tone="error" action={!target ? {
+        label: t('common.retry'), disabled: disabled || targetLoading,
+        onClick: () => {
+          if (disabled || targetLoading) return;
+          retryFocus.current = targetBinding;
+          setTargetLoading(true);
+          setTargetAttempt(value => value + 1);
+        },
+      } : undefined}>{error}</FeedbackBanner>}
       {found && summary && (
         <div className="mt-3">
           <p>{copy.discovered}: {summary.total} {copy.options}</p>
@@ -204,6 +244,6 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
           ) : <FeedbackBanner tone="error">{copy.incomplete}</FeedbackBanner>}
         </div>
       )}
-    </section>
+    </Container>
   );
 }

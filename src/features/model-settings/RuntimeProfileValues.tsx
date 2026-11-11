@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react';
+import type { AppConfig } from '../../shared/api/types';
 import type { ProviderId } from '../../shared/api/providers';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
-import type { OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import type { EffectiveSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
@@ -10,21 +12,30 @@ import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
 import { profileSchemaCopy } from './profileSchemaCopy';
 import type { ProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { profileValueMask } from './profileValueMask';
+import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import './settings-profile.css';
 
-export default function RuntimeProfileValues({ settings, provider, prompt, mode, schema, showRuntime = true }: {
+export default function RuntimeProfileValues({ settings, provider, prompt, mode, schema, config, disabled = false, showRuntime = true, onRuntimeVerified }: {
   settings: Partial<ExecutionSettings>; provider: ProviderId; prompt?: string;
   mode: 'current' | 'preview' | 'reference'; schema: ProfileRuntimeSchema;
-  showRuntime?: boolean;
+  config?: AppConfig; disabled?: boolean; showRuntime?: boolean;
+  onRuntimeVerified?: () => void;
 }) {
   const { locale } = useI18n();
   const copy = profileSchemaCopy[locale];
   const fields = profileControlCopy[locale];
   const optionsCopy = runtimeOptionsCopy[locale];
   const render = valueRenderer(locale);
+  const binding = `${provider}:${schema.runtime}`;
+  const [reviewedBinding, setReviewedBinding] = useState('');
+  const retainedView = useRef<{ binding: string; view: EffectiveSchema } | null>(null);
+  useEffect(() => { setReviewedBinding(''); }, [binding]);
   const selected = provider === schema.provider && (settings.active_runtime === undefined || settings.active_runtime === schema.runtime);
   const view = selected ? schema.view : undefined;
   const current = view && !['stale', 'unchecked'].includes(view.help_state);
+  if (retainedView.current?.binding !== binding) retainedView.current = null;
+  if (view && retainedView.current?.view !== view) retainedView.current = { binding, view };
+  const recoveryView = view ?? retainedView.current?.view;
   const applicable = (option: OptionSchemaDefinition) => !!view && option.scope.every((segment, index) => view.scope[index] === segment);
   const known = new Map(current ? view.schema.options.filter(option => !option.managed && applicable(option)).map(option => [option.key, option]) : []);
   const values = settings.provider_options?.[provider] ?? {};
@@ -46,8 +57,14 @@ export default function RuntimeProfileValues({ settings, provider, prompt, mode,
     {showRuntime && <p><RuntimeSelectionLabel config={{ ...settings, active_provider: provider,
       active_runtime: settings.active_runtime ?? (selected ? schema.runtime : '') }} /></p>}
     {selected && schema.pending ? <p role="status">{copy.checking}</p>
-      : !view ? <p role="status">{copy.unavailable} {selected && schema.runtime && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={schema.retry}>{copy.retry}</button>}</p>
-        : !current ? <p role="status">{copy.stale}</p> : null}
+      : !view ? <p role="status">{copy.unavailable} {selected && schema.runtime && <button type="button" disabled={disabled} className="app-button app-button--secondary app-button--sm" onClick={schema.retry}>{copy.retry}</button>}</p>
+        : !current && (!config || mode === 'reference') ? <p role="status">{copy.stale}</p> : null}
+    {mode !== 'reference' && config && selected && schema.runtime && recoveryView && (view && !current || reviewedBinding === binding) && <div className="settings-profile-recovery">
+      <RuntimeHelpReview key={binding} cfg={config} effective={recoveryView} disabled={disabled || schema.pending}
+        compact actionLabel={copy.review} notice={view && !current ? copy.stale : undefined}
+        onAccepted={() => { setReviewedBinding(binding); schema.retry(); onRuntimeVerified?.(); }} />
+    </div>}
+    {reviewedBinding === binding && current && <p role="status">{copy.reviewed}</p>}
     {confirmed.length > 0 && <section className="settings-profile-value-group" aria-label={copy.options}>
       <h4>{copy.options}</h4><p className="app-section-hint">{copy.declared}</p>
       <dl>{confirmed.map(key => {

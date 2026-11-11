@@ -10,13 +10,14 @@ import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
 import { ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
 import { applySettingsProfile, captureProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
-import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
+import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
+import TaskStrip from '../../shared/ui/TaskStrip';
 
 const mocks = vi.hoisted(() => ({
   dialog: null as ModelSettingsDialogProps | null, native: false, renders: 0, locale: 'en' as 'en' | 'ko',
-  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunchPreflight: vi.fn(),
+  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunch: vi.fn(),
   sessionStart: vi.fn(), sessionStop: vi.fn(), applyRequestSettings: vi.fn(),
 }));
 
@@ -30,11 +31,11 @@ vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => mocks.native,
   sessionList: mocks.sessionList, serverStatus: mocks.serverStatus,
   normalizeSessionList: (value: SessionStatus[]) => value,
-  preflightLaunch: mocks.preflightLaunch, cancelLaunchPreflight: mocks.cancelLaunchPreflight, sessionStart: mocks.sessionStart,
+  preflightLaunch: mocks.preflightLaunch, cancelLaunch: mocks.cancelLaunch, sessionStart: mocks.sessionStart,
   sessionStop: mocks.sessionStop, applyRequestSettings: mocks.applyRequestSettings,
 }));
 let context: ModelSettingsContext;
-function Consumer() { context = useModelSettings()!; return null; }
+function Consumer() { context = useModelSettings()!; return <TaskStrip launchesOnly />; }
 
 function createTestStore(overrides: Partial<AppConfig> = {}): AppStore {
   const store = createBaseTestStore(overrides);
@@ -42,8 +43,11 @@ function createTestStore(overrides: Partial<AppConfig> = {}): AppStore {
   const oldProfile = { ...captureProfile(cfg, 'Old', 'global', 'Old prompt'), id: 'profile-old' };
   const newProfile = { ...captureProfile(cfg, 'New', 'global', 'New prompt'), id: 'profile-new' };
   cfg.settings_profiles ??= { ...emptyProfileLibrary(), revision: 1, legacy_imported: true, entries: [oldProfile, newProfile], applied: {
-    [profileTargetKey(cfg.active_model)]: materializeProfileApplication(cfg, 'Old prompt', oldProfile),
-    ...Object.fromEntries((cfg.sessions ?? []).map(definition => [profileTargetKey(definition.models.primary_model, definition.id), materializeProfileApplication(sessionConfig(cfg, definition), 'Old prompt', oldProfile)])),
+    [profileTargetKey(cfg.active_model, 'default', cfg.active_provider)]: materializeProfileApplication(cfg, 'Old prompt', oldProfile),
+    ...Object.fromEntries((cfg.sessions ?? []).map(definition => {
+      const target = sessionConfig(cfg, definition);
+      return [profileTargetKey(target.active_model, definition.id, target.active_provider), materializeProfileApplication(target, 'Old prompt', oldProfile)];
+    })),
   } };
   return store;
 }
@@ -88,11 +92,11 @@ async function initialPoll() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); mocks.dialog = null; mocks.native = false; mocks.renders = 0; mocks.locale = 'en';
+  vi.resetAllMocks(); localStorage.clear(); mocks.dialog = null; mocks.native = false; mocks.renders = 0; mocks.locale = 'en';
   mocks.sessionList.mockResolvedValue([]);
   mocks.serverStatus.mockResolvedValue({ state: 'stopped' });
   mocks.preflightLaunch.mockImplementation(async (cfg: AppConfig) => structuredClone(cfg));
-  mocks.cancelLaunchPreflight.mockResolvedValue(undefined);
+  mocks.cancelLaunch.mockResolvedValue(undefined);
   mocks.sessionStart.mockResolvedValue(undefined);
   mocks.sessionStop.mockResolvedValue(undefined);
   mocks.applyRequestSettings.mockImplementation(async (cfg: AppConfig) => executionSettings(cfg));
@@ -100,46 +104,43 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 describe('model settings target application', () => {
-  it('requires an external candidate to pass the selected runtime preflight before saving or launching', async () => {
+  it('saves an external candidate before checking it but never launches a rejected model', async () => {
     const store = createTestStore({ active_provider: 'custom.example', active_runtime: 'specific-build', active_model: 'deployment.json' });
     const dialog = await open(store, { target: { kind: 'default' } });
-    const before = structuredClone(store.cfg);
     mocks.preflightLaunch.mockRejectedValueOnce(new Error('Selected runtime rejected this model'));
-    await expect(apply(dialog, dialog.initialConfig, 'start')).rejects.toThrow('Selected runtime rejected this model');
+    await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
     expect(mocks.preflightLaunch).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.example', active_runtime: 'specific-build', active_model: 'deployment.json' }), expect.any(String));
-    expect(store.cfg).toEqual(before);
-    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    expect(await screen.findByText('Selected runtime rejected this model')).toBeInTheDocument();
     expect(store.start).not.toHaveBeenCalled();
     expect(mocks.sessionStart).not.toHaveBeenCalled();
   });
-  it('cancels the pending preflight without saving its late result or stopping another target, then retries with a new owner', async () => {
+  it('cancels pending preflight without saving its late normalization or stopping another target, then retries with a new owner', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const dialog = await open(store, { target: { kind: 'default' } });
-    const before = structuredClone(store.cfg);
     let finish!: (cfg: AppConfig) => void;
     mocks.preflightLaunch.mockImplementationOnce(() => new Promise<AppConfig>(resolve => { finish = resolve; }));
-    let result!: Promise<unknown>;
-    act(() => { result = apply(dialog, dialog.initialConfig, 'start').then(() => undefined, cause => cause); });
-    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mocks.dialog?.onCancelStart).toBeTypeOf('function'));
+    await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+    const task = getTaskSnapshot().find(item => item.state === 'running')!;
     const owner = mocks.preflightLaunch.mock.calls[0][1];
-    expect(owner).toBeTypeOf('string');
-    act(() => { mocks.dialog!.onCancelStart!(); });
-    await waitFor(() => expect(mocks.cancelLaunchPreflight).toHaveBeenCalledWith(owner));
-    let outcome: unknown;
-    await act(async () => { finish({ ...dialog.initialConfig, ctx_size: 512 }); outcome = await result; });
-    expect(String(outcome)).toContain('server start cancelled');
-    expect(store.cfg).toEqual(before);
-    expect(store.updateConfig).not.toHaveBeenCalled();
+    await act(async () => { await task.cancel!(); });
+    expect(mocks.cancelLaunch).toHaveBeenCalledWith(owner, 'default');
+    await act(async () => { finish({ ...dialog.initialConfig, ctx_size: 512 }); });
+    expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelled');
+    expect(store.cfg?.ctx_size).toBe(dialog.initialConfig.ctx_size);
+    expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.start).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
     expect(mocks.sessionStart).not.toHaveBeenCalled();
     expect(mocks.sessionStop).not.toHaveBeenCalled();
-    await act(async () => { await apply(mocks.dialog!, dialog.initialConfig, 'start'); });
+    act(() => context.open({ target: { kind: 'default' } }));
+    await act(async () => { await apply(mocks.dialog!, mocks.dialog!.initialConfig, 'start'); });
     expect(mocks.preflightLaunch).toHaveBeenCalledTimes(2);
     expect(mocks.preflightLaunch.mock.calls[1][1]).not.toBe(owner);
-    expect(store.start).toHaveBeenCalledTimes(1);
-    expect(mocks.cancelLaunchPreflight).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(store.start).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelLaunch).toHaveBeenCalledTimes(1);
   });
   it('opens and saves a loaded snapshot without replacing its path with the public engine alias', async () => {
     const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
@@ -329,6 +330,49 @@ describe('model settings target application', () => {
 });
 
 describe('profile actions within an open editor', () => {
+  it.each((['default', 'session', 'project', 'benchmark'] as const).flatMap(kind =>
+    (['llama.cpp', 'vllm'] as const).map(provider => ({ kind, provider }))))(
+    'keeps the selected $provider runtime through metadata and restore actions for $kind', async ({ kind, provider }) => {
+      const store = createTestStore({ sessions: [namedSession()] });
+      const selected = { ...store.cfg!, active_provider: provider, active_runtime: provider === 'vllm' ? 'selected-vllm' : '',
+        active_backend: 'cpu', active_build: 'selected-build', active_model: 'selected-model.gguf', temperature: 0.3,
+        provider_options: { vllm: { temperature: 0.3 } } };
+      const own = { ...captureProfile(selected, 'Selected options', 'global', 'Selected prompt'), id: 'selected-options' };
+      const fallback = { ...captureProfile({ ...selected, temperature: 0.6, provider_options: { vllm: { temperature: 0.6 } } }, 'Replacement options', 'global', 'Replacement prompt'), id: 'replacement-options' };
+      const library = store.cfg!.settings_profiles!;
+      library.entries.push(own, fallback);
+      library.provider_defaults = { ...library.provider_defaults, [provider]: fallback.id };
+      if (provider === 'llama.cpp') library.default_profile_id = fallback.id;
+      library.applied[profileTargetKey(selected.active_model, 'default', provider)] = materializeProfileApplication(selected, 'Selected prompt', own);
+      const target = kind === 'session' ? { kind, sessionId: 'work' } : kind === 'default' ? { kind } : { kind, id: 'target' };
+      const onApply = vi.fn();
+      const dialog = await open(store, { target, onApply });
+      const draft = { ...dialog.initialConfig, ...executionSettings(selected), temperature: 1.1, provider_options: { vllm: { temperature: 1.1 } } };
+      const renamed = editorResult(dialog, draft);
+      renamed.library.entries.find(entry => entry.id === own.id)!.name = 'Renamed options';
+      let restored!: ProfileCommitResult;
+      await act(async () => { restored = await dialog.onProfileCommit(draft, renamed, false); });
+      expect(restored.config).toMatchObject({ active_provider: provider, active_runtime: selected.active_runtime,
+        active_backend: 'cpu', active_build: 'selected-build', active_model: selected.active_model });
+      expect(provider === 'llama.cpp' ? restored.config.temperature : restored.config.provider_options?.vllm?.temperature).toBe(0.3);
+      expect(restored.application).toMatchObject({ profile_id: own.id, profile_name: 'Renamed options', system_prompt: 'Selected prompt' });
+      expect(store.cfg).toMatchObject({ active_model: 'model.gguf', active_build: dialog.initialConfig.active_build });
+      await act(async () => { restored = await mocks.dialog!.onReloadProfile(draft); });
+      expect(restored.config).toMatchObject({ active_provider: provider, active_runtime: selected.active_runtime,
+        active_build: 'selected-build', active_model: selected.active_model });
+      expect(provider === 'llama.cpp' ? restored.config.temperature : restored.config.provider_options?.vllm?.temperature).toBe(0.3);
+      const removed = { baseRevision: restored.config.settings_profiles!.revision,
+        library: deleteSettingsProfile(restored.config.settings_profiles!, own.id), application: restored.application };
+      await act(async () => { restored = await mocks.dialog!.onProfileCommit(draft, removed, false); });
+      expect(restored.config).toMatchObject({ active_provider: provider, active_runtime: selected.active_runtime,
+        active_build: 'selected-build', active_model: selected.active_model });
+      expect(provider === 'llama.cpp' ? restored.config.temperature : restored.config.provider_options?.vllm?.temperature).toBe(0.6);
+      expect(restored.application).toMatchObject({ profile_id: fallback.id, system_prompt: 'Replacement prompt' });
+      expect(onApply).not.toHaveBeenCalled();
+      expect(store.start).not.toHaveBeenCalled(); expect(mocks.sessionStart).not.toHaveBeenCalled();
+      expect(mocks.serverStatus).not.toHaveBeenCalled(); expect(mocks.sessionList).not.toHaveBeenCalled();
+    });
+
   it('designates a default without saving or applying unsaved execution values', async () => {
     const store = createTestStore();
     const dialog = await open(store, { target: { kind: 'default' } });
@@ -394,7 +438,7 @@ describe('profile actions within an open editor', () => {
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'target.gguf', temperature: 0.25 }), expect.objectContaining({ profile_id: 'profile-new', system_prompt: 'New prompt' }));
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(entry => entry.id)).toEqual(['profile-new']);
     expect(mocks.dialog?.initialConfig.active_model).toBe('target.gguf');
-    const reloaded = await mocks.dialog!.onReloadProfile('target.gguf');
+    const reloaded = await mocks.dialog!.onReloadProfile({ ...mocks.dialog!.initialConfig, active_model: 'target.gguf' });
     expect(reloaded.config.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(entry => entry.id)).toEqual(['profile-new']);
     expect(reloaded.application.profile_id).toBe('profile-new');
     expect(store.start).not.toHaveBeenCalled();
@@ -443,7 +487,7 @@ describe('profile actions within an open editor', () => {
     store.cfg!.settings_profiles!.entries[0].settings.temperature = 1.4;
     store.cfg!.settings_profiles!.entries[0].system_prompt = 'Changed reusable prompt';
     let result!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
-    await act(async () => { result = await dialog.onReloadProfile('model.gguf'); });
+    await act(async () => { result = await dialog.onReloadProfile(dialog.initialConfig); });
     expect(result.config.temperature).toBe(1.4);
     expect(result.application.system_prompt).toBe('Changed reusable prompt');
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).toMatchObject({ settings: { temperature: 0.8 }, system_prompt: 'Old prompt' });
@@ -457,7 +501,7 @@ describe('profile actions within an open editor', () => {
     store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', store.cfg!.settings_profiles!.entries[0]);
     const dialog = await open(store, { target: { kind: 'default' } });
     let result!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
-    await act(async () => { result = await dialog.onReloadProfile('other.gguf'); });
+    await act(async () => { result = await dialog.onReloadProfile({ ...dialog.initialConfig, active_model: 'other.gguf' }); });
     expect(result.config).toMatchObject({ active_model: 'other.gguf', ctx_size: 4096, temperature: 0.8 });
     expect(result.application).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Old prompt' });
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey(other.active_model)].settings.ctx_size).toBe(16384);
@@ -471,7 +515,7 @@ describe('profile actions within an open editor', () => {
     store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', store.cfg!.settings_profiles!.entries[0]);
     const dialog = await open(store, { target: { kind: 'default' } });
     let result: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>> | undefined;
-    await act(async () => { result = await dialog.onReloadProfile('other.gguf'); });
+    await act(async () => { result = await dialog.onReloadProfile({ ...dialog.initialConfig, active_model: 'other.gguf' }); });
     const saved = result!;
     const edit = { baseRevision: saved.config.settings_profiles!.revision, library: structuredClone(saved.config.settings_profiles!), application: saved.application };
     await act(async () => { await mocks.dialog!.onProfileCommit(saved.config, edit, true); });
@@ -494,7 +538,7 @@ describe('profile actions within an open editor', () => {
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Changed');
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
     let reloaded!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
-    await act(async () => { reloaded = await mocks.dialog!.onReloadProfile('target.gguf'); });
+    await act(async () => { reloaded = await mocks.dialog!.onReloadProfile(draft); });
     expect(reloaded.config).toMatchObject({ active_model: 'target.gguf', ngl: 7 });
     expect(reloaded.application.system_prompt).toBe('New prompt');
     expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
@@ -533,7 +577,7 @@ describe('profile actions within an open editor', () => {
     expect(failure).toBeInstanceOf(SettingsDeliveryError);
     expect(store.cfg?.settings_profiles?.revision).toBe(2);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
-    const restored = await mocks.dialog!.onReloadProfile('model.gguf');
+    const restored = await mocks.dialog!.onReloadProfile(dialog.initialConfig);
     expect(restored.config.temperature).toBe(0.8);
     expect(restored.config.settings_profiles?.revision).toBe(2);
     expect(restored.application.system_prompt).toBe('Old prompt');
@@ -550,7 +594,7 @@ describe('model launch preparation', () => {
     return { promise, resolve, reject };
   }
 
-  it('closes during preflight without cancelling and keeps the launch visible until it finishes', async () => {
+  it('closes after saving before preflight settles and keeps the launch visible until readiness', async () => {
     const store = createTestStore();
     const preflight = deferred<AppConfig>();
     const launch = deferred<string>();
@@ -560,21 +604,21 @@ describe('model launch preparation', () => {
     let result!: Promise<void>;
     act(() => { result = apply(dialog, dialog.initialConfig, 'start'); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
-    act(() => mocks.dialog!.onClose());
+    await act(async () => { await result; });
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
-    expect(mocks.cancelLaunchPreflight).not.toHaveBeenCalled();
+    expect(mocks.cancelLaunch).not.toHaveBeenCalled();
     const task = getTaskSnapshot().find(item => item.state === 'running')!;
-    expect(task).toMatchObject({ kind: 'other', interruptible: true });
+    expect(task).toMatchObject({ kind: 'model-launch', targetId: 'default', interruptible: true });
     expect(task.phase).toBe('Checking the selected engine and model…');
-    act(() => context.open({ target: { kind: 'default' } }));
-    expect(screen.getByText('Wait for the current model operation to finish.')).toBeInTheDocument();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    act(() => context.open({ target: { kind: 'session', sessionId: 'missing' } }));
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
-    await act(async () => { preflight.resolve(dialog.initialConfig); await result; });
-    expect(store.start).toHaveBeenCalledOnce();
+    await act(async () => { preflight.resolve(structuredClone(mocks.preflightLaunch.mock.calls[0][0])); });
+    await waitFor(() => expect(store.start).toHaveBeenCalledOnce());
     expect(store.stop).not.toHaveBeenCalled();
     expect(getTaskSnapshot().find(item => item.id === task.id)).toMatchObject({ state: 'running', interruptible: true });
     await act(async () => { launch.resolve(''); });
-    expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('completed');
+    await waitFor(() => expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('completed'));
     act(() => context.open({ target: { kind: 'default' } }));
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
   });
@@ -587,15 +631,15 @@ describe('model launch preparation', () => {
     let result!: Promise<unknown>;
     act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
-    act(() => mocks.dialog!.onClose());
+    await act(async () => { await result; });
     await act(async () => { preflight.reject(new Error('Selected runtime rejected this model')); await result; });
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
-    expect(screen.getByText('Selected runtime rejected this model')).toBeInTheDocument();
+    expect(await screen.findByText('Selected runtime rejected this model')).toBeInTheDocument();
     expect(getTaskSnapshot()).toEqual(expect.arrayContaining([expect.objectContaining({
-      kind: 'other', state: 'failed', detail: 'Selected runtime rejected this model',
+      kind: 'model-launch', state: 'failed', detail: 'Selected runtime rejected this model',
     })]));
     expect(store.start).not.toHaveBeenCalled();
-    expect(mocks.cancelLaunchPreflight).not.toHaveBeenCalled();
+    expect(mocks.cancelLaunch).not.toHaveBeenCalled();
   });
 
   it('keeps a closed preflight cancellable from the global task', async () => {
@@ -606,10 +650,10 @@ describe('model launch preparation', () => {
     let result!: Promise<unknown>;
     act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
-    act(() => mocks.dialog!.onClose());
+    await act(async () => { await result; });
     const task = getTaskSnapshot().find(item => item.state === 'running')!;
     act(() => { void task.cancel!(); });
-    expect(mocks.cancelLaunchPreflight).toHaveBeenCalledWith(mocks.preflightLaunch.mock.calls[0][1]);
+    expect(mocks.cancelLaunch).toHaveBeenCalledWith(mocks.preflightLaunch.mock.calls[0][1], 'default');
     await act(async () => { preflight.resolve(dialog.initialConfig); await result; });
     expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelled');
     expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
@@ -640,22 +684,96 @@ describe('model launch preparation', () => {
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.sessionStart).toHaveBeenCalledOnce());
     await act(async () => { launch.reject(new Error('Session engine failed to load the model')); });
-    expect(screen.getByText('Session engine failed to load the model')).toBeInTheDocument();
+    expect(await screen.findByText('Session engine failed to load the model')).toBeInTheDocument();
     expect(getTaskSnapshot()).toEqual(expect.arrayContaining([expect.objectContaining({
-      kind: 'other', state: 'failed', detail: 'Session engine failed to load the model',
+      kind: 'model-launch', state: 'failed', detail: 'Session engine failed to load the model',
     })]));
   });
 
-  it('keeps a running model and saved configuration intact when preflight fails', async () => {
+  it('keeps the running model intact and retains newly saved settings when preflight fails', async () => {
     const store = createTestStore();
     const live = running(store.cfg!); store.status = live;
     mocks.serverStatus.mockResolvedValue(live);
     mocks.preflightLaunch.mockRejectedValueOnce(new Error('missing model shard'));
     const dialog = await open(store, { target: { kind: 'default' } });
-    await act(async () => { await expect(apply(dialog, { ...dialog.initialConfig, active_model: 'replacement.gguf' }, 'start')).rejects.toThrow('missing model shard'); });
-    expect(store.updateConfig).not.toHaveBeenCalled(); expect(store.stop).not.toHaveBeenCalled(); expect(store.start).not.toHaveBeenCalled();
-    expect(store.cfg?.active_model).toBe('model.gguf');
+    await act(async () => { await apply(dialog, { ...dialog.initialConfig, active_model: 'replacement.gguf' }, 'start'); });
+    expect(store.updateConfig).toHaveBeenCalledOnce(); expect(store.stop).not.toHaveBeenCalled(); expect(store.start).not.toHaveBeenCalled();
+    expect(store.cfg?.active_model).toBe('replacement.gguf');
+  });
+
+  it('launches the captured snapshot without repersisting over newer settings saved during preflight', async () => {
+    const store = createTestStore();
+    const preflight = deferred<AppConfig>();
+    const readiness = deferred<string>();
+    mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+    vi.mocked(store.start).mockReturnValueOnce(readiness.promise);
+    const original = await open(store, { target: { kind: 'default' } });
+    try {
+      await act(async () => { await apply(original, original.initialConfig, 'start'); });
+      await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+      const captured = structuredClone(mocks.preflightLaunch.mock.calls[0][0]);
+      const operationId = mocks.preflightLaunch.mock.calls[0][1];
+      act(() => context.open({ target: { kind: 'default' } }));
+      const newer = mocks.dialog!;
+      await act(async () => { await apply(newer, { ...newer.initialConfig, active_model: 'next.gguf', ctx_size: 8192 }, 'save', 'profile-new'); });
+      expect(store.cfg).toMatchObject({ active_model: 'next.gguf', ctx_size: 8192 });
+      await act(async () => preflight.resolve(captured));
+      await waitFor(() => expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: original.initialConfig.active_model, ctx_size: original.initialConfig.ctx_size }), false, { persist: false, operationId }));
+      expect(store.updateConfig).toHaveBeenCalledTimes(2);
+      expect(store.cfg).toMatchObject({ active_model: 'next.gguf', ctx_size: 8192 });
+      await act(async () => readiness.resolve('http://localhost:8080/v1'));
+      expect(store.cfg).toMatchObject({ active_model: 'next.gguf', ctx_size: 8192 });
+    } finally {
+      await act(async () => { preflight.resolve(original.initialConfig); readiness.resolve('http://localhost:8080/v1'); });
+    }
+  });
+
+  it('does not issue target-wide cleanup when a cancelled named launch returns late readiness', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const readiness = deferred<SessionStatus>();
+    mocks.sessionStart.mockReturnValueOnce(readiness.promise);
+    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    try {
+      await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
+      await waitFor(() => expect(mocks.sessionStart).toHaveBeenCalledOnce());
+      const task = getTaskSnapshot().find(item => item.state === 'running')!;
+      expect(mocks.sessionStart).toHaveBeenCalledWith('work', expect.objectContaining({ active_model: 'work.gguf' }), dialog.initialConfig.stop_existing_sessions_on_load, { persist: false, operationId: task.id });
+      await act(async () => { await task.cancel!(); });
+      expect(mocks.cancelLaunch).toHaveBeenCalledExactlyOnceWith(task.id, 'work');
+      await act(async () => readiness.resolve(running(dialog.initialConfig, 'work')));
+      await waitFor(() => expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelled'));
+      expect(mocks.sessionStop).not.toHaveBeenCalled();
+      expect(store.stop).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => readiness.resolve(running(dialog.initialConfig, 'work')));
+    }
+  });
+
+  it('keeps cancellation pending through late readiness and retains a scoped cancellation failure', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const readiness = deferred<SessionStatus>();
+    const cancellation = deferred<void>();
+    mocks.sessionStart.mockReturnValueOnce(readiness.promise);
+    mocks.cancelLaunch.mockReturnValueOnce(cancellation.promise);
+    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    let cancel!: Promise<void>;
+    try {
+      await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
+      await waitFor(() => expect(mocks.sessionStart).toHaveBeenCalledOnce());
+      const task = getTaskSnapshot().find(item => item.state === 'running')!;
+      act(() => { cancel = Promise.resolve(task.cancel!()); });
+      await act(async () => readiness.resolve(running(dialog.initialConfig, 'work')));
+      expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelling');
+      await act(async () => { cancellation.reject(new Error('Cannot cancel while a response is active')); await cancel; });
+      expect(await screen.findByText('Cannot cancel while a response is active')).toBeInTheDocument();
+      expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('failed');
+      expect(mocks.sessionStop).not.toHaveBeenCalled();
+      expect(store.updateConfig).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => { cancellation.resolve(); readiness.resolve(running(dialog.initialConfig, 'work')); await cancel; });
+    }
   });
 
   it('launches normalized settings through native replacement without stopping first', async () => {
@@ -668,8 +786,28 @@ describe('model launch preparation', () => {
     expect(store.cfg?.ctx_size).toBe(512);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ctx_size: 512 } });
-    expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ ctx_size: 512 }), true);
+    expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ ctx_size: 512 }), true, { persist: false, operationId: mocks.preflightLaunch.mock.calls[0][1] });
     expect(store.stop).not.toHaveBeenCalled();
+  });
+
+  it.each(['default', 'session'] as const)('keeps the accepted stop policy when preferences change during a normalized %s launch', async kind => {
+    const store = createTestStore({ stop_existing_sessions_on_load: false, sessions: [namedSession()] });
+    const preflight = deferred<AppConfig>();
+    mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+    const target: ModelSettingsRequest['target'] = kind === 'default' ? { kind } : { kind, sessionId: 'work' };
+    const dialog = await open(store, { target });
+    await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
+    const captured = structuredClone(mocks.preflightLaunch.mock.calls[0][0]);
+    const operationId = mocks.preflightLaunch.mock.calls[0][1];
+    await act(async () => { await store.updateConfig({ stop_existing_sessions_on_load: true }); });
+    setSessionActivity(kind === 'default' ? 'work' : 'default', true);
+    await act(async () => { preflight.resolve({ ...captured, ctx_size: 8192 }); });
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === operationId)?.state).toBe('completed'));
+    const saved = store.getConfig()!;
+    expect(saved.stop_existing_sessions_on_load).toBe(true);
+    const savedTarget = kind === 'session' ? sessionConfig(saved, saved.sessions!.find(session => session.id === 'work')!) : saved;
+    expect(savedTarget.ctx_size).toBe(8192);
   });
 
   it('blocks a default launch that would interrupt another active response', async () => {

@@ -43,6 +43,22 @@ function view(config = cfg, onAccepted = vi.fn()) {
   return <I18nProvider initialLocale="en"><RuntimeHelpReview cfg={config} effective={effective} disabled={false} onAccepted={onAccepted} /></I18nProvider>;
 }
 
+it('recovers a failed target lookup without running or accepting help during the retry', async () => {
+  vi.mocked(api.runtimeHelpTarget).mockRejectedValueOnce(new Error('Synthetic runtime lookup failed'));
+  render(view());
+  expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic runtime lookup failed');
+  const discover = screen.getByRole('button', { name: 'Discover help' });
+  expect(discover).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(discover).toBeEnabled());
+  expect(discover).toHaveFocus();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(api.runtimeHelpDiscoverSelected).not.toHaveBeenCalled();
+  fireEvent.click(discover);
+  expect(await screen.findByRole('button', { name: 'Use these options' })).toBeEnabled();
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+});
+
 it('reloads help text choices, invalidates a review on edit and can return to the omitted defaults', async () => {
   vi.mocked(api.runtimeHelpTarget).mockResolvedValueOnce({
     engine: cfg.active_provider, runtime: cfg.active_runtime, program: '/synthetic/engine', fixed: true,

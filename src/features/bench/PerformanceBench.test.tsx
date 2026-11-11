@@ -11,7 +11,7 @@ import { useModelSettings, type ModelSettingsContext } from "../model-settings/M
 import { testConfig } from '../../testing/appStore';
 import { materializeProfileApplication, MODEL_PROFILE_KEYS, profileSettingsSnapshot, profileTargetKey, type SettingsProfile } from '../../shared/config/settingsProfiles';
 
-import { effectiveSchema } from '../../testing/effectiveSchema';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => ({
@@ -21,6 +21,8 @@ vi.mock("../../shared/api/index", () => ({
   sessionSummaryList: vi.fn(async () => []),
   isNativeRuntimeAvailable: () => false,
   providerRuntimes: vi.fn(async () => []), providerOptionSchema: vi.fn(async () => effectiveSchema([])),
+  runtimeHelpTarget: vi.fn(), runtimeHelpDiscoverSelected: vi.fn(), runtimeHelpAccept: vi.fn(),
+  runtimeHelpCancelSelected: vi.fn(async () => true),
 }));
 
 const cfg = { active_model: "C:/models/test.gguf", active_backend: "cpu", active_build: "b1", iters: 3, runtime_defaults: [] } as unknown as api.AppConfig;
@@ -94,6 +96,10 @@ beforeEach(() => {
   mocked.onPerformanceBenchmarkProgress.mockImplementation(async (callback) => { emit = callback; return unlisten; });
   mocked.benchCancel.mockResolvedValue(undefined);
   mocked.performanceBenchAdmission.mockResolvedValue({ status: 'supported', reason: 'ready' });
+  mocked.providerOptionSchema.mockResolvedValue(effectiveSchema([]));
+  mocked.runtimeHelpTarget.mockReset();
+  mocked.runtimeHelpDiscoverSelected.mockReset();
+  mocked.runtimeHelpAccept.mockReset();
   mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => result(request.run_id, [row()]));
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -129,6 +135,56 @@ describe("Performance benchmark workflow", () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
     expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('unblocks the unchanged benchmark target after reviewing its refreshed runtime options', async () => {
+    const selected = assignedConfig({
+      active_provider: 'custom.benchmark', active_runtime: 'synthetic-build',
+      provider_options: { 'custom.benchmark': { limit: 7 } },
+    });
+    store = { ...store, cfg: selected.config };
+    const saved = structuredClone(selected.config);
+    let accepted = false;
+    const option = schemaOption({ key: 'limit', flag: '--limit', target: 'launch', group: 'runtime', kind: { type: 'integer' } });
+    const current = effectiveSchema([], [option]);
+    mocked.providerOptionSchema.mockImplementation(async () => accepted ? current : { ...current, help_state: 'stale' });
+    mocked.performanceBenchAdmission.mockImplementation(async () => accepted
+      ? { status: 'supported', reason: 'ready' }
+      : { status: 'unknown', reason: 'configuration', detail: 'Saved runtime help needs review' });
+    const fingerprint = 'a'.repeat(64);
+    const request = { args: ['--help'], scope: [] };
+    mocked.runtimeHelpTarget.mockResolvedValue({
+      engine: 'custom.benchmark', runtime: 'synthetic-build', program: 'synthetic-engine', fixed: true, prefix: [], request,
+    });
+    mocked.runtimeHelpDiscoverSelected.mockResolvedValue([{
+      identity: { fingerprint, executable_sha256: 'b'.repeat(64), artifacts_sha256: {}, parser_version: 1 },
+      scope: [], stdout: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false },
+      stderr: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false },
+      success: true, cancelled: false, timed_out: false, elapsed_ms: 1,
+    }, {
+      engine: 'custom.benchmark', runtime: 'synthetic-build', fingerprint, help_complete: true, schema: current.schema,
+      retained: [], diff: { added: [], removed: [], changed: ['limit'], retained_unknown: [] },
+    }]);
+    mocked.runtimeHelpAccept.mockImplementation(async () => {
+      accepted = true;
+      return { version: 1, fingerprint, request };
+    });
+    renderPanel();
+    await screen.findByText(/Benchmark support is not verified/);
+    const run = screen.getByRole('button', { name: 'Run benchmark' });
+    expect(run).toBeDisabled();
+    const environment = screen.getByRole('region', { name: 'Execution environment' });
+    fireEvent.click(within(environment).getByText('Key settings', { selector: 'summary' }));
+    const recheck = await within(environment).findByRole('button', { name: 'Recheck options' });
+    await waitFor(() => expect(recheck).not.toHaveAttribute('aria-disabled', 'true'));
+    fireEvent.click(recheck);
+    const accept = await within(environment).findByRole('button', { name: 'Use these options' });
+    expect(run).toBeDisabled();
+    fireEvent.click(accept);
+    await waitFor(() => expect(run).toBeEnabled());
+    expect(await within(environment).findByText('--limit')).toBeVisible();
+    expect(store.cfg).toEqual(saved);
+    expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
   });
 
   it.each([

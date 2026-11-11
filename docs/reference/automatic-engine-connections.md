@@ -58,16 +58,22 @@ For an AioLM-managed connection, model settings show options from the selected
 engine command's own help. Existing connections discover this help when their
 settings are first opened. The executable and connection files must still match
 their recorded hashes; later changes do not silently replace reviewed help.
-Use the option controls or **Import command** for documented options.
-**Additional launch arguments** is directly available below the option controls
+Simple option controls use responsive columns; JSON, token lists, local paths,
+repeated and multi-value editors retain full width. Use these controls or
+**Import command** for documented options. Command import, preview, order,
+syntax and help tools are grouped under **Command and help tools**.
+**Additional launch arguments** remains directly available below the controls
 and accepts undocumented options as individual literal tokens, including paths with spaces. It does not evaluate
 shell syntax. Duplicate flags, documented options and app-owned model,
 address, port and authentication bindings are rejected there instead of being
 emitted twice. Attached servers keep their launch settings outside AioLM.
 
-The model settings dialog can be closed during a start. Loading continues as a
-background task; closing is not cancellation. Use the task's explicit cancel
-action to stop it, and check the task or global error message if loading fails.
+**Save profile & start** saves the profile and target, then automatically closes
+the model settings dialog before engine/model checks and loading finish.
+The visible background launch task shows the model and current stage with
+indeterminate progress, not a guessed percentage. Closing is not cancellation:
+use **Cancel** to stop that launch. A later failure retains its details and
+**Review saved model settings** reopens the saved configuration for correction.
 
 Starting an unchanged, previously verified automatic model does not first load
 and unload a throwaway verification process. Changed launch options are checked

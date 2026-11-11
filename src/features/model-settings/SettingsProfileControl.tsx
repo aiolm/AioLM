@@ -90,7 +90,7 @@ const settingGroups = [
 
 type DefaultRuntime = { options: readonly ServerOption[]; verified: boolean; backend?: string; build?: string };
 
-function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; provider: ProviderId; schema: ProfileRuntimeSchema; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
+function SettingsValues({ settings, provider, schema, prompt, runtime, runtimeConfig, disabled, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; provider: ProviderId; schema: ProfileRuntimeSchema; prompt?: string; runtime: DefaultRuntime; runtimeConfig?: AppConfig; disabled: boolean; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const renderValue = valueRenderer(locale);
@@ -105,7 +105,7 @@ function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevice
   const source = sameRuntime ? runtime : previewRuntime;
   const displayDevices = sameRuntime ? gpuDevices
     : previewRuntime.capabilities?.backend === backend ? runtimeGpuDevices(backend, previewRuntime.capabilities.devices) : [];
-  if (!llama) return <RuntimeProfileValues settings={settings} provider={provider} prompt={prompt} mode={mode} schema={schema} />;
+  if (!llama) return <RuntimeProfileValues settings={settings} provider={provider} prompt={prompt} mode={mode} schema={schema} config={runtimeConfig} disabled={disabled} />;
   const keys = new Set([...Object.keys(settings), ...(settings.runtime_defaults ?? [])]);
   const entries: [string, unknown][] = [...keys].filter(key => !['active_model', 'runtime_defaults', 'chat_options', 'provider_options', 'active_runtime'].includes(key)).map(key => [key, settings[key as keyof ExecutionSettings]]);
   const rendered = new Set(settingGroups.flatMap(group => [...group.keys]) as string[]);
@@ -314,10 +314,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
         {detailItem && isDefault(detailItem) && <p id={`${detailId}-delete-hint`} className="settings-profile-hint">{copy.defaultDeleteHint}</p>}
         {preview && <p className="settings-profile-hint">{copy.previewHint}</p>}
         {preview?.description && <p className="settings-profile-hint">{preview.description}</p>}
-        <SettingsValues settings={preview?.settings ?? currentSettings} provider={preview?.provider ?? preview?.settings.active_provider ?? provider} schema={schema} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
+        <SettingsValues settings={preview?.settings ?? currentSettings} provider={preview?.provider ?? preview?.settings.active_provider ?? provider} schema={schema} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} runtimeConfig={runtimeConfig} disabled={mutationLocked} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
       </section>
       <details className="settings-profile-defaults app-card app-card--tight"><summary>{copy.defaults}<Badge>{copy.readonly}</Badge></summary>
-        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} provider={provider} schema={schema} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
+        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} provider={provider} schema={schema} runtime={runtime} runtimeConfig={runtimeConfig} disabled={mutationLocked} gpuDevices={gpuDevices} mode="reference" />
       </details>
     </>}
     {children && <div className="settings-profile-editor">{children}</div>}

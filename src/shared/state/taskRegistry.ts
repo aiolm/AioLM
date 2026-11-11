@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { notifyCompletion, type CompletionNotificationKind } from "../lib/notifications";
 
-export type TaskKind = "runtime" | "benchmark" | "model-download" | "other";
+export type TaskKind = "runtime" | "benchmark" | "model-download" | "model-launch" | "other";
 export type TaskState = "running" | "cancelling" | "completed" | "cancelled" | "failed" | "crashed";
 
 export interface AppTask {
@@ -22,6 +22,9 @@ export interface AppTask {
   /** Stopping keeps the work's progress for a later resume, so it reads as a pause. */
   pausable?: boolean;
   cancel?: () => Promise<void> | void;
+  /** Launch intent is independent of backend polling until readiness settles it. */
+  targetId?: string;
+  action?: { label: string; onClick: () => void };
   /**
    * Which completion alert a successful finish may raise. Model downloads and
    * benchmarks have one by kind; other work opts in here, and the rest - session

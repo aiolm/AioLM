@@ -62,6 +62,107 @@ describe('exclusive option editing', () => {
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue(original);
     expect(JSON.parse((screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement).value)).toEqual({ min_p: 0.4 });
   });
+
+  function SynchronizedEditor() {
+    const [cfg, setCfg] = useState<AppConfig>({ ...testConfig,
+      server_args: ['--custom-mode', 'original', '--custom-pair', 'one', 'two'],
+      chat_options: { min_p: 0.05, top_p: 0.9 } });
+    const [invalid, setInvalid] = useState(new Set(['temperature']));
+    return <>
+      <button onClick={() => setCfg(current => ({ ...current, chat_options: { ...current.chat_options, min_p: 0.2 } }))}>Update request elsewhere</button>
+      <button onClick={() => setCfg(current => ({ ...current, server_args: ['--custom-mode', 'newer', '--custom-pair', 'one', 'two', '--mlock'] }))}>Update arguments elsewhere</button>
+      <button onClick={() => setCfg(current => ({ ...current, temperature: 0.7, server_args: [...current.server_args], chat_options: { ...current.chat_options } }))}>Update unrelated setting</button>
+      <button onClick={() => setInvalid(current => { const next = new Set(current); next.delete('temperature'); return next; })}>Repair other setting</button>
+      <button disabled={invalid.size > 0}>Apply settings</button>
+      <DraftAdvancedEditor cfg={cfg} options={options} disabled={false} benchmark={false}
+        onChange={patch => setCfg(current => ({ ...current, ...patch }))}
+        onInvalid={(key, value) => setInvalid(current => { const next = new Set(current); if (value) next.add(key); else next.delete(key); return next; })} />
+    </>;
+  }
+
+  it('refreshes edited request JSON from external changes and preserves the newer values on the next edit', () => {
+    render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    const chat = screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement;
+    const formatted = '{ "min_p": 0.1, "top_p": 0.9 }';
+    fireEvent.change(chat, { target: { value: formatted } });
+    chat.focus();
+    chat.setSelectionRange(4, 4);
+    fireEvent.click(screen.getByRole('button', { name: 'Update unrelated setting' }));
+    expect(chat).toHaveValue(formatted);
+    expect(chat).toHaveFocus();
+    expect(chat.selectionStart).toBe(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Update request elsewhere' }));
+    expect(JSON.parse(chat.value)).toEqual({ min_p: 0.2, top_p: 0.9 });
+    fireEvent.change(chat, { target: { value: chat.value.replace(/\}$/, ', "top_k": 40 }') } });
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.guided }));
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    expect(JSON.parse((screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement).value))
+      .toEqual({ min_p: 0.2, top_p: 0.9, top_k: 40 });
+  });
+
+  it('refreshes edited raw arguments without resetting their formatting for unrelated updates', () => {
+    render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    const args = screen.getByLabelText('Extra server arguments (one per line)') as HTMLTextAreaElement;
+    const formatted = '--custom-mode edited\n\n--custom-pair one two';
+    fireEvent.change(args, { target: { value: formatted } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update unrelated setting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Update request elsewhere' }));
+    expect(args).toHaveValue(formatted);
+    fireEvent.click(screen.getByRole('button', { name: 'Update arguments elsewhere' }));
+    expect(args).toHaveValue('--custom-mode newer\n--custom-pair one two\n--mlock');
+    fireEvent.change(args, { target: { value: `${args.value}\n--future-flag extra` } });
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.guided }));
+    expect(screen.getByRole('textbox', { name: '--custom-mode' })).toHaveValue('newer');
+    expect(screen.getByRole('switch', { name: '--mlock Enabled' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    expect(screen.getByLabelText('Extra server arguments (one per line)'))
+      .toHaveValue('--custom-mode newer\n--custom-pair one two\n--mlock\n--future-flag extra');
+  });
+
+  it('refreshes only the externally changed guided option and preserves another incomplete draft', () => {
+    render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
+    const mode = screen.getByRole('textbox', { name: '--custom-mode' });
+    const pair = screen.getByRole('textbox', { name: '--custom-pair' });
+    fireEvent.change(mode, { target: { value: 'edited' } });
+    fireEvent.change(pair, { target: { value: 'one' } });
+    pair.focus();
+    (pair as HTMLInputElement).setSelectionRange(1, 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Update unrelated setting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Update arguments elsewhere' }));
+    expect(mode).toHaveValue('newer');
+    expect(pair).toHaveValue('one');
+    expect(pair).toHaveFocus();
+    expect((pair as HTMLInputElement).selectionStart).toBe(1);
+    expect(screen.getByRole('button', { name: controlChoiceCopy.en.direct })).toBeDisabled();
+    fireEvent.change(mode, { target: { value: `${(mode as HTMLInputElement).value}-edited` } });
+    fireEvent.change(pair, { target: { value: 'one two' } });
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    expect(screen.getByLabelText('Extra server arguments (one per line)'))
+      .toHaveValue('--custom-mode newer-edited\n--custom-pair one two\n--mlock');
+  });
+
+  it('clears only invalid drafts replaced externally and leaves other editors blocking apply', () => {
+    render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
+    fireEvent.change(screen.getByLabelText('Extra server arguments (one per line)'), { target: { value: '--custom-pair one' } });
+    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    expect(screen.getAllByRole('alert')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Update request elsewhere' }));
+    expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('--custom-pair one');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByLabelText('Extra request JSON')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: controlChoiceCopy.en.guided })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Update arguments elsewhere' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByRole('button', { name: controlChoiceCopy.en.guided })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Apply settings' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Repair other setting' }));
+    expect(screen.getByRole('button', { name: 'Apply settings' })).toBeEnabled();
+  });
 });
 
 describe('advanced options list size', () => {
@@ -113,15 +214,14 @@ describe('advanced settings explanations', () => {
     fireEvent.click(toggle);
   });
 
-  it('uses localized descriptions in option search without duplicating runtime English prose', () => {
+  it('finds options by localized help and associates that help with the editable control', () => {
     mount('ko');
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: '반복' } });
-    const option = screen.getByText('--repeat-penalty');
+    const option = screen.getByText('--repeat-penalty', { selector: 'summary code' });
     const summary = option.closest('summary')!;
-    expect(option.closest('.model-settings-option')!.textContent).toMatch(/반복/);
     expect(screen.queryByText('--mlock')).not.toBeInTheDocument();
     fireEvent.click(summary);
-    expect(screen.queryByText('Penalize repeated tokens.')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '--repeat-penalty' })).toHaveAccessibleDescription(expect.stringContaining('반복'));
   });
 
   it('keeps custom runtime options explained when help text is absent', () => {
@@ -131,17 +231,16 @@ describe('advanced settings explanations', () => {
     expect(description).toBeVisible();
     fireEvent.click(description.closest('.model-settings-option')!.querySelector('summary')!);
     // Genuine unknowns stay explicit instead of a bare default.
-    expect(screen.getByRole('textbox', { name: '--custom-pair START END' })).toHaveAccessibleDescription(expect.stringContaining(`${missing} ${advancedSettingsHelp.en.multiple}`));
-    expect(screen.getByRole('textbox', { name: '--custom-pair START END' })).toHaveAccessibleDescription(expect.stringContaining('using runtime default (Not specified in runtime help)'));
+    expect(screen.getByRole('textbox', { name: '--custom-pair' })).toHaveAccessibleDescription(expect.stringContaining(`${missing} ${advancedSettingsHelp.en.multiple}`));
+    expect(screen.getByRole('textbox', { name: '--custom-pair' })).toHaveAccessibleDescription(expect.stringContaining('using runtime default (Not specified in runtime help)'));
   });
 
-  it.each<Locale>(['ko', 'ja', 'zh'])('localizes known and unregistered option help in %s', locale => {
+  it.each<Locale>(['ko', 'ja', 'zh'])('routes localized known and unregistered help to their controls in %s', locale => {
     mount(locale);
-    expect(screen.getByText(serverOptionDescription(options[1], locale))).toBeVisible();
-    expect(screen.queryByText('Keep model weights in RAM.')).not.toBeInTheDocument();
-    expect(screen.queryByText('Use the named processing mode.')).not.toBeInTheDocument();
-    const custom = screen.getByText('--custom-mode').closest('.model-settings-option')!;
-    expect(custom.textContent).toContain(serverOptionDescription(options[2], locale));
+    fireEvent.click(screen.getByText('--mlock', { selector: 'summary code' }).closest('summary')!);
+    expect(screen.getByRole('switch', { name: /^--mlock\b/ })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(options[1], locale)));
+    fireEvent.click(screen.getByText('--custom-mode', { selector: 'summary code' }).closest('summary')!);
+    expect(screen.getByRole('textbox', { name: '--custom-mode' })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(options[2], locale)));
   });
 
   it('updates explanation language immediately without resetting edited values', () => {
@@ -159,9 +258,9 @@ describe('advanced settings explanations', () => {
 
   it('prompts for the value alone and suggests the modes --load-mode documents in prose', () => {
     const { onChange } = mount('ko');
-    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    const card = screen.getByText('--load-mode', { selector: 'summary code' }).closest('.model-settings-option')!;
     fireEvent.click(card.querySelector('summary')!);
-    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    const input = screen.getByRole('combobox', { name: '--load-mode' });
     // The flag belongs to the app, so the box asks for MODE and never for "--load-mode none".
     // Empty means the documented default, so the placeholder names it instead of a bare label.
     expect(input.getAttribute('placeholder')).toMatch(/^MODE · /);
@@ -179,9 +278,9 @@ describe('advanced settings explanations', () => {
 
   it('accepts typed values beyond the suggested modes and clears back to the default', () => {
     const { onChange, onInvalid } = mount();
-    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    const card = screen.getByText('--load-mode', { selector: 'summary code' }).closest('.model-settings-option')!;
     fireEvent.click(card.querySelector('summary')!);
-    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    const input = screen.getByRole('combobox', { name: '--load-mode' });
     fireEvent.change(input, { target: { value: 'future-mode' } });
     expect(input).toHaveValue('future-mode');
     expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'future-mode'] });
@@ -192,9 +291,9 @@ describe('advanced settings explanations', () => {
 
   it('disables suggestion comboboxes with the rest of the editor', () => {
     render(<I18nProvider initialLocale="en"><DraftAdvancedEditor cfg={{ ...testConfig, server_args: [], chat_options: {} }} options={options} disabled benchmark={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
-    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    const card = screen.getByText('--load-mode', { selector: 'summary code' }).closest('.model-settings-option')!;
     fireEvent.click(card.querySelector('summary')!);
-    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    const input = screen.getByRole('combobox', { name: '--load-mode' });
     expect(input).toBeDisabled();
     fireEvent.click(input);
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();

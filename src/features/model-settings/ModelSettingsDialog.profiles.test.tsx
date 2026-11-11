@@ -1,12 +1,15 @@
 import { cfg, mount, rawChat, numeric, openOptions } from '../../testing/modelSettingsDialog';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor, SettingsDeliveryError } from './profileEditor';
 import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
+import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
+import { I18nProvider } from '../../shared/i18n/i18n';
+import { createTestStore } from '../../testing/appStore';
 
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
@@ -121,6 +124,56 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(edit.application.profile_id).toBe(copy.id);
     expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
     expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
+  });
+
+  it('keeps the chosen runtime and current step when reverting, renaming, and deleting a profile', async () => {
+    const source = captureProfile(cfg, 'Saved options', 'global', 'Saved prompt');
+    const application = materializeProfileApplication(cfg, 'Saved prompt', source);
+    const store = createTestStore({ ...cfg, settings_profiles: { ...emptyProfileLibrary(),
+      entries: [defaultSettingsProfile(), source], applied: { [profileTargetKey(cfg.active_model)]: application } } });
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['b123', 'b456'].map(build => ({
+      id: `${build}-cpu`, provider: 'llama.cpp', backend: 'cpu', build, engine: 'llama.cpp', server: 'llama-server',
+      accelerator: 'cpu', installation: 'managed', location: 'runtime', available: true, problems: [],
+    })));
+    vi.spyOn(api, 'rtList').mockResolvedValue(['b123', 'b456'].map(build => ({ backend: 'cpu', build, dir: 'runtime', size_mb: 30 })));
+    function Consumer() {
+      const settings = useModelSettings()!;
+      return <button type="button" onClick={() => settings.open({ target: { kind: 'default' }, section: 'sampling' })}>Open settings</button>;
+    }
+    render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    await screen.findByRole('heading', { name: 'Adjust options' });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: /^b456/ }));
+    openOptions();
+    fireEvent.change(numeric('temperature'), { target: { value: '1.3' } });
+    fireEvent.blur(numeric('temperature'));
+    fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
+    await waitFor(() => expect(numeric('temperature')).toHaveValue(cfg.temperature));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveTextContent('b456');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Saved options · Selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Renamed options' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await screen.findByRole('button', { name: 'Renamed options · Selected' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete profile' })).toBeEnabled());
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveTextContent('b456');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    const confirmation = screen.getByRole('dialog', { name: 'Delete “Renamed options”?' });
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Delete profile' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete “Renamed options”?' })).not.toBeInTheDocument());
+    expect(store.cfg!.settings_profiles!.entries.some(entry => entry.id === source.id)).toBe(false);
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveTextContent('b456');
+    expect(store.cfg!.active_build).toBe('b123');
+    openOptions();
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(store.start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByText('Discard unsaved changes?')).toBeVisible();
   });
 
   it('reloads saved target values after renaming a profile without storing the working edits', async () => {

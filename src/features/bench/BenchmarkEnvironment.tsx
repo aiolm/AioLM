@@ -18,9 +18,10 @@ import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import RuntimeProfileValues from '../model-settings/RuntimeProfileValues';
 import { useProfileRuntimeSchema } from '../model-settings/useProfileRuntimeSchema';
 
-export function BenchmarkEnvironment({ config, application, device, runtimes, active, busy }: {
+export function BenchmarkEnvironment({ config, application, device, runtimes, active, busy, onRuntimeVerified }: {
   config: AppConfig; application: ProfileApplication; device: DeviceReport | null;
   runtimes: readonly InstalledRuntime[]; active: boolean; busy: boolean;
+  onRuntimeVerified?: () => void;
 }) {
   const { locale } = useI18n();
   const id = useId();
@@ -93,7 +94,7 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
           <div><dt>{copy.batch}</dt><dd>{value('batch_size')} / {value('ubatch_size')}</dd></div>
           <div><dt>{copy.cache}</dt><dd>{value('cache_type_k')} / {value('cache_type_v')}</dd></div>
           <div><dt>{copy.flash}</dt><dd>{value('flash_attn')}</dd></div>
-        </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} mode="current" showRuntime={false} />}
+        </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} config={config} disabled={!active || busy} mode="current" showRuntime={false} onRuntimeVerified={onRuntimeVerified} />}
       </div>
     </details>
     <details className="performance-environment-disclosure">

@@ -78,6 +78,7 @@ export function useExecutionStore(base: AppStore) {
   latest.current = base;
   const [error, setError] = useState<string | null>(null);
   const pending = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingStart = useRef<{ cancelled: boolean; handedOff: boolean; operationId?: string } | null>(null);
   const updateConfig = useCallback((patch: ConfigPatch<AppConfig>): Promise<AppConfig> => {
     const operation = pending.current.catch(() => undefined).then(async () => {
       const current = latest.current.getConfig();
@@ -154,33 +155,49 @@ export function useExecutionStore(base: AppStore) {
         applied: { ...library.applied, [key]: selected.application } } };
     });
   }, [updateConfig]);
-  const start = useCallback(async (_override?: AppConfig, replaceRunning = false) => {
-    // A failed save rolls back config; a retry uses the saved profile rather than the failed draft.
-    await pending.current.catch(() => undefined);
-    setError(null);
-    const current = latest.current.getConfig();
-    if (!current) throw new Error('Configuration is still loading.');
-    const prepare = (saved: AppConfig) => {
-      const library = ensureProfileAssignments(saved, saved.settings_profiles ?? emptyProfileLibrary());
-      const target = saved;
-      const key = profileTargetKey(saved.active_model, 'default', providerOf(saved));
-      const selected = resolveProfileForExecution(target, library, library.applied[key], key);
-      const settings_profiles = { ...selected.library, applied: { ...selected.library.applied, [key]: selected.application } };
-      const next = { ...target, ...selected.application.settings, settings_profiles };
-      const patch: Partial<AppConfig> = executionChanges(saved, next);
-      if (JSON.stringify(saved.settings_profiles) !== JSON.stringify(settings_profiles)) {
-        patch.settings_profiles = { ...settings_profiles, revision: (saved.settings_profiles?.revision ?? 0) + 1 };
-      }
-      return { next, patch };
-    };
-    const prepared = prepare(current);
-    const saved = Object.keys(prepared.patch).length ? await updateConfig(value => prepare(value).patch) : prepared.next;
-    return latest.current.start(saved, replaceRunning);
+  const start = useCallback(async (override?: AppConfig, replaceRunning = false, options?: Parameters<AppStore['start']>[2]) => {
+    // An explicit launch snapshot has already been saved and checked by its
+    // caller. Never replace it with a later selection or queue another save.
+    if (override) { setError(null); return options ? latest.current.start(override, replaceRunning, options) : latest.current.start(override, replaceRunning); }
+    const owner = { cancelled: false, handedOff: false, operationId: options?.operationId };
+    if (pendingStart.current) throw new Error('A model launch is already in progress.');
+    pendingStart.current = owner;
+    try {
+      // A failed save rolls back config; an ordinary retry uses the saved profile.
+      await pending.current.catch(() => undefined);
+      if (owner.cancelled) throw new Error('server start cancelled');
+      setError(null);
+      const current = latest.current.getConfig();
+      if (!current) throw new Error('Configuration is still loading.');
+      const prepare = (saved: AppConfig) => {
+        const library = ensureProfileAssignments(saved, saved.settings_profiles ?? emptyProfileLibrary());
+        const target = saved;
+        const key = profileTargetKey(saved.active_model, 'default', providerOf(saved));
+        const selected = resolveProfileForExecution(target, library, library.applied[key], key);
+        const settings_profiles = { ...selected.library, applied: { ...selected.library.applied, [key]: selected.application } };
+        const next = { ...target, ...selected.application.settings, settings_profiles };
+        const patch: Partial<AppConfig> = executionChanges(saved, next);
+        if (JSON.stringify(saved.settings_profiles) !== JSON.stringify(settings_profiles)) {
+          patch.settings_profiles = { ...settings_profiles, revision: (saved.settings_profiles?.revision ?? 0) + 1 };
+        }
+        return { next, patch };
+      };
+      const prepared = prepare(current);
+      const saved = Object.keys(prepared.patch).length ? await updateConfig(value => prepare(value).patch) : prepared.next;
+      if (owner.cancelled) throw new Error('server start cancelled');
+      owner.handedOff = true;
+      return await (options ? latest.current.start(saved, replaceRunning, options) : latest.current.start(saved, replaceRunning));
+    } finally { if (pendingStart.current === owner) pendingStart.current = null; }
   }, [updateConfig]);
+  const stop = useCallback((operationId?: string) => {
+    const owner = pendingStart.current;
+    if (owner && !owner.handedOff && (!operationId || owner.operationId === operationId)) owner.cancelled = true;
+    return operationId ? latest.current.stop(operationId) : latest.current.stop();
+  }, []);
   const clearErrors = useCallback(() => { setError(null); latest.current.clearErrors(); }, []);
   // Persistence is serialized above; only server lifecycle operations lock the app.
   // A field save must not flash every page's buttons into their busy state.
-  return { store: { ...base, updateConfig, start,
+  return { store: { ...base, updateConfig, start, stop,
     actionError: error ?? base.actionError,
     clearErrors,
   } satisfies AppStore, selectModel };

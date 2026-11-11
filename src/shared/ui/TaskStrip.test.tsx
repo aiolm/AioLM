@@ -250,4 +250,21 @@ describe("task cancellation ownership", () => {
     // A task with no byte counts shows no transfer line at all.
     expect(transferLabel({ ...getTaskSnapshot()[0], received: undefined }, left)).toBeNull();
   });
+  it("keeps model launch progress and saved-settings recovery outside ordinary activity details", () => {
+    const cancel = vi.fn();
+    const recover = vi.fn();
+    registerTask({ id: "launch", kind: "model-launch", targetId: "work", label: "Work · model.gguf", phase: "Checking engine and model", interruptible: true, cancel, action: { label: "Review saved model settings", onClick: recover } });
+    render(<I18nProvider initialLocale="en"><TaskStrip launchesOnly /><details><summary>Activity details</summary><TaskStrip /></details></I18nProvider>);
+    const strip = screen.getByTestId("launch-task-strip");
+    expect(screen.queryByTestId("task-strip")).not.toBeInTheDocument();
+    expect(within(strip).getByRole("progressbar", { name: /Work · model.gguf: Checking engine and model/ })).not.toHaveAttribute("value");
+    expect(within(strip).queryByText(/%/)).not.toBeInTheDocument();
+    fireEvent.click(within(strip).getByRole("button", { name: "Cancel" }));
+    expect(cancel).toHaveBeenCalledOnce();
+    act(() => finishTask("launch", "failed", "Engine could not load the saved model"));
+    expect(within(strip).queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(within(strip).getByRole("alert")).toHaveTextContent("Engine could not load the saved model");
+    fireEvent.click(within(strip).getByRole("button", { name: "Review saved model settings" }));
+    expect(recover).toHaveBeenCalledOnce();
+  });
 });

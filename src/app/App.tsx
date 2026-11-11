@@ -69,10 +69,13 @@ export function findTaskBlockingTabLeave(tasks: AppTask[]): AppTask | undefined 
 
 /** The only shell part that follows the task registry, so a download's progress
  * events re-render this summary instead of the shell and every mounted panel. */
-function TaskActivity({ hasActivity, title, indicator, children }: { hasActivity: boolean; title: string; indicator: React.ReactNode; children: React.ReactNode }) {
-  const tasks = useTasks();
-  return <PanelFeedbackActivity hasActivity={tasks.length > 0 || hasActivity}>
-    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span>{indicator}</summary>
+function TaskActivity({ hasActivity, title, attentionMessage, globalError, children }: { hasActivity: boolean; title: string; attentionMessage: string; globalError: boolean; children: React.ReactNode }) {
+  const tasks = useTasks().filter(task => task.kind !== "model-launch");
+  const failures = tasks.filter(task => task.state === "failed" || task.state === "crashed");
+  const attentionKeys = failures.map(task => JSON.stringify([task.id, task.startedAt]));
+  const activeCount = tasks.filter(task => task.state === "running" || task.state === "cancelling").length;
+  return <PanelFeedbackActivity hasActivity={tasks.length > 0 || hasActivity} attentionKeys={attentionKeys}>
+    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{activeCount + failures.length}</span><PanelFeedbackIndicator message={attentionMessage} globalError={globalError || failures.length > 0} /></summary>
     <div className="app-activity-content">{children}</div>
   </PanelFeedbackActivity>;
 }
@@ -325,7 +328,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
       </header>
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
-        <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} indicator={<PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} />}>
+        <TaskStrip launchesOnly />
+        <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={!!hasError}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}

@@ -34,14 +34,15 @@ function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string 
   return t("ui.taskFailed");
 }
 
-export default function TaskStrip() {
+export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boolean }) {
   const { t } = useI18n();
-  const tasks = useTasks();
+  const tasks = useTasks().filter(task => (task.kind === "model-launch") === launchesOnly);
   const localTaskIds = useLocalTaskCancellationIds();
   const [cancelError, setCancelError] = useState<string | null>(null);
   if (tasks.length === 0) return null;
   const active = tasks.filter((task) => task.state === "running" || task.state === "cancelling");
-  const visible = [...active, ...tasks.filter((task) => !active.includes(task))].slice(0, 4);
+  const ordered = [...active, ...tasks.filter((task) => !active.includes(task))];
+  const visible = launchesOnly ? ordered : ordered.slice(0, 4);
   const cancel = async (task: AppTask) => {
     if (!task.cancel || task.state !== "running") return;
     setCancelError(null);
@@ -55,7 +56,7 @@ export default function TaskStrip() {
     }
   };
   return (
-    <aside className="app-task-strip" aria-label={t("ui.taskStripLabel")} data-testid="task-strip">
+    <aside className={`app-task-strip${launchesOnly ? " app-task-strip--launches" : ""}`} aria-label={t("ui.taskStripLabel")} data-testid={launchesOnly ? "launch-task-strip" : "task-strip"}>
       <div className="app-task-strip__heading">
         <span className="app-task-strip__title">{t("ui.taskStripTitle")}</span>
         {active.length > 0 && <Badge role="status">{active.length}</Badge>}
@@ -74,10 +75,10 @@ export default function TaskStrip() {
           const status = normalizeDisplayText(statusLabel(task, t));
           const detail = task.detail ? normalizeDisplayText(task.detail) : "";
           return (
-            <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id}>
+            <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id} role={launchesOnly && !activeTask ? (task.state === "failed" || task.state === "crashed" ? "alert" : "status") : undefined}>
               <span className="app-task-strip__label" title={label}>{label}</span>
               <span className="app-task-strip__status" title={status}>{status}</span>
-              {progress !== undefined ? <ProgressBar className="app-task-strip__progress" label={label} value={progress} /> : <span className="app-task-strip__progress" aria-hidden="true" />}
+              {progress !== undefined || (activeTask && task.kind === "model-launch") ? <ProgressBar className="app-task-strip__progress" label={task.kind === "model-launch" ? `${label}: ${status}` : label} value={progress} /> : <span className="app-task-strip__progress" aria-hidden="true" />}
               <span className="app-task-strip__info">
                 {task.detail ? (isLongDiagnostic(task.detail)
                   ? <DiagnosticDetails summary={summarizeDiagnostic(task.detail)} detail={task.detail} id={`task-${task.id}`} />
@@ -85,6 +86,7 @@ export default function TaskStrip() {
                 {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`} title={transfer}>{transfer}</span>}
               </span>
               <span className="app-task-strip__action">
+                {!activeTask && task.state !== "completed" && task.action && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={task.action.onClick}>{task.action.label}</button>}
                 {activeTask && task.cancel && !localTaskIds.has(task.id) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : stopLabel} labels={[t("ui.taskCancelling"), stopLabel]} /></button>}
                 {!activeTask && <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.taskDismiss")}: ${label}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
               </span>

@@ -20,8 +20,8 @@ export interface AppStore {
   loadConfig: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   updateConfig: (patch: ConfigPatch<api.AppConfig>) => Promise<api.AppConfig>;
-  start: (cfgOverride?: api.AppConfig, replaceRunning?: boolean) => Promise<string>;
-  stop: () => Promise<void>;
+  start: (cfgOverride?: api.AppConfig, replaceRunning?: boolean, options?: api.LaunchOptions) => Promise<string>;
+  stop: (operationId?: string) => Promise<void>;
   clearActionError: () => void;
   clearErrors: () => void;
 }
@@ -93,6 +93,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   // The initial attempt exposes either data or its error; later polls refresh it.
   const initialStatusSettled = useRef(false);
   const operationInFlight = useRef(false);
+  const startOperation = useRef<{ config: api.AppConfig; promise: Promise<string>; generation: number; operationId: string } | null>(null);
   const autoStartConsumedRef = useRef(false);
   const statusGeneration = useRef(0);
   const pollFailures = useRef(0);
@@ -188,49 +189,84 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     return operation;
   }, [saveConfigWithRecovery]);
 
-  const start = useCallback(async (cfgOverride?: api.AppConfig, replaceRunning = false) => {
+  const start = useCallback(async (cfgOverride?: api.AppConfig, replaceRunning = false, options?: api.LaunchOptions) => {
     if (!api.isNativeRuntimeAvailable()) {
       const error = new Error("Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.");
       setActionError(error.message);
       throw error;
     }
-    if (operationInFlight.current || (status.state === "running" && !replaceRunning) || status.state === "starting") return status.url ?? "";
+    if (startOperation.current && operationInFlight.current) {
+      if ((!cfgOverride || cfgOverride === startOperation.current.config) && (!options?.operationId || options.operationId === startOperation.current.operationId)) return startOperation.current.promise;
+      throw new Error("A different model launch is already in progress.");
+    }
+    if (operationInFlight.current || status.state === "starting" || status.state === "stopping") throw new Error("A model operation is already in progress.");
+    if (status.state === "running" && !replaceRunning) {
+      if (options?.operationId) throw new Error("A model is already running. Stop or replace it before starting another model.");
+      return status.url ?? "";
+    }
     const current = cfgOverride ?? cfgRef.current;
     if (!current) throw new Error("Configuration is still loading.");
     setBusy(true); setActionError(null); setStatus({ state: "starting" }); operationInFlight.current = true; statusGeneration.current += 1;
     const generation = statusGeneration.current;
-    try {
-      // The backend owns the start deadline. A shorter UI timer would report a
-      // failure while a large model is still loading; Stop cancels a hung start.
-      const url = await api.startServer(current);
-      await refreshStatus();
-      return url;
-    } catch (error) {
-      if (generation !== statusGeneration.current) throw error;
-      if (isLifecycleCancellation(error)) {
-        setStatus({ state: "stopped" });
-        setActionError(null);
-      } else {
-        setStatus({ state: "failed", error: lifecycleErrorMessage("start", error) });
-        setActionError(lifecycleErrorMessage("start", error));
-      }
-      throw error;
-    } finally {
-      if (generation === statusGeneration.current) {
-        operationInFlight.current = false;
+    const operationId = options?.operationId ?? crypto.randomUUID();
+    const operation = (async () => {
+      try {
+        // The backend owns the start deadline. A shorter UI timer would report a
+        // failure while a large model is still loading; Stop cancels a hung start.
+        const url = await api.startServer(current, { ...options, operationId });
+        if (generation !== statusGeneration.current) throw new Error("server start cancelled");
         await refreshStatus();
-        if (generation === statusGeneration.current) setBusy(false);
+        return url;
+      } catch (error) {
+        if (generation !== statusGeneration.current) throw error;
+        if (isLifecycleCancellation(error)) {
+          setStatus({ state: "stopped" });
+          setActionError(null);
+        } else {
+          setStatus({ state: "failed", error: lifecycleErrorMessage("start", error) });
+          setActionError(lifecycleErrorMessage("start", error));
+        }
+        throw error;
+      } finally {
+        if (generation === statusGeneration.current) {
+          operationInFlight.current = false;
+          await refreshStatus();
+          if (generation === statusGeneration.current) setBusy(false);
+        }
+        if (startOperation.current?.generation === generation) startOperation.current = null;
       }
-    }
+    })();
+    startOperation.current = { config: current, promise: operation, generation, operationId };
+    return operation;
   }, [refreshStatus, status.state, status.url]);
 
-  const stop = useCallback(async () => {
+  const stop = useCallback(async (operationId?: string) => {
     if (!api.isNativeRuntimeAvailable()) {
       const error = new Error("Native desktop runtime is unavailable. Run the packaged desktop app instead of the browser preview.");
       setActionError(error.message); throw error;
     }
-    const cancellingStart = operationInFlight.current && status.state === "starting";
-    if ((operationInFlight.current && !cancellingStart) || status.state === "stopping" || status.state === "stopped") return;
+    const cancellationId = operationId ?? startOperation.current?.operationId;
+    if (cancellationId) {
+      const owner = startOperation.current;
+      try { await api.cancelLaunch(cancellationId, 'default'); }
+      catch (cause) {
+        if (owner?.operationId === cancellationId && startOperation.current === owner) setActionError(lifecycleErrorMessage("stop", cause));
+        throw cause;
+      }
+      // Native cancellation is generation-scoped. An old task must not release
+      // a newer local start's busy state or invalidate its readiness promise.
+      if (owner?.operationId === cancellationId && startOperation.current === owner) {
+        startOperation.current = null;
+        statusGeneration.current += 1;
+        operationInFlight.current = false;
+        setBusy(false); setActionError(null);
+      }
+      await refreshStatus();
+      return;
+    }
+    const cancellingStart = startOperation.current !== null || (operationInFlight.current && status.state === "starting");
+    if ((operationInFlight.current && !cancellingStart) || status.state === "stopping" || (status.state === "stopped" && !cancellingStart)) return;
+    startOperation.current = null;
     setBusy(true); setActionError(null); setStatus((current) => ({ ...current, state: "stopping" })); operationInFlight.current = true; statusGeneration.current += 1;
     const generation = statusGeneration.current;
     try {

@@ -55,7 +55,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     mount({ initialConfig: { ...cfg, active_provider: 'custom.unchecked', active_runtime: 'synthetic' }, initialSection: 'profiles' });
     const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
     expect(reset).toBeDisabled();
-    await within(screen.getByRole('region', { name: 'Current values' })).findByText('The engine’s options need to be checked again. Reload its help before using these saved settings.');
+    await within(screen.getByRole('region', { name: 'Current values' })).findByRole('button', { name: 'Recheck options' });
     expect(reset).toBeDisabled();
   });
 

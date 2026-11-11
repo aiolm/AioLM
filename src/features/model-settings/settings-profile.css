@@ -33,6 +33,14 @@
 .settings-profile-detail > .settings-profile-hint { margin: 12px 0 0; }
 .settings-profile-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); align-items: start; gap: 16px 32px; margin-top: 16px; }
 .settings-profile-values > p { grid-column: 1 / -1; margin: 0; }
+.settings-profile-recovery { grid-column: 1 / -1; min-width: 0; }
+.settings-profile-recovery .runtime-help-actions { margin-top: 0; align-items: center; }
+.settings-profile-recovery .runtime-help-notice { flex: 1 1 18rem; margin: 0; color: var(--ui-muted); }
+.settings-profile-recovery .runtime-help-advanced { margin-inline-start: auto; }
+.settings-profile-recovery .runtime-help-advanced[open] { flex-basis: 100%; margin-inline-start: 0; }
+.settings-profile-recovery .runtime-help-advanced > summary { min-block-size: 24px; padding-block: 4px; cursor: pointer; color: var(--ui-muted); }
+.settings-profile-recovery .runtime-help-advanced fieldset { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; min-inline-size: 0; }
+.settings-profile-recovery .runtime-help-advanced fieldset > .app-section-hint { grid-column: 1 / -1; }
 .settings-profile-value-group { min-width: 0; }
 .settings-profile-value-group h4 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-border); color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-value-group dl { display: grid; gap: 2px; margin: 0; }

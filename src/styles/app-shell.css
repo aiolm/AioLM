@@ -86,7 +86,10 @@
 .app-task-strip__info { display: flex; gap: 8px; min-width: 0; }
 .app-task-strip__transfer { font-variant-numeric: tabular-nums; }
 .app-task-strip__progress { width: 100%; }
-.app-task-strip__action { display: flex; justify-content: end; }
+.app-task-strip__action { display: flex; flex-wrap: wrap; gap: 6px; justify-content: end; }
+.app-task-strip--launches { border-color: var(--ui-border); }
+.app-task-strip--launches .app-task-strip__label,
+.app-task-strip--launches .app-task-strip__status { white-space: normal; overflow-wrap: anywhere; }
 .app-skip-link { position: fixed; top: calc(8px + var(--app-window-chrome-height, 0px)); left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: var(--ui-on-accent); background: var(--ui-accent-solid); border-radius: var(--ui-radius-control); }
 .app-skip-link:focus { transform: none; }
 .aiolm-menu-trigger { display: none; }

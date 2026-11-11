@@ -493,7 +493,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
             </div>}
           </div>
           {displayedTarget && <div className="performance-setup-section">
-            <BenchmarkEnvironment config={displayedTarget.config} application={displayedTarget.application} device={device} runtimes={installedRuntimes} active={active} busy={busy || otherBenchmark} />
+            <BenchmarkEnvironment config={displayedTarget.config} application={displayedTarget.application} device={device} runtimes={installedRuntimes} active={active} busy={busy || otherBenchmark} onRuntimeVerified={() => setAdmissionRevision(value => value + 1)} />
           </div>}
           <div className="performance-setup-section"><fieldset disabled={busy} className="performance-fields">
             <legend className="performance-column-title">{copy.conditions}</legend>

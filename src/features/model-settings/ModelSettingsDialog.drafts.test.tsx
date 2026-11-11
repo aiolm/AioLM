@@ -162,7 +162,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('allows dismissal as soon as its own start begins, before preflight props arrive', async () => {
+  it('shows preparation immediately and guards the draft until the save is accepted', async () => {
     // Promise.withResolvers is outside this app's ES2020 TypeScript target.
     let finish!: () => void;
     const operation = new Promise<void>(resolve => { finish = resolve; });
@@ -172,15 +172,17 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(start).toBeEnabled());
     fireEvent.click(start);
     expect(onApply).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.getByRole('progressbar', { name: /Preparing model launch/ })).not.toHaveAttribute('value');
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent(screen.getByRole('dialog', { name: 'Model & settings' }), new Event('cancel', { cancelable: true }));
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () => { finish(); });
   });
 
   it('exposes preflight progress and cancellation before a server starts', () => {
     const onCancelStart = vi.fn();
     const { onClose } = mount({ busy: true, liveState: 'stopped', preflightState: 'checking', onCancelStart });
-    expect(screen.getByText('Checking the selected engine and model…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('progressbar', { name: /Checking the selected engine and model/ })).not.toHaveAttribute('value');
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancelStart).toHaveBeenCalledOnce();
@@ -251,7 +253,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('reports preflight cancellation while preventing repeated cancellation', () => {
     mount({ busy: true, liveState: 'stopped', preflightState: 'cancelling', onCancelStart: vi.fn() });
-    expect(screen.getByText('Cancelling the engine and model check…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('progressbar', { name: /Cancelling model launch/ })).not.toHaveAttribute('value');
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   });
 

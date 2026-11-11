@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api';
 import type { EffectiveSchema } from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -9,17 +9,25 @@ import RuntimeProfileValues from './RuntimeProfileValues';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { StrictMode } from 'react';
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 
 beforeEach(() => vi.restoreAllMocks());
+afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 const option = schemaOption({ key: 'limit', flag: '--limit', target: 'launch', group: 'unfamiliar', kind: { type: 'integer' }, runtime_default: '0' });
 const config = { ...testConfig, active_provider: 'custom.profile', active_runtime: 'first', provider_options: { 'custom.profile': { limit: 0, forgotten: 'UNKNOWN-PRIVATE' } } } satisfies api.AppConfig;
 function View({ cfg, reference = false, enabled = true }: { cfg: api.AppConfig; reference?: boolean; enabled?: boolean }) {
   const schema = useProfileRuntimeSchema(cfg, enabled);
-  return <I18nProvider initialLocale="en"><RuntimeProfileValues provider={api.providerOf(cfg)} settings={cfg} mode={reference ? 'reference' : 'current'} schema={schema} /></I18nProvider>;
+  return <I18nProvider initialLocale="en"><RuntimeProfileValues config={cfg} provider={api.providerOf(cfg)} settings={cfg} mode={reference ? 'reference' : 'current'} schema={schema} /></I18nProvider>;
 }
 
 describe('runtime profile projection', () => {
+  it('keeps stale runtime defaults read-only without offering runtime help mutations', async () => {
+    vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [option], { help_state: 'stale' }));
+    render(<View cfg={config} reference />);
+    await screen.findByText(/Check that the saved options are supported/);
+    expect(screen.queryByRole('button', { name: 'Recheck options' })).not.toBeInTheDocument();
+  });
   it('shares one pending verification across effect replay and rechecks an installation replaced under the same id', async () => {
     let finish!: (view: EffectiveSchema) => void;
     const read = vi.spyOn(api, 'providerOptionSchema').mockReturnValueOnce(new Promise(resolve => { finish = resolve; }))
@@ -77,12 +85,56 @@ describe('runtime profile projection', () => {
     expect(screen.getByText('0')).toBeVisible();
     expect(read).toHaveBeenCalledTimes(2); expect(config).toEqual(before);
   });
+  it('recovers stale options only after explicit discovery and acceptance, preserving saved values after a failed attempt', async () => {
+    const before = structuredClone(config);
+    const stale = effectiveSchema([], [option], { help_state: 'stale' });
+    const current = effectiveSchema([], [option]);
+    let accepted = false;
+    vi.spyOn(api, 'providerOptionSchema').mockImplementation(async () => accepted ? current : stale);
+    vi.spyOn(api, 'runtimeHelpTarget').mockResolvedValue({
+      engine: config.active_provider, runtime: config.active_runtime, program: 'synthetic-engine',
+      fixed: true, prefix: [], request: { args: ['--help'], scope: [] },
+    });
+    const identity = { fingerprint: 'a'.repeat(64), executable_sha256: 'b'.repeat(64), artifacts_sha256: {}, parser_version: 1 };
+    const discover = vi.spyOn(api, 'runtimeHelpDiscoverSelected').mockRejectedValueOnce(new Error('Synthetic help command failed'))
+      .mockResolvedValueOnce([{
+        identity, scope: [], stdout: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false },
+        stderr: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false },
+        success: true, cancelled: false, timed_out: false, elapsed_ms: 1,
+      }, {
+        engine: config.active_provider, runtime: config.active_runtime, fingerprint: identity.fingerprint,
+        help_complete: true, schema: current.schema, retained: ['forgotten'],
+        diff: { added: [], removed: [], changed: [], retained_unknown: ['forgotten'] },
+      }]);
+    const accept = vi.spyOn(api, 'runtimeHelpAccept').mockImplementation(async () => {
+      accepted = true;
+      return { version: 1, fingerprint: identity.fingerprint, request: { args: ['--help'], scope: [] } };
+    });
+    vi.spyOn(api, 'runtimeHelpCancelSelected').mockResolvedValue(true);
+    const { container } = render(<View cfg={config} />);
+    const recheck = await screen.findByRole('button', { name: 'Recheck options' });
+    await waitFor(() => expect(recheck).not.toHaveAttribute('aria-disabled', 'true'));
+    expect(discover).not.toHaveBeenCalled();
+    fireEvent.click(recheck);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic help command failed');
+    expect(screen.queryByText('--limit')).not.toBeInTheDocument();
+    expect(accept).not.toHaveBeenCalled();
+    fireEvent.click(recheck);
+    const acceptButton = await screen.findByRole('button', { name: 'Use these options' });
+    expect(accept).not.toHaveBeenCalled();
+    fireEvent.click(acceptButton);
+    expect(await screen.findByText('--limit')).toBeVisible();
+    expect(screen.getByText('0')).toBeVisible();
+    expect(recheck).toHaveFocus();
+    expect(container).not.toHaveTextContent('UNKNOWN-PRIVATE');
+    expect(config).toEqual(before);
+  });
   it('keeps stale help, reserved arguments and other subcommands out of confirmed options', async () => {
     const variants = [option, { ...option, key: 'reserved', managed: 'reserved' as const }, { ...option, key: 'elsewhere', scope: ['other'] }];
     const read = vi.spyOn(api, 'providerOptionSchema').mockResolvedValueOnce(effectiveSchema([], variants, { help_state: 'stale' }));
     const cfg = { ...config, provider_options: { 'custom.profile': { limit: 12, reserved: 'RESERVED-PRIVATE', elsewhere: 'SCOPED-PRIVATE' } } };
     const { container, rerender } = render(<View cfg={cfg} />);
-    expect(await screen.findByText(/options need to be checked again/)).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Recheck options' })).toBeVisible();
     expect(screen.queryByText('--limit')).not.toBeInTheDocument();
     read.mockResolvedValueOnce(effectiveSchema([], variants));
     rerender(<View cfg={{ ...cfg, active_runtime: 'reviewed' }} />);

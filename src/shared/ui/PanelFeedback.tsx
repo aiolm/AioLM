@@ -36,20 +36,24 @@ export function PanelFeedbackOutlet() {
   return <div ref={context?.setTarget} className="app-feedback-layer app-panel-notices" aria-live="polite" />;
 }
 
-export function PanelFeedbackActivity({ hasActivity, children }: { hasActivity: boolean; children: ReactNode }) {
+export function PanelFeedbackActivity({ hasActivity, attentionKeys = [], children }: { hasActivity: boolean; attentionKeys?: readonly string[]; children: ReactNode }) {
   const context = useContext(FeedbackContext);
   const drawerRef = useRef<HTMLDetailsElement>(null);
   const seen = useRef({ count: context?.count ?? 0, attention: context?.attention ?? 0 });
+  const seenAttentionKeys = useRef(new Set<string>());
   const count = context?.count ?? 0;
   const attention = context?.attention ?? 0;
   useEffect(() => {
-    // New (or escalated) notices open the drawer on arrival; manual toggle
-    // stays native so keyboard and Escape handling keep working.
-    if ((count > seen.current.count || attention > seen.current.attention) && drawerRef.current && !drawerRef.current.open) {
+    // Only new failures or new/escalated notices reopen a manually collapsed
+    // drawer. Compare failure identities, not counts: one failure can replace
+    // another while the number of tasks needing attention stays unchanged.
+    const newFailure = attentionKeys.some(key => !seenAttentionKeys.current.has(key));
+    if ((newFailure || count > seen.current.count || attention > seen.current.attention) && drawerRef.current && !drawerRef.current.open) {
       drawerRef.current.open = true;
     }
     seen.current = { count, attention };
-  }, [count, attention]);
+    seenAttentionKeys.current = new Set(attentionKeys);
+  }, [count, attention, attentionKeys]);
   return <details ref={drawerRef} className="app-activity" hidden={!hasActivity && !count}>{children}</details>;
 }
 

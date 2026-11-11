@@ -1,4 +1,4 @@
-import { memo, useCallback, useDeferredValue, useId, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
 import { parseChatOptions } from '../../shared/config/tuningValidation';
@@ -59,11 +59,12 @@ const AdvancedOptionRow = memo(function AdvancedOptionRow({
   const switchId = `${idPrefix}-${option.id}-enabled`;
   // A configured option starts expanded to show its value; editing it later never collapses the row.
   const [initiallyOpen] = useState(checked);
-  return <div className="model-settings-option"><details open={initiallyOpen}><summary><code>{option.id}</code></summary>
+  const wide = option.arity > 1 || /\b(?:PATH|FNAME|FILE|DIR|JSON)\b/.test(option.argument) || value.includes('\n');
+  return <div className={`model-settings-option${wide ? ' model-settings-option--wide' : ''}`}><details open={initiallyOpen}><summary><code className="schema-option__name" title={option.signature}>{option.id}</code></summary>
     {option.arity === 0
       ? <div className="model-settings-option-toggle"><Switch id={switchId} aria-describedby={describedBy} checked={checked} disabled={disabled}
           onChange={enabled => onSet(option, enabled ? [{ flag: option.id, values: [] }] : [])} /><label htmlFor={switchId}><span className="sr-only">{option.id}</span> {enabledLabel}</label></div>
-      : <label><span>{option.signature}</span>{choices.length > 0
+      : <label><span className="sr-only">{option.id}</span>{choices.length > 0
           ? <CustomSelect className="w-full" aria-describedby={describedBy} value={value} disabled={disabled} placeholder={placeholder}
               options={choices.map(choice => ({ value: choice, label: choice }))} onChange={edit} onInputChange={edit} />
           : <input className="app-input" aria-describedby={describedBy} value={value} disabled={disabled}
@@ -95,6 +96,9 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   const argsRef = useRef(cfg.server_args); argsRef.current = cfg.server_args;
   const changeRef = useRef(onChange); changeRef.current = onChange;
   const invalidRef = useRef(onInvalid); invalidRef.current = onInvalid;
+  const sourceRef = useRef({ args: cfg.server_args, chat: cfg.chat_options });
+  const emittedArgs = useRef<string[] | null>(null);
+  const emittedChat = useRef<AppConfig['chat_options'] | null>(null);
 
   // Translating a description and scanning it for documented values is the
   // expensive part, and it depends on the runtime's option set, not on typing.
@@ -113,7 +117,9 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
 
   const setOption = useCallback((option: ServerOption, entries: Occurrence[]) => {
     setArgs(null);
-    changeRef.current({ server_args: replaceServerOption(argsRef.current, option, entries) });
+    const server_args = replaceServerOption(argsRef.current, option, entries);
+    emittedArgs.current = server_args;
+    changeRef.current({ server_args });
   }, []);
   const draftOption = useCallback((optionId: string, raw: string) => {
     setOptionDrafts(previous => ({ ...previous, [optionId]: raw }));
@@ -122,6 +128,53 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
     setInvalidFields(previous => { const next = new Set(previous); if (invalid) next.add(key); else next.delete(key); return next; });
     invalidRef.current(key, invalid);
   }, []);
+
+  // A parent's echo keeps the user's formatting. Only a different source value
+  // replaces a buffer; guided drafts are scoped to their own option occurrences.
+  useEffect(() => {
+    const previous = sourceRef.current;
+    sourceRef.current = { args: cfg.server_args, chat: cfg.chat_options };
+    const cleared: string[] = [];
+    if (previous.args !== cfg.server_args && JSON.stringify(previous.args) !== JSON.stringify(cfg.server_args)) {
+      const own = emittedArgs.current;
+      emittedArgs.current = null;
+      if (own !== cfg.server_args && JSON.stringify(own) !== JSON.stringify(cfg.server_args)) {
+        setArgs(null);
+        cleared.push('server_args');
+        const replaced = Object.keys(optionDrafts).filter(key => {
+          const option = options.find(item => item.id === key);
+          if (!option) return true;
+          const current = JSON.stringify(getOptionOccurrences(cfg.server_args, option));
+          return current !== JSON.stringify(getOptionOccurrences(previous.args, option))
+            && (!own || current !== JSON.stringify(getOptionOccurrences(own, option)));
+        });
+        if (replaced.length) {
+          setOptionDrafts(drafts => {
+            const next = { ...drafts };
+            for (const key of replaced) delete next[key];
+            return next;
+          });
+          cleared.push(...replaced);
+        }
+      }
+    }
+    if (previous.chat !== cfg.chat_options && JSON.stringify(previous.chat) !== JSON.stringify(cfg.chat_options)) {
+      const own = emittedChat.current;
+      emittedChat.current = null;
+      if (own !== cfg.chat_options && JSON.stringify(own) !== JSON.stringify(cfg.chat_options)) {
+        setChat(null);
+        cleared.push('chat_options');
+      }
+    }
+    if (cleared.length) {
+      for (const key of cleared) if (invalidFields.has(key)) markInvalid(key, false);
+      setErrors(previousErrors => {
+        const next = { ...previousErrors };
+        for (const key of cleared) delete next[key];
+        return next;
+      });
+    }
+  }, [cfg.server_args, cfg.chat_options, options, optionDrafts, invalidFields, markInvalid]);
   const switchMode = (next: boolean) => {
     if (disabled || invalidFields.size > 0) return;
     setDirect(next); setOptionDrafts({}); setArgs(null); setChat(null);
@@ -135,19 +188,19 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
     {invalidFields.size > 0 && <p role="status" className="app-section-hint">{choice.fixBeforeSwitch}</p>}
     {Object.entries(errors).filter(([, message]) => message).map(([key, message]) => <FeedbackBanner key={key} tone="error">{message}</FeedbackBanner>)}
     {direct ? <><div><label htmlFor={`${id}-args`}>{copy.rawArgs}</label>
-    <textarea id={`${id}-args`} aria-describedby={`${id}-args-help`} className="app-textarea font-mono" rows={6} spellCheck={false} disabled={disabled} value={args ?? serverArgsToText(cfg.server_args, options)} onChange={event => {
+    <textarea id={`${id}-args`} aria-describedby={`${id}-args-help`} aria-invalid={invalidFields.has('server_args')} className="app-textarea font-mono" rows={6} spellCheck={false} disabled={disabled} value={args ?? serverArgsToText(cfg.server_args, options)} onChange={event => {
       const raw = event.target.value; setArgs(raw);
-      try { const server_args = serverArgsFromText(raw, options); onChange({ server_args }); markInvalid('server_args', false); setErrors(previous => ({ ...previous, server_args: '' })); }
+      try { const server_args = serverArgsFromText(raw, options); emittedArgs.current = server_args; onChange({ server_args }); markInvalid('server_args', false); setErrors(previous => ({ ...previous, server_args: '' })); }
       catch (cause) { markInvalid('server_args', true); setErrors(previous => ({ ...previous, server_args: String(cause) })); }
     }} /><p id={`${id}-args-help`} className="app-section-hint">{help.args}</p></div>
     <div><label htmlFor={`${id}-chat`}>{copy.rawChat}</label>
-    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled || benchmark} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
+    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} aria-invalid={invalidFields.has('chat_options')} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled || benchmark} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
       const raw = event.target.value; setChat(raw);
-      try { const chat_options = parseChatOptions(raw); onChange({ chat_options }); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); }
+      try { const chat_options = parseChatOptions(raw); emittedChat.current = chat_options; onChange({ chat_options }); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); }
       catch (cause) { markInvalid('chat_options', true); setErrors(previous => ({ ...previous, chat_options: String(cause) })); }
     }} /><p id={`${id}-chat-help`} className="app-section-hint">{benchmark ? copy.benchmarkRequest : help.chat}</p>
     {benchmark && Object.keys(cfg.chat_options).length > 0 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => {
-      setChat(null); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); onChange({ chat_options: {} });
+      setChat(null); markInvalid('chat_options', false); setErrors(previous => ({ ...previous, chat_options: '' })); emittedChat.current = {}; onChange({ chat_options: emittedChat.current });
     }}>{copy.reset}</button>}</div></> : <>
     <div><h3>{copy.options}</h3><p className="app-section-hint">{help.options}</p></div>
     <div><input className="app-input" type="search" aria-label={copy.optionSearch} aria-describedby={`${id}-search-help`} placeholder={copy.optionSearch} value={query} onChange={event => setQuery(event.target.value)} />

@@ -8,7 +8,7 @@ import { emptyProfileLibrary, profileTargetKey } from "../config/settingsProfile
 
 vi.mock("../api/index", () => ({
   isNativeRuntimeAvailable: vi.fn(() => true), getConfig: vi.fn(),
-  serverStatus: vi.fn(), startServer: vi.fn(), stopServer: vi.fn(), saveConfig: vi.fn(),
+  serverStatus: vi.fn(), startServer: vi.fn(), stopServer: vi.fn(), cancelLaunch: vi.fn(), saveConfig: vi.fn(),
 }));
 
 function deferred<T>() {
@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.mocked(api.saveConfig).mockImplementation(async cfg => { saved = structuredClone(cfg); return cfg; });
   vi.mocked(api.serverStatus).mockResolvedValue({ state: "stopped" });
   vi.mocked(api.stopServer).mockResolvedValue(undefined);
+  vi.mocked(api.cancelLaunch).mockResolvedValue(undefined);
 });
 
 afterEach(() => { vi.useRealTimers(); });
@@ -347,6 +348,99 @@ it("expands a waiting execution-store save against the snapshot a preceding save
   expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
 });
 
+it("keeps repeated starts pending on the owned readiness promise and rejects a different launch", async () => {
+  const ready = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(ready.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  let first!: Promise<string>;
+  let repeated!: Promise<string>;
+  let settled = false;
+  act(() => {
+    first = result.current.start();
+    repeated = result.current.start();
+    void repeated.then(() => { settled = true; });
+  });
+  await act(async () => {
+    await expect(result.current.start({ ...result.current.cfg!, active_model: "different.gguf" })).rejects.toThrow("different model launch");
+  });
+  expect(settled).toBe(false);
+  expect(api.startServer).toHaveBeenCalledOnce();
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/v1" });
+  await act(async () => { ready.resolve("http://localhost:8080/v1"); await first; await repeated; });
+  expect(settled).toBe(true);
+});
+
+it("does not report a polled starting process as a successful launch without a readiness owner", async () => {
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "starting" });
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  await waitFor(() => expect(result.current.status.state).toBe("starting"));
+  await act(async () => { await expect(result.current.start()).rejects.toThrow("already in progress"); });
+  expect(api.startServer).not.toHaveBeenCalled();
+});
+
+it("cancels an immediately handed-off start without a late target-wide stop or false success", async () => {
+  const ready = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(ready.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  let start!: Promise<unknown>;
+  await act(async () => {
+    start = result.current.start().catch(cause => cause);
+    await result.current.stop();
+  });
+  expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(vi.mocked(api.startServer).mock.calls[0][1]!.operationId, 'default');
+  let outcome: unknown;
+  await act(async () => { ready.resolve("http://localhost:8080/v1"); outcome = await start; });
+  expect(String(outcome)).toContain("server start cancelled");
+  expect(api.stopServer).not.toHaveBeenCalled();
+  expect(result.current.status.state).toBe("stopped");
+  expect(result.current.actionError).toBeNull();
+});
+it("does not let an old scoped cancellation or late readiness release a newer local launch", async () => {
+  const first = deferred<string>();
+  const second = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  let firstRun!: Promise<unknown>;
+  act(() => { firstRun = result.current.start(result.current.cfg!, false, { persist: false, operationId: "original-launch" }).catch(cause => cause); });
+  await act(async () => { await result.current.stop("original-launch"); });
+  let secondRun!: Promise<string>;
+  act(() => { secondRun = result.current.start({ ...result.current.cfg!, active_model: "replacement.gguf" }, false, { persist: false, operationId: "replacement-launch" }); });
+  await act(async () => { await result.current.stop("original-launch"); });
+  expect(result.current.status.state).toBe("starting");
+  expect(result.current.busy).toBe(true);
+  let outcome: unknown;
+  await act(async () => { first.resolve("http://localhost:8080/original"); outcome = await firstRun; });
+  expect(String(outcome)).toContain("server start cancelled");
+  expect(result.current.status.state).toBe("starting");
+  expect(result.current.busy).toBe(true);
+  expect(api.stopServer).not.toHaveBeenCalled();
+  expect(api.cancelLaunch).toHaveBeenNthCalledWith(1, "original-launch", "default");
+  expect(api.cancelLaunch).toHaveBeenNthCalledWith(2, "original-launch", "default");
+  expect(api.startServer).toHaveBeenNthCalledWith(2, expect.objectContaining({ active_model: "replacement.gguf" }), { persist: false, operationId: "replacement-launch" });
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/replacement" });
+  await act(async () => { second.resolve("http://localhost:8080/replacement"); await secondRun; });
+  expect(result.current.busy).toBe(false);
+  expect(result.current.actionError).toBeNull();
+});
+
+it("preserves an ordinary running no-op but refuses to claim that process for a new scoped launch", async () => {
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/v1" });
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  await waitFor(() => expect(result.current.status.state).toBe("running"));
+  await expect(result.current.start()).resolves.toBe("http://localhost:8080/v1");
+  await expect(result.current.start(result.current.cfg!, false, { operationId: "new-launch" })).rejects.toThrow("already running");
+  expect(api.startServer).not.toHaveBeenCalled();
+  await act(async () => { await result.current.stop(); });
+  expect(api.stopServer).toHaveBeenCalledOnce();
+  expect(api.cancelLaunch).not.toHaveBeenCalled();
+});
+
+
 it("ignores a cancelled start settling after a new start begins", async () => {
   const first = deferred<string>();
   const second = deferred<string>();
@@ -414,7 +508,7 @@ it("keeps a late failure from a stopped slow start from reporting an error", asy
   await act(async () => { await vi.advanceTimersByTimeAsync(PAST_FORMER_UI_START_TIMEOUT_MS); });
   await act(async () => { await result.current.stop(); });
   await act(async () => { first.reject(new Error("Server start timed out after 600 seconds.")); await firstRun; });
-  expect(api.stopServer).toHaveBeenCalledOnce();
+  expect(api.cancelLaunch).toHaveBeenCalledOnce();
   expect(result.current.status.state).toBe("stopped");
   expect(result.current.busy).toBe(false);
   expect(result.current.actionError).toBeNull();
@@ -431,7 +525,7 @@ it("keeps a late failure from a stopped slow start from overwriting a newer laun
   act(() => { firstRun = result.current.start().catch(() => undefined); });
   await act(async () => { await vi.advanceTimersByTimeAsync(PAST_FORMER_UI_START_TIMEOUT_MS); });
   await act(async () => { await result.current.stop(); });
-  expect(api.stopServer).toHaveBeenCalledOnce();
+  expect(api.cancelLaunch).toHaveBeenCalledOnce();
   let secondRun!: Promise<string>;
   act(() => { secondRun = result.current.start(); });
   await act(async () => { first.reject(new Error("Server start timed out after 600 seconds.")); await firstRun; });

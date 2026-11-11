@@ -298,8 +298,83 @@ describe("Workspace navigation", () => {
     for (const received of [10, 20, 30, 40, 50]) act(() => { updateTask("download", { received }); });
     expect(chatRenders).toBe(renders);
     act(() => { finishTask("download", "failed", "Network lost"); });
-    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("0");
-    expect(view.container.querySelector("details.app-activity")).not.toHaveAttribute("hidden");
+    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("1");
+    expect(screen.getByText("Network lost")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss: model.gguf" })).toBeVisible();
+  });
+
+  it.each(["failed", "crashed"] as const)("reveals a %s background task and draws attention to later failures after collapse", async state => {
+    const view = mount();
+    await screen.findByLabelText("Conversation draft");
+    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
+    const summary = drawer.querySelector("summary")!;
+    const detail = ["Download connection lost", ...Array.from({ length: 8 }, (_, index) => `Diagnostic line ${index}: connection closed unexpectedly`)].join("\n");
+    act(() => { registerTask({ id: "background-download", kind: "model-download", label: "Background download", interruptible: true }); });
+    expect(drawer.open).toBe(false);
+
+    act(() => { finishTask("background-download", state, detail); });
+    expect(drawer.open).toBe(true);
+    expect(screen.getByText("Download connection lost")).toBeVisible();
+    const full = screen.getByLabelText("Full diagnostic");
+    expect(full).not.toBeVisible();
+    fireEvent.click(screen.getByText("Show full diagnostic"));
+    expect(full).toBeVisible();
+    expect(full).toHaveTextContent("Diagnostic line 7: connection closed unexpectedly");
+    expect(screen.getByRole("button", { name: "Dismiss: Background download" })).toBeVisible();
+    expect(screen.getAllByText("Background download")).toHaveLength(1);
+
+    fireEvent.click(summary);
+    expect(drawer.open).toBe(false);
+    act(() => { updateTask("background-download", { phase: "Diagnostic updated" }); });
+    expect(drawer.open).toBe(false);
+    expect(summary.querySelector(".app-activity-error")).toHaveTextContent(/\S/);
+    act(() => { registerTask({ id: "background-benchmark", kind: "benchmark", label: "Background benchmark", interruptible: true }); });
+    expect(drawer.open).toBe(false);
+    act(() => { finishTask("background-benchmark", "failed", "Benchmark worker disconnected"); });
+    expect(drawer.open).toBe(true);
+    expect(screen.getByText("Benchmark worker disconnected")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss: Background download" }));
+    expect(screen.queryByText("Background download")).not.toBeInTheDocument();
+
+    fireEvent.click(summary);
+    act(() => {
+      removeTask("background-benchmark");
+      registerTask({ id: "replacement-task", kind: "other", label: "Replacement task", state: "failed", detail: "A different background operation failed", interruptible: true });
+    });
+    expect(drawer.open).toBe(true);
+    expect(screen.getByText("A different background operation failed")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss: Replacement task" }));
+    expect(drawer).toHaveAttribute("hidden");
+    expect(summary.querySelector(".app-activity-error")).toBeNull();
+  });
+
+  it.each(["completed", "cancelled"] as const)("does not flag %s background work as a failure", async state => {
+    const view = mount();
+    await screen.findByLabelText("Conversation draft");
+    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
+    const summary = drawer.querySelector("summary")!;
+    act(() => { registerTask({ id: "expected-finish", kind: "other", label: "Expected finish", interruptible: true }); });
+    act(() => { finishTask("expected-finish", state); });
+    expect(drawer.open).toBe(false);
+    expect(summary.querySelector(".app-activity-error")).toBeNull();
+    fireEvent.click(summary);
+    expect(screen.getByText(state === "completed" ? "Completed" : "Cancelled")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss: Expected finish" }));
+    expect(drawer).toHaveAttribute("hidden");
+  });
+
+  it("keeps failed model launches in their separate strip without opening ordinary activity", async () => {
+    const view = mount();
+    await screen.findByLabelText("Conversation draft");
+    act(() => { registerTask({ id: "separate-launch", kind: "model-launch", label: "Work model", interruptible: true }); });
+    act(() => { finishTask("separate-launch", "failed", "Model engine could not start"); });
+    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
+    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer.open).toBe(false);
+    const launch = screen.getByTestId("launch-task-strip");
+    expect(within(launch).getByRole("alert")).toHaveTextContent("Model engine could not start");
+    fireEvent.click(within(launch).getByRole("button", { name: "Dismiss: Work model" }));
+    expect(screen.queryByTestId("launch-task-strip")).not.toBeInTheDocument();
   });
 
   it("guards navigation while settings can open without leaving the current workspace", async () => {

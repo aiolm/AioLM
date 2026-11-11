@@ -20,6 +20,7 @@ import { previewExecution } from '../models/modelExecutionState';
 import { useServerOptions } from '../tuning/useServerOptions';
 import DraftTuningEditor from './DraftTuningEditor';
 import DraftGpuEditor from './DraftGpuEditor';
+import { TuningOptionLabel, TuningOptionsContext } from '../tuning/TuningOptionMetadata';
 import DraftAdvancedEditor from './DraftAdvancedEditor';
 import SettingsPasteBox from './SettingsPasteBox';
 import ResourceEstimatePanel from './ResourceEstimatePanel';
@@ -44,6 +45,7 @@ import './model-settings.css';
 import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { isLifecycleCancellation } from '../../shared/lib/serverLifecycle';
+import ProgressBar from '../../shared/ui/ProgressBar';
 import SettingsFlowNav, { type SettingsStep } from './SettingsFlowNav';
 import { useImeEnterGuard } from '../../shared/ui/useImeEnterGuard';
 import { settingsFlowCopy } from './settingsFlowCopy';
@@ -51,12 +53,13 @@ import { settingsFlowCopy } from './settingsFlowCopy';
 export interface ModelSettingsDialogProps {
   open: boolean; initialConfig: api.AppConfig; targetLabel: string;
   mode: 'default' | 'session' | 'benchmark' | 'project'; initialSection?: string;
+  /** The owner closes this editor after durable save and launch acceptance. */
   onApply: (cfg: api.AppConfig, intent: 'save' | 'start', profiles: ProfileEditorResult) => Promise<void>;
   onProfileCommit: (cfg: api.AppConfig, edit: ProfileEditorResult, applyTarget: boolean) => Promise<ProfileCommitResult>;
-  onReloadProfile: (modelPath: string) => Promise<ProfileCommitResult>;
+  onReloadProfile: (draft: api.AppConfig) => Promise<ProfileCommitResult>;
   onClose: () => void; onManageRuntimes?: () => void;
   busy?: boolean; startPending?: boolean; liveState?: string;
-  preflightState?: 'checking' | 'cancelling';
+  preflightState?: 'preparing' | 'saving' | 'checking' | 'loading' | 'cancelling';
   liveConfig?: api.AppConfig;
   initialApplication?: ProfileApplication; liveApplication?: ProfileApplication; sessionId?: string;
   requireModelSelection?: boolean;
@@ -184,7 +187,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const selectedMetadata = useSelectedModelMetadata(llama ? cfg.active_model : '', open && llama);
   const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
-  const closingStart = starting || startPending;
+  const closingStart = (starting || startPending) && (preflightState === 'checking' || preflightState === 'loading' || liveState === 'starting');
   // The focused Cancel of a pending start is removed when the start settles.
   // Focus then returns to the start action (or the dialog title), not to the
   // page behind this still-open dialog; a focus moved elsewhere is kept.
@@ -374,14 +377,18 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     const modelBaseline = { ...baseline, ...Object.fromEntries(RUNTIME_SELECTION_KEYS.map(key => [key, settings[key]])) };
     if (!settingsEqual(settings, modelBaseline) || invalid.size || profileDirty || profiles.working) setPending(() => load); else load();
   };
-  const accept = ({ config, application }: ProfileCommitResult) => {
-    saved.current = structuredClone(config); initial.current = structuredClone(config);
+  const accept = ({ config, application }: ProfileCommitResult, applyTarget = true) => {
+    initial.current = structuredClone(applyTarget ? config : { ...config, active_model: initial.current.active_model,
+      ...Object.fromEntries(RUNTIME_SELECTION_KEYS.map(key => [key, initial.current[key]])) });
+    saved.current = structuredClone(initial.current);
     setSettings(executionSettings(config)); setBaseline(executionSettings(config)); setPathDraft(normalizeDisplayPath(config.active_model));
     profiles.acceptSaved(config, application); setInvalid(new Set()); setProfileDirty(false); setEditorRevision(value => value + 1);
     setFlow(previous => previous.step === 'options' ? { ...previous, profile: application.profile_id ?? profiles.selected.id } : previous);
   };
   const acceptMetadata = ({ config, application }: ProfileCommitResult) => {
-    saved.current = structuredClone(config); initial.current = structuredClone(config);
+    initial.current = structuredClone({ ...config, active_model: initial.current.active_model,
+      ...Object.fromEntries(RUNTIME_SELECTION_KEYS.map(key => [key, initial.current[key]])) });
+    saved.current = structuredClone(initial.current);
     setBaseline(executionSettings(config)); profiles.acceptMetadata(config, application);
   };
   const resetProfile = () => {
@@ -397,14 +404,16 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const commitProfile = async (prepare: () => ReturnType<typeof profiles.prepareApply>, preserveDraft = false) => {
     if (disabled || applyLock.current || providerOptionsPending && !preserveDraft) return;
     applyLock.current = true; setApplying(true); setError('');
+    let applyTarget = true;
     try {
       const next = prepare();
+      applyTarget = next.applyTarget;
       const result = await onProfileCommit(next.config, next.edit, next.applyTarget);
-      if (preserveDraft) acceptMetadata(result); else accept(result);
+      if (preserveDraft) acceptMetadata(result); else accept(result, applyTarget);
     } catch (cause) {
       if (cause instanceof SettingsDeliveryError) {
         const result = { config: cause.saved, application: cause.application };
-        if (preserveDraft) acceptMetadata(result); else accept(result);
+        if (preserveDraft) acceptMetadata(result); else accept(result, applyTarget);
         setError(profileCopy.savedFailure + cause.message); return;
       }
       setError(String(cause));
@@ -414,7 +423,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const revertProfile = async () => {
     if (disabled || applyLock.current) return;
     applyLock.current = true; setApplying(true); setError('');
-    try { accept(await onReloadProfile(cfg.active_model)); }
+    try { accept(await onReloadProfile(structuredClone(cfg)), false); }
     catch (cause) { setError(String(cause)); throw cause; }
     finally { applyLock.current = false; setApplying(false); }
   };
@@ -434,7 +443,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       return;
     }
     applyLock.current = true; setApplying(true); setStarting(true); setError('');
-    try { await onApply(structuredClone(latest.current), intent, profiles.result()); setBaseline(executionSettings(latest.current)); onClose(); }
+    try { await onApply(structuredClone(latest.current), intent, profiles.result()); setBaseline(executionSettings(latest.current)); }
     catch (cause) {
       if (cause instanceof SettingsDeliveryError) {
         saved.current = structuredClone(cause.saved); initial.current = structuredClone(cause.saved);
@@ -460,7 +469,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     const resolved = profiles.resetModel(next, sessionId);
     if (remembered) profiles.setSystemPrompt(remembered.prompt);
     const nextSettings = executionSettings(remembered ? next : resolved);
-    setSettings(nextSettings); setBaseline(nextSettings);
+    setSettings(nextSettings); setBaseline(executionSettings(resolved));
     setPathDraft(normalizeDisplayPath(next.active_model)); setInvalid(new Set()); setEditorRevision(value => value + 1);
   };
   // A probe of the previous runtime survives a backend switch until the new one
@@ -505,11 +514,12 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     ...(runtimeKnown ? { runtimeInstalled: !runtimeMissing } : {}),
   }).filter((gap): gap is 'modelShards' | 'runtimeMissing' => gap === 'modelShards' || gap === 'runtimeMissing');
   const editorKey = `${cfg.active_model}:${editorRevision}`;
-  const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
-    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
+  const launchStage = preflightState === 'checking' ? copy.preflightChecking : preflightState === 'saving' ? copy.pending : preflightState === 'loading' ? copy.loadingModel : preflightState === 'cancelling' ? copy.launchCancelling : copy.preparing;
+  const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <TuningOptionsContext.Provider value={runtime}><label><TuningOptionLabel id={`${id}-${key}-label`} fieldKey={key} label={label} />
+    <CustomSelect ariaLabelledBy={`${id}-${key}-label`} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
       ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} placeholder={copy.path} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
-  </label>;
+  </label></TuningOptionsContext.Provider>;
   return <ProfileRuntimeSchemaContext.Provider value={llama ? null : runtimeSchema}><dialog ref={dialog} className="app-dialog model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
     onKeyDown={event => {
       if (event.key !== 'Tab') return;
@@ -605,7 +615,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             {!external && <div hidden={section !== 'runtime'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={manageRuntimes}>{copy.manageRuntime}</button>}</div>
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
-              {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} draftDevice={cfg.spec_draft_device} onDraftDeviceChange={spec_draft_device => change({ spec_draft_device })} onInvalid={setFieldInvalid} />}
+              {llama && <TuningOptionsContext.Provider value={runtime}><DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} draftDevice={cfg.spec_draft_device} onDraftDeviceChange={spec_draft_device => change({ spec_draft_device })} onInvalid={setFieldInvalid} /></TuningOptionsContext.Provider>}
             </div>}
             {!benchmark && (external ? section === 'prompt' : section === 'sampling') && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{external ? copy.promptScope : profileCopy.promptHint}</small></div>}
             <div hidden={!llama || !['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
@@ -635,7 +645,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         </div>
         <footer className="model-settings-footer">
           <div className="model-settings-footer-summary" tabIndex={0}>
-            {preflightState && <p className="app-section-hint" role="status">{preflightState === 'checking' ? copy.preflightChecking : copy.preflightCancelling}</p>}
+            {(preflightState || starting) && <div className="model-settings-launch-progress">
+              <p className="app-section-hint">{launchStage}</p>
+              <ProgressBar label={`${targetLabel} · ${modelDisplayName(cfg.active_model)}: ${launchStage}`} />
+            </div>}
             {providerOptionsPending && <p className="app-section-hint" role="status">{copy.checkingOptions}</p>}
             <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].map(key => {
               if (key === 'provider-options') return profileFieldLabel('provider_options', locale);

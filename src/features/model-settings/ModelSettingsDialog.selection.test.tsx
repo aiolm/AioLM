@@ -186,6 +186,31 @@ describe('model settings editor', { timeout: 45000 }, () => {
       vi.restoreAllMocks();
     }
   });
+  it('shows saved values against remembered edits when saving after an engine roundtrip', async () => {
+    mount({ initialSection: 'sampling', initialConfig: { ...cfg, chat_options: { min_p: 0.05 } } });
+    fireEvent.click(screen.getByText('More llama.cpp sampling controls', { selector: 'summary' }));
+    fireEvent.change(numeric('min_p'), { target: { value: '0.2' } });
+    fireEvent.blur(numeric('min_p'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
+    fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
+    fireEvent.blur(numeric('ctx_size'));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'vLLM' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'llama.cpp' }));
+    openOptions();
+    expect(numeric('ctx_size')).toHaveValue(12288);
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
+    expect(numeric('min_p')).toHaveValue(0.2);
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    const confirmation = screen.getByRole('dialog', { name: /Save these changes to/ });
+    const context = within(confirmation).getByText('Context size').closest('div')!;
+    expect(context.querySelector('.settings-profile-change-before')).toHaveTextContent(String(cfg.ctx_size));
+    expect(context.querySelector('.settings-profile-change-after')).toHaveTextContent('12288');
+    const minP = within(confirmation).getByText(/Min P$/).closest('div')!;
+    expect(minP.querySelector('.settings-profile-change-before')).toHaveTextContent('0.05');
+    expect(minP.querySelector('.settings-profile-change-after')).toHaveTextContent('0.2');
+  });
+
   it('shows only the chosen external engine profiles and reconfirms after changing runtime builds', async () => {
     const provider = 'custom.new-engine';
     const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };
@@ -346,7 +371,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     ], truncated: false });
     mount({ initialSection: 'adapters' });
     await waitFor(() => expect(api.listModels).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--spec-draft-model\b/ }));
     expect(screen.getByRole('option', { name: 'language.gguf' })).toBeVisible();
     expect(screen.queryByRole('option', { name: 'Snapshot model' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'mmproj.gguf' })).not.toBeInTheDocument();
@@ -354,8 +379,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('edits each companion model once, retaining arbitrary Unicode paths in the saved profile', async () => {
     const { onProfileCommit } = mount({ initialSection: 'adapters' });
-    const projector = screen.getByRole('combobox', { name: 'Vision projector' });
-    const draft = screen.getByRole('combobox', { name: 'Draft model' });
+    const projector = screen.getByRole('combobox', { name: /^--mmproj\b/ });
+    const draft = screen.getByRole('combobox', { name: /^--spec-draft-model\b/ });
     expect(screen.queryByRole('textbox', { name: /Draft model|projector/i })).not.toBeInTheDocument();
     expect(document.querySelector('input[id$="-spec-draft-model"]')).not.toBeInTheDocument();
     expect(document.querySelector('input[id$="-spec-draft-device"]')).not.toBeInTheDocument();
@@ -396,9 +421,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{ name: 'Catalog draft', path, size_mb: 1, is_vision: false }], truncated: false });
     const { onProfileCommit } = mount({ initialSection: 'adapters' });
     await waitFor(() => expect(api.listModels).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--spec-draft-model\b/ }));
     fireEvent.click(await screen.findByRole('option', { name: 'Catalog draft' }));
-    const input = screen.getByRole('combobox', { name: 'Draft model' });
+    const input = screen.getByRole('combobox', { name: /^--spec-draft-model\b/ });
     expect(input).toHaveValue(String.raw`C:\Synthetic Models\한글 draft.gguf`);
     // A no-op edit must not replace the native access path with its display form.
     fireEvent.change(input, { target: { value: String.raw`C:\Synthetic Models\한글 draft.gguf` } });

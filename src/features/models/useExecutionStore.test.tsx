@@ -243,7 +243,7 @@ describe('execution store', () => {
     expect(hook.result.current.store.actionError).toContain('disk full');
   });
 
-  it('starts the persisted selected profile after a failed override save instead of launching the failed draft', async () => {
+  it('starts the persisted selected profile on an ordinary retry after a failed save', async () => {
     const base = createTestStore({ active_model: 'saved.gguf', temperature: 0.4, ngl: 8 });
     const profile = captureProfile(base.cfg!, 'Saved profile', 'model', 'Saved prompt');
     base.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], legacy_imported: true,
@@ -253,9 +253,44 @@ describe('execution store', () => {
     const hook = renderHook(() => useExecutionStore(base));
     const failed = { ...base.cfg!, active_model: 'unsaved.gguf', temperature: 1.2, ngl: 99 };
     await act(async () => { await expect(hook.result.current.store.updateConfig(failed)).rejects.toThrow('disk full'); });
-    await act(async () => { await hook.result.current.store.start(failed); });
+    await act(async () => { await hook.result.current.store.start(); });
     expect(base.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'saved.gguf', temperature: 0.4, ngl: 8 }), false);
     expect(base.cfg!.settings_profiles!.entries.find(entry => entry.id === profile.id)).toEqual(profile);
+  });
+
+  it('launches a captured checked snapshot without waiting for a newer unrelated save', async () => {
+    const { base, release, hook } = waitingStore(savedProfileConfig());
+    const snapshot = structuredClone(base.cfg!);
+    const options = { persist: false, operationId: 'captured-launch' };
+    let save!: Promise<AppConfig>;
+    await act(async () => {
+      save = hook.result.current.store.updateConfig({ ctx_size: 8192 });
+      await hook.result.current.store.start(snapshot, false, options);
+    });
+    expect(base.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'a.gguf', ctx_size: snapshot.ctx_size }), false, options);
+    await act(async () => { release(); await save; });
+    expect(base.cfg?.ctx_size).toBe(8192);
+    expect(base.start).toHaveBeenCalledOnce();
+    await act(async () => { await hook.result.current.store.stop(options.operationId); });
+    expect(base.stop).toHaveBeenCalledWith(options.operationId);
+  });
+
+  it.each(['target', 'operation'] as const)('prevents a queued ordinary launch when stopped by %s while its settings save is pending', async scope => {
+    const { base, release, hook } = waitingStore(savedProfileConfig());
+    const options = scope === 'operation' ? { operationId: 'queued-launch' } : undefined;
+    let save!: Promise<AppConfig>;
+    let start!: Promise<unknown>;
+    await act(async () => {
+      save = hook.result.current.store.updateConfig({ ctx_size: 8192 });
+      start = hook.result.current.store.start(undefined, false, options).catch(cause => cause);
+      await hook.result.current.store.stop(options?.operationId);
+    });
+    expect(base.start).not.toHaveBeenCalled();
+    let outcome: unknown;
+    await act(async () => { release(); await save; outcome = await start; });
+    expect(String(outcome)).toContain('server start cancelled');
+    expect(base.cfg?.ctx_size).toBe(8192);
+    expect(base.start).not.toHaveBeenCalled();
   });
 
   it('refreshes a stale target from its latest profile before starting without changing another saved target', async () => {

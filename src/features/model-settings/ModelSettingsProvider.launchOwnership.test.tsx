@@ -7,6 +7,7 @@ import { modelSettingsCopy } from './modelSettingsCopy';
 import { createTestStore } from '../../testing/appStore';
 import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
+import TaskStrip from '../../shared/ui/TaskStrip';
 // Compile the real lazy dependency before the interaction's ordinary DOM waits.
 import './ModelSettingsDialog';
 
@@ -28,7 +29,7 @@ vi.mock('../../shared/api/index', async importOriginal => ({
   sessionList: vi.fn(async () => []),
   serverStatus: vi.fn(async () => ({ state: 'stopped' })),
   preflightLaunch: vi.fn(async (cfg: AppConfig) => structuredClone(cfg)),
-  cancelLaunchPreflight: vi.fn(async () => false),
+  cancelLaunch: vi.fn(async () => undefined),
   sessionStart: vi.fn(async () => undefined),
   sessionStop: vi.fn(async () => undefined),
   applyRequestSettings: vi.fn(async (cfg: AppConfig) => cfg),
@@ -46,6 +47,7 @@ function OpenTargets() {
   return <>
     <button onClick={() => settings!.open({ target: { kind: 'default' }, section: 'model' })}>Open default target A</button>
     <button onClick={() => settings!.open({ target: { kind: 'session', sessionId: 'work' }, section: 'model' })}>Open session target B</button>
+    <TaskStrip launchesOnly />
   </>;
 }
 
@@ -117,7 +119,7 @@ it('keeps an unrelated save free of launch cancellation after another target is 
     if (inheritedCancel) fireEvent.click(inheritedCancel);
     expect(api.sessionStop).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
-    expect(api.cancelLaunchPreflight).not.toHaveBeenCalled();
+    expect(api.cancelLaunch).not.toHaveBeenCalled();
     expect(inheritedCancel).not.toBeInTheDocument();
 
     await act(async () => saveB.resolve());
@@ -126,21 +128,21 @@ it('keeps an unrelated save free of launch cancellation after another target is 
     expect(store.cfg?.sessions?.find(session => session.id === 'work')?.models.primary_model).toBe('models/b.gguf');
     expect(api.sessionStart).not.toHaveBeenCalled();
     expect(store.start).toHaveBeenCalledOnce();
+    await act(async () => launchA.resolve('synthetic-completion'));
+    expect(editorB).toBeInTheDocument();
   } finally {
     await act(async () => { saveA.resolve(); saveB.resolve(); launchA.resolve('synthetic-completion'); });
   }
 });
 
-it('keeps the current launch cancellable when a previous handed-off launch completes', async () => {
+it('keeps the current launch cancellable outside the editor when a prior launch completes', async () => {
   const store = targets();
   const sessionLaunch = deferred<api.SessionStatus>();
   const sessionComplete: api.SessionStatus = { id: 'work', name: 'Work', state: 'running', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 };
   const defaultLaunch = deferred<string>();
-  const defaultRefresh = deferred<void>();
   vi.mocked(api.sessionStart).mockReturnValueOnce(sessionLaunch.promise);
   vi.mocked(store.start).mockReturnValueOnce(defaultLaunch.promise);
   render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
-
   try {
     fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
     const sessionEditor = await screen.findByRole('dialog', { name: 'Model & settings' });
@@ -148,35 +150,25 @@ it('keeps the current launch cancellable when a previous handed-off launch compl
     await waitFor(() => expect(sessionStart).toBeEnabled());
     fireEvent.click(sessionStart);
     await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument());
-
-    // A named session's launch does not acquire the default AppStore's busy
-    // flag. A default launch can begin while that session launch is handed off.
+    await waitFor(() => expect(sessionEditor).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
     const defaultEditor = await screen.findByRole('dialog', { name: 'Model & settings' });
     const defaultStart = editorActions(defaultEditor).getByRole('button', { name: 'Save profile & start' });
     await waitFor(() => expect(defaultStart).toBeEnabled());
-    const previousRefreshes = vi.mocked(store.refreshStatus).mock.calls.length;
-    vi.mocked(store.refreshStatus).mockReturnValueOnce(defaultRefresh.promise);
     fireEvent.click(defaultStart);
     await waitFor(() => expect(store.start).toHaveBeenCalledOnce());
-    await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 1));
-    expect(defaultEditor).toHaveAttribute('aria-busy', 'true');
-    expect(editorActions(defaultEditor).getByRole('button', { name: 'Cancel' })).toBeEnabled();
-
+    await waitFor(() => expect(defaultEditor).not.toBeInTheDocument());
+    const defaultTask = getTaskSnapshot().find(task => task.targetId === 'default')!;
+    const row = screen.getByTestId('launch-task-strip').querySelector<HTMLElement>(`[data-task-id="${defaultTask.id}"]`)!;
+    expect(within(row).getByRole('progressbar')).not.toHaveAttribute('value');
     await act(async () => sessionLaunch.resolve(sessionComplete));
-    await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 2));
-    // The completed session must not remove the newer default operation's
-    // cancellation action or redirect that action to the old session.
-    fireEvent.click(editorActions(defaultEditor).getByRole('button', { name: 'Cancel' }));
-    expect(store.stop).toHaveBeenCalledOnce();
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }));
+    expect(store.stop).toHaveBeenCalledExactlyOnceWith(defaultTask.id);
     expect(api.sessionStop).not.toHaveBeenCalled();
-    expect(api.cancelLaunchPreflight).not.toHaveBeenCalled();
-    await act(async () => defaultRefresh.resolve());
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument());
-    expect(store.cfg?.active_model).toBe('models/a.gguf');
+    expect(api.cancelLaunch).not.toHaveBeenCalled();
+    expect(row).toHaveTextContent('Cancelling');
   } finally {
-    await act(async () => { sessionLaunch.resolve(sessionComplete); defaultLaunch.resolve('synthetic-default-completion'); defaultRefresh.resolve(); });
+    await act(async () => { sessionLaunch.resolve(sessionComplete); defaultLaunch.reject(new Error('server start cancelled')); });
   }
 });
 
@@ -184,8 +176,9 @@ it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps a cancelled handed-off launch 
   const copy = modelSettingsCopy[locale];
   const store = targets();
   const sessionLaunch = deferred<api.SessionStatus>();
-  const refresh = deferred<void>();
+  const preflight = deferred<AppConfig>();
   vi.mocked(api.sessionStart).mockReturnValueOnce(sessionLaunch.promise);
+  vi.mocked(api.preflightLaunch).mockReturnValueOnce(preflight.promise);
   render(<I18nProvider initialLocale={locale}><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
 
   try {
@@ -193,16 +186,16 @@ it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps a cancelled handed-off launch 
     const editor = await screen.findByRole('dialog', { name: copy.title });
     const start = editorActions(editor).getByRole('button', { name: copy.start });
     await waitFor(() => expect(start).toBeEnabled());
-    const previousRefreshes = vi.mocked(store.refreshStatus).mock.calls.length;
-    vi.mocked(store.refreshStatus).mockReturnValueOnce(refresh.promise);
     fireEvent.click(start);
+    await waitFor(() => expect(api.preflightLaunch).toHaveBeenCalledOnce());
+    await waitFor(() => expect(editor).not.toBeInTheDocument());
+    await act(async () => preflight.resolve(structuredClone(vi.mocked(api.preflightLaunch).mock.calls[0][0])));
     await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
-    await waitFor(() => expect(store.refreshStatus).toHaveBeenCalledTimes(previousRefreshes + 1));
-    fireEvent.click(editorActions(editor).getByRole('button', { name: copy.cancel }));
-    expect(api.sessionStop).toHaveBeenCalledWith('work');
+    fireEvent.click(within(screen.getByTestId('launch-task-strip')).getByRole('button', { name: copy.cancel }));
+    expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(vi.mocked(api.preflightLaunch).mock.calls[0][1], 'work');
+    expect(api.sessionStop).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
-    // The native launch reports the stop it was asked for with its canonical message.
-    await act(async () => { sessionLaunch.reject(new Error('server start cancelled')); refresh.resolve(); });
+    await act(async () => { sessionLaunch.reject(new Error('server start cancelled')); });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: copy.title })).not.toBeInTheDocument());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
@@ -210,7 +203,7 @@ it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps a cancelled handed-off launch 
     expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.cfg?.sessions?.find(session => session.id === 'work')?.models.primary_model).toBe('models/b.gguf');
   } finally {
-    await act(async () => { sessionLaunch.resolve({ id: 'work', name: 'Work', state: 'stopped', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 }); refresh.resolve(); });
+    await act(async () => { preflight.resolve(store.cfg!); sessionLaunch.resolve({ id: 'work', name: 'Work', state: 'stopped', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 }); });
   }
 });
 
@@ -237,4 +230,66 @@ it('keeps a handed-off session launch failure that mentions cancellation visible
   } finally {
     await act(async () => { sessionLaunch.resolve({ id: 'work', name: 'Work', state: 'stopped', model: 'models/b.gguf', active_requests: 0, idle_seconds: 0 }); });
   }
+});
+
+it.each(['cancelled', 'failed'] as const)('keeps launch ownership live while saving and preserves the editor on a %s save', async outcome => {
+  const store = targets();
+  const gate = deferred<void>();
+  const save = store.updateConfig;
+  store.updateConfig = vi.fn(async patch => { await gate.promise; return save(patch); });
+  render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
+  const editor = await screen.findByRole('dialog', { name: 'Model & settings' });
+  const start = editorActions(editor).getByRole('button', { name: 'Save profile & start' });
+  await waitFor(() => expect(start).toBeEnabled());
+  fireEvent.click(start);
+  expect(within(editor).getByRole('progressbar', { name: /Preparing model launch/ })).not.toHaveAttribute('value');
+  await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+  expect(within(editor).getByRole('progressbar', { name: /Saving/ })).not.toHaveAttribute('value');
+  expect(within(editor).getByRole('button', { name: 'Close' })).toBeDisabled();
+  if (outcome === 'cancelled') {
+    fireEvent.click(editorActions(editor).getByRole('button', { name: 'Cancel' }));
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(editor).not.toBeInTheDocument());
+    expect(within(screen.getByTestId('launch-task-strip')).getByRole('status')).toHaveTextContent('Cancelled');
+    expect(store.cfg?.active_model).toBe('models/a.gguf');
+  } else {
+    await act(async () => gate.reject(new Error('disk full')));
+    expect(editor).toBeInTheDocument();
+    expect(within(editor).getByRole('alert')).toHaveTextContent('disk full');
+    expect(start).toBeEnabled();
+  }
+  expect(api.preflightLaunch).not.toHaveBeenCalled();
+  expect(api.cancelLaunch).toHaveBeenCalledTimes(outcome === 'cancelled' ? 1 : 0);
+  expect(store.start).not.toHaveBeenCalled();
+  expect(store.stop).not.toHaveBeenCalled();
+});
+
+it('keeps a late preflight failure outside a newer editor and recovers the saved original target', async () => {
+  const store = targets();
+  const preflight = deferred<AppConfig>();
+  vi.mocked(api.preflightLaunch).mockReturnValueOnce(preflight.promise);
+  render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open session target B' }));
+  const original = await screen.findByRole('dialog', { name: 'Model & settings' });
+  const start = editorActions(original).getByRole('button', { name: 'Save profile & start' });
+  await waitFor(() => expect(start).toBeEnabled());
+  fireEvent.click(start);
+  await waitFor(() => expect(api.preflightLaunch).toHaveBeenCalledOnce());
+  expect(original).not.toBeInTheDocument();
+  expect(store.updateConfig).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
+  const newer = await screen.findByRole('dialog', { name: 'Model & settings' });
+  await act(async () => preflight.reject(new Error('selected runtime cannot load this model')));
+  expect(newer).toBeInTheDocument();
+  expect(newer).toHaveTextContent('Default execution');
+  expect(api.sessionStart).not.toHaveBeenCalled();
+  fireEvent.click(within(newer).getByRole('button', { name: 'Close' }));
+  const strip = within(screen.getByTestId('launch-task-strip'));
+  expect(strip.getByRole('alert')).toHaveTextContent('selected runtime cannot load this model');
+  fireEvent.click(strip.getByRole('button', { name: 'Review saved model settings' }));
+  const recovered = await screen.findByRole('dialog', { name: 'Model & settings' });
+  expect(recovered).toHaveTextContent('Session: Work');
+  expect(recovered.querySelector<HTMLInputElement>('input[aria-label="Model path"]')).toHaveValue('models/b.gguf');
+  expect(store.cfg?.sessions?.find(session => session.id === 'work')?.models.primary_model).toBe('models/b.gguf');
 });
