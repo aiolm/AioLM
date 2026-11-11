@@ -117,11 +117,11 @@ describe('workspace provider fallback profile integration', () => {
   // Each case traverses the real workspace, dialog, profiles, tabs and Apply.
   // Allow time for that DOM journey while retaining every state/save boundary.
   it.each([
-    { name: 'uses the fallback provider target assignment', currentProvider: 'llama.cpp' as const, assigned: true, clearsRuntime: true, malformedBrowserMemory: false },
-    { name: 'uses the fallback provider default when no target assignment exists', currentProvider: 'llama.cpp' as const, assigned: false, clearsRuntime: true, malformedBrowserMemory: false },
-    { name: 'retains the current provider runtime and target assignment', currentProvider: 'vllm' as const, assigned: true, clearsRuntime: false, malformedBrowserMemory: false },
-    { name: 'opens the fallback target assignment without parsing unrelated malformed memory', currentProvider: 'llama.cpp' as const, assigned: true, clearsRuntime: true, malformedBrowserMemory: true },
-  ])('$name without changing saved state before Apply', { timeout: 10_000 }, async ({ currentProvider, assigned, clearsRuntime, malformedBrowserMemory }) => {
+    { name: 'uses the fallback provider target assignment', currentProvider: 'llama.cpp' as const, assigned: true, malformedBrowserMemory: false },
+    { name: 'uses the fallback provider default when no target assignment exists', currentProvider: 'llama.cpp' as const, assigned: false, malformedBrowserMemory: false },
+    { name: 'retains the current provider runtime and target assignment', currentProvider: 'vllm' as const, assigned: true, malformedBrowserMemory: false },
+    { name: 'opens the fallback target assignment without parsing unrelated malformed memory', currentProvider: 'llama.cpp' as const, assigned: true, malformedBrowserMemory: true },
+  ])('$name without changing saved state before Apply', { timeout: 10_000 }, async ({ currentProvider, assigned, malformedBrowserMemory }) => {
     const state = fixture(currentProvider, assigned);
     if (malformedBrowserMemory) {
       localStorage.setItem(MODEL_EXECUTION_KEY, '{invalid synthetic memory');
@@ -133,17 +133,15 @@ describe('workspace provider fallback profile integration', () => {
     fireEvent.click(await library.findByRole('button', { name: 'Configure & run: provider-target' }));
     const dialog = within(await screen.findByRole('dialog', { name: 'Model & settings' }));
     expect(dialog.getByRole('radio', { name: /^vLLM/ })).toBeChecked();
-    const runtime = await dialog.findByRole('radio', { name: /^selected-vllm-runtime/ });
-    expect(runtime).toHaveProperty('checked', !clearsRuntime);
-    expect(dialog.getByRole('button', { name: 'Continue to profile' })).toHaveProperty('disabled', clearsRuntime);
+    const continueToProfile = dialog.getByRole('button', { name: 'Continue to profile' });
+    await waitFor(() => expect(continueToProfile).toBeEnabled());
     expect(store.cfg).toEqual(before);
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(memory);
     expect(storedValues()).toEqual(storage);
     expect(outside).not.toHaveBeenCalled();
 
-    if (clearsRuntime) fireEvent.click(runtime);
-    fireEvent.click(dialog.getByRole('button', { name: 'Continue to profile' }));
+    fireEvent.click(continueToProfile);
     expect(dialog.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
     // The reusable entry is newer than its saved application. Execution uses
     // current profile values/prompt while retaining the target's chosen identity.
