@@ -39,7 +39,7 @@ function AdapterRow({ item, runtimes, disabled, copy, onOpen }: {
         </button>
       </div>
       <div id={`${id}-details`} className="adapter-row__details" hidden={!expanded}>
-        <p>{copy.server}: {item.server}{item.managed_version ? ` · ${item.managed_version}` : ''}</p>
+        <p>{copy.server}: {item.server}</p>
         {!item.availability.supported && item.availability.detail && <p>{item.availability.detail}</p>}
         {runtimes.length === 0 ? <p>{copy.noRuntimes}</p> : (
           <ul>

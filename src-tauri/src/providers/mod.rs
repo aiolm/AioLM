@@ -618,16 +618,17 @@ mod tests {
     fn vllm_macos_availability_reports_metal_requirements_without_a_fourth_provider() {
         let eligible = availability_for_with_macos(ProviderId::Vllm, "macos", "aarch64", "15.0");
         assert!(eligible.supported);
-        assert!(eligible.detail.contains("CPython 3.12"));
-        assert!(eligible.detail.contains("0.30.0"));
         for (os, arch, version) in [
             ("macos", "aarch64", "14.9"),
             ("macos", "x86_64", "15.0"),
             ("windows", "aarch64", "15.0"),
             ("windows", "x86_64", "15.0"),
         ] {
-            assert!(!availability_for_with_macos(ProviderId::Vllm, os, arch, version).supported);
+            let availability = availability_for_with_macos(ProviderId::Vllm, os, arch, version);
+            assert!(!availability.supported);
+            assert!(!availability.detail.contains(metal_env::VERSION));
         }
+        assert!(!eligible.detail.contains(metal_env::VERSION));
         assert!(availability_for_with_macos(ProviderId::Vllm, "linux", "aarch64", "").supported);
         assert_eq!(ProviderId::ALL.len(), 3);
         assert_eq!(ProviderId::parse("vllm-metal"), None);

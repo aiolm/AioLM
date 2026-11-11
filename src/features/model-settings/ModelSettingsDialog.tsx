@@ -179,7 +179,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const invoker = useRef<HTMLElement | null>(null);
-  const runtime = useServerOptions(llama ? cfg.active_backend : '', llama ? cfg.active_build : '', open && llama);
+  const runtime = useServerOptions(llama ? cfg.active_backend : '', llama ? cfg.active_build : '', open && llama && !!cfg.active_backend && !!cfg.active_build);
   const catalog = useModelCatalog(initialConfig.models_dir, open, cfg);
   const selectedMetadata = useSelectedModelMetadata(llama ? cfg.active_model : '', open && llama);
   const contextLimit = selectedMetadata?.context_length;

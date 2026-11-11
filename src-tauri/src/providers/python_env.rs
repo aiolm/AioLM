@@ -1221,7 +1221,12 @@ pub async fn install_managed(
     emit(
         "packages",
         if metal {
-            metal_env::REQUIREMENTS.into()
+            format!(
+                "{} Managed installs pair vllm-metal {} with vLLM {}.",
+                metal_env::REQUIREMENTS,
+                metal_env::VERSION,
+                metal_env::CORE_VERSION
+            )
         } else {
             format!("installing {}=={version}", package_name(provider))
         },

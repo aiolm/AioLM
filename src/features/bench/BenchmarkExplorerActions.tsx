@@ -152,7 +152,7 @@ export function useBenchmarkProfileImport(store: AppStore) {
     onConfirm={() => void confirm()} onCancel={cancel} description={<>
       <p>{copy.importHint}</p>
       <section aria-label={copy.destination}>
-        <ProviderRuntimeControl cfg={destination} disabled={saving} onProvider={chooseProvider} onChange={changeDestination} onReady={setReady} />
+        <ProviderRuntimeControl cfg={destination} disabled={saving} autoSelect={false} onProvider={chooseProvider} onChange={changeDestination} onReady={setReady} />
       </section>
       {!source && !pending.error && <p role="status">{copy.loading}</p>}
       {pending.error && <FeedbackBanner tone="error" action={{ label: copy.retry, disabled: saving, onClick: () => {

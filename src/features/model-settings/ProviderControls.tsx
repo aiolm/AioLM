@@ -29,9 +29,9 @@ import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 import RuntimeArgumentList from '../runtimes/RuntimeArgumentList';
 import { rawArgumentsCopy } from './rawArgumentsCopy';
 
-export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
+export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, autoSelect = true }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
-  onChange: (patch: Partial<api.AppConfig>) => void; onReady: (ready: boolean | null) => void; revision?: number;
+  onChange: (patch: Partial<api.AppConfig>) => void; onReady: (ready: boolean | null) => void; revision?: number; autoSelect?: boolean;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const flowCopy = settingsFlowCopy[locale];
@@ -55,10 +55,16 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   const description = descriptions.find(item => item.id === provider);
   const entries = runtimes.filter(item => item.provider === provider);
   const engines = [...new Set([...api.PROVIDERS, ...descriptions.map(item => item.id), provider])];
-  const selectRuntime = (item?: api.RuntimeInstance) => onChange(provider === 'llama.cpp'
-    ? { active_backend: item?.backend ?? '', active_build: item?.build ?? '' } : { active_runtime: item?.id ?? '' });
-  // A pending or failed inventory cannot establish that the selected runtime is absent.
-  const ready = inventoryState === 'ready' ? description?.availability.supported === true && entries.some(item => item.id === selected && item.available) : null;
+  const selectRuntime = useCallback((item?: api.RuntimeInstance) => onChange(provider === 'llama.cpp'
+    ? { active_backend: item?.backend ?? '', active_build: item?.build ?? '' } : { active_runtime: item?.id ?? '' }), [provider, onChange]);
+  const defaultRuntime = !selected ? entries.find(item => item.available) ?? entries[0] : undefined;
+  useEffect(() => {
+    if (!autoSelect || disabled || inventoryState !== 'ready' || !defaultRuntime) return;
+    selectRuntime(defaultRuntime);
+  }, [autoSelect, disabled, inventoryState, defaultRuntime, selectRuntime]);
+  // Neither a pending inventory nor an unapplied default can establish readiness.
+  const ready = inventoryState === 'ready' && !(autoSelect && defaultRuntime)
+    ? description?.availability.supported === true && entries.some(item => item.id === selected && item.available) : null;
   useEffect(() => onReady(ready), [ready, onReady]);
   return <div className="model-settings-fields runtime-selection-cards">
     <fieldset disabled={disabled} className="runtime-choice-group"><legend>{copy.engine}</legend>
@@ -78,7 +84,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
       </label>)}
       {inventoryState === 'ready' && !entries.length && <p className="app-section-hint">{flowCopy.noRuntimes}</p>}
       {selected && !entries.some(item => item.id === selected) && <p className="app-section-hint">{selected}</p>}
-      {selected && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => selectRuntime()}>{copy.clearSelection}</button>}
+      {!autoSelect && selected && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => selectRuntime()}>{copy.clearSelection}</button>}
     </fieldset>
     {description?.availability.supported === false && <FeedbackBanner tone="warning">{copy.unsupported} {description.availability.detail}</FeedbackBanner>}
     {inventoryState === 'loading' && <p role="status">{copy.loading}</p>}

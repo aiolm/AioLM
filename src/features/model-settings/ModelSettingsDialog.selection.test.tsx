@@ -42,7 +42,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('tab', { name: 'Profiles' })).not.toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
   });
-  it('requires a runtime selection before profile or option navigation', () => {
+  it('blocks profile and option navigation until an installed runtime is automatically selected', async () => {
+    vi.mocked(api.rtProbe).mockClear();
     mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' }, initialSection: 'advanced', onManageRuntimes: vi.fn() });
     expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
@@ -50,6 +51,12 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage runtimes' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^b123/ })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeEnabled());
+    await waitFor(() => expect(api.rtProbe).toHaveBeenCalledWith('cpu', 'b123'));
+    expect(vi.mocked(api.rtProbe).mock.calls.filter(([backend, build]) => !backend || !build)).toEqual([]);
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
   });
 
   it('keeps the option draft on backward navigation and confirms before replacing it with another profile', async () => {
@@ -453,9 +460,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Default system prompt' }), { target: { value: 'Unsaved llama prompt' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
-    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^synthetic · synthetic · Registered installation/ })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeEnabled());
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('radio', { name: /^synthetic · synthetic · Registered installation/ }));
     openOptions();
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue(''));
     fireEvent.change(screen.getByRole('textbox', { name: 'Default system prompt' }), { target: { value: 'Unsaved vLLM prompt' } });

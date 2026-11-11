@@ -2771,8 +2771,9 @@ async fn probe_with_cancel(
         return Err("server start cancelled".into());
     }
     let (resolved_backend, resolved_build, binary) = if backend.is_empty() && build.is_empty() {
-        let binary = which::which(server_executable_name())
-            .map_err(|_| "no llama-server executable was found on PATH".to_string())?;
+        let binary = which::which(server_executable_name()).map_err(|_| {
+            "No llama.cpp runtime is selected, and llama-server could not be found on PATH. Open Inference engines, choose llama.cpp, and install or import a runtime. Then return to model settings and select that runtime.".to_string()
+        })?;
         ("system".to_string(), "system".to_string(), binary)
     } else {
         validate_runtime_identifiers(backend, build)?;

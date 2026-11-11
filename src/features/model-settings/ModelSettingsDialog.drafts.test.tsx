@@ -346,17 +346,28 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(saved.active_model).toBe('models/a.gguf');
   });
 
-  it('requires a managed runtime before starting and never offers a system runtime', async () => {
-    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
-    await waitFor(() => expect(api.rtList).toHaveBeenCalled());
+  it('automatically selects an installed managed runtime but leaves navigation and saving explicit', async () => {
+    const { onApply, onProfileCommit } = mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^b123/ })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeEnabled());
     expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
     const options = within(screen.getByRole('group', { name: 'Runtime' })).getAllByRole('radio').map(option => option.closest('label')?.textContent ?? '');
     expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · Installed by AioLM'))).toBe(true);
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(screen.queryByText('No runtime is selected.')).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /^b123/ })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
   });
 
   it('reports a selected runtime as missing when the installed list loads empty', async () => {
@@ -399,17 +410,17 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
   });
 
-  it.each(['vllm', 'mlx-vlm'] as const)('asks to select a %s runtime without claiming an unselected runtime is missing', async provider => {
+  it.each(['vllm', 'mlx-vlm'] as const)('automatically selects an installed %s runtime without applying or persisting it', async provider => {
     vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
     vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
     vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
     const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: '' } });
-    await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^synthetic · synthetic · Registered installation/ })).toBeChecked());
     expect(screen.queryByText('No runtime is selected.')).not.toBeInTheDocument();
     expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
     expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeEnabled());
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
     expect(onProfileCommit).not.toHaveBeenCalled();

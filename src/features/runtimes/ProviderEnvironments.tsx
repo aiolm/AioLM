@@ -137,7 +137,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
           {external && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
         </div>
         {!external && <div className="app-page-actions">
-          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
+          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install}{provider.availability.supported && provider.managed_version ? ` ${provider.managed_version}` : ''}</button>
           <button type="button" className="app-button app-button--secondary" disabled={busy || blocked || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
         </div>}
       </div>
