@@ -33,7 +33,7 @@ export const executionText: Record<Locale, Copy> = {
   },
   ja: {
     title: 'モデル実行', setup: '実行設定', setupAction: '設定して実行', hint: 'モデルを選択し、設定を確認して実行します。', remembered: 'モデルごとに最後の設定を記憶します。',
-    runtime: 'ランタイム', manageRuntime: '推論エンジン', back: 'モデルに戻る', systemRuntime: 'システム PATH ランタイム', runtimeMissing: 'このランタイムはまだ使用できません。ランタイム管理で状態を確認し、必要に応じてインストールするか、別のランタイムを選択してください。', runtimeError: 'ランタイムまたはデバイスを取得できません。実行前に再試行してください。',
+    runtime: 'ランタイム', manageRuntime: '推論エンジン', back: 'モデルに戻る', systemRuntime: 'システム PATH ランタイム', runtimeMissing: 'このランタイムはまだ使用できません。推論エンジン管理で状態を確認し、必要に応じてインストールするか、別のランタイムを選択してください。', runtimeError: 'ランタイムまたはデバイスを取得できません。実行前に再試行してください。',
     blockedTitle: '実行する前に', needModel: 'モデルが選択されていません。', needModelAction: 'モデルを選択',
     needModelParts: '必要なモデルファイルがないか、ダウンロードが未完了です。ダウンロードを完了するか、別のモデルを選択してください。',
     needRuntime: 'ランタイムが選択されていません。', needRuntimeAction: 'ランタイムを選択',
@@ -42,7 +42,7 @@ export const executionText: Record<Locale, Copy> = {
   },
   zh: {
     title: '运行模型', setup: '运行配置', setupAction: '配置并运行', hint: '选择模型，检查配置，然后在此运行。', remembered: '记住每个模型的上次配置。',
-    runtime: '运行时', manageRuntime: '推理引擎', back: '返回模型', systemRuntime: '系统 PATH 运行时', runtimeMissing: '此运行时尚不可用。请在运行时管理中检查状态，按需安装，或选择其他运行时。', runtimeError: '无法加载运行时或设备。请在运行前重试。',
+    runtime: '运行时', manageRuntime: '推理引擎', back: '返回模型', systemRuntime: '系统 PATH 运行时', runtimeMissing: '此运行时尚不可用。请在推理引擎管理中检查状态，按需安装，或选择其他运行时。', runtimeError: '无法加载运行时或设备。请在运行前重试。',
     blockedTitle: '运行前需要', needModel: '尚未选择模型。', needModelAction: '选择模型',
     needModelParts: '缺少必需的模型文件，或下载尚未完成。请完成下载，或选择其他模型。',
     needRuntime: '尚未选择运行时。', needRuntimeAction: '选择运行时',

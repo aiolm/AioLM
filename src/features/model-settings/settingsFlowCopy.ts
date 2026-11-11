@@ -1,6 +1,6 @@
 const en = {
   journey: 'Runtime, profile and options', runtime: 'Choose runtime', profile: 'Choose profile', options: 'Adjust options',
-  runtimeHint: 'Choose the inference engine and its installed runtime first.',
+  runtimeHint: 'An inference engine is the engine type; a runtime is an installed execution environment. Choose the engine and runtime to use.',
   profileHint: 'These profiles belong to the selected engine. Options are checked against the selected runtime build.',
   optionsHint: 'Adjust the model and options in the selected profile.',
   nextProfile: 'Continue to profile', nextOptions: 'Use this profile and adjust options',
@@ -21,22 +21,22 @@ const ko: Copy = {
 };
 const ja: Copy = {
   journey: 'ランタイム、プロファイル、オプションの設定順序', runtime: 'ランタイムを選択', profile: 'プロファイルを選択', options: 'オプションを調整',
-  runtimeHint: '最初に推論エンジンとインストール済みランタイムを選択してください。',
+  runtimeHint: '推論エンジンはエンジンの種類、ランタイムはインストール済みの実行環境です。使用するエンジンとランタイムを選択してください。',
   profileHint: '選択したエンジンのプロファイルです。オプションは選択したランタイムのビルドで確認します。',
   optionsHint: '選択したプロファイルのモデルとオプションを調整してください。',
   nextProfile: 'プロファイルの選択へ', nextOptions: 'このプロファイルでオプションを調整',
   backRuntime: 'ランタイムの選択に戻る', backProfile: 'プロファイルの選択に戻る', choose: '未選択',
-  noRuntimes: 'このエンジンのランタイムは未登録です。ランタイム管理で追加またはインストールしてください。',
+  noRuntimes: 'このエンジンのランタイムは未登録です。推論エンジン管理で追加またはインストールしてください。',
   backSettings: 'モデル設定に戻る',
 };
 const zh: Copy = {
   journey: '运行时、预设和选项设置顺序', runtime: '选择运行时', profile: '选择预设', options: '调整选项',
-  runtimeHint: '首先选择推理引擎及其已安装的运行时。',
+  runtimeHint: '推理引擎是引擎类型，运行时是已安装的运行环境。请选择要使用的引擎和运行时。',
   profileHint: '这些预设属于所选引擎。选项会根据所选运行时版本进行检查。',
   optionsHint: '调整所选预设的模型和选项。',
   nextProfile: '继续选择预设', nextOptions: '使用此预设并调整选项',
   backRuntime: '返回运行时选择', backProfile: '返回预设选择', choose: '未选择',
-  noRuntimes: '此引擎尚未注册运行时。请在运行时管理中添加或安装。',
+  noRuntimes: '此引擎尚未注册运行时。请在推理引擎管理中添加或安装。',
   backSettings: '返回模型设置',
 };
 export const settingsFlowCopy = { en, ko, ja, zh };

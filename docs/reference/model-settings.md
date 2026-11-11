@@ -2,7 +2,7 @@
 
 Choose a model without leaving the current screen. The topbar controls default execution and labels that scope separately. Chat's always-visible header session selector controls the answering session without changing that default. Retrieval and audio/video preprocessing remain in **Conversation settings**. Benchmark and project settings apply to their own targets, shown at the top of the dialog.
 
-Use **Choose runtime → Choose profile → Adjust options** to select the inference engine and installed runtime, then that engine's settings profile and compatible model. **Library** shows the complete local library with runtime filters. See [Inference runtimes](inference-runtimes.md) for llama.cpp, vLLM and MLX installation, snapshot and multimodal behavior. Resource allocation estimates below apply to llama.cpp; Python engine allocations remain unavailable where the engine cannot provide a reliable estimate.
+Use **Choose runtime → Choose profile → Adjust options** to select the inference engine and installed runtime, then that engine's settings profile and compatible model. **Library** shows the complete local library with engine filters. See [Inference runtimes](inference-runtimes.md) for llama.cpp, vLLM and MLX installation, snapshot and multimodal behavior. Resource allocation estimates below apply to llama.cpp; Python engine allocations remain unavailable where the engine cannot provide a reliable estimate.
 
 In the runtime selector, **Clear selection** removes only the current runtime selection. It does not uninstall the runtime or clear engine option values. The separate **Clear value** action next to an unrecognized option deletes only that option's saved value, leaving other options and the runtime selection unchanged.
 

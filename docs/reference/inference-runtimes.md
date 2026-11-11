@@ -25,7 +25,7 @@ The editor keeps engine selection, the installed runtime selector and profile se
 
 The shared model settings dialog selects the engine before presenting its profiles and compatible primary models. Selecting another engine preserves its working execution settings and system prompt while the dialog is open. Each engine has an independent default profile and recent profile selection. Existing profiles and saved sessions without an engine identifier migrate to llama.cpp. Legacy backend/build fields are preserved as migration metadata rather than selecting a runtime when a portable profile is applied.
 
-The model library shows all detected artifacts, their format and compatibility evidence. Its runtime filter includes companion GGUF projectors for llama.cpp. Launch selection excludes projector-only artifacts. Embedding-only models can start an embedding session, and supported speech models start a transcription session; chat and text benchmarks require a generation session. Missing files, incomplete downloads and unknown model architectures remain visible in the library and cannot silently become supported launches.
+The model library shows all detected artifacts, their format and compatibility evidence. Its engine filter includes companion GGUF projectors for llama.cpp. Launch selection excludes projector-only artifacts. Embedding-only models can start an embedding session, and supported speech models start a transcription session; chat and text benchmarks require a generation session. Missing files, incomplete downloads and unknown model architectures remain visible in the library and cannot silently become supported launches.
 
 ## Engine presentation across menus
 

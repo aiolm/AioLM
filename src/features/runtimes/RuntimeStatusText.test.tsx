@@ -25,6 +25,7 @@ describe('runtime status explanations', () => {
       state: 'failed preflight', version: '', flags: [], devices: [], diagnostics: ['Synthetic binary fingerprint changed'] };
     const { container } = render(<I18nProvider initialLocale="ko"><RuntimeCapabilitiesCard locale="ko" t={(key, vars) => translate('ko', key, vars)}
       capabilities={capabilities} probeTarget={{ backend: 'cpu', build: 'synthetic-build' }} /></I18nProvider>);
+    expect(screen.getByRole('heading', { name: '런타임 기능' })).toBeVisible();
     expect(screen.getByText('실행 파일 점검 실패')).toBeVisible();
     expect(screen.queryByRole('button', { name: '다시 점검' })).not.toBeInTheDocument();
     const diagnostic = container.querySelector('details')!;

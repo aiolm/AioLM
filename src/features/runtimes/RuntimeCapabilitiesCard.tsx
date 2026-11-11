@@ -24,7 +24,7 @@ export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities
   return (
     <section className="app-card runtime-tool runtime-capabilities-card" aria-labelledby="runtime-capabilities-heading">
       <div className="runtime-tool__header">
-        <h3 id="runtime-capabilities-heading" className="runtime-tool__title">{t("section.runtimes")}</h3>
+        <h3 id="runtime-capabilities-heading" className="runtime-tool__title">{t("panel.runtimeCapabilities")}</h3>
         <p className="app-section-hint">{t("ui.probeHint")}</p>
       </div>
       <p className="runtime-tool__meta">{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
