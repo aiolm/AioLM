@@ -94,7 +94,7 @@ fn window_chrome(window: tauri::WebviewWindow) -> Result<&'static str, String> {
 /// (servers already stopped) with an error.
 pub(crate) fn shutdown_managed_processes(state: &AppState) {
     providers::runtime_auto::cancel();
-    state.launch_preflights.cancel_all();
+    state.launch_jobs.cancel_all();
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
     state.discover_cancel.store(true, Ordering::Release);
@@ -309,6 +309,7 @@ pub fn run() {
             commands::server::start_server,
             commands::launch::preflight_launch,
             commands::launch::preflight_launch_cancel,
+            commands::launch::launch_cancel,
             commands::launch::verify_model_deeply,
             commands::launch::verify_cancel,
             commands::launch::allow_verification_override,

@@ -5,28 +5,51 @@ use std::{fs, net::TcpListener, path::Path, process::Command};
 
 const WORKER: &str = "commands::server::launch_preparation_tests::isolated_preparation_worker";
 const PROBE: &str = r#"
-import json, os, pathlib, socket, subprocess, sys, time
-root, model = pathlib.Path(sys.argv[1]), sys.argv[2]
-if model:
-    listener = socket.socket()
-    listener.bind(('127.0.0.1', 0))
-    listener.listen()
-    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-    (root / 'started.json').write_text(json.dumps([os.getpid(), child.pid, listener.getsockname()[1]]))
-    try:
-        while not (root / 'release').exists():
-            time.sleep(0.01)
-    finally:
-        child.terminate()
-        child.wait()
-        listener.close()
-    if (root / 'failure').exists():
-        sys.stderr.write('invalid weights in ' + model + '\nrequest cancelled by upstream fixture\n')
-        sys.exit(7)
-print(json.dumps(dict(schema_version=1, engine_id='custom.preparation', runtime_id='synthetic',
-    version='synthetic-1', accelerator='cpu', model=model, model_supported=bool(model),
-    served_model='synthetic-model', capabilities=dict(tasks=['generate'],
-    modalities=dict(text=True, image=False, audio=False, video=False), chat=True, tools=False))))
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { setTimeout: delay } = require('node:timers/promises');
+const [root, model] = process.argv.slice(2);
+async function main() {
+    if (model) {
+        const listener = net.createServer();
+        await new Promise((resolve, reject) => {
+            listener.once('error', reject);
+            listener.listen(0, '127.0.0.1', resolve);
+        });
+        const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+        await new Promise((resolve, reject) => {
+            child.once('spawn', resolve);
+            child.once('error', reject);
+        });
+        fs.writeFileSync(path.join(root, 'started.json'),
+            JSON.stringify([process.pid, child.pid, listener.address().port]));
+        try {
+            while (!fs.existsSync(path.join(root, 'release'))) await delay(10);
+        } finally {
+            child.kill();
+            await new Promise(resolve => {
+                if (child.exitCode !== null || child.signalCode !== null) resolve();
+                else child.once('exit', resolve);
+            });
+            await new Promise(resolve => listener.close(resolve));
+        }
+        if (fs.existsSync(path.join(root, 'failure'))) {
+            process.stderr.write('invalid weights in ' + model + '\nrequest cancelled by upstream fixture\n');
+            process.exitCode = 7;
+            return;
+        }
+    }
+    process.stdout.write(JSON.stringify({
+        schema_version: 1, engine_id: 'custom.preparation', runtime_id: 'synthetic',
+        version: 'synthetic-1', accelerator: 'cpu', model, model_supported: Boolean(model),
+        served_model: 'synthetic-model', capabilities: { tasks: ['generate'],
+            modalities: { text: true, image: false, audio: false, video: false },
+            chat: true, tools: false }
+    }) + '\n');
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
 "#;
 
 #[test]
@@ -42,6 +65,9 @@ fn launch_preparation_in_flight() {
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_DATA_HOME", root.join("share"))
+        .env("USERPROFILE", root.join("home"))
+        .env("APPDATA", root.join("config"))
+        .env("LOCALAPPDATA", root.join("cache"))
         .output()
         .unwrap();
     println!("{}", String::from_utf8_lossy(&output.stdout));
@@ -74,12 +100,18 @@ async fn wait_started(root: &Path) -> Vec<u64> {
     .expect("the real probe must be running before the test requests cancellation")
 }
 
-async fn assert_reaped(started: &[u64]) {
+async fn assert_reaped(
+    started: &[u64],
+    #[cfg(windows)] processes: &[crate::procutil::ProcessExitProbe],
+) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
+            #[cfg(unix)]
             let gone = started[..2]
                 .iter()
                 .all(|pid| unsafe { libc::kill(*pid as i32, 0) != 0 });
+            #[cfg(windows)]
+            let gone = processes.iter().all(|process| process.exited());
             if gone {
                 break;
             }
@@ -99,16 +131,16 @@ async fn isolated_preparation_worker() {
         return;
     };
     let root = std::path::PathBuf::from(root);
-    let probe = root.join("probe.py");
+    let probe = root.join("probe.js");
     fs::write(&probe, PROBE).unwrap();
-    let python = which::which("python3").expect("synthetic probe requires Python 3");
+    let node = which::which("node").expect("synthetic probe requires the project Node.js runtime");
     let manifest = serde_json::from_value(json!({
         "schema_version": 1, "adapter_version": 1, "engine_id": "custom.preparation",
         "runtime_id": "synthetic", "display_name": "Synthetic preparation probe",
         "platforms": [{"os": std::env::consts::OS, "arch": std::env::consts::ARCH}],
         "protocol": "openai-v1",
-        "probe": {"program": python, "args": [probe, root, "{model}"]},
-        "launch": {"program": python, "args": [probe, root, "{model}", "{port}"],
+        "probe": {"program": node, "args": [probe, root, "{model}"]},
+        "launch": {"program": node, "args": [probe, root, "{model}", "{port}"],
             "env": {"SYNTHETIC_API_KEY": "{api_key}"}},
         "artifacts": [probe], "model_formats": ["unknown"], "health_path": "/health"
     }))
@@ -122,6 +154,7 @@ async fn isolated_preparation_worker() {
         active_provider: "custom.preparation".into(),
         active_runtime: "synthetic".into(),
         active_model: model.to_string_lossy().into_owned(),
+        ctx_size: 4096,
         ..Default::default()
     };
     let mut observations = Vec::new();
@@ -135,6 +168,7 @@ async fn isolated_preparation_worker() {
         "exit-cancel",
         "busy-failure",
         "exit-failure",
+        "captured-snapshot",
         "artifact-change",
     ] {
         for name in ["started.json", "release", "failure"] {
@@ -150,15 +184,33 @@ async fn isolated_preparation_worker() {
         let cancel = pending.cancel_flag();
         assert!(!cancel.load(Ordering::Acquire));
         config::save(&config::AppConfig::default()).unwrap();
-        let preparation = prepare_launch(&state, cfg.clone(), true, &cancel);
+        let preparation = prepare_launch(&state, cfg.clone(), case != "captured-snapshot", &cancel);
         tokio::pin!(preparation);
         let started = tokio::select! {
             result = &mut preparation => panic!("preparation finished before the probe gate: {:?}", result.err()),
             started = wait_started(&root) => started,
         };
+        #[cfg(windows)]
+        let processes = started[..2]
+            .iter()
+            .map(|pid| {
+                crate::procutil::ProcessExitProbe::open(*pid as u32)
+                    .expect("synthetic probe and descendant must still be running at the gate")
+            })
+            .collect::<Vec<_>>();
         // A different settings save occurs while this probe is in flight.
         let latest = config::save(&config::AppConfig {
             port: 49123,
+            active_model: if case == "captured-snapshot" {
+                root.join("newer-model.bin").to_string_lossy().into_owned()
+            } else {
+                config::load_result().unwrap().active_model
+            },
+            ctx_size: if case == "captured-snapshot" {
+                8192
+            } else {
+                cfg.ctx_size
+            },
             ..config::load_result().unwrap()
         })
         .unwrap();
@@ -172,7 +224,7 @@ async fn isolated_preparation_worker() {
         if case == "artifact-change" {
             fs::write(
                 &probe,
-                format!("{PROBE}\n# changed after the probe started\n"),
+                format!("{PROBE}\n// changed after the probe started\n"),
             )
             .unwrap();
         }
@@ -187,13 +239,22 @@ async fn isolated_preparation_worker() {
             .unwrap();
         let outcome = match result {
             Ok(prepared) => {
-                assert_eq!(case, "success");
+                assert!(matches!(case, "success" | "captured-snapshot"));
                 assert_eq!(prepared.cfg.active_model, cfg.active_model);
-                assert_eq!(prepared.cfg.port, latest.port);
-                assert_eq!(
-                    config::load_result().unwrap().active_model,
-                    cfg.active_model
-                );
+                if case == "captured-snapshot" {
+                    assert_eq!(prepared.cfg.ctx_size, 4096);
+                    assert_eq!(prepared.cfg.port, cfg.port);
+                    assert_eq!(fs::read(config::config_path()).unwrap(), saved_bytes);
+                    let still_saved = config::load_result().unwrap();
+                    assert_eq!(still_saved.active_model, latest.active_model);
+                    assert_eq!(still_saved.ctx_size, 8192);
+                } else {
+                    assert_eq!(prepared.cfg.port, latest.port);
+                    assert_eq!(
+                        config::load_result().unwrap().active_model,
+                        cfg.active_model
+                    );
+                }
                 "prepared".to_string()
             }
             Err(error) => {
@@ -228,7 +289,10 @@ async fn isolated_preparation_worker() {
         assert!(!unrelated.cancel_flag().load(Ordering::Acquire));
         assert_eq!(state.server.lock().unwrap().model, "current-model");
         assert!(state.server.lock().unwrap().child.is_none());
+        #[cfg(unix)]
         assert_reaped(&started).await;
+        #[cfg(windows)]
+        assert_reaped(&started, &processes).await;
         let row = json!({"case":case,"cancelInitiallySet":false,"probePid":started[0],
             "descendantPid":started[1],"port":started[2],"outcome":outcome,
             "ownedProcessesExited":true,"ownedPortReleased":true,

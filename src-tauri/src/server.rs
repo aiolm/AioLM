@@ -350,6 +350,8 @@ pub struct ServerState {
     /// A forgotten named session cannot accept a launch through an older Arc.
     pub retired: bool,
     launch_generation: u64,
+    /// Ownership lasts exactly as long as this target's native generation.
+    launch_operation: Option<(String, u64)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -453,6 +455,7 @@ impl ServerState {
             active_requests: 0,
             retired: false,
             launch_generation: 0,
+            launch_operation: None,
         }
     }
 }
@@ -465,6 +468,7 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn begin_launch(&mut self) -> u64 {
+        self.launch_operation = None;
         self.execution = None;
         self.engine = None;
         self.active_requests = 0;
@@ -474,6 +478,7 @@ impl ServerState {
     }
 
     pub fn cancel_launch(&mut self) {
+        self.launch_operation = None;
         self.execution = None;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Stopped;
@@ -481,6 +486,18 @@ impl ServerState {
 
     pub fn is_current_launch(&self, generation: u64) -> bool {
         self.launch_generation == generation
+    }
+
+    pub(crate) fn bind_launch_operation(&mut self, operation_id: &str, generation: u64) {
+        self.launch_operation = Some((operation_id.to_owned(), generation));
+    }
+
+    pub(crate) fn owns_launch_operation(&self, operation_id: &str) -> bool {
+        self.launch_operation
+            .as_ref()
+            .is_some_and(|(id, generation)| {
+                id == operation_id && self.is_current_launch(*generation)
+            })
     }
 
     pub fn attach_starting(

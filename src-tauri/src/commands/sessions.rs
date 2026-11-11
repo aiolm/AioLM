@@ -21,6 +21,27 @@ pub(crate) async fn session_start(
     session_id: String,
     cfg: config::AppConfig,
     stop_existing: Option<bool>,
+    persist: Option<bool>,
+    operation_id: Option<String>,
+) -> Result<session::SessionStatus, String> {
+    run_session_start(
+        &state,
+        session_id,
+        cfg,
+        stop_existing,
+        persist,
+        operation_id,
+    )
+    .await
+}
+
+pub(super) async fn run_session_start(
+    state: &AppState,
+    session_id: String,
+    cfg: config::AppConfig,
+    stop_existing: Option<bool>,
+    persist: Option<bool>,
+    operation_id: Option<String>,
 ) -> Result<session::SessionStatus, String> {
     let id = {
         let trimmed = session_id.trim();
@@ -32,6 +53,9 @@ pub(crate) async fn session_start(
     };
     let pending = state.sessions.begin_pending_start(&id)?;
     let launch_cancel = pending.cancel_flag();
+    let serving = operation_id
+        .map(|id| state.launch_jobs.begin_launch(id, launch_cancel.clone()))
+        .transpose()?;
     let _operation = state.operation.lock().await;
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
@@ -50,13 +74,16 @@ pub(crate) async fn session_start(
     let prepared = prepare_launch(
         &state,
         cfg,
-        id == session::DEFAULT_SESSION_ID,
+        persist.unwrap_or(id == session::DEFAULT_SESSION_ID),
         &launch_cancel,
     )
     .await?;
     ensure_no_active_requests(&state, &id, policy)?;
+    if launch_cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
     if policy {
-        stop_models_for_replacement(&state, &id)?;
+        stop_models_for_replacement(state, &id, Some(&launch_cancel))?;
     }
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
@@ -65,7 +92,15 @@ pub(crate) async fn session_start(
     if id == session::DEFAULT_SESSION_ID {
         let target = state.server.clone();
         let err = state.err.clone();
-        start_on_target(&state, &target, &err, prepared, &launch_cancel).await?;
+        start_on_target(
+            state,
+            &target,
+            &err,
+            prepared,
+            &launch_cancel,
+            serving.as_ref(),
+        )
+        .await?;
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
@@ -82,7 +117,15 @@ pub(crate) async fn session_start(
         .name
         .lock()
         .map_err(|_| "session name lock was poisoned".to_string())? = name.clone();
-    start_on_target(&state, &entry.state, &entry.err, prepared, &launch_cancel).await?;
+    start_on_target(
+        state,
+        &entry.state,
+        &entry.err,
+        prepared,
+        &launch_cancel,
+        serving.as_ref(),
+    )
+    .await?;
     let mut server = entry
         .state
         .lock()

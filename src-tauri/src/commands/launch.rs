@@ -19,7 +19,7 @@ async fn run_launch_preflight(
     operation_id: Option<String>,
 ) -> Result<config::AppConfig, String> {
     let job = state
-        .launch_preflights
+        .launch_jobs
         .begin(operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))?;
     if state.exiting.load(Ordering::Acquire) || job.cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
@@ -39,7 +39,17 @@ pub(crate) fn preflight_launch_cancel(
     state: State<'_, AppState>,
     operation_id: String,
 ) -> Result<(), String> {
-    state.launch_preflights.cancel(&operation_id)
+    state.launch_jobs.cancel(&operation_id)
+}
+
+/// Cancel only this operation's preflight and native launch generation.
+#[tauri::command]
+pub(crate) fn launch_cancel(
+    state: State<'_, AppState>,
+    operation_id: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    super::server::cancel_launch_operation(&state, &operation_id, session_id.as_deref())
 }
 
 /// Accept a blocked GPU placement and let it start anyway.
@@ -127,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn a_queued_preflight_cancel_stops_before_validation_and_releases_its_owner() {
         let state = AppState::default();
-        state.launch_preflights.cancel("queued-launch").unwrap();
+        state.launch_jobs.cancel("queued-launch").unwrap();
         let result = run_launch_preflight(
             &state,
             config::AppConfig::default(),
@@ -135,10 +145,7 @@ mod tests {
         )
         .await;
         assert_eq!(result.err().as_deref(), Some("server start cancelled"));
-        let retry = state
-            .launch_preflights
-            .begin("queued-launch".into())
-            .unwrap();
+        let retry = state.launch_jobs.begin("queued-launch".into()).unwrap();
         assert!(!retry.cancel.load(Ordering::Acquire));
         // Existing cfg-only clients still enter the ordinary validation gate.
         let legacy = run_launch_preflight(&state, config::AppConfig::default(), None).await;

@@ -1,4 +1,5 @@
 //! Model process IPC, shared session lifecycle operations and idle tracking.
+use crate::launch_jobs::ServingLaunch;
 use crate::launch_validation::validate_launch_config_with_cancel;
 use crate::{config, gpu, server, session, state::AppState, tuning_defaults};
 use std::sync::{
@@ -124,7 +125,11 @@ pub(super) fn ensure_no_active_requests(
 /// target is locked before checking activity, so a late API request cannot make
 /// a later session refuse after an earlier session has already been stopped.
 /// The caller holds `state.operation`, which serializes model launches.
-pub(super) fn stop_models_for_replacement(state: &AppState, target_id: &str) -> Result<(), String> {
+pub(super) fn stop_models_for_replacement(
+    state: &AppState,
+    target_id: &str,
+    launch_cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
     let mut targets = vec![(
         session::DEFAULT_SESSION_ID.to_string(),
         state.server.clone(),
@@ -153,6 +158,9 @@ pub(super) fn stop_models_for_replacement(state: &AppState, target_id: &str) -> 
             ));
         }
     }
+    if let Some(cancel) = launch_cancel {
+        ensure_launch_allowed(state, cancel)?;
+    }
     // All checks passed. Keep the locks through teardown so neither a client
     // lease nor a manual stop can interleave with the accepted replacement.
     for ((id, _, err), model) in targets.iter().zip(&mut locked) {
@@ -171,6 +179,7 @@ pub(super) async fn start_on_target(
     err: &Arc<server::ErrBuf>,
     prepared: PreparedLaunch,
     launch_cancel: &Arc<AtomicBool>,
+    operation: Option<&ServingLaunch>,
 ) -> Result<String, String> {
     ensure_launch_allowed(state, launch_cancel)?;
     let PreparedLaunch {
@@ -193,6 +202,9 @@ pub(super) async fn start_on_target(
         // API router use this process's live URL, never the configured port.
         let worker_cfg = private_worker_config(&saved)?;
         let generation = server.begin_launch();
+        if let Some(operation) = operation {
+            server.bind_launch_operation(operation.operation_id(), generation);
+        }
         server.last_error = None;
         server.url.clear();
         server.api_key.clear();
@@ -219,6 +231,7 @@ pub(super) async fn start_on_target(
     }
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
     let engine = crate::providers::execution::probed_info(&worker_cfg).await?;
+    ensure_launch_allowed(state, launch_cancel)?;
     let server::SpawnedServer {
         child,
         url,
@@ -254,13 +267,15 @@ pub(super) async fn start_on_target(
             let mut orphan = Some(child);
             server::kill(&mut orphan, Some(err.clone()));
             server::cleanup_api_key_file(api_key_file.as_deref());
-            server.lifecycle = server::Lifecycle::Stopped;
-            server.url.clear();
-            server.api_key.clear();
-            server.redaction_secret.clear();
-            server.model.clear();
-            server.mmproj.clear();
-            server.draft_model.clear();
+            if server.is_current_launch(launch_generation) {
+                server.lifecycle = server::Lifecycle::Stopped;
+                server.url.clear();
+                server.api_key.clear();
+                server.redaction_secret.clear();
+                server.model.clear();
+                server.mmproj.clear();
+                server.draft_model.clear();
+            }
             return Err(if state.exiting.load(Ordering::Acquire) {
                 "application is exiting".into()
             } else {
@@ -300,14 +315,16 @@ pub(super) async fn start_on_target(
                 || state.exiting.load(Ordering::Acquire)
                 || launch_cancel.load(Ordering::Acquire)
             {
-                server::kill(&mut server.child, Some(err.clone()));
                 server::cleanup_api_key_file(api_key_file.as_deref());
-                server.url.clear();
-                server.api_key.clear();
-                server.redaction_secret.clear();
-                server.mmproj.clear();
-                server.draft_model.clear();
-                server.lifecycle = server::Lifecycle::Stopped;
+                if server.is_current_launch(launch_generation) {
+                    server::kill(&mut server.child, Some(err.clone()));
+                    server.url.clear();
+                    server.api_key.clear();
+                    server.redaction_secret.clear();
+                    server.mmproj.clear();
+                    server.draft_model.clear();
+                    server.lifecycle = server::Lifecycle::Stopped;
+                }
                 return Err(if state.exiting.load(Ordering::Acquire) {
                     "application is exiting".into()
                 } else {
@@ -357,11 +374,25 @@ fn private_worker_config(saved: &config::AppConfig) -> Result<config::AppConfig,
 pub(crate) async fn start_server(
     state: State<'_, AppState>,
     cfg: config::AppConfig,
+    persist: Option<bool>,
+    operation_id: Option<String>,
+) -> Result<String, String> {
+    run_start_server(&state, cfg, persist, operation_id).await
+}
+
+pub(super) async fn run_start_server(
+    state: &AppState,
+    cfg: config::AppConfig,
+    persist: Option<bool>,
+    operation_id: Option<String>,
 ) -> Result<String, String> {
     let pending = state
         .sessions
         .begin_pending_start(session::DEFAULT_SESSION_ID)?;
     let launch_cancel = pending.cancel_flag();
+    let serving = operation_id
+        .map(|id| state.launch_jobs.begin_launch(id, launch_cancel.clone()))
+        .transpose()?;
     let _operation = state.operation.lock().await;
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
@@ -371,18 +402,26 @@ pub(crate) async fn start_server(
         session::DEFAULT_SESSION_ID,
         cfg.stop_existing_sessions_on_load,
     )?;
-    let prepared = prepare_launch(&state, cfg, true, &launch_cancel).await?;
+    let prepared = prepare_launch(state, cfg, persist.unwrap_or(true), &launch_cancel).await?;
     ensure_no_active_requests(
         &state,
         session::DEFAULT_SESSION_ID,
         prepared.cfg.stop_existing_sessions_on_load,
     )?;
     if prepared.cfg.stop_existing_sessions_on_load {
-        stop_models_for_replacement(&state, session::DEFAULT_SESSION_ID)?;
+        stop_models_for_replacement(state, session::DEFAULT_SESSION_ID, Some(&launch_cancel))?;
     }
     let target = state.server.clone();
     let err = state.err.clone();
-    start_on_target(&state, &target, &err, prepared, &launch_cancel).await
+    start_on_target(
+        state,
+        &target,
+        &err,
+        prepared,
+        &launch_cancel,
+        serving.as_ref(),
+    )
+    .await
 }
 
 /// Tear down one session's process and reset it to `Stopped`. Shared by the
@@ -400,6 +439,45 @@ fn stop_target(server: &mut server::ServerState, err: &Arc<server::ErrBuf>) {
     server.last_error = None;
     server.active_requests = 0;
     server.touch_activity();
+}
+
+pub(super) fn cancel_launch_operation(
+    state: &AppState,
+    operation_id: &str,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    state.launch_jobs.cancel_operation(operation_id)?;
+    let id = session_id.unwrap_or(session::DEFAULT_SESSION_ID).trim();
+    let id = if id.is_empty() {
+        session::DEFAULT_SESSION_ID
+    } else {
+        id
+    };
+    let entry = if id == session::DEFAULT_SESSION_ID {
+        None
+    } else {
+        let Some(entry) = state.sessions.get(id) else {
+            return Ok(());
+        };
+        Some(entry)
+    };
+    let (target, err) = match &entry {
+        Some(entry) => (&entry.state, &entry.err),
+        None => (&state.server, &state.err),
+    };
+    let mut model = target
+        .lock()
+        .map_err(|_| "server state lock was poisoned")?;
+    if model.owns_launch_operation(operation_id)
+        && matches!(
+            model.lifecycle,
+            server::Lifecycle::Starting | server::Lifecycle::Ready
+        )
+    {
+        ensure_can_unload(&model)?;
+        stop_target(&mut model, err);
+    }
+    Ok(())
 }
 
 /// Stop the default session or one tracked extra session by id. Stopping an
@@ -751,9 +829,16 @@ mod tests {
         // This token was registered after unload's initial cancellation. The
         // retained target itself must reject the late request before spawning.
         let cancel = Arc::new(AtomicBool::new(false));
-        let error = start_on_target(&state, &original.state, &original.err, prepared, &cancel)
-            .await
-            .unwrap_err();
+        let error = start_on_target(
+            &state,
+            &original.state,
+            &original.err,
+            prepared,
+            &cancel,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error, "session was unloaded");
         assert!(original.state.lock().unwrap().child.is_none());
         assert_eq!(
@@ -909,7 +994,7 @@ mod tests {
             model.lifecycle = server::Lifecycle::Ready;
             model.begin_request();
         }
-        assert!(stop_models_for_replacement(&state, "default").is_err());
+        assert!(stop_models_for_replacement(&state, "default", None).is_err());
         assert_eq!(
             state.server.lock().unwrap().lifecycle,
             server::Lifecycle::Ready
@@ -929,7 +1014,7 @@ mod tests {
         let other = state.sessions.begin_pending_start("named").unwrap();
         state.server.lock().unwrap().lifecycle = server::Lifecycle::Ready;
         named.state.lock().unwrap().lifecycle = server::Lifecycle::Ready;
-        stop_models_for_replacement(&state, "default").unwrap();
+        stop_models_for_replacement(&state, "default", None).unwrap();
         assert!(!current.cancel_flag().load(Ordering::Acquire));
         assert!(other.cancel_flag().load(Ordering::Acquire));
         assert_eq!(
@@ -1080,6 +1165,7 @@ mod tests {
             &state.err,
             prepared,
             &Arc::new(AtomicBool::new(false)),
+            None,
         )
         .await;
         assert!(result.unwrap_err().contains("active response"));
@@ -1171,5 +1257,8 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod launch_preparation_tests;
+
+#[cfg(test)]
+mod scoped_launch_tests;

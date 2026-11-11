@@ -107,11 +107,14 @@ export const mcpCallTool = (id: string, name: string, argumentsValue: Record<str
 /** Stop the call started with `callId`, including its approval wait. Safe to send before the call itself arrives. */
 export const mcpCancelToolCall = (callId: string) => invoke<void>("mcp_cancel_tool_call", { callId });
 
-export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
+export interface LaunchOptions { persist?: boolean; operationId?: string }
+export const startServer = (cfg: AppConfig, options?: LaunchOptions) => invoke<string>("start_server", { cfg, ...options });
 export const preflightLaunch = (cfg: AppConfig, operationId?: string) =>
   invoke<AppConfig>('preflight_launch', { cfg, ...(operationId ? { operationId } : {}) });
 /** Cancel only this preflight, including one whose IPC command is still queued. */
 export const cancelLaunchPreflight = (operationId: string) => invoke<void>('preflight_launch_cancel', { operationId });
+/** Cancel one launch across preflight, queue admission and its native generation. */
+export const cancelLaunch = (operationId: string, sessionId = 'default') => invoke<void>('launch_cancel', { operationId, sessionId });
 /** Accept one blocked GPU placement, using the key printed in its refusal. */
 export const allowVerificationOverride = (key: string) => invoke<void>('allow_verification_override', { key });
 export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => invoke<NonNullable<ServerStatus['execution']>>('apply_request_settings', { cfg, sessionId });
@@ -136,8 +139,8 @@ export const benchCancel = () => invoke<void>("bench_cancel");
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
 export const sessionList = (phase: LayoutReadPhase = "initial") => invoke<SessionStatus[] | SessionListResult>("session_list", undefined, phase);
 export const sessionSummaryList = () => invoke<SessionSummary[]>("session_summary_list");
-export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) =>
-  withSessionTransition(() => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting }));
+export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean, options?: LaunchOptions) =>
+  withSessionTransition(() => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting, ...options }));
 export const sessionStop = (sessionId: string) =>
   withSessionTransition(() => invoke<void>("session_stop", { sessionId }));
 export const sessionUnload = (sessionId: string) =>

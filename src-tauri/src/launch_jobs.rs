@@ -1,4 +1,4 @@
-//! A launch preflight owns its cancellation, before any server is replaced.
+//! Cancellation ownership across preflight, queued admission and serving.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -10,15 +10,23 @@ struct Jobs {
     active: HashMap<String, Arc<AtomicBool>>,
     cancelled: HashSet<String>,
     order: VecDeque<String>,
+    serving: HashMap<String, Arc<AtomicBool>>,
+    cancelled_serving: HashSet<String>,
+    cancelled_serving_order: VecDeque<String>,
 }
 
 #[derive(Default)]
-pub(crate) struct PreflightJobs(Mutex<Jobs>);
+pub(crate) struct LaunchJobs(Mutex<Jobs>);
 
 pub(crate) struct PreflightJob {
-    jobs: Arc<PreflightJobs>,
+    jobs: Arc<LaunchJobs>,
     id: String,
     pub cancel: Arc<AtomicBool>,
+}
+
+pub(crate) struct ServingLaunch {
+    jobs: Arc<LaunchJobs>,
+    id: String,
 }
 
 fn validate(id: &str) -> Result<(), String> {
@@ -28,12 +36,12 @@ fn validate(id: &str) -> Result<(), String> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
     {
-        return Err("invalid launch preflight identifier".into());
+        return Err("invalid launch operation identifier".into());
     }
     Ok(())
 }
 
-impl PreflightJobs {
+impl LaunchJobs {
     pub(crate) fn begin(self: &Arc<Self>, id: String) -> Result<PreflightJob, String> {
         validate(&id)?;
         let mut jobs = self
@@ -75,9 +83,53 @@ impl PreflightJobs {
         Ok(())
     }
 
+    /// Shares the session stop token before waiting for global launch admission.
+    pub(crate) fn begin_launch(
+        self: &Arc<Self>,
+        id: String,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<ServingLaunch, String> {
+        validate(&id)?;
+        let mut jobs = self.0.lock().map_err(|_| "launch jobs lock was poisoned")?;
+        if jobs.serving.contains_key(&id) || jobs.serving.len() >= 64 {
+            return Err("launch is already active or too many launches are running".into());
+        }
+        if jobs.cancelled_serving.remove(&id) {
+            cancel.store(true, Ordering::Release);
+        }
+        jobs.cancelled_serving_order.retain(|entry| entry != &id);
+        jobs.serving.insert(id.clone(), cancel);
+        Ok(ServingLaunch {
+            jobs: self.clone(),
+            id,
+        })
+    }
+
+    /// Release this registry lock before looking up or locking any session.
+    pub(crate) fn cancel_operation(&self, id: &str) -> Result<(), String> {
+        self.cancel(id)?;
+        let mut jobs = self.0.lock().map_err(|_| "launch jobs lock was poisoned")?;
+        if let Some(cancel) = jobs.serving.get(id) {
+            cancel.store(true, Ordering::Release);
+            return Ok(());
+        }
+        if jobs.cancelled_serving.insert(id.to_owned()) {
+            jobs.cancelled_serving_order.push_back(id.to_owned());
+            while jobs.cancelled_serving_order.len() > 256 {
+                if let Some(old) = jobs.cancelled_serving_order.pop_front() {
+                    jobs.cancelled_serving.remove(&old);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn cancel_all(&self) {
         if let Ok(jobs) = self.0.lock() {
             for cancel in jobs.active.values() {
+                cancel.store(true, Ordering::Release);
+            }
+            for cancel in jobs.serving.values() {
                 cancel.store(true, Ordering::Release);
             }
         }
@@ -93,13 +145,32 @@ impl Drop for PreflightJob {
     }
 }
 
+impl ServingLaunch {
+    pub(crate) fn operation_id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for ServingLaunch {
+    fn drop(&mut self) {
+        let mut jobs = self
+            .jobs
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        jobs.serving.remove(&self.id);
+        // A ready target owns its operation identity until its next generation.
+        // Completing this guard must not mark that process cancelled.
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn queued_and_active_cancellation_preserve_other_launch_targets() {
-        let jobs = Arc::new(PreflightJobs::default());
+        let jobs = Arc::new(LaunchJobs::default());
         jobs.cancel("queued").unwrap();
         let queued = jobs.begin("queued".into()).unwrap();
         let other = jobs.begin("other".into()).unwrap();
@@ -118,5 +189,32 @@ mod tests {
             jobs.cancel(&format!("past-{index}")).unwrap();
         }
         assert_eq!(jobs.0.lock().unwrap().cancelled.len(), 256);
+    }
+
+    #[test]
+    fn scoped_handoff_cancel_survives_preflight_drop_and_retry() {
+        let jobs = Arc::new(LaunchJobs::default());
+        let preflight = jobs.begin("handoff".into()).unwrap();
+        jobs.cancel_operation("handoff").unwrap();
+        assert!(preflight.cancel.load(Ordering::Acquire));
+        drop(preflight);
+        let retry = jobs.begin("handoff".into()).unwrap();
+        assert!(!retry.cancel.load(Ordering::Acquire));
+        drop(retry);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let serving = jobs.begin_launch("handoff".into(), cancel.clone()).unwrap();
+        assert!(cancel.load(Ordering::Acquire));
+        drop(serving);
+    }
+
+    #[test]
+    fn scoped_pre_admission_tombstones_are_bounded() {
+        let jobs = Arc::new(LaunchJobs::default());
+        for index in 0..512 {
+            jobs.cancel_operation(&format!("queued-{index}")).unwrap();
+        }
+        let state = jobs.0.lock().unwrap();
+        assert_eq!(state.cancelled_serving.len(), 256);
+        assert!(state.serving.is_empty());
     }
 }
