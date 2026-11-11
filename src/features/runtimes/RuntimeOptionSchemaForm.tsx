@@ -46,6 +46,15 @@ function optionName(option: OptionSchemaDefinition) {
   return option.spellings[0]?.flag ?? option.key;
 }
 
+/** Compound editors keep their values and row actions together at full width. */
+function needsWideCard(option: OptionSchemaDefinition): boolean {
+  const kind = kindOf(option);
+  const arity = supported(option.arity);
+  return kind === 'json' || kind === 'tokens' || kind === 'path' || supported(option.local_path) === true
+    || supported(option.repeatable) === true
+    || (!isSwitch(option) && (arity === undefined || arity.min !== 1 || arity.max !== 1));
+}
+
 interface ValueInputProps {
   /** Set when a visible label element names this input. */
   inputId?: string;
@@ -609,7 +618,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   }, [validationDescriptions, issues, formId]);
 
   const fields = (showAll ? visible : visible.slice(0, limit)).map((option, index) => (
-    <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
+    <div key={option.key} className={needsWideCard(option) ? 'schema-option-grid__wide' : undefined} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
       <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} readOnly={readOnlyForOption?.(option)} applicable={isApplicable(option, scope)}
         inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} validationDescription={issueDescriptions.get(option.key)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
         rowSpellings={rowSpellings.get(option.key)}

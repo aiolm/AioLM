@@ -41,7 +41,7 @@ function mount(section: string, initialConfig: AppConfig, benchmark = false) {
 describe('fixed numeric settings', () => {
   it('accepts model context zero or at least 512 without accepting a value native save would clamp', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, ctx_size: 0, runtime_defaults: [] });
-    const context = screen.getByRole('spinbutton', { name: 'Context size' });
+    const context = screen.getByRole('spinbutton', { name: /^--ctx-size\b/ });
     fireEvent.change(context, { target: { value: '256' } });
     expect(context).toHaveAttribute('aria-invalid', 'true');
     expect(onInvalid).toHaveBeenLastCalledWith('ctx_size', true);
@@ -54,8 +54,8 @@ describe('fixed numeric settings', () => {
 
   it('rejects explicit microbatches above batch and batch reductions below explicit microbatch', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, batch_size: 2048, ubatch_size: 512, runtime_defaults: [] });
-    const batch = screen.getByRole('spinbutton', { name: 'Batch size' });
-    const microbatch = screen.getByRole('spinbutton', { name: 'Micro batch size' });
+    const batch = screen.getByRole('spinbutton', { name: /^--batch-size\b/ });
+    const microbatch = screen.getByRole('spinbutton', { name: /^--ubatch-size\b/ });
     fireEvent.change(microbatch, { target: { value: '4096' } });
     expect(onInvalid).toHaveBeenLastCalledWith('ubatch_size', true);
     expect(config().ubatch_size).toBe(512);
@@ -69,23 +69,23 @@ describe('fixed numeric settings', () => {
 
   it('validates manual microbatch against the effective inherited batch, not its stale raw placeholder', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, batch_size: 128, ubatch_size: 512, runtime_defaults: ['batch_size'] });
-    expect(screen.getByRole('spinbutton', { name: 'Batch size' })).toHaveValue(2048);
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Micro batch size' }), { target: { value: '1024' } });
+    expect(screen.getByRole('spinbutton', { name: /^--batch-size\b/ })).toHaveValue(2048);
+    fireEvent.change(screen.getByRole('spinbutton', { name: /^--ubatch-size\b/ }), { target: { value: '1024' } });
     expect(onInvalid).toHaveBeenLastCalledWith('ubatch_size', false);
     expect(config()).toMatchObject({ batch_size: 128, ubatch_size: 1024, runtime_defaults: ['batch_size'] });
   });
 
   it('allows a smaller manual batch without rewriting or blocking an inherited microbatch', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, batch_size: 2048, ubatch_size: 512, runtime_defaults: ['ubatch_size'] });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Batch size' }), { target: { value: '128' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: /^--batch-size\b/ }), { target: { value: '128' } });
     expect(onInvalid).toHaveBeenLastCalledWith('batch_size', false);
     expect(config()).toMatchObject({ batch_size: 128, ubatch_size: 512, runtime_defaults: ['ubatch_size'] });
-    expect(screen.getByRole('spinbutton', { name: 'Micro batch size' })).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByRole('spinbutton', { name: /^--ubatch-size\b/ })).not.toHaveAttribute('aria-invalid');
   });
 
   it('accepts the keep-all sentinel without changing the default keep policy', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, keep: 0, runtime_defaults: [] });
-    const keep = screen.getByRole('spinbutton', { name: 'Keep tokens' });
+    const keep = screen.getByRole('spinbutton', { name: /^--keep\b/ });
     expect(keep).toHaveValue(0);
     fireEvent.change(keep, { target: { value: '-1' } });
     fireEvent.blur(keep);
@@ -95,8 +95,8 @@ describe('fixed numeric settings', () => {
 
   it('accepts disabled Top-k and temperatures above one', () => {
     const { config, onInvalid } = mount('sampling', { ...testConfig, runtime_defaults: [] });
-    const topK = screen.getByRole('spinbutton', { name: 'Top-k' });
-    const temperature = screen.getByRole('spinbutton', { name: 'Temperature' });
+    const topK = screen.getByRole('spinbutton', { name: /^--top-k\b/ });
+    const temperature = screen.getByRole('spinbutton', { name: /^--temp\b/ });
     fireEvent.change(topK, { target: { value: '0' } });
     fireEvent.change(temperature, { target: { value: '1.5' } });
     expect(config()).toMatchObject({ top_k: 0, temperature: 1.5 });
@@ -106,7 +106,7 @@ describe('fixed numeric settings', () => {
   it('shows stored advanced values outside slider policy without rewriting them on blur', () => {
     const { config } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { dry_multiplier: 4, mirostat: 3 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
-    const multiplier = screen.getByRole('spinbutton', { name: 'DRY multiplier' });
+    const multiplier = screen.getByRole('spinbutton', { name: /^--dry-multiplier\b/ });
     expect(multiplier).toHaveValue(4);
     expect(screen.getByRole('textbox', { name: 'Custom value for Mirostat mode' })).toHaveValue('3');
     fireEvent.blur(multiplier);
@@ -116,7 +116,7 @@ describe('fixed numeric settings', () => {
   it('rejects zero repetition penalty but accepts a positive value below slider step', () => {
     const { config, onInvalid } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { repeat_penalty: 1 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
-    const penalty = screen.getByRole('spinbutton', { name: 'Repeat penalty' });
+    const penalty = screen.getByRole('spinbutton', { name: /^--repeat-penalty\b/ });
     fireEvent.change(penalty, { target: { value: '0' } });
     expect(penalty).toHaveAttribute('aria-invalid', 'true');
     expect(onInvalid).toHaveBeenLastCalledWith('repeat_penalty', true);
@@ -129,7 +129,7 @@ describe('fixed numeric settings', () => {
 
   it('accepts disabled or positive idle sleep but rejects zero without replacing the stored value', () => {
     const { config, onInvalid } = mount('tuning', { ...testConfig, sleep_idle_seconds: -1, runtime_defaults: [] });
-    const sleep = screen.getByRole('spinbutton', { name: 'Sleep after idle (seconds)' });
+    const sleep = screen.getByRole('spinbutton', { name: /^--sleep-idle-seconds\b/ });
     fireEvent.change(sleep, { target: { value: '0' } });
     expect(sleep).toHaveAttribute('aria-invalid', 'true');
     expect(onInvalid).toHaveBeenLastCalledWith('sleep_idle_seconds', true);
@@ -143,10 +143,10 @@ describe('fixed numeric settings', () => {
   it('displays effective request aliases and replaces them only on explicit edits', () => {
     const { config } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { mirostat_eta: 0.7, mirostat_lr: 0.2, mirostat_tau: 9, max_completion_tokens: 512 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
-    const rate = screen.getByRole('spinbutton', { name: 'Mirostat learning rate' });
+    const rate = screen.getByRole('spinbutton', { name: /^--mirostat-lr\b/ });
     expect(rate).toHaveValue(0.7);
-    expect(screen.getByRole('spinbutton', { name: 'Mirostat target entropy' })).toHaveValue(9);
-    const tokens = screen.getByRole('spinbutton', { name: 'Max tokens' });
+    expect(screen.getByRole('spinbutton', { name: /^--mirostat-ent\b/ })).toHaveValue(9);
+    const tokens = screen.getByRole('spinbutton', { name: /^--predict\b/ });
     expect(tokens).toHaveValue(512);
     expect(config().chat_options).toEqual({ mirostat_eta: 0.7, mirostat_lr: 0.2, mirostat_tau: 9, max_completion_tokens: 512 });
     fireEvent.change(rate, { target: { value: '0.3' } });
@@ -160,8 +160,8 @@ describe('fixed numeric settings', () => {
   it('retains saved negative windows visibly but rejects new negative request values', () => {
     const { config, onInvalid } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { repeat_last_n: -1, dry_penalty_last_n: -1 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
-    const repeat = screen.getByRole('spinbutton', { name: 'Repeat last n' });
-    const dry = screen.getByRole('spinbutton', { name: 'DRY penalty last n' });
+    const repeat = screen.getByRole('spinbutton', { name: /^--repeat-last-n\b/ });
+    const dry = screen.getByRole('spinbutton', { name: /^--dry-penalty-last-n\b/ });
     expect(repeat).toHaveValue(-1);
     expect(dry).toHaveValue(-1);
     fireEvent.blur(repeat);
@@ -172,13 +172,23 @@ describe('fixed numeric settings', () => {
     fireEvent.change(repeat, { target: { value: '0' } });
     expect(config().chat_options.repeat_last_n).toBe(0);
   });
+
+  it('edits request-only settings under their real JSON key without inventing a CLI flag', () => {
+    const { config } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { id_slot: 2 } });
+    fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
+    const slot = screen.getByRole('spinbutton', { name: /^id_slot\b/ });
+    expect(slot).toHaveValue(2);
+    fireEvent.change(slot, { target: { value: '3' } });
+    fireEvent.blur(slot);
+    expect(config().chat_options).toEqual({ id_slot: 3 });
+  });
 });
 
 describe('draft tuning field resets', () => {
   it('keeps native context, server parallelism and cache settings editable in benchmark mode', () => {
     const { config } = mount('tuning', { ...testConfig, ctx_size: 8192, parallel: 2, cache_type_k: 'q8_0', runtime_defaults: [] }, true);
-    const context = screen.getByRole('spinbutton', { name: 'Context size' });
-    const parallel = screen.getByRole('spinbutton', { name: 'Server slots' });
+    const context = screen.getByRole('spinbutton', { name: /^--ctx-size\b/ });
+    const parallel = screen.getByRole('spinbutton', { name: /^--parallel\b/ });
     expect(context).toBeEnabled();
     expect(parallel).toBeEnabled();
     fireEvent.change(context, { target: { value: '32768' } });
@@ -188,7 +198,7 @@ describe('draft tuning field resets', () => {
 
   it('preserves native request values in benchmark mode until explicitly cleared', () => {
     const { config } = mount('sampling', { ...testConfig, temperature: 0.7, runtime_defaults: [] }, true);
-    expect(screen.getByRole('spinbutton', { name: 'Temperature' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: /^--temp\b/ })).toBeDisabled();
     const clear = screen.getByRole('button', { name: 'Reset Temperature to default' });
     expect(clear).toBeEnabled();
     expect(config().temperature).toBe(0.7);
@@ -199,12 +209,12 @@ describe('draft tuning field resets', () => {
   it('clears a custom Mirostat draft and preserves the controlled reset patch', () => {
     const { config, onInvalid } = mount('sampling', { ...testConfig, runtime_defaults: [], chat_options: { mirostat: 1, min_p: 0.2 } });
     fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
-    const minP = screen.getByRole('spinbutton', { name: 'Min-p' });
+    const minP = screen.getByRole('spinbutton', { name: /^--min-p\b/ });
     fireEvent.change(minP, { target: { value: '1.5' } });
     fireEvent.blur(minP);
     expect(onInvalid).toHaveBeenCalledWith('min_p', true);
 
-    const mirostat = screen.getByRole('combobox', { name: 'Mirostat mode' });
+    const mirostat = screen.getByRole('combobox', { name: /^--mirostat\b/ });
     fireEvent.click(mirostat);
     fireEvent.click(screen.getByRole('option', { name: 'Custom numeric value' }));
     const custom = screen.getByRole('textbox', { name: 'Custom value for Mirostat mode' });
@@ -216,8 +226,8 @@ describe('draft tuning field resets', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset Mirostat mode to default' }));
 
     expect(screen.queryByRole('textbox', { name: 'Custom value for Mirostat mode' })).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Mirostat mode' })).toHaveTextContent('Disabled');
-    expect(screen.getByRole('spinbutton', { name: 'Min-p' })).toHaveValue(1.5);
+    expect(screen.getByRole('combobox', { name: /^--mirostat\b/ })).toHaveTextContent('Disabled');
+    expect(screen.getByRole('spinbutton', { name: /^--min-p\b/ })).toHaveValue(1.5);
     expect(config().runtime_defaults).not.toContain('mirostat');
     expect(config().chat_options).toMatchObject({ min_p: 0.2 });
     expect(config().chat_options).not.toHaveProperty('mirostat');
@@ -225,11 +235,11 @@ describe('draft tuning field resets', () => {
   });
 
   it.each([
-    ['spec_type', 'Speculative type(s)', 'Custom / comma-separated', 'Custom value for Speculative type(s)', 'future-draft'],
-    ['spec_draft_ngl', 'Draft GPU layers', 'Custom numeric value', 'Custom value for Draft GPU layers', '37'],
-  ])('clears the %s custom input through the real caller reset path', (_key, label, customOption, inputName, value) => {
+    ['spec_type', /^--spec-type\b/, 'Speculative type(s)', 'Custom / comma-separated', 'Custom value for Speculative type(s)', 'future-draft'],
+    ['spec_draft_ngl', /^--spec-draft-ngl\b/, 'Draft GPU layers', 'Custom numeric value', 'Custom value for Draft GPU layers', '37'],
+  ])('clears the %s custom input through the real caller reset path', (_key, identifier, label, customOption, inputName, value) => {
     const { config } = mount('adapters', { ...testConfig, runtime_defaults: [] });
-    const select = screen.getByRole('combobox', { name: label });
+    const select = screen.getByRole('combobox', { name: identifier });
     fireEvent.click(select);
     fireEvent.click(screen.getByRole('option', { name: customOption }));
     const custom = screen.getByRole('textbox', { name: inputName });

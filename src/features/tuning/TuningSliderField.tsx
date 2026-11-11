@@ -1,6 +1,7 @@
 import { useRef, type ChangeEvent, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { useI18n } from '../../shared/i18n/i18n';
 import { executionText } from '../../shared/i18n/executionI18n';
+import { TuningOptionLabel } from './TuningOptionMetadata';
 
 export interface TuningSliderFieldDescriptor {
   key?: string;
@@ -18,6 +19,7 @@ export interface TuningSliderFieldProps {
   field?: TuningSliderFieldDescriptor;
   /** Explicit values are useful for controls that are not in tuningFields.ts. */
   id?: string;
+  optionKey?: string;
   label?: string;
   min?: number;
   max?: number;
@@ -50,6 +52,7 @@ function finiteValue(value: string, fallback: number): number {
 export default function TuningSliderField({
   field,
   id,
+  optionKey,
   label,
   min,
   max,
@@ -101,7 +104,7 @@ export default function TuningSliderField({
     <div className="tuning-slider-field">
       <div className="tuning-slider-field__header">
         <div className="tuning-slider-field__label-wrap">
-          <label id={labelId} htmlFor={inputId} className="tuning-slider-field__label">{resolvedLabel}</label>
+          <label id={labelId} htmlFor={inputId} className="tuning-slider-field__label">{optionKey ? <TuningOptionLabel fieldKey={optionKey} label={resolvedLabel} /> : resolvedLabel}</label>
           {labelExtra}
           {headerAction}
         </div>
@@ -123,7 +126,7 @@ export default function TuningSliderField({
           onPointerUp={commit}
           onKeyDown={commitOnEnter}
           disabled={disabled}
-          aria-label={resolvedLabel}
+          aria-labelledby={labelId}
           aria-describedby={hintId}
           className="tuning-slider-field__range"
         />

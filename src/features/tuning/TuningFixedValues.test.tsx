@@ -63,17 +63,17 @@ describe('fixed tuning values', () => {
     const commitServerText = vi.fn();
     const { rerender } = render(<I18nProvider initialLocale="en"><ServerView cfg={cfg} updateFlash={updateFlash} onServerTextChange={onServerTextChange} commitServerText={commitServerText} /></I18nProvider>);
 
-    expect(screen.getByRole('combobox', { name: 'Flash attention' })).toHaveTextContent('future-flash');
-    expect(screen.getByRole('combobox', { name: 'Cache type K' })).toHaveTextContent('k+v');
-    expect(screen.getByRole('combobox', { name: 'Cache type V' })).toHaveTextContent('future-v');
+    expect(screen.getByRole('combobox', { name: /^--flash-attn\b/ })).toHaveTextContent('future-flash');
+    expect(screen.getByRole('combobox', { name: /^--cache-type-k\b/ })).toHaveTextContent('k+v');
+    expect(screen.getByRole('combobox', { name: /^--cache-type-v\b/ })).toHaveTextContent('future-v');
     rerender(<I18nProvider initialLocale="en"><ServerView cfg={{ ...cfg, flash_attn: rawFlash }} updateFlash={updateFlash} onServerTextChange={onServerTextChange} commitServerText={commitServerText} /></I18nProvider>);
     expect(updateFlash).not.toHaveBeenCalled();
     expect(onServerTextChange).not.toHaveBeenCalled();
     expect(commitServerText).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Flash attention' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--flash-attn\b/ }));
     fireEvent.click(screen.getByRole('option', { name: 'on' }));
-    fireEvent.click(screen.getByRole('combobox', { name: 'Cache type K' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--cache-type-k\b/ }));
     fireEvent.click(screen.getByRole('option', { name: 'f32' }));
     expect(updateFlash).toHaveBeenCalledWith('on');
     expect(onServerTextChange).toHaveBeenCalledWith('cache_type_k', 'f32');
@@ -85,13 +85,13 @@ describe('fixed tuning values', () => {
     const updateServerText = vi.fn();
     render(<I18nProvider initialLocale="en"><ReasoningView cfg={{ ...testConfig, reasoning: 'off', reasoning_format: rawFormat, reasoning_preserve: 'off', reasoning_effort: 'none' }} updateServerText={updateServerText} /></I18nProvider>);
 
-    expect(screen.getByRole('combobox', { name: 'Reasoning format' })).toHaveTextContent('future-reasoning');
-    expect(screen.getByRole('combobox', { name: 'Reasoning mode' })).toHaveTextContent('off');
-    expect(screen.getByRole('combobox', { name: 'Preserve reasoning' })).toHaveTextContent('off');
-    expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toHaveTextContent('none');
+    expect(screen.getByRole('combobox', { name: /^--reasoning-format\b/ })).toHaveTextContent('future-reasoning');
+    expect(screen.getByRole('combobox', { name: /^--reasoning\s/ })).toHaveTextContent('off');
+    expect(screen.getByRole('combobox', { name: /^--reasoning-preserve\b/ })).toHaveTextContent('off');
+    expect(screen.getByRole('combobox', { name: /^--reasoning-effort\b/ })).toHaveTextContent('none');
     expect(updateServerText).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Reasoning format' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--reasoning-format\b/ }));
     fireEvent.click(screen.getByRole('option', { name: 'deepseek' }));
     expect(updateServerText).toHaveBeenCalledWith('reasoning_format', 'deepseek');
   });

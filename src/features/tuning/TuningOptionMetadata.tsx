@@ -29,7 +29,23 @@ export function ServerOptionDefault({ option, options, verified }: { option: Ser
   return <DefaultValue defaults={serverDefault(option, options)} verified={verified} />;
 }
 
-export default function TuningOptionMetadata({ fieldKey, inherited = false, value }: { fieldKey: string; inherited?: boolean; value?: unknown }) {
+/** Resolve headings from the selected runtime; request-only settings use JSON keys. */
+export function TuningOptionLabel({ fieldKey, label, id }: { fieldKey: string; label: string; id?: string }) {
+  const runtime = useContext(TuningOptionsContext);
+  const { locale } = useI18n();
+  const metadata = tuningOptionMetadata(fieldKey, runtime.options, runtime.verified);
+  if (!metadata.identifier) return <span id={id}>{label}</span>;
+  const title = [
+    metadata.signature,
+    metadata.requestKey ? `${serverOptionsText[locale].requestKey}: ${metadata.requestKey}` : undefined,
+  ].filter(Boolean).join(' · ');
+  return <span id={id} className="tuning-option-label">
+    <code className="tuning-option-label__identifier" title={title || undefined}>{metadata.identifier}</code>
+    {label !== metadata.identifier && <>{' '}<span className="tuning-option-label__meaning">{label}</span></>}
+  </span>;
+}
+
+export default function TuningOptionMetadata({ fieldKey, inherited = false, value, showIdentifier = true }: { fieldKey: string; inherited?: boolean; value?: unknown; showIdentifier?: boolean }) {
   const runtime = useContext(TuningOptionsContext);
   const { locale } = useI18n();
   const copy = serverOptionsText[locale];
@@ -50,11 +66,9 @@ export default function TuningOptionMetadata({ fieldKey, inherited = false, valu
   const signature = metadata.signature;
   return <div className="tuning-option-metadata" data-option-metadata={fieldKey}>
     <div className="tuning-option-summary">
-      {metadata.requestKey
-        ? <code className="tuning-option-flag" title={signature ? `${copy.requestKey} · ${normalizeDisplayText(signature)}` : copy.requestKey}>{normalizeDisplayText(metadata.requestKey)}</code>
-        : signature
-          ? <code className="tuning-option-flag">{normalizeDisplayText(signature)}</code>
-          : <span className="tuning-option-flag tuning-option-flag--none">{copy.noCliMapping}</span>}
+      {showIdentifier && (metadata.identifier
+        ? <code className="tuning-option-label__identifier" title={[signature, metadata.requestKey ? `${copy.requestKey}: ${metadata.requestKey}` : undefined].filter(Boolean).join(' · ') || undefined}>{metadata.identifier}</code>
+        : <span className="tuning-option-flag tuning-option-flag--none">{copy.noCliMapping}</span>)}
       <span className="option-default-value">
         <span>{copy.defaultValue}: </span><code>{normalizeDisplayText(defaultText)}</code>
         {/* Where the default came from, in one word beside it: whose number is on

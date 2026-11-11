@@ -1,12 +1,12 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { chatOptionValue, tuningFieldDescription, tuningFieldLabel, type ChatOptionField } from "./tuningFields";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
 import { useTuningId } from './TuningIdScope';
+import { TuningOptionLabel } from './TuningOptionMetadata';
 
 interface Props {
   cfg: AppConfig;
@@ -37,11 +37,11 @@ export default function TuningChatOptionField({
     <TuningDefaultField fieldKey={field.key} label={label} request>{(resetAction) => <div className="flex min-w-0 flex-col gap-1.5">
       {field.options && <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="tuning-field-title">
-          <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
+          <label htmlFor={inputId} className="app-text-wrap text-sm text-ink"><TuningOptionLabel fieldKey={field.key} label={label} /></label>
           {resetAction}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Badge tone="success" className="shrink-0">{t("extra.perRequest")}</Badge>
+          <span className="tuning-option-apply-time">{t("extra.perRequest")}</span>
         </div>
       </div>}
       {field.options ? (
@@ -94,6 +94,7 @@ export default function TuningChatOptionField({
       ) : (
         <TuningSliderField
           id={inputId}
+          optionKey={field.key}
           label={label}
           min={field.min}
           minExclusive={field.minExclusive}
@@ -104,7 +105,7 @@ export default function TuningChatOptionField({
           onChange={(value) => setChatOptionDrafts((drafts) => ({ ...drafts, [field.key]: value }))}
           onCommit={(value) => onCommit(field, value)}
           disabled={disabled}
-          valueMeta={<Badge tone="success" className="shrink-0">{t("extra.perRequest")}</Badge>}
+          valueMeta={<span className="tuning-option-apply-time">{t("extra.perRequest")}</span>}
           headerAction={resetAction}
         />
       )}

@@ -25,6 +25,7 @@ export function tuningOptionMetadata(key: string, options: readonly ServerOption
   }
   return {
     // Only show a CLI mapping that is documented; request-only fields must not invent flags.
+    identifier: option?.id ?? (rawServer ? name : requestKey),
     signature: option?.signature ?? (rawServer ? name : undefined), requestKey,
     defaults, verified: verified && !!current, missing: verified && !current && !!reference,
   };

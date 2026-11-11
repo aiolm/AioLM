@@ -70,14 +70,20 @@
 .app-input[type="number"]::-webkit-inner-spin-button, .app-input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
 /* A visible boundary keeps each name, description and control in one option. */
 .schema-option-form { container: schema-options / inline-size; }
-.schema-option-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; min-inline-size: 0; }
+.schema-option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: start; gap: 16px; min-inline-size: 0; }
 .schema-option-grid > * { min-inline-size: 0; }
+.schema-option-grid__wide { grid-column: 1 / -1; }
 .schema-option { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
 .schema-option > legend { max-inline-size: 100%; padding: 0; }
 .schema-option__name { display: block; min-width: 0; color: var(--ui-ink); font-family: var(--font-mono); font-size: max(1rem, var(--ui-text)); font-weight: 650; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .schema-option__facts { display: block; margin: 0; color: var(--ui-muted); font-size: max(.875rem, var(--ui-text)); font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
 .schema-option :is(.app-section-hint, small) { margin: 0; color: var(--ui-muted); font-size: max(.875rem, var(--ui-text)); line-height: 1.5; }
 .schema-option .app-section-hint { max-inline-size: 80ch; }
+.schema-option__single, .schema-option__value, .schema-option__cell { display: grid; gap: 8px; min-inline-size: 0; }
+.schema-option__row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; min-inline-size: 0; }
+.schema-option__cell { flex: 1 1 17rem; }
+.schema-option :is(.app-input, .app-textarea, .app-custom-select-container) { min-inline-size: 0; max-inline-size: 100%; }
+.schema-option :is(.schema-option__value, .schema-option__cell) > .app-button { justify-self: start; }
 .app-tab-list { display: flex; gap: 4px; min-width: 0; }
 .app-tab-list[aria-orientation="vertical"] { flex-direction: column; }
 .app-tab, .app-nav-item { display: inline-flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); border: 1px solid transparent; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-muted); font-size: var(--ui-text); font-weight: 500; line-height: 1.5; text-align: start; }
@@ -93,15 +99,20 @@
 .app-switch[aria-checked="true"] .app-switch__thumb { transform: translateX(14px); background: var(--ui-on-primary); }
 .app-switch:disabled { cursor: not-allowed; background: var(--ui-surface-muted); border-color: var(--ui-border); opacity: 1; }
 .app-switch:disabled .app-switch__thumb { background: var(--ui-faint); }
-.app-progress { display: block; width: 100%; height: 6px; border: 0; border-radius: var(--ui-radius-pill); overflow: hidden; appearance: none; background: var(--ui-input); accent-color: var(--ui-accent); }
-.app-progress::-webkit-progress-bar { background: var(--ui-input); border-radius: inherit; }
-.app-progress::-webkit-progress-value { background: var(--ui-accent); border-radius: inherit; }
-.app-progress::-moz-progress-bar { background: var(--ui-accent); border-radius: inherit; }
-/* Unknown-total progress uses a moving band without implying a percentage. */
-.app-progress:indeterminate { background: linear-gradient(to right, var(--ui-input) 25%, var(--ui-accent) 50%, var(--ui-input) 75%); background-size: 200% 100%; animation: app-progress-pending 1.4s linear infinite; }
-.app-progress:indeterminate::-webkit-progress-bar { background: transparent; }
-@keyframes app-progress-pending { to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .app-progress:indeterminate { animation: none; } }
+.app-progress { display: block; width: 100%; height: 6px; border: 0 solid; border-radius: var(--ui-radius-pill); overflow: clip; appearance: none; background: var(--ui-input); accent-color: var(--ui-accent); container-type: inline-size; --app-progress-duration: 1.4s; }
+.app-progress::-webkit-progress-bar { background: transparent; }
+.app-progress::-webkit-progress-value { background: var(--ui-accent); border-radius: var(--ui-radius-pill); animation: var(--app-progress-animation, none); }
+.app-progress::-moz-progress-bar { background: var(--ui-accent); border-radius: var(--ui-radius-pill); animation: var(--app-progress-animation, none); }
+/* Animate the real fill without suggesting a completed fraction. */
+.app-progress:indeterminate { --app-progress-animation: app-progress-pending var(--app-progress-duration) linear infinite; }
+.app-progress:indeterminate:dir(rtl) { --app-progress-animation: app-progress-pending var(--app-progress-duration) linear infinite reverse; }
+@keyframes app-progress-pending {
+  from, to { inline-size: 30%; margin-right: auto; }
+  from { translate: -100%; }
+  to { translate: 100cqi; }
+}
+@media (prefers-reduced-motion: reduce) { .app-progress { --app-progress-duration: 10s; } }
+.app-reduce-motion .app-progress { --app-progress-duration: 10s; }
 /* The one panel box. Every page had been spelling this out in utilities, which
    is how Projects, MCP and Tuning ended up with three different backgrounds and
    two paddings for what reads as the same card. Tone variants change only the
@@ -210,6 +221,10 @@
 .app-link-button:hover { text-decoration-thickness: 2px; }
 .tuning-default-field { container: tuning-field / inline-size; }
 .tuning-field-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tuning-option-label { display: grid; gap: 4px; min-inline-size: 0; }
+.tuning-option-label__identifier { color: var(--ui-ink); font-family: var(--font-mono); font-size: max(1rem, var(--ui-text)); font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.tuning-option-label__meaning { color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.tuning-option-apply-time { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .tuning-slider-field { display: grid; min-width: 0; grid-template-columns: minmax(0,1fr); align-items: center; gap: 8px 24px; }
 .tuning-slider-field__header, .tuning-slider-field__label-wrap, .tuning-slider-field__value-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .tuning-slider-field__header { justify-content: space-between; flex-wrap: wrap; }

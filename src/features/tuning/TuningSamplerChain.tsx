@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
 import { useTuningId } from './TuningIdScope';
 import { tuningHelp } from '../../shared/i18n/tuningHelp';
+import { TuningOptionLabel } from './TuningOptionMetadata';
 import './tuning-sampler-chain.css';
 
 export const SAMPLER_CHAIN_OPTIONS = [
@@ -122,7 +123,7 @@ export default function TuningSamplerChain({
     <div className="tuning-sampler-chain app-card app-card--tight" data-testid="tuning-sampler-chain">
       <div className="tuning-sampler-chain__header flex-wrap">
         <div className="tuning-field-title">
-          <h3 className="tuning-sampler-chain__title">{t("extra.samplerChainTitle")}</h3>
+          <h3 className="tuning-sampler-chain__title"><TuningOptionLabel fieldKey="samplers" label={t("extra.samplerChainTitle")} /></h3>
           {headerAction}
         </div>
         <div className="flex shrink-0 items-center gap-2">

@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import { useI18n } from "../../shared/i18n/i18n";
 import { hasChatOverride, usesRuntimeDefault } from "../../shared/config/tuningDefaults";
-import TuningOptionMetadata from './TuningOptionMetadata';
+import TuningOptionMetadata, { TuningOptionLabel } from './TuningOptionMetadata';
 
 export const TuningDefaultsContext = createContext<{
   cfg: AppConfig;
@@ -29,8 +29,8 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   </button>;
   const content = typeof children === "function"
     ? children(resetAction)
-    : <>{resetAction && <div className="tuning-field-title"><span>{label}</span>{resetAction}</div>}{children}</>;
-  if (!context) return <>{content}<TuningOptionMetadata fieldKey={fieldKey} /></>;
+    : <><div className="tuning-field-title"><TuningOptionLabel fieldKey={fieldKey} label={label} />{resetAction}</div>{children}</>;
+  if (!context) return <>{content}<TuningOptionMetadata fieldKey={fieldKey} showIdentifier={false} /></>;
   const inherited = request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
   const value = request
     ? (context.cfg.chat_options as Record<string, unknown> | undefined)?.[fieldKey]
@@ -40,7 +40,7 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
       <div className="tuning-default-field__content">
       {content}
       </div>
-      <TuningOptionMetadata fieldKey={fieldKey} inherited={inherited} value={value} />
+      <TuningOptionMetadata fieldKey={fieldKey} inherited={inherited} value={value} showIdentifier={false} />
     </div>
   );
 }

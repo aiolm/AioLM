@@ -1,10 +1,9 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
-import TuningOptionMetadata, { TuningOptionsContext } from './TuningOptionMetadata';
+import TuningOptionMetadata, { TuningOptionLabel, TuningOptionsContext } from './TuningOptionMetadata';
 import { MTP_FIELDS, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import { SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
 import { useTuningId } from './TuningIdScope';
@@ -50,11 +49,11 @@ export default function TuningSpeculativeSection({
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
             <div className="tuning-field-title">
-              <label htmlFor={`${id}-spec-type`} className="text-sm text-ink">{t("ui.specTypeLabel")}</label>
+              <label htmlFor={`${id}-spec-type`} className="text-sm text-ink"><TuningOptionLabel fieldKey="spec_type" label={t("ui.specTypeLabel")} /></label>
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+              <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
             </div>
           </div>
           <CustomSelect
@@ -89,11 +88,11 @@ export default function TuningSpeculativeSection({
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
             <div className="tuning-field-title">
-              <label htmlFor={`${id}-spec-draft-ngl`} className="text-sm text-ink">{t("ui.specDraftNglLabel")}</label>
+              <label htmlFor={`${id}-spec-draft-ngl`} className="text-sm text-ink"><TuningOptionLabel fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")} /></label>
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+              <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
             </div>
           </div>
           <CustomSelect
@@ -129,9 +128,9 @@ export default function TuningSpeculativeSection({
         {showDraftBindings && <><div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor={`${id}-spec-draft-device`} className="text-sm text-ink">{t("ui.specDraftDeviceLabel")}</label>
+              <label htmlFor={`${id}-spec-draft-device`} className="text-sm text-ink"><TuningOptionLabel fieldKey="spec_draft_device" label={t("ui.specDraftDeviceLabel")} /></label>
             </div>
-            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+            <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
           </div>
           <input
             id={`${id}-spec-draft-device`}
@@ -145,14 +144,14 @@ export default function TuningSpeculativeSection({
             className="app-input"
           />
           <span id={`${id}-spec-draft-device-hint`} className="text-xs text-muted">{help.specDraftDevice}</span>
-          <TuningOptionMetadata fieldKey="spec_draft_device" />
+          <TuningOptionMetadata fieldKey="spec_draft_device" showIdentifier={false} />
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor={`${id}-spec-draft-model`} className="text-sm text-ink">{t("ui.specDraftModelLabel")}</label>
+              <label htmlFor={`${id}-spec-draft-model`} className="text-sm text-ink"><TuningOptionLabel fieldKey="spec_draft_model" label={t("ui.specDraftModelLabel")} /></label>
             </div>
-            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+            <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
           </div>
           <input
             id={`${id}-spec-draft-model`}
@@ -166,7 +165,7 @@ export default function TuningSpeculativeSection({
             className="app-input"
           />
           <span id={`${id}-spec-draft-model-hint`} className="text-xs text-muted">{help.specDraftModel}</span>
-          <TuningOptionMetadata fieldKey="spec_draft_model" />
+          <TuningOptionMetadata fieldKey="spec_draft_model" showIdentifier={false} />
         </div></>}
       </div>
       <div className="mt-4 grid gap-4 app-form-grid">

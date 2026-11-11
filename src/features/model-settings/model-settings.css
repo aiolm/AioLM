@@ -131,11 +131,12 @@
 .model-settings-fields > .app-button { align-self: flex-start; }
 
 /* Runtime-reported options (guided editor) */
-.model-settings-options { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; }
+.model-settings-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: start; gap: 16px; }
 .model-settings-options > p { grid-column: 1 / -1; margin: 0; padding: 12px; }
 .model-settings-option { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
 .model-settings-option summary { color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; }
-.model-settings-option summary code { font-family: var(--font-mono); font-weight: 600; }
+.model-settings-option summary code { display: inline; font-family: var(--font-mono); font-weight: 650; }
+.model-settings-option--wide { grid-column: 1 / -1; }
 .model-settings-option > details[open] > summary { margin-bottom: 8px; }
 .model-settings-option > .app-section-hint { margin: 6px 0 0; }
 /* One runtime value per row; a full-width box would read as a paragraph field. */
@@ -163,27 +164,15 @@
 .model-settings-body .schema-option > :is(.app-input, .app-custom-select-container, .schema-option__single, .schema-option__value) { inline-size: 100%; max-inline-size: 32rem; min-inline-size: 0; }
 .model-settings-body .schema-option > .app-button { justify-self: start; }
 .model-settings-dialog .schema-option-filter > :is(.app-input, label) { max-inline-size: 32rem; }
-@container schema-options (min-width: 58rem) {
-  .model-settings-dialog .schema-option-filter { grid-template-columns: minmax(0, 32rem) minmax(0, 24rem); align-items: end; gap: 8px 16px; }
-  .model-settings-body .schema-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@container schema-options (min-width: 36rem) {
+  .model-settings-dialog .schema-option-filter { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 8px 16px; }
 }
-@container schema-options (min-width: 88rem) {
-  .model-settings-body .schema-option-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@container schema-options (min-width: 118rem) {
-  .model-settings-body .schema-option-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
-@container model-editor (min-width: 58rem) {
-  .model-settings-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@container model-editor (min-width: 88rem) {
-  .model-settings-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@container model-editor (min-width: 118rem) {
-  .model-settings-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
+.model-settings-body .schema-option-grid__wide .schema-option > :is(.schema-option__single, .schema-option__value) { max-inline-size: none; }
+.model-settings-body .tuning-field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); align-items: start; gap: 16px; }
+.model-settings-body .tuning-section .tuning-default-field:not(:has(.tuning-sampler-chain)) { padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.model-settings-body .tuning-default-field { gap: 8px; }
 
-/* Tuning tabs: one form surface with bordered sub-groups, not cards in cards. */
+/* Tuning tabs keep category headings distinct from the individual option cards. */
 .model-settings-body .tuning-subgroup > .app-section-title { font-size: var(--ui-text-group); font-weight: 650; }
 .model-settings-body .tuning-disclosure > summary { color: var(--ui-ink); font-weight: 600; }
 

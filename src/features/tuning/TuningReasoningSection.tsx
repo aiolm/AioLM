@@ -1,10 +1,9 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
-import { TuningOptionsContext } from './TuningOptionMetadata';
+import { TuningOptionLabel, TuningOptionsContext } from './TuningOptionMetadata';
 import { settingDefaultLabel } from '../../shared/config/defaultValueDisplay';
 import { REASONING_FIELDS, type NumericField, type NumericKey } from "./tuningFields";
 import { useTuningId } from './TuningIdScope';
@@ -51,7 +50,7 @@ export default function TuningReasoningSection({
       <div className="grid gap-4 app-form-grid">
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="reasoning" label={t("ui.reasoningMode")}>{(resetAction) => <><div className="tuning-field-title">
-            <label htmlFor={`${id}-reasoning`} className="text-sm text-ink">{t("ui.reasoningMode")}</label>
+            <label htmlFor={`${id}-reasoning`} className="text-sm text-ink"><TuningOptionLabel fieldKey="reasoning" label={t("ui.reasoningMode")} /></label>
             {resetAction}
           </div>
           <CustomSelect
@@ -70,7 +69,7 @@ export default function TuningReasoningSection({
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="reasoning_format" label={t("ui.reasoningFormat")}>{(resetAction) => <><div className="tuning-field-title">
-            <label htmlFor={`${id}-reasoning-format`} className="text-sm text-ink">{t("ui.reasoningFormat")}</label>
+            <label htmlFor={`${id}-reasoning-format`} className="text-sm text-ink"><TuningOptionLabel fieldKey="reasoning_format" label={t("ui.reasoningFormat")} /></label>
             {resetAction}
           </div>
           <CustomSelect
@@ -90,7 +89,7 @@ export default function TuningReasoningSection({
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="reasoning_preserve" label={t("ui.reasoningPreserve")}>{(resetAction) => <><div className="tuning-field-title">
-            <label htmlFor={`${id}-reasoning-preserve`} className="text-sm text-ink">{t("ui.reasoningPreserve")}</label>
+            <label htmlFor={`${id}-reasoning-preserve`} className="text-sm text-ink"><TuningOptionLabel fieldKey="reasoning_preserve" label={t("ui.reasoningPreserve")} /></label>
             {resetAction}
           </div>
           <CustomSelect
@@ -110,11 +109,11 @@ export default function TuningReasoningSection({
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="reasoning_effort" label={t("ui.reasoningEffort")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
             <div className="tuning-field-title">
-              <label htmlFor={`${id}-reasoning-effort`} className="text-sm text-ink">{t("ui.reasoningEffort")}</label>
+              <label htmlFor={`${id}-reasoning-effort`} className="text-sm text-ink"><TuningOptionLabel fieldKey="reasoning_effort" label={t("ui.reasoningEffort")} /></label>
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge tone="warning" className="shrink-0">{t("ui.serverAndRequest")}</Badge>
+              <span className="tuning-option-apply-time">{t("ui.serverAndRequest")}</span>
             </div>
           </div>
           <CustomSelect
@@ -141,7 +140,7 @@ export default function TuningReasoningSection({
         <NumericFieldGrid fields={REASONING_FIELDS} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} />
         <div className="flex min-w-0 flex-col gap-1.5">
           <TuningDefaultField fieldKey="reasoning_budget_message" label={t("ui.budgetMessageLabel")}>{(resetAction) => <><div className="tuning-field-title">
-            <label htmlFor={`${id}-reasoning-budget-message`} className="text-sm text-ink">{t("ui.budgetMessageLabel")}</label>
+            <label htmlFor={`${id}-reasoning-budget-message`} className="text-sm text-ink"><TuningOptionLabel fieldKey="reasoning_budget_message" label={t("ui.budgetMessageLabel")} /></label>
             {resetAction}
           </div>
           <input

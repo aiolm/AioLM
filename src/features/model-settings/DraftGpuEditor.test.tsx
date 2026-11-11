@@ -32,41 +32,41 @@ describe('DraftGpuEditor linkage', () => {
         draftDevice={manual} onDraftDeviceChange={value => { manualChanges(value); setManual(value); }} onInvalid={vi.fn()} />;
     }
     render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
-    expect(screen.getByLabelText('Draft device names')).toHaveValue('CUDA0,CUDA1');
-    expect(screen.queryByRole('combobox', { name: 'Draft device' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /^--spec-draft-device\b/ })).toHaveValue('CUDA0,CUDA1');
+    expect(screen.queryByRole('combobox', { name: /^--spec-draft-device\b/ })).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled(); expect(manualChanges).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText('Draft device names'), { target: { value: 'none' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /^--spec-draft-device\b/ }), { target: { value: 'none' } });
     expect(manualChanges).toHaveBeenLastCalledWith('none');
     fireEvent.click(screen.getByRole('combobox', { name: 'Draft model device' }));
     fireEvent.click(screen.getByRole('option', { name: 'Choose a detected GPU' }));
     expect(manualChanges).toHaveBeenLastCalledWith('');
-    expect(screen.queryByLabelText('Draft device names')).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Draft device' })).toHaveTextContent('gpu-b');
+    expect(screen.queryByRole('textbox', { name: /^--spec-draft-device\b/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /^--spec-draft-device\b/ })).toHaveTextContent('gpu-b');
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('combobox', { name: 'Draft model device' }));
     fireEvent.click(screen.getByRole('option', { name: 'Enter device names' }));
-    expect(screen.getByLabelText('Draft device names')).toHaveValue('');
-    expect(screen.queryByRole('combobox', { name: 'Draft device' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /^--spec-draft-device\b/ })).toHaveValue('');
+    expect(screen.queryByRole('combobox', { name: /^--spec-draft-device\b/ })).not.toBeInTheDocument();
   });
 
   it('keeps weights editable in non-tensor modes while two GPUs are selected', () => {
     mount();
-    expect(screen.getByLabelText('Tensor split (comma-separated weights)')).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: /^--tensor-split\b/ })).toBeEnabled();
   });
 
   it('disables the weights input with fewer than two GPUs selected', () => {
     mount({ ...twoGpus, gpu_ids: ['gpu-a'] });
-    expect(screen.getByLabelText('Tensor split (comma-separated weights)')).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: /^--tensor-split\b/ })).toBeDisabled();
   });
 
   it('disables the main GPU selector with no GPU selected', () => {
     mount({ ...twoGpus, gpu_ids: [] });
-    expect(screen.getByRole('combobox', { name: 'Main GPU' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: /^--main-gpu\b/ })).toBeDisabled();
   });
 
   it('keeps mode switches passing weights through untouched', () => {
     const { onChange } = mount({ ...twoGpus, split_mode: 'tensor', tensor_split: [1, 1] });
-    fireEvent.click(screen.getByRole('combobox', { name: 'Multi-GPU split mode' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--split-mode\b/ }));
     fireEvent.click(screen.getByRole('option', { name: 'layer' }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ split_mode: 'layer', tensor_split: [1, 1] }));
   });
@@ -80,17 +80,17 @@ describe('DraftGpuEditor linkage', () => {
 
   it('names a main GPU and a split mode instead of offering an automatic choice', async () => {
     mount({ ...twoGpus, main_gpu: null, split_mode: 'none' });
-    expect(screen.getByRole('combobox', { name: 'Main GPU' })).toHaveTextContent('gpu-a');
-    expect(screen.getByRole('combobox', { name: 'Multi-GPU split mode' })).toHaveTextContent('layer');
+    expect(screen.getByRole('combobox', { name: /^--main-gpu\b/ })).toHaveTextContent('gpu-a');
+    expect(screen.getByRole('combobox', { name: /^--split-mode\b/ })).toHaveTextContent('layer');
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Multi-GPU split mode' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--split-mode\b/ }));
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(4));
     expect(screen.queryByRole('option', { name: 'Automatic' })).not.toBeInTheDocument();
   });
 
   it('keeps the automatic choice for the draft device, which is genuinely optional', async () => {
     mount();
-    fireEvent.click(screen.getByRole('combobox', { name: 'Draft device' }));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--spec-draft-device\b/ }));
     await waitFor(() => expect(screen.getByRole('option', { name: 'Automatic' })).toBeInTheDocument());
   });
 

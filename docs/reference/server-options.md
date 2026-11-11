@@ -6,7 +6,7 @@ GPU layers use an explicit **app default of 99**, shared by the display, reset, 
 
 Numeric draft GPU defaults remain numeric when stored in the string-valued draft control. Reasoning preservation follows each runtime's reported policy: `enabled` → `on`, `disabled` → `off`, or template-dependent → `auto`. Genuine automatic defaults include an explanation rather than an invented fixed number.
 
-Each setting displays its llama.cpp CLI signature (including aliases), the request JSON key where applicable, and the upstream default even while a custom value is being edited. Defaults from the selected executable's help take precedence. Model-dependent defaults and sentinel explanations are preserved; a missing default is explicitly marked as unspecified instead of substituting an old form value. Reference-only defaults are labeled and linked to their source. Request-only settings show their JSON key without inventing CLI flags. The catalog shows defaults even when an entry is collapsed.
+Each setting uses its primary llama.cpp CLI option, or the real JSON key for request-only settings, as its main title with the translated meaning secondary. The title's hover description retains the full CLI signature and aliases and any mapped request JSON key. The upstream default remains visible while a custom value is edited. Defaults from the selected executable's help take precedence. Model-dependent defaults and sentinel explanations are preserved; a missing default is explicitly marked as unspecified instead of substituting an old form value. Reference-only defaults are labeled and linked to their source. Request-only settings do not invent CLI flags. The catalog shows defaults even when an entry is collapsed.
 
 The request-only defaults for `n_probs`, `min_keep`, `t_max_predict_ms` and `id_slot` are checked against the pinned upstream source linked in the UI. The prediction time limit's reference default is `-1`; both `-1` and `0` disable the limit. Deprecated memory switches show the default of `--load-mode` when the runtime delegates to it.
 
@@ -23,12 +23,15 @@ protections even when a manifest supplies the displayed option definition.
 Attached services cannot be
 reconfigured through launch arguments. See [External engine connections](automatic-engine-connections.md).
 
-Shared runtime-option fields group each option name, description and controls
-inside one bordered area, with the name above its own input. Descriptions use
-readable body-sized text rather than captions. Routine launch-timing labels,
-provenance and unknown-default/type notices are omitted; request-only settings
-retain their distinction. Known defaults, numeric limits, sensitive-value
-masking, syntax confirmation and validation still apply.
+Shared runtime-option groups keep each name, description and controls together,
+with the name above its own input. Simple controls use multiple columns when
+their containing editor has room, reducing to one column in narrow editors
+without changing keyboard order. JSON, token lists, local paths, repeated
+options and multi-value or unknown-arity editors span the full grid width.
+Descriptions use readable body-sized text rather than captions. Routine
+launch-timing labels, provenance and unknown-default/type notices are omitted;
+request-only settings retain their distinction. Known defaults, numeric limits,
+sensitive-value masking, syntax confirmation and validation still apply.
 
 
 ## Numeric limits and special values

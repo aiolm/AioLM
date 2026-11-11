@@ -1,10 +1,9 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
-import TuningOptionMetadata from './TuningOptionMetadata';
+import TuningOptionMetadata, { TuningOptionLabel } from './TuningOptionMetadata';
 import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldDescription, tuningFieldLabel, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import TuningSpeculativeSection from "./TuningSpeculativeSection";
 import { useTuningId } from './TuningIdScope';
@@ -67,11 +66,11 @@ export default function TuningServerSection({
       {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full max-w-lg">
         <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
           <div className="tuning-field-title">
-            <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink">{t("ui.flashAttention")}</label>
+            <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink"><TuningOptionLabel fieldKey="flash_attn" label={t("ui.flashAttention")} /></label>
             {resetAction}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+            <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
           </div>
         </div>
         <CustomSelect
@@ -95,7 +94,7 @@ export default function TuningServerSection({
             return (
               <div key={field.key} className="flex min-w-0 flex-col gap-1.5">
                 <TuningDefaultField fieldKey={field.key} label={label}>{(resetAction) => <><div className="tuning-field-title">
-                    <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
+                    <label htmlFor={inputId} className="app-text-wrap text-sm text-ink"><TuningOptionLabel fieldKey={field.key} label={label} /></label>
                   {resetAction}
                 </div>
                 <CustomSelect
@@ -121,9 +120,9 @@ export default function TuningServerSection({
           {showProjector && <div className="mt-4 flex min-w-0 flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-1.5">
-                <label htmlFor={`${id}-mmproj`} className="text-sm text-ink">{t("ui.mmprojLabel")}</label>
+                <label htmlFor={`${id}-mmproj`} className="text-sm text-ink"><TuningOptionLabel fieldKey="mmproj" label={t("ui.mmprojLabel")} /></label>
               </div>
-              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
+              <span className="tuning-option-apply-time">{t("extra.serverSide")}</span>
             </div>
             <input
               id={`${id}-mmproj`}
@@ -137,7 +136,7 @@ export default function TuningServerSection({
               className="app-input mt-1"
             />
             <span id={`${id}-mmproj-hint`} className="text-xs text-muted">{tuningHelp[locale].projector}</span>
-            <TuningOptionMetadata fieldKey="mmproj" />
+            <TuningOptionMetadata fieldKey="mmproj" showIdentifier={false} />
           </div>}
 
           {showSpeculative && <TuningSpeculativeSection showDraftBindings={showDraftBindings}

@@ -9,6 +9,7 @@ import { formatMebibytes } from '../../shared/lib/units';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
+import { TuningOptionLabel } from '../tuning/TuningOptionMetadata';
 
 export default function DraftGpuEditor({ placement, device, disabled, onChange, onInvalid, draftDevice = '', onDraftDeviceChange }: {
   placement?: GpuPlacement; device: DeviceReport | null; disabled: boolean;
@@ -37,7 +38,7 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
   return <section className="model-settings-fields" aria-label={copy.gpu}>
     {/* Keep reported GPU selections explicit. A CPU runtime has no device
         checkboxes, so a saved assignment needs an explicit recovery action. */}
-    <div className="model-settings-section-heading"><h3>{copy.gpu}</h3>
+    <div className="model-settings-section-heading"><h3><TuningOptionLabel fieldKey="device" label={copy.gpu} /></h3>
       {canClear && <button type="button" className="app-button app-button--secondary" disabled={disabled}
         onClick={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(emptyGpuPlacement()); }}>{copy.clearGpu}</button>}
     </div>
@@ -51,17 +52,17 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
       <span>{normalizeDisplayText(gpuDeviceLabel(item, index))}{item.vram_mb ? <small>{formatMebibytes(item.vram_mb)}</small> : null}</span>
     </label>)}</div>
     <div className="model-settings-grid">
-      <div><label>{t('ui.gpuMain')}<CustomSelect ariaLabel={t('ui.gpuMain')} ariaDescribedBy={`${id}-main-hint`} value={gpu.main_gpu ?? ''} options={deviceOptions.filter(option => gpu.gpu_ids.includes(option.value))} onChange={value => patch({ main_gpu: value })} disabled={disabled || gpu.gpu_ids.length === 0} /></label><p id={`${id}-main-hint`} className="app-section-hint">{help.gpuMain}</p></div>
+      <div><label><TuningOptionLabel id={`${id}-main-label`} fieldKey="main_gpu" label={t('ui.gpuMain')} /><CustomSelect ariaLabelledBy={`${id}-main-label`} ariaDescribedBy={`${id}-main-hint`} value={gpu.main_gpu ?? ''} options={deviceOptions.filter(option => gpu.gpu_ids.includes(option.value))} onChange={value => patch({ main_gpu: value })} disabled={disabled || gpu.gpu_ids.length === 0} /></label><p id={`${id}-main-hint`} className="app-section-hint">{help.gpuMain}</p></div>
       <div>{onDraftDeviceChange && <label>{choice.draftMode}<CustomSelect ariaLabel={choice.draftMode} value={manual ? 'manual' : 'list'} disabled={disabled}
         options={[{ value: 'list', label: choice.deviceList }, { value: 'manual', label: choice.deviceManual }]}
         onChange={value => { setManualDraft(value === 'manual'); if (value === 'list') onDraftDeviceChange(''); }} /></label>}
-        {manual ? <><label htmlFor={`${id}-draft-device`}>{choice.draftDevice}</label><input id={`${id}-draft-device`} className="app-input" value={draftDevice} disabled={disabled}
+        {manual ? <><label htmlFor={`${id}-draft-device`}><TuningOptionLabel fieldKey="spec_draft_device" label={choice.draftDevice} /></label><input id={`${id}-draft-device`} className="app-input" value={draftDevice} disabled={disabled}
           aria-describedby={`${id}-draft-hint`} onChange={event => onDraftDeviceChange?.(event.target.value)} /></>
-          : <label>{t('ui.gpuDraft')}<CustomSelect ariaLabel={t('ui.gpuDraft')} ariaDescribedBy={`${id}-draft-hint`} value={gpu.draft_gpu_id ?? ''} options={options} onChange={value => patch({ draft_gpu_id: value || null })} disabled={disabled || devices.length === 0} /></label>}
+          : <label><TuningOptionLabel id={`${id}-draft-label`} fieldKey="spec_draft_device" label={t('ui.gpuDraft')} /><CustomSelect ariaLabelledBy={`${id}-draft-label`} ariaDescribedBy={`${id}-draft-hint`} value={gpu.draft_gpu_id ?? ''} options={options} onChange={value => patch({ draft_gpu_id: value || null })} disabled={disabled || devices.length === 0} /></label>}
         <p id={`${id}-draft-hint`} className="app-section-hint">{manual ? choice.draftDeviceHint : help.gpuDraft}</p>
         {manual && !draftDevice.trim() && <p className="app-section-hint">{t('ui.gpuDraft')}: {options.find(option => option.value === gpu.draft_gpu_id)?.label ?? gpu.draft_gpu_id ?? copy.automatic}</p>}</div>
-      <div><label>{t('ui.gpuSplitMode')}<CustomSelect ariaLabel={t('ui.gpuSplitMode')} ariaDescribedBy={`${id}-split-hint`} value={gpu.split_mode} options={['single', 'layer', 'row', 'tensor'].map(value => ({ value, label: value }))} onChange={value => patch({ split_mode: value as SplitMode })} disabled={disabled} /></label><p id={`${id}-split-hint`} className="app-section-hint">{help.gpuSplitMode}</p></div>
-      <div><label>{copy.tensorSplit}<input className="app-input" aria-describedby={`${id}-weights-hint`} value={weights ?? gpu.tensor_split.join(', ')} disabled={disabled || gpu.gpu_ids.length < 2} onChange={event => {
+      <div><label><TuningOptionLabel id={`${id}-split-label`} fieldKey="split_mode" label={t('ui.gpuSplitMode')} /><CustomSelect ariaLabelledBy={`${id}-split-label`} ariaDescribedBy={`${id}-split-hint`} value={gpu.split_mode} options={['single', 'layer', 'row', 'tensor'].map(value => ({ value, label: value }))} onChange={value => patch({ split_mode: value as SplitMode })} disabled={disabled} /></label><p id={`${id}-split-hint`} className="app-section-hint">{help.gpuSplitMode}</p></div>
+      <div><label><TuningOptionLabel fieldKey="tensor_split" label={copy.tensorSplit} /><input className="app-input" aria-describedby={`${id}-weights-hint`} value={weights ?? gpu.tensor_split.join(', ')} disabled={disabled || gpu.gpu_ids.length < 2} onChange={event => {
         const raw = event.target.value; setWeights(raw);
         const values = raw.trim() ? raw.split(',').map(value => value.trim() ? Number(value.trim()) : NaN) : [];
         const valid = !values.length || (values.length === gpu.gpu_ids.length && values.every(value => Number.isFinite(value) && value >= 0) && values.some(value => value > 0));

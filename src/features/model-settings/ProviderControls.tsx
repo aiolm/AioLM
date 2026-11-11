@@ -350,7 +350,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
         confirmSyntaxFor={option => formEffective.help_keys.includes(option.key)}
         onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />
     </div>}
-    {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} readOnly={benchmark && option.target === 'request'} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
+    {visible.length > 0 && <div className="schema-option-grid">{visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} readOnly={benchmark && option.target === 'request'} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}</div>}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
@@ -447,7 +447,7 @@ function OptionField({ option, value, disabled, readOnly = false, automaticTelem
     } catch (cause) { invalidRef.current = true; setInvalid(true); setJsonNumberError(cause instanceof JsonOptionNumberError); onInvalid(`provider:${option.key}`, true); }
   };
   const label = <code className="schema-option__name">{option.flag ?? option.key}</code>;
-  return <div className="model-settings-provider-option schema-option">
+  return <div className={`model-settings-provider-option schema-option${option.kind.type === 'json' || option.kind.type === 'path' ? ' schema-option-grid__wide' : ''}`}>
     {selection ? <span>{label}</span> : <label htmlFor={controlId}>{label}</label>}
     <p className="schema-option__facts">{option.target === 'request' ? `${copy.request} · ` : ''}{copy.inherit}: {option.runtime_default ?? copy.modelDefault}</p>
     {option.help && <p className="app-section-hint">{option.help}</p>}

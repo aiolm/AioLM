@@ -1,6 +1,5 @@
 import type { AppConfig } from "../../shared/api/types";
 import { useI18n } from "../../shared/i18n/i18n";
-import Badge from "../../shared/ui/Badge";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
 import { tuningFieldDescription, tuningFieldLabel, type NumericField, type NumericKey } from "./tuningFields";
@@ -29,6 +28,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
         return (
           <TuningDefaultField key={field.key} fieldKey={field.key} label={label}>{(resetAction) => <TuningSliderField
             id={inputId}
+            optionKey={field.key}
             label={label}
             min={field.min}
             max={field.max}
@@ -40,9 +40,9 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             onChange={(value) => onChange(field.key, value)}
             onCommit={(value) => onCommit(field, value)}
             disabled={disabled}
-            valueMeta={<Badge tone={field.server ? "warning" : "success"} className="shrink-0">
+            valueMeta={<span className="tuning-option-apply-time">
               {field.server ? t("extra.serverSide") : t("extra.perRequest")}
-            </Badge>}
+            </span>}
             headerAction={resetAction}
           />}</TuningDefaultField>
         );
