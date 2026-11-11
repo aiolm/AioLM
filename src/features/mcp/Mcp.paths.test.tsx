@@ -71,6 +71,25 @@ describe("MCP path presentation", () => {
     }
   });
 
+  it("retains spaces while an executable path is typed character by character and saves the complete path", async () => {
+    vi.mocked(api.mcpListServers).mockResolvedValue([]);
+    vi.mocked(api.mcpSaveServer).mockImplementation(async server => [server]);
+    render(<I18nProvider initialLocale="en"><McpPanel store={createTestStore()} /></I18nProvider>);
+    await screen.findByText("No MCP servers configured");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Spaced executable" } });
+    const input = screen.getByLabelText("Executable / command") as HTMLInputElement;
+    const executable = String.raw`C:\Program Files\MCP Server\server.exe`;
+    for (const [index, character] of [...executable].entries()) {
+      fireEvent.change(input, { target: { value: input.value + character } });
+      expect(input).toHaveValue(executable.slice(0, index + 1));
+    }
+    expect(input).toHaveValue(executable);
+    fireEvent.click(screen.getByRole("button", { name: "Save server" }));
+    await screen.findByText("MCP server saved. Tool discovery starts only when you request it.");
+    expect(api.mcpSaveServer).toHaveBeenCalledWith(expect.objectContaining({ command: executable }));
+    expect(input).toHaveValue(executable);
+  });
+
   it("cleans restored commands, metadata, schemas, approvals and results without changing server or tool arguments", async () => {
     const raw = String.raw`\\?\C:\tools\server.exe`;
     const rawDocument = String.raw`\\?\UNC\server\share\notes.md`;

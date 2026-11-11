@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -41,6 +41,89 @@ describe('MCP saved definition ownership', () => {
     vi.mocked(api.mcpCancelToolCall).mockResolvedValue(undefined);
   });
   afterEach(() => { for (const task of getTaskSnapshot()) removeTask(task.id); });
+
+  it.each([
+    ['Name', 'Renamed draft'],
+    ['Executable / command', 'another-server'],
+    ['Arguments, one per line', 'changed arguments'],
+    ['Enabled', false],
+  ] as const)('keeps the unsaved %s until a requested server switch is explicitly discarded', async (label, value) => {
+    await openPanel();
+    const field = screen.getByLabelText(label);
+    if (value === false) fireEvent.click(field);
+    else fireEvent.change(field, { target: { value } });
+    field.focus();
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Keep editing' })).toHaveFocus());
+    expect(screen.getByText('alpha tools').closest('button')).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+    expect(field).toHaveFocus();
+    if (value === false) expect(field).toHaveAttribute('aria-checked', 'false');
+    else expect(field).toHaveValue(value);
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' })).getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
+    expect(screen.getByLabelText('Executable / command')).toHaveValue('synthetic-server');
+    expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('old');
+    expect(screen.getByLabelText('Enabled')).toHaveAttribute('aria-checked', 'true');
+    expect(api.mcpSaveServer).not.toHaveBeenCalled();
+  });
+
+  it('preserves a new unsaved definition and its focus on Escape, then starts a clean draft on Discard', async () => {
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    const name = screen.getByLabelText('Name');
+    fireEvent.change(name, { target: { value: 'Unsaved new server' } });
+    name.focus();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' });
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(name).toHaveValue('Unsaved new server');
+    expect(name).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' })).getByRole('button', { name: 'Discard changes' }));
+    expect(name).toHaveValue('');
+    expect(screen.getByLabelText('Executable / command')).toHaveValue('');
+    expect(screen.queryByRole('button', { name: 'Discover tools' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved server changes?' })).not.toBeInTheDocument();
+  });
+
+  it('does not prompt for untouched, reverted, saved, or same-server selections', async () => {
+    await openPanel();
+    editArgs();
+    fireEvent.click(screen.getByText('alpha tools').closest('button')!);
+    expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('new');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved server changes?' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Arguments, one per line'), { target: { value: 'old' } });
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
+    fireEvent.click(screen.getByText('alpha tools').closest('button')!);
+    editArgs(); save();
+    await screen.findByText(savedNotice);
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved server changes?' })).not.toBeInTheDocument();
+  });
+
+  it('keeps an active call and its result while a dirty navigation is rejected', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    await openPanel(); await discover(); review();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and run once' }));
+    editArgs();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' });
+    expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+    await act(async () => call.resolve({ text: 'Retained call result' }));
+    expect(await screen.findByLabelText('Tool result')).toHaveTextContent('Retained call result');
+    expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('new');
+    expect(getTaskSnapshot()[0].state).toBe('completed');
+  });
 
   it('discards metadata and the reviewed call when saved arguments change, then discovers the new definition', async () => {
     await openPanel(); await discover(); review(); editArgs(); save();
@@ -108,6 +191,7 @@ describe('MCP saved definition ownership', () => {
   it.each(['success', 'failure'])('does not move a new selection back to the server whose save %s arrives late', async outcome => {
     const pending = deferred<api.McpServer[]>(); vi.mocked(api.mcpSaveServer).mockReturnValue(pending.promise);
     await openPanel(); editArgs(); save(); fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' })).getByRole('button', { name: 'Discard changes' }));
     await act(async () => outcome === 'success' ? pending.resolve([{ ...servers[0], args: ['new'] }, servers[1]]) : pending.reject(new Error('Retired save failure')));
     expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
     expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('old');

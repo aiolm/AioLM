@@ -5,6 +5,8 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { formatMcpCommand, validateMcpServerDraft } from "./mcpUtils";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import { mcpDraftCopy } from "./mcpDraftCopy";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import Badge from "../../shared/ui/Badge";
 import Switch from "../../shared/ui/Switch";
@@ -23,6 +25,8 @@ import "./mcp.css";
 type Approval = { tool: api.McpTool; args: Record<string, unknown> };
 type ToolCall = { id: string; taskId: string; label: string; cancelRequested: boolean; settled: boolean; cancelPending?: Promise<void> };
 type DeleteConfirmation = { server: api.McpServer };
+type ServerDraft = Pick<api.McpServer, "name" | "command" | "enabled"> & { argsText: string };
+type DraftNavigation = { server: api.McpServer | null };
 
 function toolExecutionFailed(response: unknown): boolean {
   return response !== null && typeof response === "object" && "isError" in response && response.isError === true;
@@ -60,15 +64,20 @@ const McpToolSchema = memo(function McpToolSchema({ tool }: { tool: api.McpTool 
 });
 
 export default function McpPanel(_props: { store: AppStore }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const draftCopy = mcpDraftCopy[locale];
   const policyLabel = (policy: McpApprovalPolicy) => t(`ui.${POLICY_LABELS[policy]}`);
 
   const [servers, setServers] = useState<api.McpServer[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
+  const [commandEdited, setCommandEdited] = useState(false);
   const [argsText, setArgsText] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const draftBaseline = useRef<ServerDraft>({ name: "", command: "", argsText: "", enabled: true });
+  const [pendingNavigation, setPendingNavigation] = useState<DraftNavigation | null>(null);
+  const pendingNavigationRef = useRef<DraftNavigation | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [approvalPolicy, setApprovalPolicy] = useState<McpApprovalPolicy>(() => loadMcpApprovalPolicy());
@@ -184,8 +193,10 @@ export default function McpPanel(_props: { store: AppStore }) {
     setSelectedId(null);
     setName("");
     setCommand("");
+    setCommandEdited(false);
     setArgsText("");
     setEnabled(true);
+    draftBaseline.current = { name: "", command: "", argsText: "", enabled: true };
     setApprovalPolicy(loadMcpApprovalPolicy());
     setApprovedCalls(new Set());
     setTools([]);
@@ -204,14 +215,43 @@ export default function McpPanel(_props: { store: AppStore }) {
     setSelectedId(server.id);
     setName(server.name);
     setCommand(server.command);
+    setCommandEdited(false);
     setArgsText(server.args.join("\n"));
     setEnabled(server.enabled);
+    draftBaseline.current = { name: server.name, command: server.command, argsText: server.args.join("\n"), enabled: server.enabled };
     setTools([]);
     setSelectedTool(null);
     setApproval(null);
     setResult(null);
     setError(null);
     setNotice(null);
+  };
+
+  const requestNavigation = (server: api.McpServer | null) => {
+    if (server && server.id === selectedId) return;
+    if (pendingNavigationRef.current) return;
+    const baseline = draftBaseline.current;
+    if (name !== baseline.name || command !== baseline.command || argsText !== baseline.argsText || enabled !== baseline.enabled) {
+      const navigation = { server };
+      pendingNavigationRef.current = navigation;
+      setPendingNavigation(navigation);
+      return;
+    }
+    if (server) selectServer(server);
+    else resetDraft();
+  };
+
+  const keepEditing = () => {
+    pendingNavigationRef.current = null;
+    setPendingNavigation(null);
+  };
+
+  const discardDraft = () => {
+    const navigation = pendingNavigationRef.current;
+    if (!navigation) return;
+    keepEditing();
+    if (navigation.server) selectServer(navigation.server);
+    else resetDraft();
   };
 
   const save = async () => {
@@ -221,6 +261,7 @@ export default function McpPanel(_props: { store: AppStore }) {
     if (validation) { setError(validation); return; }
     const id = selectedId ?? newId();
     const server = { id, name: name.trim(), command: command.trim(), args, enabled };
+    const savedDraft = { name, command, argsText, enabled };
     const previous = servers.find(candidate => candidate.id === id);
     const definitionChanged = !previous || previous.command !== server.command
       || previous.enabled !== enabled || JSON.stringify(previous.args) !== JSON.stringify(args);
@@ -247,6 +288,7 @@ export default function McpPanel(_props: { store: AppStore }) {
       setServers(next);
       if (generation !== selectionGeneration.current) return;
       setSelectedId(id);
+      draftBaseline.current = savedDraft;
       setNotice(t("ui.mcpSaved"));
       setError(null);
     } catch (caught) {
@@ -409,13 +451,13 @@ export default function McpPanel(_props: { store: AppStore }) {
               <h2 id="mcp-servers-title" className="mcp-heading">{t("panel.configuredServers")}</h2>
               <p className="mcp-hint">{t("ui.mcpConfigured", { count: servers.length })} · {t("ui.mcpEnabledCount", { count: enabledCount })}</p>
             </div>
-            <button type="button" data-icon="add" onClick={resetDraft} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button>
+            <button type="button" data-icon="add" onClick={() => requestNavigation(null)} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button>
           </div>
           {servers.length === 0
             ? <EmptyState title={t("panel.noMcpServers")} description={t("ui.mcpEmptyHint")} />
             : <ul className="mcp-server-list" aria-label={t("panel.ariaConfiguredServers")}>
               {servers.map((server) => <li key={server.id} className={`app-list-row mcp-server-row ${server.id === selectedId ? "is-selected" : ""}`}>
-                <button type="button" onClick={() => selectServer(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action mcp-server-row__select">
+                <button type="button" onClick={() => requestNavigation(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action mcp-server-row__select">
                   <span className="mcp-server-row__name">{normalizeDisplayText(server.name)}</span>
                   <StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} />
                 </button>
@@ -432,7 +474,7 @@ export default function McpPanel(_props: { store: AppStore }) {
             </div>
             <div className="grid gap-3 app-form-grid">
               <label className="mcp-field">{t("ui.fieldName")}<input value={normalizeDisplayText(name)} onChange={(event) => setName(event.target.value)} placeholder={t("ui.fieldNamePlaceholder")} className="app-input" /></label>
-              <label className="mcp-field">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPath(command)} onChange={(event) => setCommand(event.target.value)} placeholder="npx or C:\\Tools\\server.exe" className="app-input font-mono" /></label>
+              <label className="mcp-field">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={commandEdited ? command : normalizeDisplayPath(command)} onChange={(event) => { setCommandEdited(true); setCommand(event.target.value); }} placeholder="npx or C:\\Tools\\server.exe" className="app-input font-mono" /></label>
             </div>
             <label className="mcp-field">{t("ui.fieldArgs")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPathLines(argsText)} onChange={(event) => setArgsText(event.target.value)} rows={4} placeholder={"-y\n@modelcontextprotocol/server-filesystem\nC:\\Documents"} className="app-textarea app-mono" /></label>
             <div className="mcp-actions">
@@ -486,6 +528,17 @@ export default function McpPanel(_props: { store: AppStore }) {
           </section>}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingNavigation !== null}
+        title={draftCopy.title}
+        description={draftCopy.body}
+        confirmLabel={draftCopy.discard}
+        cancelLabel={draftCopy.keep}
+        confirmIcon="delete"
+        onConfirm={discardDraft}
+        onCancel={keepEditing}
+      />
 
       <dialog
         ref={deleteDialogRef}
