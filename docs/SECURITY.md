@@ -20,6 +20,14 @@ The API server is local-only as well. MCP servers are third-party executables la
 
 An MCP server's first launch requires native OS approval bound to its command, arguments, allowlisted inherited environment and working directory. Changing those inputs prompts again. Approval fingerprints persist in the separate Rust-owned `mcp-launch-approvals.json` data file, not in the editable server list; tool-call approval remains separate.
 
+## Runtime help execution
+
+All desktop help IPC routes require native approval for the exact program path, arguments, effective working directory and environment, including installed runtimes and registered artifacts. An unchanged, previously approved command may reuse its persisted approval. Rejected requests do not spawn a help process; discovery executes the same command that was presented for approval.
+
+Help is code execution, not a sandbox. External Python runtimes retain their package search behavior for compatibility; a working directory can supply a module instead of the installed package. Only approve trusted runtimes and directories. Approval fingerprints do not freeze directory contents. Direct CLI operations keep their local-caller trust model.
+
+Cancellation and supersession cover the native approval wait as well as help execution. A withdrawn request cannot persist a late approval or start a help child. Approval publication is checked against the live request under the same ownership lock used by cancellation.
+
 ## Network redirects
 
 Runtime GitHub and Hugging Face requests require HTTPS and a trusted service host on every redirect, with a 10-hop cap. GitHub metadata uses the GitHub host allowlist; runtime and verification-model transfers use their trusted download hosts. The final response URL is checked as well; a permitted first URL cannot redirect through an untrusted host or downgrade to HTTP.

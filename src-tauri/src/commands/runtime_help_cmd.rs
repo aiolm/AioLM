@@ -63,100 +63,66 @@ fn adapters_root() -> std::path::PathBuf {
     crate::providers::registry::root()
 }
 
-/// Compare against commands constructed from installed state, never a
-/// provisional manifest supplied by the WebView.
-fn registered_execution(engine: &str, runtime: &str, command: &HelpCommand) -> bool {
-    let derive = || -> Result<HelpCommand, crate::error::AppError> {
-        let provider = crate::providers::ProviderId::parse(engine)
-            .ok_or_else(|| crate::error::AppError::validation("unknown engine"))?;
-        let request = runtime_schema::HelpRequest {
-            encoding: Some(command.encoding),
-            locale: None,
-            working_directory: command
-                .working_directory
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned()),
-            program: provider
-                .is_custom()
-                .then(|| command.program.to_string_lossy().into_owned()),
-            args: command.args.clone(),
-            scope: command.scope.clone(),
-        };
-        if provider.is_custom() {
-            return runtime_schema::manifest_help_command(
-                &crate::providers::registry::manifest(provider, runtime)?,
-                &request,
-            );
-        }
-        let mut cfg = crate::config::load_result()?;
-        cfg.active_provider = engine.to_owned();
-        if provider != crate::providers::ProviderId::Llama {
-            cfg.active_runtime = runtime.to_owned();
-        }
-        let key = runtime_schema::runtime_key(&cfg)?;
-        if key.engine != engine || key.runtime != runtime {
-            return Err(crate::error::AppError::validation(
-                "runtime is not selected",
-            ));
-        }
-        runtime_schema::help_command(&cfg, &request)
-    };
-    derive().is_ok_and(|derived| {
-        matches!(
-            (derived.execution_fingerprint(), command.execution_fingerprint()),
-            (Ok(derived), Ok(requested)) if derived == requested
-        )
-    })
+struct PendingDiscovery(crate::providers::runtime_help::DiscoveryTicket);
+
+impl Drop for PendingDiscovery {
+    fn drop(&mut self) {
+        self.0.cancel_execution();
+        service().failed(&self.0);
+    }
 }
 
 async fn authorize_execution(
-    engine: String,
-    runtime: String,
-    command: HelpCommand,
-) -> Result<(), crate::error::AppError> {
-    let checked = command.clone();
-    let fingerprint =
-        tokio::task::spawn_blocking(move || -> Result<Option<String>, crate::error::AppError> {
-            if registered_execution(&engine, &runtime, &checked) {
-                return Ok(None);
-            }
-            let fingerprint = checked.execution_fingerprint()?;
-            if runtime_help_store::command_approved(&adapters_root(), &fingerprint)? {
-                Ok(None)
-            } else {
-                Ok(Some(fingerprint))
-            }
-        })
-        .await
-        .map_err(crate::error::AppError::from)??;
-    let Some(fingerprint) = fingerprint else {
-        return Ok(());
-    };
-    let directory = command
-        .working_directory
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(std::env::current_dir)
-        .map_err(|error| crate::error::AppError::from_io(&error))?;
+    mut command: HelpCommand,
+    ticket: &crate::providers::runtime_help::DiscoveryTicket,
+) -> Result<HelpCommand, crate::error::AppError> {
+    let (command, fingerprint, approved) = tokio::task::spawn_blocking(move || {
+        // Freeze the effective directory before approval. Discovery must execute
+        // this command, not re-derive it from mutable registration or help state.
+        let directory = command
+            .working_directory
+            .take()
+            .map(Ok)
+            .unwrap_or_else(std::env::current_dir)
+            .map_err(|error| crate::error::AppError::from_io(&error))?;
+        command.working_directory = Some(directory);
+        let fingerprint = command.execution_fingerprint()?;
+        let approved = runtime_help_store::command_approved(&adapters_root(), &fingerprint)?;
+        Ok::<_, crate::error::AppError>((command, fingerprint, approved))
+    })
+    .await
+    .map_err(crate::error::AppError::from)??;
+    if approved {
+        return service().with_current(ticket, || Ok(command));
+    }
     let description = format!(
-        "Run this command to discover runtime help?\n\n{}\n\nEnvironment values are included in the approval fingerprint; only keys are shown.",
+        "Run this command to discover runtime help?\n\n{}\n\nThis executes local code, not just a read-only help lookup. The working directory can supply Python modules or other executable code. Only approve a runtime and directory you trust.\n\nEnvironment values are included in the approval fingerprint; only keys are shown.",
         serde_json::to_string_pretty(&serde_json::json!({
             "program": command.program,
             "args": command.args,
-            "working_directory": directory,
+            "working_directory": command.working_directory,
             "environment_keys": command.environment.keys().collect::<Vec<_>>(),
         })).map_err(|error| error.to_string())?,
     );
-    if !crate::native_confirm::confirm("Approve runtime help command", &description).await? {
+    let approved = tokio::select! {
+        biased;
+        _ = ticket.cancelled() => return Err(crate::error::AppError::cancelled("help discovery cancelled")),
+        answer = crate::native_confirm::confirm("Approve runtime help command", &description) => answer?,
+    };
+    if !approved {
         return Err(crate::error::AppError::denied(
             "runtime help command was not approved",
         ));
     }
+    let ticket = ticket.clone();
     tokio::task::spawn_blocking(move || {
-        runtime_help_store::approve_command(&adapters_root(), &fingerprint)
+        service().with_current(&ticket, || {
+            runtime_help_store::approve_command(&adapters_root(), &fingerprint)
+        })
     })
     .await
-    .map_err(crate::error::AppError::from)?
+    .map_err(crate::error::AppError::from)??;
+    Ok(command)
 }
 
 /// Explicit discovery: runs the owned help child once, parses, persists and
@@ -173,16 +139,19 @@ pub(crate) async fn runtime_help_discover(
     // Discovery never starts a model server, so live sessions do not block it;
     // sessions only gate registration, which owns probes.
     let root = adapters_root();
-    authorize_execution(engine.clone(), runtime.clone(), command.clone()).await?;
+    let pending = PendingDiscovery(service().begin(&owner)?);
+    let command = authorize_execution(command, &pending.0).await?;
+    let ticket = pending.0.clone();
     tokio::task::spawn_blocking(move || {
-        runtime_help_store::discover_persist_describe(
+        runtime_help_store::discover_with_ticket(
             service(),
             &root,
-            &owner,
+            ticket,
             &engine,
             &runtime,
             &command,
             &saved_keys,
+            runtime_help_store::Baseline::Latest,
         )
     })
     .await
@@ -208,10 +177,19 @@ pub(crate) async fn runtime_help_discover_selected(
     cfg: crate::config::AppConfig,
     request: runtime_schema::HelpRequest,
 ) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
+    let key = runtime_schema::runtime_key(&cfg)?;
+    let pending =
+        PendingDiscovery(service().begin(&format!("runtime:{}/{}", key.engine, key.runtime))?);
+    let (cfg, command) = tokio::task::spawn_blocking(move || {
+        let command = runtime_schema::help_command(&cfg, &request)?;
+        Ok::<_, crate::error::AppError>((cfg, command))
+    })
+    .await
+    .map_err(crate::error::AppError::from)??;
+    let command = authorize_execution(command, &pending.0).await?;
+    let ticket = pending.0.clone();
     tokio::task::spawn_blocking(move || {
         let root = adapters_root();
-        let key = runtime_schema::runtime_key(&cfg)?;
-        let command = runtime_schema::help_command(&cfg, &request)?;
         let accepted = runtime_schema::load_accepted(&root, &key.engine, &key.runtime)?;
         let baseline = match accepted {
             Some(accepted) => runtime_help_store::load_snapshot(
@@ -226,10 +204,10 @@ pub(crate) async fn runtime_help_discover_selected(
             &cfg,
             &runtime_schema::Selected::from_config(&cfg)?,
         )?;
-        let (report, mut descriptor) = runtime_help_store::discover_against(
+        let (report, mut descriptor) = runtime_help_store::discover_with_ticket(
             service(),
             &root,
-            &format!("runtime:{}/{}", key.engine, key.runtime),
+            ticket,
             &key.engine,
             &key.runtime,
             &command,
@@ -412,19 +390,13 @@ pub(crate) async fn entrypoint_help_discover(
     request: runtime_schema::HelpRequest,
     cfg: Option<crate::config::AppConfig>,
 ) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
+    let pending = PendingDiscovery(service().begin(&entrypoint_owner(&entry))?);
     let manifest = crate::providers::registry::provisional_manifest(&entry)
         .map_err(crate::error::AppError::validation)?;
     let command = runtime_schema::manifest_help_command(&manifest, &request)?;
-    authorize_execution(
-        entry.engine_id.as_str().to_owned(),
-        entry.runtime_id.clone(),
-        command,
-    )
-    .await?;
+    let command = authorize_execution(command, &pending.0).await?;
+    let ticket = pending.0.clone();
     tokio::task::spawn_blocking(move || {
-        let manifest = crate::providers::registry::provisional_manifest(&entry)
-            .map_err(crate::error::AppError::validation)?;
-        let command = runtime_schema::manifest_help_command(&manifest, &request)?;
         let cfg = match cfg {
             Some(cfg) => cfg,
             None => crate::config::load_result()?,
@@ -435,10 +407,10 @@ pub(crate) async fn entrypoint_help_discover(
             entry.engine_id.as_str(),
             &entry.runtime_id,
         )?;
-        let (report, mut descriptor) = runtime_help_store::discover_against(
+        let (report, mut descriptor) = runtime_help_store::discover_with_ticket(
             service(),
             &adapters_root(),
-            &entrypoint_owner(&entry),
+            ticket,
             entry.engine_id.as_str(),
             &entry.runtime_id,
             &command,
@@ -501,3 +473,7 @@ pub(crate) fn runtime_help_parse(
     };
     crate::providers::runtime_help_parse::parse_help_report(&report, binding)
 }
+
+#[cfg(test)]
+#[path = "runtime_help_cmd_tests.rs"]
+mod tests;

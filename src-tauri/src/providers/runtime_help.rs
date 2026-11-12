@@ -460,6 +460,26 @@ pub struct DiscoveryTicket {
     pub id: String,
     pub cancel: Arc<AtomicBool>,
     owner: String,
+    cancellation: Arc<tokio::sync::Notify>,
+}
+
+impl DiscoveryTicket {
+    pub(crate) fn cancel_execution(&self) {
+        self.cancel.store(true, Ordering::Release);
+        self.cancellation.notify_waiters();
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            let notified = self.cancellation.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancel.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -494,9 +514,10 @@ impl HelpService {
             id: uuid::Uuid::new_v4().to_string(),
             cancel: Arc::new(AtomicBool::new(false)),
             owner: owner.into(),
+            cancellation: Arc::new(tokio::sync::Notify::new()),
         };
         if let Some(previous) = state.active.insert(owner.into(), ticket.clone()) {
-            previous.cancel.store(true, Ordering::Release);
+            previous.cancel_execution();
         }
         Ok(ticket)
     }
@@ -507,7 +528,7 @@ impl HelpService {
             .lock()
             .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         if let Some(ticket) = state.active.values().find(|t| t.id == id) {
-            ticket.cancel.store(true, Ordering::Release);
+            ticket.cancel_execution();
             Ok(true)
         } else {
             Ok(false)
@@ -520,7 +541,7 @@ impl HelpService {
             .lock()
             .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         if let Some(ticket) = state.active.get(owner) {
-            ticket.cancel.store(true, Ordering::Release);
+            ticket.cancel_execution();
             Ok(true)
         } else {
             Ok(false)
@@ -539,7 +560,7 @@ impl HelpService {
             .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         let count = state.active.len();
         for ticket in state.active.values() {
-            ticket.cancel.store(true, Ordering::Release);
+            ticket.cancel_execution();
         }
         Ok(count)
     }
@@ -554,6 +575,22 @@ impl HelpService {
                 .get(&ticket.owner)
                 .is_some_and(|t| t.id == ticket.id)
         })
+    }
+
+    /// Commit a small execution approval only while its request still owns the
+    /// slot. Cancellation and supersession use the same lock, so a late native
+    /// answer cannot persist permission for an already-cancelled request.
+    pub(crate) fn with_current<T>(
+        &self,
+        ticket: &DiscoveryTicket,
+        action: impl FnOnce() -> Result<T, crate::error::AppError>,
+    ) -> Result<T, crate::error::AppError> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
+        Self::check_publication(&mut state, ticket)?;
+        action()
     }
 
     pub fn cached(

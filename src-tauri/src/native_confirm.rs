@@ -10,7 +10,38 @@ mod macos_approval;
 #[path = "mcp/native_approval.rs"]
 pub(crate) mod native_approval;
 
+// A task-scoped dialog boundary keeps IPC regression tests headless without
+// changing process-global behavior or adding an approval bypass to app builds.
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_ANSWERS: std::cell::RefCell<std::collections::VecDeque<TestAnswer>>;
+}
+
+#[cfg(test)]
+pub(crate) enum TestAnswer {
+    Immediate(bool),
+    Delayed {
+        opened: tokio::sync::oneshot::Sender<()>,
+        answer: tokio::sync::oneshot::Receiver<bool>,
+    },
+}
+
 pub(crate) async fn confirm(title: &str, description: &str) -> Result<bool, String> {
+    #[cfg(test)]
+    if let Ok(answer) = TEST_ANSWERS.try_with(|answers| {
+        answers
+            .borrow_mut()
+            .pop_front()
+            .expect("unexpected native confirmation in the scoped IPC test")
+    }) {
+        return match answer {
+            TestAnswer::Immediate(answer) => Ok(answer),
+            TestAnswer::Delayed { opened, answer } => {
+                let _ = opened.send(());
+                Ok(answer.await.unwrap_or(false))
+            }
+        };
+    }
     // Dropping the future withdraws its dialog rather than leaving a detached
     // prompt open after cancellation or a caller's approval timeout.
     #[cfg(windows)]

@@ -660,12 +660,31 @@ pub fn discover_against(
     saved_keys: &[String],
     baseline: Baseline,
 ) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
+    let ticket = service.begin(owner)?;
+    discover_with_ticket(
+        service, root, ticket, engine, runtime, command, saved_keys, baseline,
+    )
+}
+
+/// Continue the ticket that already owns a desktop request's approval dialog.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn discover_with_ticket(
+    service: &HelpService,
+    root: &Path,
+    ticket: DiscoveryTicket,
+    engine: &str,
+    runtime: &str,
+    command: &HelpCommand,
+    saved_keys: &[String],
+    baseline: Baseline,
+) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
     if !valid_segment(engine) || !valid_segment(runtime) {
+        service.failed(&ticket);
         return Err(crate::error::AppError::validation(
             "invalid engine or runtime identity for help snapshots",
         ));
     }
-    let ticket = service.begin(owner)?;
+    service.with_current(&ticket, || Ok(()))?;
     // The owned capture runs under this ticket's flag; a spawn failure frees
     // the owner slot immediately so the owner can retry.
     let report = match super::runtime_help::discover(command, &ticket.cancel) {
