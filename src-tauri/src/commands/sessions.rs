@@ -3,6 +3,7 @@ use super::server::{
     ensure_no_active_requests, prepare_launch, start_on_target, stop_models_for_replacement,
     stop_session_by_id,
 };
+use crate::error::AppError;
 use crate::{config, server, session, state::AppState};
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -23,7 +24,7 @@ pub(crate) async fn session_start(
     stop_existing: Option<bool>,
     persist: Option<bool>,
     operation_id: Option<String>,
-) -> Result<session::SessionStatus, String> {
+) -> Result<session::SessionStatus, AppError> {
     run_session_start(
         &state,
         session_id,
@@ -42,7 +43,7 @@ pub(super) async fn run_session_start(
     stop_existing: Option<bool>,
     persist: Option<bool>,
     operation_id: Option<String>,
-) -> Result<session::SessionStatus, String> {
+) -> Result<session::SessionStatus, AppError> {
     let id = {
         let trimmed = session_id.trim();
         if trimmed.is_empty() {
@@ -58,7 +59,7 @@ pub(super) async fn run_session_start(
         .transpose()?;
     let _operation = state.operation.lock().await;
     if launch_cancel.load(Ordering::Acquire) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
     let policy = match stop_existing {
         Some(explicit) => explicit,
@@ -80,13 +81,13 @@ pub(super) async fn run_session_start(
     .await?;
     ensure_no_active_requests(state, &id, policy)?;
     if launch_cancel.load(Ordering::Acquire) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
     if policy {
-        stop_models_for_replacement(state, &id, Some(&launch_cancel))?;
+        stop_models_for_replacement(state, &id, Some(&launch_cancel)).await?;
     }
     if launch_cancel.load(Ordering::Acquire) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
 
     if id == session::DEFAULT_SESSION_ID {
@@ -101,15 +102,14 @@ pub(super) async fn run_session_start(
             serving.as_ref(),
         )
         .await?;
-        let mut server = target
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?;
-        return Ok(session::build_status(
-            session::DEFAULT_SESSION_ID,
-            "default",
-            &mut server,
-            &err,
-        ));
+        let (status, teardown) = {
+            let mut server = target
+                .lock()
+                .map_err(|_| "server state lock was poisoned".to_string())?;
+            session::build_status(session::DEFAULT_SESSION_ID, "default", &mut server, &err)
+        };
+        drop(teardown);
+        return Ok(status);
     }
 
     let entry = state.sessions.get_or_create(&id, &name)?;
@@ -126,18 +126,22 @@ pub(super) async fn run_session_start(
         serving.as_ref(),
     )
     .await?;
-    let mut server = entry
-        .state
-        .lock()
-        .map_err(|_| "server state lock was poisoned".to_string())?;
-    Ok(session::build_status(&id, &name, &mut server, &entry.err))
+    let (status, teardown) = {
+        let mut server = entry
+            .state
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        session::build_status(&id, &name, &mut server, &entry.err)
+    };
+    drop(teardown);
+    Ok(status)
 }
 
 #[tauri::command]
 pub(crate) async fn session_stop(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let id = session_id.trim();
     let id = if id.is_empty() {
         session::DEFAULT_SESSION_ID
@@ -155,7 +159,7 @@ pub(crate) async fn session_stop(
 pub(crate) async fn session_unload(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let id = session_id.trim();
     let id = if id.is_empty() {
         session::DEFAULT_SESSION_ID
@@ -173,41 +177,52 @@ pub(crate) async fn session_unload(
 #[tauri::command]
 pub(crate) fn session_list(
     state: State<'_, AppState>,
-) -> Result<Vec<session::SessionStatus>, String> {
+) -> Result<Vec<session::SessionStatus>, AppError> {
     collect_sessions(&state, session::build_status)
 }
 
 #[tauri::command]
 pub(crate) fn session_summary_list(
     state: State<'_, AppState>,
-) -> Result<Vec<session::SessionSummary>, String> {
+) -> Result<Vec<session::SessionSummary>, AppError> {
     collect_sessions(&state, session::build_summary)
 }
 
 fn collect_sessions<T>(
     state: &AppState,
-    snapshot: impl Fn(&str, &str, &mut server::ServerState, &std::sync::Arc<server::ErrBuf>) -> T,
-) -> Result<Vec<T>, String> {
+    snapshot: impl Fn(
+        &str,
+        &str,
+        &mut server::ServerState,
+        &std::sync::Arc<server::ErrBuf>,
+    ) -> (T, Option<server::Teardown>),
+) -> Result<Vec<T>, AppError> {
     let mut out = Vec::new();
-    {
+    let (status, teardown) = {
         let mut server = state
             .server
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        out.push(snapshot(
+        snapshot(
             session::DEFAULT_SESSION_ID,
             "default",
             &mut server,
             &state.err,
-        ));
-    }
+        )
+    };
+    out.push(status);
+    drop(teardown);
     for entry in state.sessions.entries() {
         let name = entry.display_name();
-        let mut server = entry
-            .state
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?;
-        out.push(snapshot(&entry.id, &name, &mut server, &entry.err));
+        let (status, teardown) = {
+            let mut server = entry
+                .state
+                .lock()
+                .map_err(|_| "server state lock was poisoned".to_string())?;
+            snapshot(&entry.id, &name, &mut server, &entry.err)
+        };
+        out.push(status);
+        drop(teardown);
     }
     Ok(out)
 }

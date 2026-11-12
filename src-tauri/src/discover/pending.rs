@@ -7,7 +7,8 @@
 //! staged beside their destinations (see `resume`); how much of each file is
 //! already there is measured from disk whenever the list is read, so the list
 //! never claims progress that was lost.
-use super::resume;
+use super::{io_error, resume};
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -90,8 +91,10 @@ impl PendingDownload {
     }
 }
 
-fn default_store() -> Result<PathBuf, String> {
-    crate::home::resolve_aiolm_home().map(|home| home.join("pending-downloads.json"))
+fn default_store() -> Result<PathBuf, AppError> {
+    crate::home::resolve_aiolm_home()
+        .map(|home| home.join("pending-downloads.json"))
+        .map_err(AppError::unavailable)
 }
 
 fn read_store(store: &Path) -> Vec<PendingDownload> {
@@ -143,15 +146,19 @@ fn read_store(store: &Path) -> Vec<PendingDownload> {
     entries
 }
 
-fn write_store(store: &Path, entries: &[PendingDownload]) -> Result<(), String> {
+fn write_store(store: &Path, entries: &[PendingDownload]) -> Result<(), AppError> {
     if entries.is_empty() {
         return match std::fs::remove_file(store) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("cannot update interrupted downloads: {error}")),
+            Err(error) => Err(io_error(
+                &error,
+                format!("cannot update interrupted downloads: {error}"),
+            )),
         };
     }
-    let bytes = serde_json::to_vec_pretty(entries).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(entries)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     crate::config::atomic_write(store, &bytes)
 }
 
@@ -179,7 +186,7 @@ fn list_in(store: &Path) -> Vec<PendingDownload> {
     entries
 }
 
-fn remember_in(store: &Path, entry: PendingDownload) -> Result<(), String> {
+fn remember_in(store: &Path, entry: PendingDownload) -> Result<(), AppError> {
     let mut entries = read_store(store);
     entries.retain(|existing| {
         existing.id != entry.id
@@ -195,7 +202,7 @@ fn remember_in(store: &Path, entry: PendingDownload) -> Result<(), String> {
     write_store(store, &entries)
 }
 
-fn forget_in(store: &Path, id: &str) -> Result<(), String> {
+fn forget_in(store: &Path, id: &str) -> Result<(), AppError> {
     let mut entries = read_store(store);
     let before = entries.len();
     entries.retain(|entry| entry.id != id);
@@ -205,30 +212,30 @@ fn forget_in(store: &Path, id: &str) -> Result<(), String> {
     write_store(store, &entries)
 }
 
-fn owned_destination(entry: &PendingDownload, file: &PendingFile) -> Result<PathBuf, String> {
+fn owned_destination(entry: &PendingDownload, file: &PendingFile) -> Result<PathBuf, AppError> {
     super::validate_repo_id(&entry.repo_id)?;
     let root = Path::new(&entry.models_dir)
         .canonicalize()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     let path = Path::new(&file.path);
     let repository = root.join("hf").join(super::repo_directory(&entry.repo_id));
     path.strip_prefix(&repository)
-        .map_err(|_| "pending download escapes its repository")?;
+        .map_err(|_| AppError::validation("pending download escapes its repository"))?;
     let relative = path
         .strip_prefix(&root)
-        .map_err(|_| "pending download escapes its library")?
+        .map_err(|_| AppError::validation("pending download escapes its library"))?
         .components()
         .map(|part| {
             part.as_os_str()
                 .to_str()
-                .ok_or("invalid pending download path")
+                .ok_or_else(|| AppError::validation("invalid pending download path"))
         })
         .collect::<Result<Vec<_>, _>>()?
         .join("/");
     super::snapshots::checked_destination(&root, &relative, false)
 }
 
-fn discard_in(store: &Path, id: &str) -> Result<(), String> {
+fn discard_in(store: &Path, id: &str) -> Result<(), AppError> {
     if let Some(entry) = read_store(store).into_iter().find(|entry| entry.id == id) {
         // Validate the whole plan before deleting anything, without following
         // linked parents or trusting paths outside this repository's library.
@@ -239,8 +246,9 @@ fn discard_in(store: &Path, id: &str) -> Result<(), String> {
             .collect::<Result<Vec<_>, _>>()?;
         for path in destinations {
             for part in resume::staged_parts(&path) {
-                std::fs::remove_file(&part)
-                    .map_err(|error| format!("cannot remove a staged download: {error}"))?;
+                std::fs::remove_file(&part).map_err(|error| {
+                    io_error(&error, format!("cannot remove a staged download: {error}"))
+                })?;
             }
         }
     }
@@ -271,7 +279,7 @@ pub(super) fn forget(id: &str) {
 
 /// Remove an interrupted download's staged bytes and its entry. Files that
 /// already finished stay where they are, like any other downloaded model.
-pub fn discard(id: &str) -> Result<(), String> {
+pub fn discard(id: &str) -> Result<(), AppError> {
     discard_in(&default_store()?, id)
 }
 
@@ -332,6 +340,7 @@ mod tests {
             super::super::download_revision(Some(""), std::future::ready(Ok(latest)))
                 .await
                 .unwrap_err()
+                .message
                 .contains("staged bytes were retained")
         );
         assert_eq!(list_in(&store).len(), 1);
@@ -363,6 +372,7 @@ mod tests {
         remember_in(&store, entry.clone()).unwrap();
         assert!(discard_in(&store, &entry.id)
             .unwrap_err()
+            .message
             .contains("escapes its repository"));
         assert_eq!(std::fs::read(user_part).unwrap(), b"user");
         assert_eq!(list_in(&store).len(), 1);

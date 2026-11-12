@@ -1,4 +1,5 @@
 //! Cancellation belongs to one media preparation, including a queued command.
+use crate::error::AppError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,29 +22,29 @@ pub(crate) struct MediaJob {
     pub cancel: Arc<AtomicBool>,
 }
 
-fn validate(id: &str) -> Result<(), String> {
+fn validate(id: &str) -> Result<(), AppError> {
     if id.is_empty()
         || id.len() > 128
         || !id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
     {
-        return Err("invalid media operation identifier".into());
+        return Err(AppError::validation("invalid media operation identifier"));
     }
     Ok(())
 }
 
 impl MediaJobs {
-    pub(crate) fn begin(self: &Arc<Self>, id: String) -> Result<MediaJob, String> {
+    pub(crate) fn begin(self: &Arc<Self>, id: String) -> Result<MediaJob, AppError> {
         validate(&id)?;
         let mut jobs = self
             .0
             .lock()
-            .map_err(|_| "media operation lock was poisoned")?;
+            .map_err(|_| AppError::internal("media operation lock was poisoned"))?;
         if jobs.active.contains_key(&id) || jobs.active.len() >= 8 {
-            return Err(
-                "media operation is already active or too many preparations are running".into(),
-            );
+            return Err(AppError::busy(
+                "media operation is already active or too many preparations are running",
+            ));
         }
         let cancel = Arc::new(AtomicBool::new(jobs.cancelled.remove(&id)));
         jobs.order.retain(|entry| entry != &id);
@@ -55,12 +56,12 @@ impl MediaJobs {
         })
     }
 
-    pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
+    pub(crate) fn cancel(&self, id: &str) -> Result<(), AppError> {
         validate(id)?;
         let mut jobs = self
             .0
             .lock()
-            .map_err(|_| "media operation lock was poisoned")?;
+            .map_err(|_| AppError::internal("media operation lock was poisoned"))?;
         if let Some(cancel) = jobs.active.get(id) {
             cancel.store(true, Ordering::Release);
         } else if jobs.cancelled.insert(id.to_owned()) {
@@ -95,6 +96,7 @@ impl Drop for MediaJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorKind;
 
     #[test]
     fn stopping_a_queued_preparation_does_not_cancel_another_attachment() {
@@ -104,7 +106,12 @@ mod tests {
         let other = jobs.begin("other".into()).unwrap();
         assert!(queued.cancel.load(Ordering::Acquire));
         assert!(!other.cancel.load(Ordering::Acquire));
-        assert!(jobs.begin("other".into()).is_err());
+        let error = jobs.begin("other".into()).err().unwrap();
+        assert_eq!(error.kind, ErrorKind::Busy);
+        assert_eq!(
+            error.message,
+            "media operation is already active or too many preparations are running"
+        );
         drop(queued);
         assert!(!jobs
             .begin("queued".into())
@@ -117,5 +124,16 @@ mod tests {
             jobs.cancel(&format!("past-{index}")).unwrap();
         }
         assert_eq!(jobs.0.lock().unwrap().cancelled.len(), 128);
+    }
+
+    #[test]
+    fn invalid_operation_ids_are_validation_errors() {
+        let jobs = Arc::new(MediaJobs::default());
+        let error = jobs.begin("../invalid".into()).err().unwrap();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "invalid media operation identifier");
+        let error = jobs.cancel("").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "invalid media operation identifier");
     }
 }

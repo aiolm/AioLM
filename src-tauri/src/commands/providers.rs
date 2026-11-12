@@ -1,18 +1,20 @@
 //! Provider-neutral discovery and installation IPC.
 use crate::{
     config,
+    error::AppError,
     providers::{self, artifacts::ModelArtifact, compat::ModelCompatibility, ProviderId},
     state::AppState,
 };
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, LazyLock, Mutex},
 };
 use tauri::{Emitter, State};
 
-fn provider(value: &str) -> Result<ProviderId, String> {
-    ProviderId::parse(value).ok_or_else(|| format!("unknown runtime provider: {value}"))
+fn provider(value: &str) -> Result<ProviderId, AppError> {
+    ProviderId::parse(value)
+        .ok_or_else(|| AppError::validation(format!("unknown runtime provider: {value}")))
 }
 
 #[tauri::command]
@@ -27,36 +29,40 @@ pub(crate) fn provider_catalog() -> serde_json::Value {
 }
 
 #[tauri::command]
-pub(crate) async fn provider_runtimes() -> Result<Vec<providers::RuntimeInstance>, String> {
+pub(crate) async fn provider_runtimes() -> Result<Vec<providers::RuntimeInstance>, AppError> {
     tokio::task::spawn_blocking(providers::list_runtime_instances)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
 pub(crate) fn provider_runtime_options(
     provider_id: String,
     runtime_id: String,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<serde_json::Value>, AppError> {
     let provider = provider(&provider_id)?;
     if provider.is_custom() {
         let manifest = providers::registry::manifest(provider, &runtime_id)?;
         return manifest
             .options
             .iter()
-            .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+            .map(|option| {
+                serde_json::to_value(option).map_err(|e| AppError::internal(e.to_string()))
+            })
             .collect();
     }
     if provider == ProviderId::Llama || runtime_id.is_empty() {
         return providers::options::schema(provider)
             .iter()
-            .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+            .map(|option| {
+                serde_json::to_value(option).map_err(|e| AppError::internal(e.to_string()))
+            })
             .collect();
     }
     let runtime = providers::python_env::read(provider, &runtime_id)?;
     providers::launch::option_schema(&runtime)
         .iter()
-        .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+        .map(|option| serde_json::to_value(option).map_err(|e| AppError::internal(e.to_string())))
         .collect()
 }
 
@@ -65,11 +71,13 @@ pub(crate) async fn provider_register(
     state: State<'_, AppState>,
     provider_id: String,
     python: String,
-) -> Result<providers::python_env::PythonRuntimeManifest, String> {
+) -> Result<providers::python_env::PythonRuntimeManifest, AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err("stop model sessions before changing runtimes".into());
+        return Err(AppError::busy(
+            "stop model sessions before changing runtimes",
+        ));
     }
     providers::python_env::register_external(provider(&provider_id)?, Path::new(&python)).await
 }
@@ -80,12 +88,14 @@ pub(crate) async fn provider_install(
     app: tauri::AppHandle,
     provider_id: String,
     python: Option<String>,
-) -> Result<providers::python_env::PythonRuntimeManifest, String> {
+) -> Result<providers::python_env::PythonRuntimeManifest, AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
-            return Err("stop model sessions before changing runtimes".into());
+            return Err(AppError::busy(
+                "stop model sessions before changing runtimes",
+            ));
         }
     }
     state.runtime_cancel.store(false, Ordering::Release);
@@ -106,11 +116,13 @@ pub(crate) async fn provider_remove(
     state: State<'_, AppState>,
     provider_id: String,
     runtime_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err("stop model sessions before removing runtimes".into());
+        return Err(AppError::busy(
+            "stop model sessions before removing runtimes",
+        ));
     }
     let selected = provider(&provider_id)?;
     if selected.is_custom() {
@@ -133,17 +145,21 @@ pub(crate) async fn provider_portable_export(
     app: tauri::AppHandle,
     provider_id: String,
     runtime_id: String,
-) -> Result<providers::portable::PortableExportInfo, String> {
+) -> Result<providers::portable::PortableExportInfo, AppError> {
     let provider = provider(&provider_id)?;
     if !provider.is_python() {
-        return Err("only Python runtimes have portable bundles".into());
+        return Err(AppError::validation(
+            "only Python runtimes have portable bundles",
+        ));
     }
     providers::python_env::validate_id(&runtime_id)?;
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
-            return Err("stop model sessions before exporting a runtime".into());
+            return Err(AppError::busy(
+                "stop model sessions before exporting a runtime",
+            ));
         }
     }
     // The full health, freeze and provenance checks run inside
@@ -158,8 +174,8 @@ pub(crate) async fn provider_portable_export(
             .save_file()
     })
     .await
-    .map_err(|error| format!("portable export picker failed: {error}"))?
-    .ok_or_else(|| "portable runtime export cancelled".to_string())?;
+    .map_err(|error| AppError::internal(format!("portable export picker failed: {error}")))?
+    .ok_or_else(|| AppError::cancelled("portable runtime export cancelled"))?;
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
     let progress_app = app.clone();
@@ -197,12 +213,14 @@ pub(crate) async fn provider_portable_export(
 pub(crate) async fn provider_portable_import(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<providers::python_env::PythonRuntimeManifest, String> {
+) -> Result<providers::python_env::PythonRuntimeManifest, AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = super::runtimes::runtime_change_gate(&state).await;
         if super::runtimes::runtime_resources_in_use(&state)? {
-            return Err("stop model sessions before importing a runtime".into());
+            return Err(AppError::busy(
+                "stop model sessions before importing a runtime",
+            ));
         }
     }
     let path = tokio::task::spawn_blocking(|| {
@@ -212,8 +230,8 @@ pub(crate) async fn provider_portable_import(
             .pick_file()
     })
     .await
-    .map_err(|error| format!("portable import picker failed: {error}"))?
-    .ok_or_else(|| "portable runtime import cancelled".to_string())?;
+    .map_err(|error| AppError::internal(format!("portable import picker failed: {error}")))?
+    .ok_or_else(|| AppError::cancelled("portable runtime import cancelled"))?;
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
     providers::portable::import_bundle(&path, cancel, move |progress| {
@@ -223,7 +241,7 @@ pub(crate) async fn provider_portable_import(
 }
 
 #[tauri::command]
-pub(crate) async fn model_artifact(path: String) -> Result<ModelArtifact, String> {
+pub(crate) async fn model_artifact(path: String) -> Result<ModelArtifact, AppError> {
     tokio::task::spawn_blocking(move || {
         if let Some(artifact) = providers::registry::registered_models()
             .into_iter()
@@ -234,7 +252,7 @@ pub(crate) async fn model_artifact(path: String) -> Result<ModelArtifact, String
         providers::execution::inspect(Path::new(&path))
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(AppError::from)?
 }
 
 #[derive(serde::Serialize)]
@@ -263,7 +281,7 @@ pub fn inspect_catalog(
     root: &str,
     cancel: &std::sync::atomic::AtomicBool,
     selection: Option<(ProviderId, String)>,
-) -> Result<ModelCatalog, String> {
+) -> Result<ModelCatalog, AppError> {
     inspect_catalog_view(root, cancel, selection, true)
 }
 
@@ -287,9 +305,9 @@ fn inspect_catalog_view(
     cancel: &std::sync::atomic::AtomicBool,
     selection: Option<(ProviderId, String)>,
     include_library: bool,
-) -> Result<ModelCatalog, String> {
+) -> Result<ModelCatalog, AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err("model scan cancelled".into());
+        return Err(AppError::cancelled("model scan cancelled"));
     }
     let selected_bindings = selection
         .as_ref()
@@ -343,7 +361,7 @@ fn inspect_catalog_view(
     let mut truncated = scan.truncated;
     while let Some((dir, depth)) = pending.pop() {
         if cancel.load(Ordering::Acquire) {
-            return Err("model scan cancelled".into());
+            return Err(AppError::cancelled("model scan cancelled"));
         }
         if providers::artifacts::is_snapshot_dir(&dir) {
             artifacts.push(providers::artifacts::inspect_snapshot(&dir));
@@ -436,10 +454,80 @@ fn inspect_catalog_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_and_provider_errors_preserve_source_kinds() {
+        assert_eq!(
+            provider("unknown").unwrap_err().kind,
+            crate::error::ErrorKind::Validation
+        );
+        let error = inspect_catalog("", &std::sync::atomic::AtomicBool::new(true), None)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "model scan cancelled");
+    }
     use crate::models::{GgufModel, ModelScan, ModelShards};
 
     #[test]
-    fn entrypoint_partial_errors_are_opt_in_and_keep_ordinary_string_errors() {
+    fn adapter_registration_requires_approval_without_a_canonical_picker_grant() {
+        let area =
+            std::env::temp_dir().join(format!("aiolm-adapter-approval-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&area).unwrap();
+        let source = area.join("manifest.json");
+        let probe = area.join("not-executed-probe");
+        let launch = area.join("not-executed-server");
+        let manifest = serde_json::json!({
+            "schema_version":1,"adapter_version":1,
+            "engine_id":"custom.approval","runtime_id":"local",
+            "display_name":"Synthetic approval engine",
+            "platforms":[{"os":"windows","arch":"x86_64"}],
+            "protocol":"openai-v1",
+            "probe":{"program":probe,"args":["--model","{model}","--options","{options_json}","line\nbreak"]},
+            "launch":{"program":launch,"args":["--model","{model}","--port","{port}"]},
+            "model_formats":["unknown"],"health_path":"/health"
+        });
+        std::fs::write(&source, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let grants = Mutex::new(HashSet::new());
+        let (loaded, prompt) = adapter_registration_request(&source, &grants).unwrap();
+        let prompt = prompt.expect("typed paths require native approval");
+        let canonical = std::fs::canonicalize(&source).unwrap();
+        assert!(prompt.contains(canonical.to_str().unwrap()));
+        assert!(prompt.contains(
+            &serde_json::to_string(&serde_json::json!([
+                probe,
+                "--model",
+                "",
+                "--options",
+                "{}",
+                "line\nbreak"
+            ]))
+            .unwrap()
+        ));
+        assert!(prompt.contains(
+            &serde_json::to_string(&serde_json::json!([
+                launch, "--model", "{model}", "--port", "{port}"
+            ]))
+            .unwrap()
+        ));
+        grants.lock().unwrap().insert(canonical);
+        let alias = area.join(".").join("manifest.json");
+        let (granted, prompt) = adapter_registration_request(&alias, &grants).unwrap();
+        assert!(prompt.is_none());
+        assert_eq!(granted, loaded);
+        let other = area.join("other.json");
+        std::fs::write(&other, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(adapter_registration_request(&other, &grants)
+            .unwrap()
+            .1
+            .is_some());
+        assert!(!probe.exists());
+        assert!(!launch.exists());
+        std::fs::remove_dir_all(area).unwrap();
+    }
+
+    #[test]
+    fn entrypoint_partial_errors_are_opt_in_and_keep_typed_ordinary_errors() {
         use providers::runtime_schema::EntrypointRegistration;
         let manifest: providers::registry::RuntimeManifest = serde_json::from_value(serde_json::json!({
             "schema_version":1,"adapter_version":1,"engine_id":"custom.wire","runtime_id":"local",
@@ -452,12 +540,12 @@ mod tests {
         let pending = || EntrypointRegistration::HelpPending {
             manifest: manifest.clone(),
             fingerprint: "a".repeat(64),
-            cause: cause.clone(),
+            cause: AppError::internal(cause.clone()),
         };
         assert_eq!(
             serde_json::to_value(entrypoint_registration_result(pending(), false).unwrap_err())
                 .unwrap(),
-            serde_json::json!(cause)
+            serde_json::json!({"kind":"internal","message":cause})
         );
         assert_eq!(
             serde_json::to_value(entrypoint_registration_result(pending(), true).unwrap_err())
@@ -478,7 +566,7 @@ mod tests {
         let ordinary = EntrypointRegisterError::from("probe failed before publication".to_string());
         assert_eq!(
             serde_json::to_value(ordinary).unwrap(),
-            "probe failed before publication"
+            serde_json::json!({"kind":"internal","message":"probe failed before publication"})
         );
     }
 
@@ -643,7 +731,7 @@ pub(crate) async fn list_model_artifacts(
     provider_id: Option<String>,
     runtime_id: Option<String>,
     include_library: Option<bool>,
-) -> Result<ModelCatalog, String> {
+) -> Result<ModelCatalog, AppError> {
     let selection = provider_id
         .map(|value| provider(&value))
         .transpose()?
@@ -672,20 +760,20 @@ pub(crate) async fn list_model_artifacts(
         }
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(AppError::from)?
 }
 
 #[tauri::command]
 pub(crate) async fn model_compatibility(
     cfg: config::AppConfig,
-) -> Result<ModelCompatibility, String> {
-    cfg.validate()?;
+) -> Result<ModelCompatibility, AppError> {
+    cfg.validate().map_err(AppError::validation)?;
     if providers::provider_of(&cfg).is_custom() {
         providers::registry::refresh(&cfg, None).await?;
     }
     tokio::task::spawn_blocking(move || providers::execution::compatibility(&cfg))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(AppError::from)?
 }
 
 #[tauri::command]
@@ -693,23 +781,24 @@ pub(crate) fn provider_import_command(
     provider_id: String,
     command: String,
     syntax: Option<providers::options::CommandSyntax>,
-) -> Result<providers::options::ImportedCommand, String> {
+) -> Result<providers::options::ImportedCommand, AppError> {
     providers::options::import_command_with_syntax(
         provider(&provider_id)?,
         &command,
         syntax.unwrap_or_default(),
     )
+    .map_err(AppError::validation)
 }
 
 #[tauri::command]
-pub(crate) fn provider_command_preview(cfg: config::AppConfig) -> Result<Vec<String>, String> {
+pub(crate) fn provider_command_preview(cfg: config::AppConfig) -> Result<Vec<String>, AppError> {
     providers::command_preview(&cfg)
 }
 
 #[tauri::command]
 pub(crate) fn provider_option_issues(
     cfg: config::AppConfig,
-) -> Result<Vec<providers::options::OptionIssue>, String> {
+) -> Result<Vec<providers::options::OptionIssue>, AppError> {
     let selected = providers::provider_of(&cfg);
     let options = providers::launch::provider_options(&cfg, selected);
     if selected == ProviderId::Llama {
@@ -736,32 +825,76 @@ pub(crate) fn provider_option_issues(
     ))
 }
 
+static RUNTIME_ADAPTER_GRANTS: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
+
+fn adapter_registration_request(
+    source: &Path,
+    grants: &Mutex<HashSet<PathBuf>>,
+) -> Result<(providers::registry::RuntimeManifest, Option<String>), AppError> {
+    let source = std::fs::canonicalize(source).map_err(|e| AppError::from_io(&e))?;
+    let granted = grants
+        .lock()
+        .map_err(|_| "runtime adapter picker grant lock was poisoned")?
+        .contains(&source);
+    let manifest = providers::registry::load_manifest(&source)?;
+    let confirmation = if granted {
+        None
+    } else {
+        Some(providers::registry::registration_confirmation(
+            &source, &manifest,
+        )?)
+    };
+    Ok((manifest, confirmation))
+}
+
 /// Register a user-selected process adapter without installing or deleting its
 /// executable/environment. The existing operation lock protects live sessions.
 #[tauri::command]
 pub(crate) async fn runtime_adapter_register(
     state: State<'_, AppState>,
     manifest_path: String,
-) -> Result<providers::registry::RuntimeManifest, String> {
+) -> Result<providers::registry::RuntimeManifest, AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err("stop model sessions before registering a runtime".into());
+        return Err(AppError::busy(
+            "stop model sessions before registering a runtime",
+        ));
     }
     state.runtime_cancel.store(false, Ordering::Release);
-    providers::registry::register(
-        Path::new(&manifest_path),
-        Some(state.runtime_cancel.clone()),
-    )
+    let (manifest, confirmation) = tokio::task::spawn_blocking(move || {
+        adapter_registration_request(Path::new(&manifest_path), &RUNTIME_ADAPTER_GRANTS)
+    })
     .await
+    .map_err(AppError::from)??;
+    if let Some(description) = confirmation {
+        let approved = tokio::select! {
+            biased;
+            _ = async {
+                loop {
+                    if state.runtime_cancel.load(Ordering::Acquire) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            } => return Err(AppError::cancelled("runtime probe cancelled")),
+            approved = crate::native_confirm::confirm("Register external runtime", &description) => approved?,
+        };
+        if !approved {
+            return Err(AppError::denied(
+                "runtime adapter registration was not approved",
+            ));
+        }
+    }
+    providers::registry::register_manifest(manifest, Some(state.runtime_cancel.clone())).await
 }
 
-/// Ordinary failures keep their legacy JSON string. Only an opted-in caller
-/// receives structured evidence of a known post-publication help-write failure.
+/// Ordinary failures carry typed errors. Opted-in callers also receive
+/// structured evidence of a known post-publication help-write failure.
 #[derive(Debug, serde::Serialize)]
 #[serde(untagged)]
 pub(crate) enum EntrypointRegisterError {
-    Message(String),
+    Message(AppError),
     HelpPending(Box<EntrypointHelpPending>),
 }
 
@@ -777,7 +910,13 @@ pub(crate) struct EntrypointHelpPending {
 
 impl From<String> for EntrypointRegisterError {
     fn from(message: String) -> Self {
-        Self::Message(message)
+        Self::Message(AppError::from(message))
+    }
+}
+
+impl From<AppError> for EntrypointRegisterError {
+    fn from(error: AppError) -> Self {
+        Self::Message(error)
     }
 }
 
@@ -801,7 +940,7 @@ fn entrypoint_registration_result(
                         engine_id: manifest.engine_id,
                         runtime_id: manifest.runtime_id,
                         fingerprint,
-                        cause,
+                        cause: cause.message,
                     },
                 )))
             } else {
@@ -824,9 +963,9 @@ pub(crate) async fn runtime_entrypoint_register(
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     let _operation = super::runtimes::runtime_change_gate(&state).await;
     if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err(EntrypointRegisterError::Message(
-            "stop model sessions before registering a runtime".into(),
-        ));
+        return Err(EntrypointRegisterError::Message(AppError::busy(
+            "stop model sessions before registering a runtime",
+        )));
     }
     state.runtime_cancel.store(false, Ordering::Release);
     if resume_help.unwrap_or(false) {
@@ -834,8 +973,8 @@ pub(crate) async fn runtime_entrypoint_register(
             providers::runtime_schema::resume_entrypoint_help(&providers::registry::root(), &draft)
         })
         .await
-        .map_err(|error| EntrypointRegisterError::Message(error.to_string()))?
-        .map_err(EntrypointRegisterError::Message);
+        .map_err(|error| EntrypointRegisterError::Message(AppError::from(error)))?
+        .map_err(EntrypointRegisterError::from);
     }
     let outcome = providers::runtime_schema::register_entrypoint_outcome(
         &providers::registry::root(),
@@ -849,21 +988,34 @@ pub(crate) async fn runtime_entrypoint_register(
 /// Pick an executable, script or file (`file`) or a working directory
 /// (`folder`) with the native dialog. Nothing is read or run here.
 #[tauri::command]
-pub(crate) async fn pick_runtime_path(kind: String) -> Result<Option<String>, String> {
+pub(crate) async fn pick_runtime_path(kind: String) -> Result<Option<String>, AppError> {
     let dialog = rfd::AsyncFileDialog::new();
     let picked = match kind.as_str() {
         "file" => dialog.pick_file().await,
         "folder" => dialog.pick_folder().await,
-        _ => return Err("unknown picker kind".into()),
+        _ => return Err(AppError::validation("unknown picker kind")),
     };
     Ok(picked.map(|item| item.path().to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
-pub(crate) async fn pick_runtime_adapter() -> Result<Option<String>, String> {
+pub(crate) async fn pick_runtime_adapter() -> Result<Option<String>, AppError> {
     let file = rfd::AsyncFileDialog::new()
         .add_filter("Runtime manifest", &["json"])
         .pick_file()
         .await;
-    Ok(file.map(|file| file.path().to_string_lossy().into_owned()))
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let selected = file.path().to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let canonical = std::fs::canonicalize(selected).map_err(|e| AppError::from_io(&e))?;
+        RUNTIME_ADAPTER_GRANTS
+            .lock()
+            .map_err(|_| "runtime adapter picker grant lock was poisoned")?
+            .insert(canonical.clone());
+        Ok(Some(canonical.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(AppError::from)?
 }

@@ -5,6 +5,7 @@
 //! instead of as base64 inside the JSON. The frontend owns the conversation
 //! format and its limits; this store moves images in and out of files, keeps
 //! every write atomic, and never deletes a file it cannot read.
+use crate::error::AppError;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -35,8 +36,17 @@ const PRODUCTION_SAVE_LIMITS: SaveLimits = SaveLimits {
     image_bytes: MAX_IMAGE_BYTES,
 };
 
-pub(crate) fn root() -> Result<PathBuf, String> {
-    crate::home::resolve_aiolm_home().map(|home| home.join("conversations"))
+pub(crate) fn root() -> Result<PathBuf, AppError> {
+    let configured = std::env::var_os("AIOLM_HOME").filter(|value| !value.is_empty());
+    crate::home::resolve_aiolm_home()
+        .map(|home| home.join("conversations"))
+        .map_err(|message| {
+            if configured.is_some_and(|path| !Path::new(&path).is_absolute()) {
+                AppError::validation(message)
+            } else {
+                AppError::unavailable(message)
+            }
+        })
 }
 
 #[derive(Serialize)]
@@ -76,7 +86,7 @@ fn lock() -> MutexGuard<'static, ()> {
 
 /// Every conversation folder that can be read. A folder that cannot be read is
 /// reported and left as it is, so a damaged or newer file is never replaced.
-pub(crate) fn load(root: &Path) -> Result<Loaded, String> {
+pub(crate) fn load(root: &Path) -> Result<Loaded, AppError> {
     let _guard = lock();
     let mut loaded = Loaded {
         threads: Vec::new(),
@@ -85,10 +95,16 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, String> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(loaded),
-        Err(error) => return Err(format!("cannot read {}: {error}", root.display())),
+        Err(error) => {
+            return Err(AppError::io(
+                &format!("cannot read {}", root.display()),
+                &error,
+            ))
+        }
     };
     for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read {}: {error}", root.display()))?;
+        let entry = entry
+            .map_err(|error| AppError::io(&format!("cannot read {}", root.display()), &error))?;
         // `file_type` does not follow links, so a linked folder is skipped.
         if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
@@ -111,38 +127,42 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, String> {
     Ok(loaded)
 }
 
-fn read_thread(folder: &Path) -> Result<Option<StoredThread>, String> {
+fn read_thread(folder: &Path) -> Result<Option<StoredThread>, AppError> {
     let bytes = match read_bounded(&folder.join(THREAD_FILE), MAX_THREAD_BYTES) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(read_error(error)),
     };
     let mut thread: StoredThread = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("not a conversation file: {error}"))?;
+        .map_err(|error| AppError::validation(format!("not a conversation file: {error}")))?;
     if thread.version > FORMAT_VERSION {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "written by a newer AioLM (format {})",
             thread.version
-        ));
+        )));
     }
     restore_images(&mut thread.messages, folder)?;
     Ok(Some(thread))
 }
 
-pub(crate) fn save(root: &Path, thread: Value) -> Result<(), String> {
+pub(crate) fn save(root: &Path, thread: Value) -> Result<(), AppError> {
     let _guard = lock();
     save_unlocked(root, thread)
 }
 
-fn save_unlocked(root: &Path, thread: Value) -> Result<(), String> {
+fn save_unlocked(root: &Path, thread: Value) -> Result<(), AppError> {
     save_unlocked_with_limits(root, thread, PRODUCTION_SAVE_LIMITS)
 }
 
-fn save_unlocked_with_limits(root: &Path, thread: Value, limits: SaveLimits) -> Result<(), String> {
-    let mut thread: StoredThread =
-        serde_json::from_value(thread).map_err(|error| format!("invalid conversation: {error}"))?;
+fn save_unlocked_with_limits(
+    root: &Path,
+    thread: Value,
+    limits: SaveLimits,
+) -> Result<(), AppError> {
+    let mut thread: StoredThread = serde_json::from_value(thread)
+        .map_err(|error| AppError::validation(format!("invalid conversation: {error}")))?;
     if thread.id.is_empty() {
-        return Err("a conversation needs an id".into());
+        return Err(AppError::validation("a conversation needs an id"));
     }
     thread.version = FORMAT_VERSION;
     let folder = root.join(folder_name(&thread.id));
@@ -177,7 +197,7 @@ fn save_unlocked_with_limits(root: &Path, thread: Value, limits: SaveLimits) -> 
 
 /// Writes conversations that are not stored yet and leaves every stored one
 /// alone, so bringing over an earlier copy never overwrites newer data.
-pub(crate) fn import(root: &Path, threads: Vec<Value>) -> Result<usize, String> {
+pub(crate) fn import(root: &Path, threads: Vec<Value>) -> Result<usize, AppError> {
     let _guard = lock();
     import_unlocked_with_limits(root, threads, PRODUCTION_SAVE_LIMITS)
 }
@@ -186,13 +206,13 @@ fn import_unlocked_with_limits(
     root: &Path,
     threads: Vec<Value>,
     limits: SaveLimits,
-) -> Result<usize, String> {
+) -> Result<usize, AppError> {
     let mut imported = 0;
     for thread in threads {
         let id = thread
             .get("id")
             .and_then(Value::as_str)
-            .ok_or("a conversation needs an id")?
+            .ok_or_else(|| AppError::validation("a conversation needs an id"))?
             .to_owned();
         if root.join(folder_name(&id)).join(THREAD_FILE).exists() {
             continue;
@@ -203,35 +223,43 @@ fn import_unlocked_with_limits(
     Ok(imported)
 }
 
-pub(crate) fn delete(root: &Path, id: &str) -> Result<(), String> {
+pub(crate) fn delete(root: &Path, id: &str) -> Result<(), AppError> {
     let _guard = lock();
     let folder = root.join(folder_name(id));
     match read_thread(&folder)? {
         Some(thread) if thread.id == id => remove_folder(&folder),
-        Some(_) => Err("cannot delete a conversation whose id does not match".into()),
+        Some(_) => Err(AppError::validation(
+            "cannot delete a conversation whose id does not match",
+        )),
         None => match fs::symlink_metadata(&folder) {
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("cannot read {}: {error}", folder.display())),
-            Ok(_) => Err(format!(
+            Err(error) => Err(AppError::io(
+                &format!("cannot read {}", folder.display()),
+                &error,
+            )),
+            Ok(_) => Err(AppError::not_found(format!(
                 "cannot delete {}: no conversation file",
                 folder.display()
-            )),
+            ))),
         },
     }
 }
 
 /// Removes every conversation, including folders that could not be read.
-pub(crate) fn clear(root: &Path) -> Result<(), String> {
+pub(crate) fn clear(root: &Path) -> Result<(), AppError> {
     let _guard = lock();
     remove_folder(root)
 }
 
-fn remove_folder(folder: &Path) -> Result<(), String> {
+fn remove_folder(folder: &Path) -> Result<(), AppError> {
     // `remove_dir_all` removes a link itself, never what it points to.
     match fs::remove_dir_all(folder) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot delete {}: {error}", folder.display())),
+        Err(error) => Err(AppError::io(
+            &format!("cannot delete {}", folder.display()),
+            &error,
+        )),
     }
 }
 
@@ -270,7 +298,7 @@ fn store_images(
     kept: &mut HashSet<String>,
     max_image_bytes: u64,
     created: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     for image in messages.iter_mut().flat_map(images_mut) {
         let Some(object) = image.as_object_mut() else {
             continue;
@@ -309,14 +337,14 @@ fn rollback_new_attachments(created: &[PathBuf]) {
     }
 }
 
-fn serialize_thread(thread: &StoredThread, max_bytes: u64) -> Result<Vec<u8>, String> {
+fn serialize_thread(thread: &StoredThread, max_bytes: u64) -> Result<Vec<u8>, AppError> {
     let mut writer = BoundedWriter::new(max_bytes);
     match serde_json::to_writer_pretty(&mut writer, thread) {
         Ok(()) => Ok(writer.bytes),
-        Err(_error) if writer.exceeded => {
-            Err(format!("serialized conversation exceeds {max_bytes} bytes"))
-        }
-        Err(error) => Err(error.to_string()),
+        Err(_error) if writer.exceeded => Err(AppError::validation(format!(
+            "serialized conversation exceeds {max_bytes} bytes"
+        ))),
+        Err(error) => Err(AppError::internal(error.to_string())),
     }
 }
 
@@ -359,7 +387,7 @@ impl Write for BoundedWriter {
     }
 }
 
-fn restore_images(messages: &mut [Value], folder: &Path) -> Result<(), String> {
+fn restore_images(messages: &mut [Value], folder: &Path) -> Result<(), AppError> {
     for image in messages.iter_mut().flat_map(images_mut) {
         let Some(object) = image.as_object_mut() else {
             continue;
@@ -367,18 +395,28 @@ fn restore_images(messages: &mut [Value], folder: &Path) -> Result<(), String> {
         let Some(file) = object.get("file") else {
             continue;
         };
-        let file = file
-            .as_str()
-            .ok_or("a stored conversation image has an invalid attachment path")?;
-        let name = attachment_name(file)
-            .ok_or_else(|| format!("invalid conversation image attachment path: {file}"))?;
+        let file = file.as_str().ok_or_else(|| {
+            AppError::validation("a stored conversation image has an invalid attachment path")
+        })?;
+        let name = attachment_name(file).ok_or_else(|| {
+            AppError::validation(format!(
+                "invalid conversation image attachment path: {file}"
+            ))
+        })?;
         let media_type = object
             .get("mediaType")
             .and_then(Value::as_str)
             .filter(|value| valid_media_type(value))
-            .ok_or_else(|| format!("invalid media type for conversation image {file}"))?;
-        let bytes = read_bounded(&folder.join(ATTACHMENTS).join(name), MAX_IMAGE_BYTES)
-            .map_err(|error| format!("cannot read conversation image {file}: {error}"))?;
+            .ok_or_else(|| {
+                AppError::validation(format!("invalid media type for conversation image {file}"))
+            })?;
+        let bytes = read_bounded(&folder.join(ATTACHMENTS).join(name), MAX_IMAGE_BYTES).map_err(
+            |error| {
+                let mut error = read_error(error);
+                error.message = format!("cannot read conversation image {file}: {error}");
+                error
+            },
+        )?;
         let data_url = format!("data:{media_type};base64,{}", STANDARD.encode(bytes));
         object.remove("file");
         object.remove("mediaType");
@@ -395,7 +433,7 @@ fn images_mut(message: &mut Value) -> impl Iterator<Item = &mut Value> {
         .flatten()
 }
 
-fn decode_data_url(value: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>, String> {
+fn decode_data_url(value: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>, AppError> {
     let Some((media_type, payload)) = value
         .strip_prefix("data:")
         .and_then(|value| value.split_once(";base64,"))
@@ -410,14 +448,18 @@ fn decode_data_url(value: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8
         return Ok(None);
     };
     if decoded_len > max_bytes {
-        return Err(format!("conversation image exceeds {max_bytes} bytes"));
+        return Err(AppError::validation(format!(
+            "conversation image exceeds {max_bytes} bytes"
+        )));
     }
     let bytes = match STANDARD.decode(payload) {
         Ok(bytes) => bytes,
         Err(_) => return Ok(None),
     };
     if bytes.len() as u64 > max_bytes {
-        return Err(format!("conversation image exceeds {max_bytes} bytes"));
+        return Err(AppError::validation(format!(
+            "conversation image exceeds {max_bytes} bytes"
+        )));
     }
     Ok((!bytes.is_empty()).then_some((media_type, bytes)))
 }
@@ -527,12 +569,23 @@ fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(std::io::Error::other(format!(
-            "{} is larger than {limit} bytes",
-            path.display()
-        )));
+        return Err(std::io::Error::new(
+            ErrorKind::FileTooLarge,
+            format!("{} is larger than {limit} bytes", path.display()),
+        ));
     }
     Ok(bytes)
+}
+
+/// Bounded readers report oversized on-disk content as `FileTooLarge`; retain
+/// the original I/O message while distinguishing it from missing attachments.
+fn read_error(error: std::io::Error) -> AppError {
+    use crate::error::ErrorKind as Kind;
+    let kind = match error.kind() {
+        ErrorKind::InvalidData | ErrorKind::FileTooLarge => Kind::Validation,
+        _ => AppError::io_kind(&error),
+    };
+    AppError::new(kind, error.to_string())
 }
 
 #[cfg(test)]
@@ -574,7 +627,7 @@ mod tests {
         }
     }
 
-    fn save_with_limits(root: &Path, thread: Value, limits: SaveLimits) -> Result<(), String> {
+    fn save_with_limits(root: &Path, thread: Value, limits: SaveLimits) -> Result<(), AppError> {
         let _guard = lock();
         save_unlocked_with_limits(root, thread, limits)
     }
@@ -583,9 +636,30 @@ mod tests {
         root: &Path,
         threads: Vec<Value>,
         limits: SaveLimits,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AppError> {
         let _guard = lock();
         import_unlocked_with_limits(root, threads, limits)
+    }
+
+    #[test]
+    fn invalid_conversations_and_missing_conversation_files_have_distinct_kinds() {
+        let root = fixture();
+        let error = save(&root, json!({"id": ""})).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(error.message, "a conversation needs an id");
+        let error = import(&root, vec![json!({})]).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(error.message, "a conversation needs an id");
+
+        let folder = root.join("unfinished");
+        fs::create_dir(&folder).unwrap();
+        let error = delete(&root, "unfinished").unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::NotFound);
+        assert_eq!(
+            error.message,
+            format!("cannot delete {}: no conversation file", folder.display())
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -656,7 +730,8 @@ mod tests {
         assert!(loaded.warnings[0].contains(photo_file));
         assert!(read_thread(&folder).is_err());
         let error = delete(&root, "thread-1").unwrap_err();
-        assert!(error.contains(photo_file));
+        assert_eq!(error.kind, crate::error::ErrorKind::NotFound);
+        assert!(error.message.contains(photo_file));
         for thread in loaded.threads {
             save(&root, thread).unwrap();
         }
@@ -759,7 +834,11 @@ mod tests {
         assert!(loaded.warnings[0].contains(file));
         assert!(loaded.warnings[0].contains(&format!("larger than {MAX_IMAGE_BYTES} bytes")));
         assert!(read_thread(&folder).is_err());
-        assert!(delete(&root, "thread-1").is_err());
+        let error = delete(&root, "thread-1").unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error
+            .message
+            .contains(&format!("larger than {MAX_IMAGE_BYTES} bytes")));
         assert_eq!(fs::read(&thread_path).unwrap(), original_json);
         assert_eq!(
             fs::metadata(&image_path).unwrap().len(),
@@ -985,7 +1064,8 @@ mod tests {
             limits,
         )
         .unwrap_err();
-        assert!(error.contains("conversation image exceeds 3 bytes"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("conversation image exceeds 3 bytes"));
         assert_eq!(fs::read(&thread_path).unwrap(), old_thread);
         assert_eq!(fs::read(old_image_path).unwrap(), b"old");
         assert_eq!(
@@ -1076,7 +1156,8 @@ mod tests {
             test_limits(candidate_bytes.len() as u64 - 1, 4),
         )
         .unwrap_err();
-        assert!(error.contains("serialized conversation exceeds"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("serialized conversation exceeds"));
         assert_eq!(fs::read(&thread_path).unwrap(), old_thread);
         assert_eq!(fs::read(old_image_path).unwrap(), b"old");
         assert!(!candidate_image_path.exists());
@@ -1105,7 +1186,8 @@ mod tests {
             test_limits(16 * 1024, 3),
         );
         let error = result.unwrap_err();
-        assert!(error.contains("conversation image exceeds 3 bytes"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("conversation image exceeds 3 bytes"));
         assert!(!root.join("rejected-import").exists());
         assert!(load(&root).unwrap().threads.is_empty());
         fs::remove_dir_all(root).unwrap();

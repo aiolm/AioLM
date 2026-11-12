@@ -1,4 +1,6 @@
 //! Submit generic desktop alerts without claiming that the OS displayed them.
+//! Transport deadlines, submission gates and platform failures remain typed.
+use crate::error::AppError;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct NotificationOptions {
@@ -10,7 +12,7 @@ pub(crate) struct NotificationOptions {
 pub(crate) async fn send_desktop_notification(
     app: tauri::AppHandle,
     options: NotificationOptions,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     #[cfg(target_os = "linux")]
     {
         use tauri::Manager;
@@ -26,6 +28,6 @@ pub(crate) async fn send_desktop_notification(
             .title(options.title)
             .body(options.body)
             .show()
-            .map_err(|error| error.to_string())
+            .map_err(|error| AppError::unavailable(error.to_string()))
     }
 }

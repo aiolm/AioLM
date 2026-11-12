@@ -1,6 +1,7 @@
 //! Real private-bus lifetime checks; these do not stand in for OS rendering.
 
 use super::*;
+use crate::error::ErrorKind;
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -155,7 +156,8 @@ async fn acquisition_deadline_cancels_an_unresponsive_owned_peer() {
             () = &mut hold_peer => unreachable!(),
         }
     };
-    assert!(error.contains("timed out"));
+    assert_eq!(error.kind, ErrorKind::Timeout);
+    assert_eq!(error.message, "Desktop notification service timed out");
     drop(listener);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -225,14 +227,17 @@ async fn uncertain_timeout_keeps_the_sender_and_does_not_replay() {
         })
         .await
         .unwrap();
-        assert!(service
-            .submit("sample", "generic body")
-            .await
-            .unwrap_err()
-            .contains("already"));
+        let error = service.submit("sample", "generic body").await.unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Busy);
+        assert_eq!(
+            error.message,
+            "A desktop notification is already being submitted"
+        );
     };
     let (result, ()) = tokio::join!(request, concurrent);
-    assert!(result.unwrap_err().contains("timed out"));
+    let error = result.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Timeout);
+    assert_eq!(error.message, "Desktop notification service timed out");
     assert!(!client.is_closed());
     tokio::time::timeout(OPERATION_TIMEOUT, async {
         while !finished.load(Ordering::SeqCst) {
@@ -269,5 +274,28 @@ fn only_a_nonzero_uint_reply_confirms_submission() {
         .unwrap()
         .build(&"wrong type")
         .unwrap();
-    assert!(accepted_id(wrong).is_err());
+    let error = accepted_id(wrong).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Unavailable);
+    assert_eq!(
+        error.message,
+        "Desktop notification service returned an invalid reply"
+    );
+}
+
+#[tokio::test]
+async fn transport_failure_is_unavailable_and_submission_gate_is_busy() {
+    let error = bounded(async { Err::<(), _>(zbus::Error::Failure("offline".into())) })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Unavailable);
+    assert_eq!(error.message, "Desktop notification service is unavailable");
+
+    let service = NotificationService::default();
+    let _guard = service.connection.lock().await;
+    let error = service.submit("sample", "generic body").await.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Busy);
+    assert_eq!(
+        error.message,
+        "A desktop notification is already being submitted"
+    );
 }

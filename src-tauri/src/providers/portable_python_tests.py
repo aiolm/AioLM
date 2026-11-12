@@ -4,6 +4,7 @@ import csv
 import contextlib
 import hashlib
 import importlib.metadata as metadata
+import importlib.util
 import io
 import json
 import pathlib
@@ -55,13 +56,18 @@ class VirtualBytes(bytes):
 
 class PortablePythonTests(unittest.TestCase):
     def execute(self, script, argv, **patches):
-        source = (ROOT / "portable_source_probe.py").read_text() + "\n" + (ROOT / script).read_text()
+        helper_spec = importlib.util.spec_from_file_location("portable_source_probe", ROOT / "portable_source_probe.py")
+        helper = importlib.util.module_from_spec(helper_spec)
+        helper_spec.loader.exec_module(helper)
+        spec = importlib.util.spec_from_file_location(pathlib.Path(script).stem, ROOT / script)
+        probe = importlib.util.module_from_spec(spec)
+        probe.portable_source_commit = helper.portable_source_commit
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", [script] + argv))
             for name, value in patches.items():
                 stack.enter_context(patch.object(metadata, name, value))
             output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-            exec(compile(source, script, "exec"), {})
+            spec.loader.exec_module(probe)
             return output.getvalue()
 
     def execute_recording(self, dist, destination, read_bytes=None):

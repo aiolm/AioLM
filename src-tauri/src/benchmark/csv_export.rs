@@ -5,6 +5,7 @@
 //! the user picks the destination in a native dialog. The frontend never
 //! supplies a path, only a file name that pre-fills the dialog and can still be
 //! changed there.
+use crate::error::AppError;
 use std::path::{Path, PathBuf};
 
 pub(crate) const DEFAULT_FILE_NAME: &str = "aiolm-benchmarks.csv";
@@ -61,7 +62,7 @@ const UTF8_BOM: &str = "\u{feff}";
 pub(crate) fn save(
     contents: &str,
     choose_path: impl FnOnce() -> Option<PathBuf>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     save_bytes(&encode(contents), "CSV", choose_path)
 }
 
@@ -71,7 +72,7 @@ pub(crate) fn save(
 pub(crate) fn save_xlsx(
     contents: &[u8],
     choose_path: impl FnOnce() -> Option<PathBuf>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     save_bytes(contents, "XLSX", choose_path)
 }
 
@@ -79,7 +80,7 @@ fn save_bytes(
     bytes: &[u8],
     format: &str,
     choose_path: impl FnOnce() -> Option<PathBuf>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     let Some(path) = choose_path() else {
         return Ok(false);
     };
@@ -97,11 +98,14 @@ fn encode(contents: &str) -> Vec<u8> {
     bytes
 }
 
-fn write(path: &Path, bytes: &[u8], format: &str) -> Result<(), String> {
+fn write(path: &Path, bytes: &[u8], format: &str) -> Result<(), AppError> {
     crate::config::atomic_write(path, bytes).map_err(|error| {
-        format!(
-            "The benchmark {format} could not be saved to {}: {error}",
-            path.display()
+        AppError::new(
+            error.kind,
+            format!(
+                "The benchmark {format} could not be saved to {}: {error}",
+                path.display()
+            ),
         )
     })
 }
@@ -241,8 +245,8 @@ mod tests {
 
         let error = save("a,b\r\n", || Some(target.clone())).unwrap_err();
 
-        assert!(error.contains("could not be saved"), "{error}");
-        assert!(error.contains(DEFAULT_FILE_NAME), "{error}");
+        assert!(error.message.contains("could not be saved"), "{error}");
+        assert!(error.message.contains(DEFAULT_FILE_NAME), "{error}");
         assert!(target.is_dir());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(&root).unwrap();
@@ -296,8 +300,8 @@ mod tests {
 
         let error = save_xlsx(XLSX_BYTES, || Some(target.clone())).unwrap_err();
 
-        assert!(error.contains("XLSX could not be saved"), "{error}");
-        assert!(error.contains(DEFAULT_XLSX_FILE_NAME), "{error}");
+        assert!(error.message.contains("XLSX could not be saved"), "{error}");
+        assert!(error.message.contains(DEFAULT_XLSX_FILE_NAME), "{error}");
         assert!(target.is_dir());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(&root).unwrap();

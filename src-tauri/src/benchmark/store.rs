@@ -6,6 +6,7 @@ mod receipts;
 pub(crate) use deletions::delete;
 pub(crate) use receipts::{acknowledge, Acknowledgement, UploadReceipt};
 
+use crate::error::AppError;
 use crate::performance_bench::{PerformanceBenchRequest, PerformanceBenchResult};
 use locks::{RunLock, StoreLock};
 use serde::{Deserialize, Serialize};
@@ -288,24 +289,24 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
+fn files(root: &Path) -> Result<Vec<PathBuf>, AppError> {
     let mut paths = files_unsorted(root)?;
     paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
     Ok(paths)
 }
 
-fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, String> {
+fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, AppError> {
     let entries = match fs::read_dir(root.join("runs")) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(error) => return Err(format!("cannot read benchmark history: {error}")),
+        Err(error) => return Err(AppError::io("cannot read benchmark history", &error)),
     };
     let mut paths = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = entry.map_err(|error| AppError::from_io(&error))?;
         if !entry
             .file_type()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| AppError::from_io(&error))?
             .is_file()
         {
             continue;
@@ -415,7 +416,7 @@ fn record_digest(record: &Value) -> String {
     )
 }
 
-fn existing_digests(root: &Path) -> Result<HashSet<String>, String> {
+fn existing_digests(root: &Path) -> Result<HashSet<String>, AppError> {
     Ok(files_unsorted(root)?
         .into_iter()
         .filter_map(|path| {
@@ -475,15 +476,19 @@ fn path_for(
     root: &Path,
     record: &Value,
     existing: &HashSet<String>,
-) -> Result<Option<PathBuf>, String> {
-    path_for_validated(root, validated::RecordRef::check(record)?, existing)
+) -> Result<Option<PathBuf>, AppError> {
+    path_for_validated(
+        root,
+        validated::RecordRef::check(record).map_err(AppError::validation)?,
+        existing,
+    )
 }
 
 fn path_for_validated(
     root: &Path,
     record: validated::RecordRef<'_>,
     existing: &HashSet<String>,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<PathBuf>, AppError> {
     let record = record.value();
     let digest = record_digest(record);
     let id = record["id"].as_str().expect("validated id");
@@ -530,17 +535,18 @@ impl Drop for RunJournal {
 }
 
 impl RunJournal {
-    pub(crate) fn begin(root: &Path, record: Value) -> Result<Self, String> {
+    pub(crate) fn begin(root: &Path, record: Value) -> Result<Self, AppError> {
         let _lock = StoreLock::acquire(root)?;
         let path = path_for(root, &record, &existing_digests(root)?)?
-            .ok_or("benchmark run id already exists")?;
+            .ok_or_else(|| AppError::validation("benchmark run id already exists"))?;
         let rows = record["result"]["rows"]
             .as_array()
             .expect("validated rows")
             .len();
         let run_id = record["id"].as_str().expect("validated id").to_owned();
-        let run_lock = RunLock::acquire(root, &run_id)?
-            .ok_or("benchmark run is active in another application instance")?;
+        let run_lock = RunLock::acquire(root, &run_id)?.ok_or_else(|| {
+            AppError::busy("benchmark run is active in another application instance")
+        })?;
         crate::config::atomic_write(
             &path,
             &encoded(&Entry::Start {
@@ -553,7 +559,7 @@ impl RunJournal {
             .append(true)
             .read(true)
             .open(&path)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         let activity_marker = locks::mark_active(root, &run_id)?;
         ACTIVE_RUNS
             .lock()
@@ -571,15 +577,15 @@ impl RunJournal {
         })
     }
 
-    pub(crate) fn checkpoint(&self, result: &PerformanceBenchResult) -> Result<(), String> {
+    pub(crate) fn checkpoint(&self, result: &PerformanceBenchResult) -> Result<(), AppError> {
         self.write(result, false)
     }
 
-    pub(crate) fn finish(&self, result: &PerformanceBenchResult) -> Result<(), String> {
+    pub(crate) fn finish(&self, result: &PerformanceBenchResult) -> Result<(), AppError> {
         self.write(result, true)
     }
 
-    fn write(&self, result: &PerformanceBenchResult, finish: bool) -> Result<(), String> {
+    fn write(&self, result: &PerformanceBenchResult, finish: bool) -> Result<(), AppError> {
         let mut writer = self
             .writer
             .lock()
@@ -606,10 +612,12 @@ impl RunJournal {
         let length = writer
             .file
             .metadata()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| AppError::from_io(&error))?
             .len();
         if length + bytes.len() as u64 > MAX_JOURNAL_BYTES {
-            return Err("benchmark journal exceeds the storage size limit".into());
+            return Err(AppError::validation(
+                "benchmark journal exceeds the storage size limit",
+            ));
         }
         if let Err(error) = writer
             .file
@@ -620,7 +628,7 @@ impl RunJournal {
             // look like a valid event. A crash still leaves only a torn tail.
             let _ = writer.file.set_len(length);
             let _ = writer.file.sync_all();
-            return Err(format!("cannot persist benchmark measurement: {error}"));
+            return Err(AppError::io("cannot persist benchmark measurement", &error));
         }
         writer.rows = result.rows.len();
         writer.prepared = true;
@@ -628,11 +636,11 @@ impl RunJournal {
     }
 }
 
-fn sync_parent(path: &Path) -> Result<(), String> {
+fn sync_parent(path: &Path) -> Result<(), AppError> {
     #[cfg(unix)]
     File::open(path.parent().ok_or("benchmark path has no directory")?)
         .and_then(|file| file.sync_all())
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
@@ -649,15 +657,17 @@ fn replay(path: &Path) -> Result<Value, String> {
     Ok(replay_run(path)?.record)
 }
 
-fn replay_run(path: &Path) -> Result<ReplayedRun, String> {
+fn replay_run(path: &Path) -> Result<ReplayedRun, AppError> {
     let mut bytes = Vec::new();
     File::open(path)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .take(MAX_JOURNAL_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.len() as u64 > MAX_JOURNAL_BYTES {
-        return Err("benchmark journal exceeds the storage size limit".into());
+        return Err(AppError::validation(
+            "benchmark journal exceeds the storage size limit",
+        ));
     }
     let mut record: Option<Value> = None;
     let mut finished = false;
@@ -668,17 +678,22 @@ fn replay_run(path: &Path) -> Result<ReplayedRun, String> {
             torn_tail = true;
             break;
         }
-        let entry: Entry = serde_json::from_slice(line)
-            .map_err(|error| format!("benchmark journal contains a corrupt event: {error}"))?;
+        let entry: Entry = serde_json::from_slice(line).map_err(|error| {
+            AppError::validation(format!(
+                "benchmark journal contains a corrupt event: {error}"
+            ))
+        })?;
         match entry {
             Entry::Start {
                 record: initial,
                 origin: source,
             } => {
                 if record.is_some() {
-                    return Err("benchmark journal contains duplicate start events".into());
+                    return Err(AppError::validation(
+                        "benchmark journal contains duplicate start events",
+                    ));
                 }
-                validate_record(&initial)?;
+                validate_record(&initial).map_err(AppError::validation)?;
                 record = Some(initial);
                 origin = source;
             }
@@ -694,26 +709,31 @@ fn replay_run(path: &Path) -> Result<ReplayedRun, String> {
                 } else {
                     valid_row(&row)
                 }) {
-                    return Err("benchmark journal contains an invalid trial".into());
+                    return Err(AppError::validation(
+                        "benchmark journal contains an invalid trial",
+                    ));
                 }
                 let rows = record
                     .as_mut()
                     .and_then(|value| value.pointer_mut("/result/rows"))
                     .and_then(Value::as_array_mut)
-                    .ok_or("benchmark trial is missing its start event")?;
+                    .ok_or_else(|| {
+                        AppError::validation("benchmark trial is missing its start event")
+                    })?;
                 rows.push(row);
             }
             Entry::Metadata { result } => {
                 finished = false;
-                update_result(&mut record, result)?;
+                update_result(&mut record, result).map_err(AppError::validation)?;
             }
             Entry::Finish { result } => {
-                update_result(&mut record, result)?;
+                update_result(&mut record, result).map_err(AppError::validation)?;
                 finished = true;
             }
         }
     }
-    let mut record = record.ok_or("benchmark journal has no complete start event")?;
+    let mut record = record
+        .ok_or_else(|| AppError::validation("benchmark journal has no complete start event"))?;
     if !finished {
         let has_rows = record["result"]["rows"]
             .as_array()
@@ -723,7 +743,7 @@ fn replay_run(path: &Path) -> Result<ReplayedRun, String> {
             "benchmark was interrupted before finalization; persisted measurements were recovered"
         );
     }
-    validate_record(&record)?;
+    validate_record(&record).map_err(AppError::validation)?;
     Ok(ReplayedRun {
         record,
         origin,
@@ -748,7 +768,7 @@ fn update_result(record: &mut Option<Value>, result: Value) -> Result<(), String
     Ok(())
 }
 
-pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPage, String> {
+pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPage, AppError> {
     let _lock = StoreLock::acquire(root)?;
     let (active_digests, mut warnings) = locks::active_digests(root)?;
     let deleted = deletions::deleted_digests(root)?;
@@ -803,8 +823,8 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
     })
 }
 
-pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> {
-    let records = validated::batch(records)?;
+pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, AppError> {
+    let records = validated::batch(records).map_err(AppError::validation)?;
     let _lock = StoreLock::acquire(root)?;
     let mut imported = 0;
     let mut existing = existing_digests(root)?;
@@ -853,7 +873,7 @@ mod tests {
         let capped = parent.join("capped");
         assert_eq!(
             import(&capped, vec![Value::Null; 101]).unwrap_err(),
-            "import at most 100 benchmark records at a time"
+            AppError::validation("import at most 100 benchmark records at a time")
         );
         assert!(!capped.exists());
 
@@ -862,7 +882,7 @@ mod tests {
         invalid["request"]["generation_length"] = json!(0);
         assert_eq!(
             import(&rejected, vec![invalid, Value::Null]).unwrap_err(),
-            "generation length must be 1 to 4096 and repetitions 1 to 10"
+            AppError::validation("generation length must be 1 to 4096 and repetitions 1 to 10")
         );
         assert!(!rejected.exists());
 
@@ -886,7 +906,7 @@ mod tests {
         let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
         assert_eq!(
             import(&empty, vec![]).unwrap_err(),
-            format!("cannot read benchmark history: {io_error}")
+            AppError::internal(format!("cannot read benchmark history: {io_error}"))
         );
         assert_eq!(fs::read(&blocker).unwrap(), b"preserved scan blocker");
         // Remove only files this test requested; unexpected residue must survive.
@@ -931,7 +951,7 @@ mod tests {
         );
         assert_eq!(
             import(&destination, vec![oversized.clone()]).unwrap_err(),
-            "benchmark record exceeds the storage size limit"
+            AppError::validation("benchmark record exceeds the storage size limit")
         );
         assert!(!destination.exists());
 
@@ -957,7 +977,7 @@ mod tests {
 
         assert_eq!(
             import(&destination, vec![oversized]).unwrap_err(),
-            "benchmark record exceeds the storage size limit"
+            AppError::validation("benchmark record exceeds the storage size limit")
         );
         assert_eq!(fs::read(&journal).unwrap(), bytes);
         fs::remove_file(journal).unwrap();
@@ -993,7 +1013,7 @@ mod tests {
         };
         assert_eq!(
             native_error,
-            format!("cannot read benchmark history: {io_error}")
+            AppError::internal(format!("cannot read benchmark history: {io_error}"))
         );
         assert!(native.join(".store.lock").is_file());
         assert_eq!(fs::read(&blocker).unwrap(), b"native scan blocker");
@@ -1230,7 +1250,7 @@ mod tests {
         invalid["request"]["generation_length"] = json!(0);
         assert_eq!(
             import(&destination, vec![first, invalid]).unwrap_err(),
-            "generation length must be 1 to 4096 and repetitions 1 to 10"
+            AppError::validation("generation length must be 1 to 4096 and repetitions 1 to 10")
         );
         assert!(!destination.exists());
         fs::remove_dir(parent).unwrap();
@@ -1314,22 +1334,22 @@ mod tests {
         );
         assert_eq!(
             import(&root, vec![malformed.clone()]).unwrap_err(),
-            expected
+            AppError::validation(expected.clone())
         );
         assert_eq!(
             import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
-            expected_provenance
+            AppError::validation(expected_provenance.clone())
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
         delete(&root, "retained-id").unwrap();
         assert_eq!(import(&root, vec![valid]).unwrap(), 0);
         assert_eq!(
             import(&root, vec![malformed.clone()]).unwrap_err(),
-            expected
+            AppError::validation(expected.clone())
         );
         assert_eq!(
             import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
-            expected_provenance
+            AppError::validation(expected_provenance.clone())
         );
         assert!(files(&root).unwrap().is_empty());
         // Fresh ids make native validation independent of duplicate/tombstone rejection.
@@ -1347,7 +1367,7 @@ mod tests {
                 }
                 Err(error) => error,
             };
-            assert_eq!(native_error, expected);
+            assert_eq!(native_error, AppError::validation(expected));
             assert!(files(&root).unwrap().is_empty());
         }
         fs::remove_dir_all(root).unwrap();

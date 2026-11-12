@@ -192,6 +192,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     assert!(
         runtime_schema::draft_acceptance(&root, &typo, &typo_manifest)
             .unwrap_err()
+            .message
             .contains("--modle")
     );
     // A draft whose engine changed after discovery is refused.
@@ -203,6 +204,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     assert!(
         runtime_schema::draft_acceptance(&root, &moved, &moved_manifest)
             .unwrap_err()
+            .message
             .contains("changed")
     );
 
@@ -282,11 +284,13 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         }
     )
     .unwrap_err()
+    .message
     .contains("entry point"));
     // Editing the declared script is detected before anything runs.
     fs::write(&script, b"synthetic entry script v2").unwrap();
     assert!(providers::registry::command(&cfg, port, "synthetic-key")
         .unwrap_err()
+        .message
         .contains("changed"));
 }
 // Characterize the original split-publication outcome before choosing a recovery policy.
@@ -346,7 +350,7 @@ async fn observe_post_registration_help_pin_failure(
     let first_error = runtime_schema::register_entrypoint(root, &fault_draft, None)
         .await
         .unwrap_err();
-    assert!(!first_error.is_empty());
+    assert!(!first_error.message.is_empty());
     assert!(accepted_path.is_dir());
     assert!(registration_path.is_file());
     assert_eq!(fs::read(&probe_marker).unwrap(), b"probed");
@@ -364,13 +368,16 @@ async fn observe_post_registration_help_pin_failure(
     let accepted_error =
         runtime_schema::load_accepted(root, entry.engine_id.as_str(), runtime).unwrap_err();
     assert!(
-        accepted_error.contains("bounded regular file"),
+        accepted_error.message.contains("bounded regular file"),
         "{accepted_error}"
     );
     let retry_error = runtime_schema::register_entrypoint(root, &fault_draft, None)
         .await
         .unwrap_err();
-    assert!(retry_error.contains("already registered"), "{retry_error}");
+    assert!(
+        retry_error.message.contains("already registered"),
+        "{retry_error}"
+    );
     assert_eq!(fs::read(&registration_path).unwrap(), registration_bytes);
     // Remove only this empty synthetic fault directory, preserving the published build.
     fs::remove_dir(&accepted_path).unwrap();
@@ -1027,14 +1034,22 @@ fn reviewed_binding_arity_before_registration() {
     // expected rejection can fail; incidental setup is not a policy RED.
     for row in rows.iter().filter(|row| row["reject"] == true) {
         let label = row["label"].as_str().unwrap();
-        let message = row["acceptance_error"].as_str().unwrap_or_default();
+        assert_eq!(
+            row["acceptance_error"]["kind"], "validation",
+            "{label}: {row:#}"
+        );
+        let message = row["acceptance_error"]["message"].as_str().unwrap();
         assert!(
             message.contains("binding")
                 && message.contains("one value")
                 && message.contains("discovered help"),
             "{label}: intended rejection absent {row:#}"
         );
-        let message = row["registration_error"].as_str().unwrap_or_default();
+        assert_eq!(
+            row["registration_error"]["kind"], "validation",
+            "{label}: {row:#}"
+        );
+        let message = row["registration_error"]["message"].as_str().unwrap();
         assert!(
             message.contains("binding")
                 && message.contains("one value")

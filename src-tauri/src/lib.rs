@@ -11,12 +11,14 @@ mod conversations;
 #[cfg(target_os = "linux")]
 mod desktop_notifications;
 mod discover;
+pub mod error;
 mod gateway;
 pub mod gguf;
 pub mod gpu;
 pub mod hardware;
 mod hardware_memory;
 pub mod home;
+mod http_policy;
 mod inference_args;
 mod launch_jobs;
 #[cfg(any(target_os = "macos", test))]
@@ -25,6 +27,7 @@ mod launch_validation;
 mod mcp;
 pub mod media;
 pub mod models;
+mod native_confirm;
 pub mod performance_bench;
 pub mod performance_memory;
 mod personalization;
@@ -49,6 +52,7 @@ pub use commands::models::{deletable_model_path, delete_owned_snapshot};
 pub use commands::providers::inspect_catalog as scan_model_catalog;
 pub use config::AppConfig;
 pub use launch_validation::validate_launch_config;
+pub use procutil::OwnedChild;
 pub use server::ErrBuf;
 
 use state::AppState;
@@ -112,26 +116,30 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     commands::gateway::abort_gateway_now(state);
     // Bench/model children are already covered by the process-owner registry.
     // Recover poisoned state locks so credentials/readers are still released.
-    {
+    let mut child = {
         let mut server = state.server.lock().unwrap_or_else(|e| e.into_inner());
         server.cancel_launch();
-        server::kill(&mut server.child, Some(state.err.clone()));
         server.lifecycle = server::Lifecycle::Stopped;
         server.api_key.clear();
         server.redaction_secret.clear();
-    }
+        server.child.take()
+    };
+    server::kill(&mut child, Some(state.err.clone()));
+    server::wait_teardowns_blocking(&state.server);
     // Every additional session started alongside the default one is its own
     // untracked-by-the-OS process tree; nothing else in the app kills these
     // once the window is gone.
     for entry in state.sessions.entries() {
-        {
+        let mut child = {
             let mut server = entry.state.lock().unwrap_or_else(|e| e.into_inner());
             server.cancel_launch();
-            server::kill(&mut server.child, Some(entry.err.clone()));
             server.lifecycle = server::Lifecycle::Stopped;
             server.api_key.clear();
             server.redaction_secret.clear();
-        }
+            server.child.take()
+        };
+        server::kill(&mut child, Some(entry.err.clone()));
+        server::wait_teardowns_blocking(&entry.state);
     }
 }
 

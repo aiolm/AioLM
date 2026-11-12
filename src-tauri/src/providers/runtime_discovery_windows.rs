@@ -116,7 +116,11 @@ fn process_metadata(pid: u32, current_user: &[u8]) -> Option<(Option<String>, St
 const MAX_TABLE_BYTES: usize = 4 * 1024 * 1024;
 const TABLE_ATTEMPTS: usize = 3;
 
-fn tcp_table(ipv6: bool, cancel: &AtomicBool, truncated: &mut bool) -> Result<Vec<u8>, String> {
+fn tcp_table(
+    ipv6: bool,
+    cancel: &AtomicBool,
+    truncated: &mut bool,
+) -> Result<Vec<u8>, crate::error::AppError> {
     let family = u32::from(if ipv6 { AF_INET6 } else { AF_INET });
     let mut size = 0;
     cancelled(cancel)?;
@@ -131,16 +135,22 @@ fn tcp_table(ipv6: bool, cancel: &AtomicBool, truncated: &mut bool) -> Result<Ve
         )
     };
     if status != ERROR_INSUFFICIENT_BUFFER && status != ERROR_SUCCESS {
-        return Err("The native Windows listener table is unavailable.".into());
+        return Err(crate::error::AppError::unavailable(
+            "The native Windows listener table is unavailable.",
+        ));
     }
     for _ in 0..TABLE_ATTEMPTS {
         cancelled(cancel)?;
         if size as usize > MAX_TABLE_BYTES {
             *truncated = true;
-            return Err("The native Windows listener table exceeds the discovery limit.".into());
+            return Err(crate::error::AppError::internal(
+                "The native Windows listener table exceeds the discovery limit.",
+            ));
         }
         if size < std::mem::size_of::<u32>() as u32 {
-            return Err("The native Windows listener table is incomplete.".into());
+            return Err(crate::error::AppError::internal(
+                "The native Windows listener table is incomplete.",
+            ));
         }
         let mut bytes = vec![0u8; size as usize];
         let status = unsafe {
@@ -158,12 +168,16 @@ fn tcp_table(ipv6: bool, cancel: &AtomicBool, truncated: &mut bool) -> Result<Ve
             continue;
         }
         if status != ERROR_SUCCESS || size as usize > bytes.len() {
-            return Err("The native Windows listener table is unavailable or incomplete.".into());
+            return Err(crate::error::AppError::unavailable(
+                "The native Windows listener table is unavailable or incomplete.",
+            ));
         }
         bytes.truncate(size as usize);
         return Ok(bytes);
     }
-    Err("The native Windows listener table changed repeatedly; find local servers again.".into())
+    Err(crate::error::AppError::unavailable(
+        "The native Windows listener table changed repeatedly; find local servers again.",
+    ))
 }
 
 fn listener(
@@ -184,7 +198,7 @@ fn table_listeners(
     bytes: &[u8],
     ipv6: bool,
     cancel: &AtomicBool,
-) -> Result<(Vec<(u32, LocalEndpoint)>, bool), String> {
+) -> Result<(Vec<(u32, LocalEndpoint)>, bool), crate::error::AppError> {
     cancelled(cancel)?;
     let (offset, row_size) = if ipv6 {
         (
@@ -201,19 +215,27 @@ fn table_listeners(
         || bytes.len() < offset
         || bytes.len() > MAX_TABLE_BYTES
     {
-        return Err("The native Windows listener table has an invalid size.".into());
+        return Err(crate::error::AppError::internal(
+            "The native Windows listener table has an invalid size.",
+        ));
     }
     let count = u32::from_ne_bytes(
         bytes[..4]
             .try_into()
-            .map_err(|_| "The listener count is incomplete.")?,
+            .map_err(|_| crate::error::AppError::internal("The listener count is incomplete."))?,
     ) as usize;
     let required = count
         .checked_mul(row_size)
         .and_then(|length| length.checked_add(offset))
-        .ok_or("The native Windows listener count exceeds its limits.")?;
+        .ok_or_else(|| {
+            crate::error::AppError::internal(
+                "The native Windows listener count exceeds its limits.",
+            )
+        })?;
     if required > bytes.len() {
-        return Err("The native Windows listener table has incomplete rows.".into());
+        return Err(crate::error::AppError::internal(
+            "The native Windows listener table has incomplete rows.",
+        ));
     }
     let mut listeners = Vec::new();
     for index in 0..count.min(MAX_ENTRIES) {
@@ -251,7 +273,10 @@ fn table_listeners(
     Ok((listeners, count > MAX_ENTRIES))
 }
 
-pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
+pub(super) fn discover(
+    report: &mut DiscoveryReport,
+    cancel: &AtomicBool,
+) -> Result<(), crate::error::AppError> {
     cancelled(cancel)?;
     let Some(current_user) = user_token(unsafe { GetCurrentProcess() }) else {
         report
@@ -272,7 +297,7 @@ pub(super) fn discover(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Res
             }
             Err(message) => {
                 cancelled(cancel)?;
-                report.warnings.push(message);
+                report.warnings.push(message.message);
             }
         }
     }
@@ -410,6 +435,7 @@ mod tests {
         assert!(table_listeners(&short, false, &cancel).is_err());
         assert!(table_listeners(&bytes, false, &AtomicBool::new(true))
             .unwrap_err()
+            .message
             .contains("cancelled"));
     }
 

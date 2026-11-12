@@ -12,6 +12,7 @@
 //! are selected. Timestamps come from ffmpeg's decoded presentation times,
 //! relative to the first frame; they are never inferred from output filenames.
 
+use crate::error::{AppError, ErrorKind};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -77,27 +78,29 @@ pub fn ffmpeg_frame_args(
 
 /// Resolve `reference` through the app-owned store check. Thin wrapper so
 /// preprocessors share the exact ownership validation as chat attachments.
-pub fn resolve_owned_video(reference: &str) -> Result<PathBuf, String> {
+pub fn resolve_owned_video(reference: &str) -> Result<PathBuf, AppError> {
     super::owned_path(reference)
 }
 
 /// Validate one extracted frame before it is imported as an image part:
 /// it must be a nonempty regular file inside `temp_dir` with an image
 /// extension and within `MAX_FRAME_BYTES`.
-pub fn validate_frame_output(path: &Path, temp_dir: &Path) -> Result<u64, String> {
+pub fn validate_frame_output(path: &Path, temp_dir: &Path) -> Result<u64, AppError> {
     let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("sampled frame is missing: {error}"))?;
+        .map_err(|error| AppError::io("sampled frame is missing", &error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("sampled frame was replaced by a link".into());
+        return Err(AppError::validation("sampled frame was replaced by a link"));
     }
     let canonical = path
         .canonicalize()
-        .map_err(|error| format!("sampled frame is missing: {error}"))?;
-    let directory = temp_dir
-        .canonicalize()
-        .map_err(|error| format!("frame directory is unavailable: {error}"))?;
+        .map_err(|error| AppError::io("sampled frame is missing", &error))?;
+    let directory = temp_dir.canonicalize().map_err(|error| {
+        AppError::unavailable(format!("frame directory is unavailable: {error}"))
+    })?;
     if canonical.parent() != Some(directory.as_path()) {
-        return Err("sampled frame escaped its temporary directory".into());
+        return Err(AppError::validation(
+            "sampled frame escaped its temporary directory",
+        ));
     }
     let extension = canonical
         .extension()
@@ -105,18 +108,24 @@ pub fn validate_frame_output(path: &Path, temp_dir: &Path) -> Result<u64, String
         .unwrap_or_default()
         .to_ascii_lowercase();
     if !["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
-        return Err("sampled frame must be a png/jpg/webp image".into());
+        return Err(AppError::validation(
+            "sampled frame must be a png/jpg/webp image",
+        ));
     }
     let metadata = std::fs::symlink_metadata(&canonical)
-        .map_err(|error| format!("sampled frame is missing: {error}"))?;
+        .map_err(|error| AppError::io("sampled frame is missing", &error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("sampled frame was replaced by a link".into());
+        return Err(AppError::validation("sampled frame was replaced by a link"));
     }
     if metadata.len() == 0 || metadata.len() > MAX_FRAME_BYTES {
-        return Err("sampled frame must be nonempty and at most 10 MiB".into());
+        return Err(AppError::validation(
+            "sampled frame must be nonempty and at most 10 MiB",
+        ));
     }
     if metadata.len() > super::MAX_MEDIA_BYTES {
-        return Err("sampled frame exceeds the media store limit".into());
+        return Err(AppError::validation(
+            "sampled frame exceeds the media store limit",
+        ));
     }
     Ok(metadata.len())
 }
@@ -129,10 +138,11 @@ struct TempFrames {
 }
 
 impl TempFrames {
-    fn create(parent: &Path) -> Result<Self, String> {
+    fn create(parent: &Path) -> Result<Self, AppError> {
         let path = parent.join(format!("aiolm-frames-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&path)
-            .map_err(|error| format!("frame directory is unavailable: {error}"))?;
+        std::fs::create_dir_all(&path).map_err(|error| {
+            AppError::unavailable(format!("frame directory is unavailable: {error}"))
+        })?;
         Ok(Self { path })
     }
 }
@@ -147,28 +157,19 @@ impl Drop for TempFrames {
 /// shared orchestration below while tests script realistic stub children
 /// without a native binary or engine.
 trait FrameChild {
-    fn frame_timestamps(&self) -> Result<Vec<f64>, String>;
+    fn frame_timestamps(&self) -> Result<Vec<f64>, AppError>;
     /// `Ok(None)` while running, `Ok(Some(code))` when exited.
-    fn try_wait(&mut self) -> Result<Option<i32>, String>;
+    fn try_wait(&mut self) -> Result<Option<i32>, AppError>;
     /// Stop a cancelled or timed-out extraction.
-    fn kill(&mut self) -> Result<(), String>;
+    fn kill(&mut self) -> Result<(), AppError>;
     /// Reap the child after `kill` (stdio is null, so there are no pipes to
     /// drain; waiting reaps the zombie).
-    fn wait(&mut self) -> Result<i32, String>;
+    fn wait(&mut self) -> Result<i32, AppError>;
 }
 
-struct SystemChild(std::process::Child, PathBuf);
+struct SystemChild(crate::procutil::OwnedChild, PathBuf);
 
-impl Drop for SystemChild {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
-        }
-        let _ = self.0.wait();
-    }
-}
-
-fn parse_frame_timestamps(log: &str) -> Result<Vec<f64>, String> {
+fn parse_frame_timestamps(log: &str) -> Result<Vec<f64>, AppError> {
     let mut times = Vec::new();
     for line in log
         .lines()
@@ -183,10 +184,12 @@ fn parse_frame_timestamps(log: &str) -> Result<Vec<f64>, String> {
             .unwrap_or("");
         let time: f64 = value
             .parse()
-            .map_err(|_| "invalid sampled frame timestamp")?;
+            .map_err(|_| AppError::validation("invalid sampled frame timestamp"))?;
         if !time.is_finite() || time < 0.0 || times.last().is_some_and(|previous| time <= *previous)
         {
-            return Err("invalid sampled frame timestamp order".into());
+            return Err(AppError::validation(
+                "invalid sampled frame timestamp order",
+            ));
         }
         times.push(time);
         if times.len() == MAX_VIDEO_FRAMES {
@@ -197,34 +200,35 @@ fn parse_frame_timestamps(log: &str) -> Result<Vec<f64>, String> {
 }
 
 impl FrameChild for SystemChild {
-    fn frame_timestamps(&self) -> Result<Vec<f64>, String> {
-        let file = std::fs::File::open(&self.1).map_err(|error| error.to_string())?;
+    fn frame_timestamps(&self) -> Result<Vec<f64>, AppError> {
+        let file = std::fs::File::open(&self.1).map_err(|error| AppError::from_io(&error))?;
         let mut bytes = Vec::new();
         file.take(64 * 1024 + 1)
             .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         if bytes.len() > 64 * 1024 {
-            return Err("frame extraction diagnostics exceeded the size limit".into());
+            return Err(AppError::validation(
+                "frame extraction diagnostics exceeded the size limit",
+            ));
         }
         parse_frame_timestamps(&String::from_utf8_lossy(&bytes))
     }
-    fn try_wait(&mut self) -> Result<Option<i32>, String> {
+    fn try_wait(&mut self) -> Result<Option<i32>, AppError> {
         self.0
             .try_wait()
-            .map_err(|error| format!("frame extraction failed: {error}"))
+            .map_err(|error| AppError::io("frame extraction failed", &error))
             .map(|status| status.map(|status| status.code().unwrap_or(-1)))
     }
 
-    fn kill(&mut self) -> Result<(), String> {
-        self.0
-            .kill()
-            .map_err(|error| format!("frame extraction failed: {error}"))
+    fn kill(&mut self) -> Result<(), AppError> {
+        self.0.terminate();
+        Ok(())
     }
 
-    fn wait(&mut self) -> Result<i32, String> {
+    fn wait(&mut self) -> Result<i32, AppError> {
         self.0
             .wait()
-            .map_err(|error| format!("frame extraction failed: {error}"))
+            .map_err(|error| AppError::io("frame extraction failed", &error))
             .map(|status| status.code().unwrap_or(-1))
     }
 }
@@ -235,28 +239,38 @@ fn spawn_system_ffmpeg(
     input: &Path,
     output_pattern: &Path,
     max_frames: usize,
-) -> Result<Box<dyn FrameChild>, String> {
+) -> Result<Box<dyn FrameChild>, AppError> {
     let args = ffmpeg_frame_args(input, output_pattern, max_frames);
     let log = output_pattern
         .parent()
-        .ok_or("missing frame directory")?
+        .ok_or_else(|| AppError::validation("missing frame directory"))?
         .join("frame-times.log");
-    let diagnostics = std::fs::File::create(&log).map_err(|error| error.to_string())?;
-    let child = crate::procutil::std_command("ffmpeg")
+    let diagnostics = std::fs::File::create(&log).map_err(|error| AppError::from_io(&error))?;
+    let mut command = crate::procutil::std_command("ffmpeg");
+    command
         .args(&args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(diagnostics)
-        .spawn()
-        .map_err(|error| format!("video frame sampling needs a local ffmpeg binary ({error})"))?;
+        .stderr(diagnostics);
+    let child = crate::procutil::OwnedChild::spawn(&mut command).map_err(|error| {
+        let kind = if error.kind() == std::io::ErrorKind::NotFound {
+            ErrorKind::NotFound
+        } else {
+            ErrorKind::Unavailable
+        };
+        AppError::new(
+            kind,
+            format!("video frame sampling needs a local ffmpeg binary ({error})"),
+        )
+    })?;
     Ok(Box::new(SystemChild(child, log)))
 }
 
 /// Import one validated frame file into immutable owned image storage.
 /// Returns only the new image reference; the temporary path and any data
 /// URL are never persisted.
-fn import_frame_to_store(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+fn import_frame_to_store(path: &Path) -> Result<String, AppError> {
+    let file = std::fs::File::open(path).map_err(|error| AppError::from_io(&error))?;
     super::import_selected_reference(path, file)
 }
 
@@ -264,21 +278,21 @@ fn import_frame_to_store(path: &Path) -> Result<String, String> {
 /// injected so tests exercise the real lifecycle (validation, timeout and
 /// cancellation kills with reap, temp cleanup, source integrity, bounded
 /// import) against scripted stubs without touching the real media store.
-type FrameSpawner<'a> = dyn Fn(&Path, &Path, usize) -> Result<Box<dyn FrameChild>, String> + 'a;
+type FrameSpawner<'a> = dyn Fn(&Path, &Path, usize) -> Result<Box<dyn FrameChild>, AppError> + 'a;
 
 #[allow(clippy::too_many_arguments)]
 fn extract_inner(
     reference: &str,
     cancel: &AtomicBool,
-    resolve: &dyn Fn(&str) -> Result<PathBuf, String>,
+    resolve: &dyn Fn(&str) -> Result<PathBuf, AppError>,
     spawn: &FrameSpawner<'_>,
-    import_frame: &dyn Fn(&Path) -> Result<String, String>,
+    import_frame: &dyn Fn(&Path) -> Result<String, AppError>,
     timeout: Duration,
     temp_parent: &Path,
     max_frames: usize,
-) -> Result<VideoFrames, String> {
+) -> Result<VideoFrames, AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err("video frame extraction cancelled".into());
+        return Err(AppError::cancelled("video frame extraction cancelled"));
     }
     // Only owned immutable video references are accepted. `resolve` enforces
     // the `<64-hex>.<ext>` store shape, so URLs, absolute paths and
@@ -287,12 +301,14 @@ fn extract_inner(
     // Best-effort revalidation just before use: the store file must still be
     // a regular unlinked file and still decode as video.
     let metadata = std::fs::symlink_metadata(&source)
-        .map_err(|error| format!("attachment is missing: {error}"))?;
+        .map_err(|error| AppError::io("attachment is missing", &error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("owned media was replaced by a link".into());
+        return Err(AppError::validation("owned media was replaced by a link"));
     }
     if super::mime(&source).map(|(kind, _)| kind) != Some("video") {
-        return Err("select a video attachment for frame sampling".into());
+        return Err(AppError::validation(
+            "select a video attachment for frame sampling",
+        ));
     }
     // `owned_path` verifies the path, not the bytes: hash the source content
     // here so a swapped file cannot ride on a valid reference.
@@ -308,36 +324,41 @@ fn extract_inner(
             .and_then(|value| value.to_str())
             .unwrap_or("mp4")
     ));
-    let mut snapshot_file = std::fs::File::create(&snapshot).map_err(|error| error.to_string())?;
+    let mut snapshot_file =
+        std::fs::File::create(&snapshot).map_err(|error| AppError::from_io(&error))?;
     let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(&source).map_err(|error| error.to_string())?;
+    let mut file = std::fs::File::open(&source).map_err(|error| AppError::from_io(&error))?;
     let mut bounded = (&mut file).take(super::MAX_MEDIA_BYTES + 1);
     let mut checked: u64 = 0;
     let mut chunk = [0u8; 64 * 1024];
     loop {
         if cancel.load(Ordering::Acquire) {
-            return Err("video frame extraction cancelled".into());
+            return Err(AppError::cancelled("video frame extraction cancelled"));
         }
         let read = bounded
             .read(&mut chunk)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         if read == 0 {
             break;
         }
         checked += read as u64;
         snapshot_file
             .write_all(&chunk[..read])
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         hasher.update(&chunk[..read]);
     }
     if checked == 0 || checked > super::MAX_MEDIA_BYTES {
-        return Err("stored media must be nonempty and at most 64 MiB".into());
+        return Err(AppError::validation(
+            "stored media must be nonempty and at most 64 MiB",
+        ));
     }
     if format!("{:x}", hasher.finalize()) != expected.to_ascii_lowercase() {
-        return Err("stored video no longer matches its immutable reference".into());
+        return Err(AppError::validation(
+            "stored video no longer matches its immutable reference",
+        ));
     }
     if cancel.load(Ordering::Acquire) {
-        return Err("video frame extraction cancelled".into());
+        return Err(AppError::cancelled("video frame extraction cancelled"));
     }
     drop(snapshot_file);
     let pattern = temp.path.join("frame-%02d.jpg");
@@ -347,12 +368,12 @@ fn extract_inner(
         if cancel.load(Ordering::Acquire) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("video frame extraction cancelled".into());
+            return Err(AppError::cancelled("video frame extraction cancelled"));
         }
         if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("video frame extraction timed out".into());
+            return Err(AppError::timeout("video frame extraction timed out"));
         }
         match child.try_wait() {
             Err(error) => {
@@ -366,15 +387,17 @@ fn extract_inner(
     };
     if code != 0 {
         let _ = child.wait();
-        return Err(format!("video frame sampling failed (ffmpeg exit {code})"));
+        return Err(AppError::internal(format!(
+            "video frame sampling failed (ffmpeg exit {code})"
+        )));
     }
     if cancel.load(Ordering::Acquire) {
-        return Err("video frame extraction cancelled".into());
+        return Err(AppError::cancelled("video frame extraction cancelled"));
     }
     // Collect this extraction's outputs only, in sorted output order, capped
     // at the bound even if the binary emitted more.
     let mut produced: Vec<PathBuf> = std::fs::read_dir(&temp.path)
-        .map_err(|error| format!("frame directory is unavailable: {error}"))?
+        .map_err(|error| AppError::unavailable(format!("frame directory is unavailable: {error}")))?
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
@@ -389,17 +412,21 @@ fn extract_inner(
         .collect();
     produced.sort();
     if produced.is_empty() {
-        return Err("video frame sampling produced no frames".into());
+        return Err(AppError::internal(
+            "video frame sampling produced no frames",
+        ));
     }
     produced.truncate(max_frames.clamp(1, MAX_VIDEO_FRAMES));
     let timestamps = child.frame_timestamps()?;
     if timestamps.len() < produced.len() {
-        return Err("frame sampling did not report presentation timestamps".into());
+        return Err(AppError::validation(
+            "frame sampling did not report presentation timestamps",
+        ));
     }
     let mut frames = Vec::with_capacity(produced.len());
     for (index, path) in produced.iter().enumerate() {
         if cancel.load(Ordering::Acquire) {
-            return Err("video frame extraction cancelled".into());
+            return Err(AppError::cancelled("video frame extraction cancelled"));
         }
         validate_frame_output(path, &temp.path)?;
         let imported = import_frame(path)?;
@@ -422,9 +449,11 @@ pub async fn extract_video_frames(
     reference: &str,
     max_frames: usize,
     cancel: Arc<AtomicBool>,
-) -> Result<VideoFrames, String> {
+) -> Result<VideoFrames, AppError> {
     if !(1..=MAX_VIDEO_FRAMES).contains(&max_frames) {
-        return Err("request between one and four video frames".into());
+        return Err(AppError::validation(
+            "request between one and four video frames",
+        ));
     }
     let reference = reference.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -440,7 +469,7 @@ pub async fn extract_video_frames(
         )
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(AppError::from)?
 }
 
 #[cfg(test)]
@@ -481,7 +510,7 @@ mod tests {
     }
 
     impl FrameChild for StubChild {
-        fn frame_timestamps(&self) -> Result<Vec<f64>, String> {
+        fn frame_timestamps(&self) -> Result<Vec<f64>, AppError> {
             Ok(vec![
                 0.0,
                 FRAME_INTERVAL_SECS,
@@ -489,7 +518,7 @@ mod tests {
                 3.0 * FRAME_INTERVAL_SECS,
             ])
         }
-        fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        fn try_wait(&mut self) -> Result<Option<i32>, AppError> {
             self.polls += 1;
             if self.killed_child {
                 // A killed stub reaps immediately.
@@ -501,12 +530,12 @@ mod tests {
             }
         }
 
-        fn kill(&mut self) -> Result<(), String> {
+        fn kill(&mut self) -> Result<(), AppError> {
             self.killed_child = true;
             Ok(())
         }
 
-        fn wait(&mut self) -> Result<i32, String> {
+        fn wait(&mut self) -> Result<i32, AppError> {
             self.waited = true;
             Ok(if self.killed_child {
                 -9
@@ -556,22 +585,22 @@ mod tests {
             reference
         }
 
-        fn resolve(&self) -> impl Fn(&str) -> Result<PathBuf, String> + '_ {
+        fn resolve(&self) -> impl Fn(&str) -> Result<PathBuf, AppError> + '_ {
             |reference: &str| {
                 let Some((hash, extension)) = reference.split_once('.') else {
-                    return Err("invalid media reference".into());
+                    return Err(AppError::validation("invalid media reference"));
                 };
                 if hash.len() != 64
                     || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
                     || !["mp4", "webm", "mp3", "wav", "png", "jpg"].contains(&extension)
                 {
-                    return Err("invalid media reference".into());
+                    return Err(AppError::validation("invalid media reference"));
                 }
                 let path = self.root.join(reference);
                 let metadata = std::fs::symlink_metadata(&path)
-                    .map_err(|_| "attachment is missing".to_string())?;
+                    .map_err(|_| AppError::not_found("attachment is missing"))?;
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    return Err("owned media was replaced by a link".into());
+                    return Err(AppError::validation("owned media was replaced by a link"));
                 }
                 Ok(path)
             }
@@ -579,11 +608,13 @@ mod tests {
 
         /// Stub importer: validates the frame file, then mints an immutable
         /// `<content-sha>.jpg` reference without touching any real store.
-        fn import(&self) -> impl Fn(&Path) -> Result<String, String> + '_ {
+        fn import(&self) -> impl Fn(&Path) -> Result<String, AppError> + '_ {
             |path: &Path| {
-                let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+                let bytes = std::fs::read(path).map_err(|error| AppError::from_io(&error))?;
                 if bytes.is_empty() || bytes.len() as u64 > MAX_FRAME_BYTES {
-                    return Err("sampled frame must be nonempty and at most 10 MiB".into());
+                    return Err(AppError::validation(
+                        "sampled frame must be nonempty and at most 10 MiB",
+                    ));
                 }
                 Ok(format!("{:x}.jpg", Sha256::digest(&bytes)))
             }
@@ -603,7 +634,7 @@ mod tests {
         cancel: &AtomicBool,
         timeout: Duration,
         temp_parent: &Path,
-    ) -> Result<VideoFrames, String> {
+    ) -> Result<VideoFrames, AppError> {
         extract_inner(
             reference,
             cancel,
@@ -612,13 +643,15 @@ mod tests {
                 *stub.spawned.lock().unwrap() += 1;
                 // The stub honors the caller's output pattern directory and
                 // writes its scripted frame payloads there.
-                let directory = pattern.parent().ok_or("frame pattern has no directory")?;
+                let directory = pattern
+                    .parent()
+                    .ok_or_else(|| AppError::validation("frame pattern has no directory"))?;
                 for (index, payload) in stub.outputs.iter().enumerate() {
                     std::fs::write(
                         directory.join(format!("frame-{:02}.jpg", index + 1)),
                         payload,
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| AppError::from_io(&error))?;
                 }
                 if let Some(hook) = &stub.on_spawn {
                     hook();
@@ -628,7 +661,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .take()
-                    .ok_or("stub child consumed")?;
+                    .ok_or_else(|| AppError::internal("stub child consumed"))?;
                 Ok(Box::new(child) as Box<dyn FrameChild>)
             },
             &store.import(),
@@ -725,7 +758,8 @@ mod tests {
             MAX_VIDEO_FRAMES,
         )
         .unwrap_err();
-        assert!(error.contains("ffmpeg exit 1"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(error.message.contains("ffmpeg exit 1"), "{error}");
         assert_eq!(*imports.lock().unwrap(), 0);
         assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
         std::fs::remove_dir_all(&parent).unwrap();
@@ -752,7 +786,8 @@ mod tests {
             &parent,
         )
         .unwrap_err();
-        assert!(error.contains("timed out"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Timeout);
+        assert!(error.message.contains("timed out"), "{error}");
         assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
         std::fs::remove_dir_all(&parent).unwrap();
     }
@@ -767,7 +802,9 @@ mod tests {
             &AtomicBool::new(false),
             &store.resolve(),
             &|_input, _pattern, _max| {
-                Err("video frame sampling needs a local ffmpeg binary (not found)".into())
+                Err(AppError::not_found(
+                    "video frame sampling needs a local ffmpeg binary (not found)",
+                ))
             },
             &store.import(),
             Duration::from_secs(30),
@@ -775,7 +812,8 @@ mod tests {
             MAX_VIDEO_FRAMES,
         )
         .unwrap_err();
-        assert!(error.contains("ffmpeg"), "{error}");
+        assert_eq!(error.kind, ErrorKind::NotFound);
+        assert!(error.message.contains("ffmpeg"), "{error}");
         std::fs::remove_dir_all(&parent).unwrap();
     }
 
@@ -795,7 +833,8 @@ mod tests {
             &parent,
         )
         .unwrap_err();
-        assert!(error.contains("cancelled"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Cancelled);
+        assert!(error.message.contains("cancelled"), "{error}");
         assert_eq!(*stub.spawned.lock().unwrap(), 0);
         std::fs::remove_dir_all(&parent).unwrap();
     }
@@ -827,7 +866,8 @@ mod tests {
             )
             .unwrap_err()
         });
-        assert!(error.contains("cancelled"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Cancelled);
+        assert!(error.message.contains("cancelled"), "{error}");
         assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
         std::fs::remove_dir_all(&parent).unwrap();
     }
@@ -849,7 +889,8 @@ mod tests {
             &parent,
         )
         .unwrap_err();
-        assert!(error.contains("immutable reference"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert!(error.message.contains("immutable reference"), "{error}");
         assert_eq!(*stub.spawned.lock().unwrap(), 0);
         std::fs::remove_dir_all(&parent).unwrap();
     }
@@ -869,7 +910,8 @@ mod tests {
             &parent,
         )
         .unwrap_err();
-        assert!(error.contains("video"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert!(error.message.contains("video"), "{error}");
         let error = run_with(
             &store,
             &stub,
@@ -879,7 +921,20 @@ mod tests {
             &parent,
         )
         .unwrap_err();
-        assert!(error.contains("invalid media reference"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert!(error.message.contains("invalid media reference"), "{error}");
+        let missing = format!("{}.mp4", "a".repeat(64));
+        let error = run_with(
+            &store,
+            &stub,
+            &missing,
+            &AtomicBool::new(false),
+            Duration::from_secs(30),
+            &parent,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NotFound);
+        assert_eq!(error.message, "attachment is missing");
         assert_eq!(*stub.spawned.lock().unwrap(), 0);
         std::fs::remove_dir_all(&parent).unwrap();
     }
@@ -896,13 +951,15 @@ mod tests {
             &AtomicBool::new(false),
             &store.resolve(),
             &|_input, pattern, _max| {
-                let directory = pattern.parent().ok_or("frame pattern has no directory")?;
+                let directory = pattern
+                    .parent()
+                    .ok_or_else(|| AppError::validation("frame pattern has no directory"))?;
                 for (index, payload) in [b"one".as_slice(), b"two".as_slice()].iter().enumerate() {
                     std::fs::write(
                         directory.join(format!("frame-{:02}.jpg", index + 1)),
                         payload,
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| AppError::from_io(&error))?;
                 }
                 Ok(Box::new(StubChild::exiting(0, 0)) as Box<dyn FrameChild>)
             },
@@ -910,7 +967,7 @@ mod tests {
                 let mut calls = calls.lock().unwrap();
                 *calls += 1;
                 if *calls > 1 {
-                    return Err("store unavailable".into());
+                    return Err(AppError::unavailable("store unavailable"));
                 }
                 Ok("first.jpg".to_string())
             },
@@ -919,7 +976,8 @@ mod tests {
             MAX_VIDEO_FRAMES,
         )
         .unwrap_err();
-        assert!(error.contains("store unavailable"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Unavailable);
+        assert!(error.message.contains("store unavailable"), "{error}");
         assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
         std::fs::remove_dir_all(&parent).unwrap();
         let _ = stub;
@@ -961,8 +1019,13 @@ mod tests {
     fn decoded_presentation_times_are_preserved_instead_of_invented() {
         let times = parse_frame_timestamps("[Parsed_showinfo] n: 0 pts: 0 pts_time:0\n[Parsed_showinfo] n: 1 pts: 303 pts_time:5.05\n").unwrap();
         assert_eq!(times, vec![0.0, 5.05]);
-        assert!(parse_frame_timestamps("[showinfo] pts_time:NaN").is_err());
-        assert!(parse_frame_timestamps("[showinfo] pts_time:2\n[showinfo] pts_time:1").is_err());
+        let error = parse_frame_timestamps("[showinfo] pts_time:NaN").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "invalid sampled frame timestamp order");
+        let error =
+            parse_frame_timestamps("[showinfo] pts_time:2\n[showinfo] pts_time:1").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "invalid sampled frame timestamp order");
     }
 
     #[test]
@@ -976,13 +1039,28 @@ mod tests {
         assert_eq!(validate_frame_output(&good, &root).unwrap(), 8);
         let outside = elsewhere.join("frame-01.jpg");
         std::fs::write(&outside, b"fake-jpg").unwrap();
-        assert!(validate_frame_output(&outside, &root).is_err());
+        let error = validate_frame_output(&outside, &root).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(
+            error.message,
+            "sampled frame escaped its temporary directory"
+        );
         let wrong_ext = root.join("frame-01.mp4");
         std::fs::write(&wrong_ext, b"fake").unwrap();
-        assert!(validate_frame_output(&wrong_ext, &root).is_err());
+        let error = validate_frame_output(&wrong_ext, &root).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "sampled frame must be a png/jpg/webp image");
         let empty = root.join("empty.jpg");
         std::fs::write(&empty, b"").unwrap();
-        assert!(validate_frame_output(&empty, &root).is_err());
+        let error = validate_frame_output(&empty, &root).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(
+            error.message,
+            "sampled frame must be nonempty and at most 10 MiB"
+        );
+        let error = validate_frame_output(&root.join("missing.jpg"), &root).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NotFound);
+        assert!(error.message.starts_with("sampled frame is missing: "));
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(elsewhere).unwrap();
     }

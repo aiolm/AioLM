@@ -96,56 +96,68 @@ enum PlanMode {
 fn valid_revision(revision: &str) -> bool {
     revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-fn gguf_metadata(path: &Path) -> Result<PathBuf, String> {
+fn gguf_metadata(path: &Path) -> Result<PathBuf, AppError> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("invalid GGUF filename")?;
+        .ok_or_else(|| AppError::validation("invalid GGUF filename"))?;
     Ok(path.with_file_name(format!(".{name}.aiolm-update.json")))
 }
 
 // Check every existing component, not just the final canonical target. This
 // refuses links even when they point back inside the selected library.
-fn safe_destination(root: &Path, relative: &str) -> Result<PathBuf, String> {
+fn safe_destination(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
     snapshots::safe_file(relative)?;
-    let metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+    let metadata = fs::symlink_metadata(root).map_err(|error| AppError::from_io(&error))?;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
         || !same_path_identity(
-            &root.canonicalize().map_err(|error| error.to_string())?,
+            &root
+                .canonicalize()
+                .map_err(|error| AppError::from_io(&error))?,
             root,
         )
     {
-        return Err("model update root must be a real, unchanged directory".into());
+        return Err(AppError::validation(
+            "model update root must be a real, unchanged directory",
+        ));
     }
     let mut target = root.to_path_buf();
     for component in relative.split('/') {
         target.push(component);
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err("model update path contains a symbolic link".into())
+                return Err(AppError::validation(
+                    "model update path contains a symbolic link",
+                ))
             }
             Ok(_) => {
-                let resolved = target.canonicalize().map_err(|error| error.to_string())?;
+                let resolved = target
+                    .canonicalize()
+                    .map_err(|error| AppError::from_io(&error))?;
                 if !same_path_identity(&resolved, &target) {
-                    return Err("model update path contains a reparse point".into());
+                    return Err(AppError::validation(
+                        "model update path contains a reparse point",
+                    ));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(AppError::from_io(&error)),
         }
     }
     Ok(target)
 }
-fn bounded_metadata(path: &Path) -> Result<Option<Vec<u8>>, String> {
+fn bounded_metadata(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
     use std::io::Read;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(AppError::from_io(&error)),
     };
     if !metadata.is_file() || metadata.len() > snapshots::MAX_SNAPSHOT_MANIFEST_BYTES {
-        return Err("update metadata must be a bounded regular file".into());
+        return Err(AppError::validation(
+            "update metadata must be a bounded regular file",
+        ));
     }
     let mut bytes = Vec::new();
     fs::File::open(path)
@@ -153,15 +165,15 @@ fn bounded_metadata(path: &Path) -> Result<Option<Vec<u8>>, String> {
             file.take(snapshots::MAX_SNAPSHOT_MANIFEST_BYTES + 1)
                 .read_to_end(&mut bytes)
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.len() as u64 > snapshots::MAX_SNAPSHOT_MANIFEST_BYTES {
-        return Err("update metadata is too large".into());
+        return Err(AppError::validation("update metadata is too large"));
     }
     Ok(Some(bytes))
 }
-fn validate_files(files: &[TrackedFile]) -> Result<(), String> {
+fn validate_files(files: &[TrackedFile]) -> Result<(), AppError> {
     if files.is_empty() || files.len() > MAX_TREE_ENTRIES {
-        return Err("invalid update file count".into());
+        return Err(AppError::validation("invalid update file count"));
     }
     let mut local = HashSet::new();
     let mut remote = HashSet::new();
@@ -182,14 +194,16 @@ fn validate_files(files: &[TrackedFile]) -> Result<(), String> {
             || !local.insert(file.local.to_ascii_lowercase())
             || !remote.insert(file.remote.to_ascii_lowercase())
         {
-            return Err("update metadata has unsafe or colliding file paths".into());
+            return Err(AppError::validation(
+                "update metadata has unsafe or colliding file paths",
+            ));
         }
     }
     // Reject file/directory collisions before a staging tree is created.
     for name in &local {
         for (index, _) in name.match_indices('/') {
             if local.contains(&name[..index]) {
-                return Err("update files have a path collision".into());
+                return Err(AppError::validation("update files have a path collision"));
             }
         }
     }
@@ -200,28 +214,34 @@ fn load_installed(
     path: &str,
     models_dir: &str,
     receipt_root: Option<&Path>,
-) -> Result<Installed, String> {
+) -> Result<Installed, AppError> {
     let library = Path::new(models_dir)
         .canonicalize()
-        .map_err(|error| format!("cannot open models library: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot open models library: {error}")))?;
     let supplied = Path::new(path);
     if !supplied.is_absolute() {
-        return Err("model update requires an absolute local path".into());
+        return Err(AppError::validation(
+            "model update requires an absolute local path",
+        ));
     }
-    let relative = supplied
-        .strip_prefix(&library)
-        .map_err(|_| "only models inside the selected library can be updated")?;
+    let relative = supplied.strip_prefix(&library).map_err(|_| {
+        AppError::validation("only models inside the selected library can be updated")
+    })?;
     let relative = relative
         .to_str()
-        .ok_or("invalid model path")?
+        .ok_or_else(|| AppError::validation("invalid model path"))?
         .replace(std::path::MAIN_SEPARATOR, "/");
     let target = safe_destination(&library, &relative)?;
-    let metadata = fs::symlink_metadata(&target).map_err(|error| error.to_string())?;
+    let metadata = fs::symlink_metadata(&target).map_err(|error| AppError::from_io(&error))?;
     if metadata.is_dir() {
-        let mut manifest = read_snapshot_manifest(&target.join(SNAPSHOT_MANIFEST))?
-            .ok_or("model folder has no app snapshot ownership manifest")?;
+        let mut manifest =
+            read_snapshot_manifest(&target.join(SNAPSHOT_MANIFEST))?.ok_or_else(|| {
+                AppError::not_found("model folder has no app snapshot ownership manifest")
+            })?;
         if !manifest.complete {
-            return Err("incomplete snapshots must be resumed, not updated".into());
+            return Err(AppError::validation(
+                "incomplete snapshots must be resumed, not updated",
+            ));
         }
         let expected_parent = library
             .join("hf")
@@ -233,7 +253,9 @@ fn load_installed(
                 .and_then(|v| v.to_str())
                 .is_some_and(valid_revision)
         {
-            return Err("snapshot is not in the app-owned library tree".into());
+            return Err(AppError::validation(
+                "snapshot is not in the app-owned library tree",
+            ));
         }
         // Older selected manifests may name another member of the same index.
         // Normalize metadata only; the stable installed root remains untouched.
@@ -268,14 +290,20 @@ fn load_installed(
         });
     }
     if !metadata.is_file() {
-        return Err("model is not a regular file or snapshot directory".into());
+        return Err(AppError::validation(
+            "model is not a regular file or snapshot directory",
+        ));
     }
-    let root = target.parent().ok_or("model has no parent")?.to_path_buf();
+    let root = target
+        .parent()
+        .ok_or_else(|| AppError::validation("model has no parent"))?
+        .to_path_buf();
     let metadata = gguf_metadata(&target)?;
     let previous_metadata = bounded_metadata(&metadata)?;
     if let Some(bytes) = &previous_metadata {
-        let manifest: GgufManifest = serde_json::from_slice(bytes)
-            .map_err(|error| format!("invalid GGUF update metadata: {error}"))?;
+        let manifest: GgufManifest = serde_json::from_slice(bytes).map_err(|error| {
+            AppError::validation(format!("invalid GGUF update metadata: {error}"))
+        })?;
         validate_repo_id(&manifest.repository)?;
         validate_repo_path(&manifest.entrypoint)?;
         let expected = library
@@ -283,10 +311,14 @@ fn load_installed(
             .join(repo_directory(&manifest.repository))
             .join(relative_path(&manifest.entrypoint));
         if !same_path_identity(&target, &expected) {
-            return Err("download is not in its app-owned repository location".into());
+            return Err(AppError::validation(
+                "download is not in its app-owned repository location",
+            ));
         }
         if manifest.format != 1 || !valid_revision(&manifest.revision) {
-            return Err("GGUF update metadata differs from its proven source".into());
+            return Err(AppError::validation(
+                "GGUF update metadata differs from its proven source",
+            ));
         }
         validate_files(&manifest.files)?;
         let parent = manifest
@@ -298,15 +330,17 @@ fn load_installed(
             let expected_local = if file.remote.to_ascii_lowercase().ends_with(".gguf") {
                 file.remote
                     .strip_prefix(&parent)
-                    .ok_or("GGUF ownership leaves its model folder")?
+                    .ok_or_else(|| AppError::validation("GGUF ownership leaves its model folder"))?
             } else {
                 file.remote
                     .rsplit('/')
                     .next()
-                    .ok_or("invalid companion path")?
+                    .ok_or_else(|| AppError::validation("invalid companion path"))?
             };
             if expected_local != file.local || file.local.contains('/') {
-                return Err("GGUF ownership has an invalid local mapping".into());
+                return Err(AppError::validation(
+                    "GGUF ownership has an invalid local mapping",
+                ));
             }
         }
         if !manifest
@@ -314,7 +348,9 @@ fn load_installed(
             .iter()
             .any(|file| file.remote == manifest.entrypoint)
         {
-            return Err("GGUF manifest is missing its entrypoint".into());
+            return Err(AppError::validation(
+                "GGUF manifest is missing its entrypoint",
+            ));
         }
         return Ok(Installed {
             path: path.into(),
@@ -331,36 +367,42 @@ fn load_installed(
     // Legacy receipts prove individual files, never coincidentally named neighbors.
     let receipt = receipt_root
         .and_then(|root| crate::benchmark::download_receipt::read(root, &target))
-        .ok_or("model has no valid app download provenance")?;
+        .ok_or_else(|| AppError::validation("model has no valid app download provenance"))?;
     let expected = library
         .join("hf")
         .join(repo_directory(&receipt.repository))
         .join(relative_path(&receipt.artifact));
     if !same_path_identity(&target, &expected) {
-        return Err("download is not in its app-owned repository location".into());
+        return Err(AppError::validation(
+            "download is not in its app-owned repository location",
+        ));
     }
     let name = target
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("invalid GGUF name")?;
+        .ok_or_else(|| AppError::validation("invalid GGUF name"))?;
     let names = shard_group(name)
         .map(|names| names.collect::<Vec<_>>())
         .unwrap_or_else(|| vec![name.to_owned()]);
     let prefix = receipt
         .artifact
         .strip_suffix(name)
-        .ok_or("invalid receipt artifact")?;
+        .ok_or_else(|| AppError::validation("invalid receipt artifact"))?;
     let mut files = Vec::new();
     for name in names {
         let local = safe_destination(&root, &name)?;
         let origin = receipt_root
             .and_then(|root| crate::benchmark::download_receipt::read(root, &local))
-            .ok_or("a legacy GGUF shard has no valid download provenance")?;
+            .ok_or_else(|| {
+                AppError::validation("a legacy GGUF shard has no valid download provenance")
+            })?;
         if origin.repository != receipt.repository || origin.artifact != format!("{prefix}{name}") {
-            return Err("legacy GGUF shards have different sources".into());
+            return Err(AppError::validation(
+                "legacy GGUF shards have different sources",
+            ));
         }
         let size = fs::metadata(&local)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| AppError::from_io(&error))?
             .len();
         files.push(TrackedFile {
             remote: origin.artifact,
@@ -387,15 +429,15 @@ async fn selected_files(
     installed: &Installed,
     remote: &Remote,
     cancel: &AtomicBool,
-) -> Result<(Option<String>, Vec<TrackedFile>), String> {
+) -> Result<(Option<String>, Vec<TrackedFile>), AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let mut selected_file = None;
     let files = if let Some((entrypoint, companions)) = &installed.gguf {
         let listed = listed_gguf_files(&installed.repository, &remote.revision, &remote.entries)?;
         // An upstream rename cannot safely be inferred from another quantization.
-        let plan = model_download_plan(&listed, entrypoint).map_err(|_| "the original GGUF path/shard set was removed or renamed; automatic replacement is ambiguous")?;
+        let plan = model_download_plan(&listed, entrypoint).map_err(|error| AppError::new(error.kind, "the original GGUF path/shard set was removed or renamed; automatic replacement is ambiguous"))?;
         let mut files = plan
             .into_iter()
             .map(|file| TrackedFile {
@@ -449,7 +491,9 @@ async fn selected_files(
         .iter()
         .any(|file| !digests::valid_oid(file.oid.as_deref()))
     {
-        return Err("repository files lack a supported content digest".into());
+        return Err(AppError::validation(
+            "repository files lack a supported content digest",
+        ));
     }
     Ok((selected_file, files))
 }
@@ -458,7 +502,7 @@ async fn plan_update(
     remote: &Remote,
     cancel: &AtomicBool,
     mode: PlanMode,
-) -> Result<Plan, String> {
+) -> Result<Plan, AppError> {
     let (selected_file, files) = selected_files(&installed, remote, cancel).await?;
     installed.selected_file = selected_file;
     let shared_companions = installed
@@ -483,15 +527,16 @@ async fn plan_update(
         // Availability checks compare recorded identities without reading every
         // weight. Applying an update still verifies all old bytes before transfer.
         if matches!(mode, PlanMode::Check) && digests::valid_oid(file.oid.as_deref()) {
-            let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            let metadata =
+                fs::symlink_metadata(&path).map_err(|error| AppError::from_io(&error))?;
             if !metadata.is_file()
                 || (metadata.len() != file.size
                     && companion.is_none_or(|desired| metadata.len() != desired.size))
             {
-                return Err(format!(
+                return Err(AppError::validation(format!(
                     "local file differs from download metadata: {}",
                     file.local
-                ));
+                )));
             }
             continue;
         }
@@ -503,7 +548,7 @@ async fn plan_update(
             if let Err(error) =
                 digests::verify_file_digest(&path, &file.snapshot_file(), cancel).await
             {
-                if error == DOWNLOAD_CANCELLED {
+                if error.kind == ErrorKind::Cancelled {
                     return Err(error);
                 }
                 // Quantizations can share companions. Adopt only bytes that
@@ -518,11 +563,14 @@ async fn plan_update(
                             adopted_companions = true;
                             continue;
                         }
-                        Err(error) if error == DOWNLOAD_CANCELLED => return Err(error),
+                        Err(error) if error.kind == ErrorKind::Cancelled => return Err(error),
                         Err(_) => {}
                     }
                 }
-                return Err(format!("local modification in {}: {error}", file.local));
+                return Err(AppError::new(
+                    error.kind,
+                    format!("local modification in {}: {error}", file.local),
+                ));
             }
         }
     }
@@ -562,26 +610,26 @@ async fn plan_update(
             .await
             {
                 Ok(()) => reusable = true,
-                Err(error) if error == DOWNLOAD_CANCELLED => return Err(error),
+                Err(error) if error.kind == ErrorKind::Cancelled => return Err(error),
                 Err(_) => {}
             }
         }
         if reusable {
             reused_bytes = reused_bytes
                 .checked_add(file.size)
-                .ok_or("update size overflow")?;
+                .ok_or_else(|| AppError::validation("update size overflow"))?;
         } else {
             let target = safe_destination(&installed.root, &file.local)?;
             if previous.is_none() && fs::symlink_metadata(&target).is_ok() {
-                return Err(format!(
+                return Err(AppError::validation(format!(
                     "untracked local file collides with update: {}",
                     file.local
-                ));
+                )));
             }
             changed.push(index);
             download_bytes = download_bytes
                 .checked_add(file.size)
-                .ok_or("update size overflow")?;
+                .ok_or_else(|| AppError::validation("update size overflow"))?;
         }
     }
     let names: HashSet<_> = files.iter().map(|file| file.local.as_str()).collect();
@@ -614,7 +662,7 @@ async fn plan_update(
             files: files.iter().map(TrackedFile::snapshot_file).collect(),
         })
     }
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(Plan {
         installed,
         revision: remote.revision.clone(),
@@ -632,13 +680,13 @@ pub async fn check_model_updates(
     paths: &[String],
     models_dir: &str,
     cancel: &AtomicBool,
-) -> Result<Vec<ModelUpdateStatus>, String> {
+) -> Result<Vec<ModelUpdateStatus>, AppError> {
     let receipt_root = crate::benchmark::data_root().ok();
-    let mut repositories: HashMap<String, Result<Remote, String>> = HashMap::new();
+    let mut repositories: HashMap<String, Result<Remote, AppError>> = HashMap::new();
     let mut statuses = Vec::with_capacity(paths.len());
     for path in paths {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         let mut status = ModelUpdateStatus {
             path: path.clone(),
@@ -669,7 +717,7 @@ pub async fn check_model_updates(
             }
             let remote = repositories
                 .get(&installed.repository)
-                .ok_or("repository metadata missing")?
+                .ok_or_else(|| AppError::internal("repository metadata missing"))?
                 .as_ref()
                 .map_err(Clone::clone)?;
             status.latest_revision = Some(remote.revision.clone());
@@ -679,11 +727,14 @@ pub async fn check_model_updates(
             status.download_bytes = plan.download_bytes;
             status.reused_bytes = plan.reused_bytes;
             status.update_available = !plan.changed.is_empty() || !plan.removed.is_empty();
-            Ok::<(), String>(())
+            Ok::<(), AppError>(())
         }
         .await;
         if let Err(error) = result {
-            status.error = Some(error);
+            if error.kind == ErrorKind::Cancelled {
+                return Err(error);
+            }
+            status.error = Some(error.message);
         }
         statuses.push(status);
     }
@@ -699,8 +750,12 @@ pub(super) async fn record_gguf_manifest(
     plan: &[HfFile],
     companions: Option<&[SnapshotFile]>,
     cancel: &AtomicBool,
-) -> Result<(), String> {
-    let entrypoint = plan.first().ok_or("empty GGUF download")?.path.clone();
+) -> Result<(), AppError> {
+    let entrypoint = plan
+        .first()
+        .ok_or_else(|| AppError::validation("empty GGUF download"))?
+        .path
+        .clone();
     let mut files = plan
         .iter()
         .map(|file| TrackedFile {
@@ -724,7 +779,9 @@ pub(super) async fn record_gguf_manifest(
         }));
     }
     validate_files(&files)?;
-    let root = target.parent().ok_or("GGUF has no parent")?;
+    let root = target
+        .parent()
+        .ok_or_else(|| AppError::validation("GGUF has no parent"))?;
     for file in &files {
         digests::verify_file_digest(
             &safe_destination(root, &file.local)?,
@@ -743,8 +800,11 @@ pub(super) async fn record_gguf_manifest(
     };
     let metadata = gguf_metadata(target)?;
     if let Some(bytes) = bounded_metadata(&metadata)? {
-        let previous: GgufManifest = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("existing GGUF ownership metadata is invalid: {error}"))?;
+        let previous: GgufManifest = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::validation(format!(
+                "existing GGUF ownership metadata is invalid: {error}"
+            ))
+        })?;
         validate_files(&previous.files)?;
         let previous_files: HashMap<_, _> = previous
             .files
@@ -771,9 +831,9 @@ pub(super) async fn record_gguf_manifest(
             || !valid_revision(&previous.revision)
             || !(requested_is_owned || adding_companions)
         {
-            return Err(
-                "existing GGUF ownership metadata differs; use the model update operation".into(),
-            );
+            return Err(AppError::validation(
+                "existing GGUF ownership metadata differs; use the model update operation",
+            ));
         }
         // A plain retry never drops companions or rewrites ready ownership.
         // Only newly verified companions can extend an existing download here.
@@ -783,7 +843,8 @@ pub(super) async fn record_gguf_manifest(
     }
     crate::config::atomic_write(
         &metadata,
-        &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        &serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| AppError::internal(error.to_string()))?,
     )
 }
 
@@ -800,15 +861,16 @@ impl TransferSource {
             Self::Loopback(base) => format!("{}/{}", base.trim_end_matches('/'), file),
         }
     }
-    fn validate(&self, response: &reqwest::Response) -> Result<(), String> {
+    fn validate(&self, response: &reqwest::Response) -> Result<(), AppError> {
         match self {
             Self::Hub => validate_response_url(response),
             #[cfg(test)]
             Self::Loopback(base) => {
-                let base = reqwest::Url::parse(base).map_err(|error| error.to_string())?;
+                let base = reqwest::Url::parse(base)
+                    .map_err(|error| AppError::validation(error.to_string()))?;
                 if base.host_str() != Some("127.0.0.1") || response.url().origin() != base.origin()
                 {
-                    return Err("unsafe loopback test redirect".into());
+                    return Err(AppError::validation("unsafe loopback test redirect"));
                 }
                 Ok(())
             }
@@ -827,9 +889,11 @@ impl Drop for Staging {
     }
 }
 
-async fn verify_baseline(plan: &Plan, cancel: &AtomicBool) -> Result<(), String> {
+async fn verify_baseline(plan: &Plan, cancel: &AtomicBool) -> Result<(), AppError> {
     if bounded_metadata(&plan.installed.metadata)? != plan.installed.previous_metadata {
-        return Err("model ownership metadata changed while updating".into());
+        return Err(AppError::validation(
+            "model ownership metadata changed while updating",
+        ));
     }
     for file in &plan.installed.files {
         digests::verify_file_digest(
@@ -839,10 +903,13 @@ async fn verify_baseline(plan: &Plan, cancel: &AtomicBool) -> Result<(), String>
         )
         .await
         .map_err(|error| {
-            if error == DOWNLOAD_CANCELLED {
+            if error.kind == ErrorKind::Cancelled {
                 error
             } else {
-                format!("local modification in {}: {error}", file.local)
+                AppError::new(
+                    error.kind,
+                    format!("local modification in {}: {error}", file.local),
+                )
             }
         })?;
     }
@@ -855,10 +922,10 @@ async fn verify_baseline(plan: &Plan, cancel: &AtomicBool) -> Result<(), String>
     for file in &plan.files {
         let target = safe_destination(&plan.installed.root, &file.local)?;
         if !old.contains(file.local.as_str()) && fs::symlink_metadata(target).is_ok() {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "untracked local file collides with update: {}",
                 file.local
-            ));
+            )));
         }
     }
     Ok(())
@@ -866,9 +933,9 @@ async fn verify_baseline(plan: &Plan, cancel: &AtomicBool) -> Result<(), String>
 
 // Validate model loading metadata against a hard-linked view. This reads no
 // network bytes and copies no unchanged weights. The view is never published.
-fn validate_staged_model(plan: &Plan, stage: &Path) -> Result<(), String> {
+fn validate_staged_model(plan: &Plan, stage: &Path) -> Result<(), AppError> {
     let view = stage.join("view");
-    fs::create_dir(&view).map_err(|error| error.to_string())?;
+    fs::create_dir(&view).map_err(|error| AppError::from_io(&error))?;
     let changed: HashSet<_> = plan.changed.iter().copied().collect();
     for (index, file) in plan.files.iter().enumerate() {
         let source = if changed.contains(&index) {
@@ -877,29 +944,42 @@ fn validate_staged_model(plan: &Plan, stage: &Path) -> Result<(), String> {
             safe_destination(&plan.installed.root, &file.local)?
         };
         let destination = snapshot_path(&view, &file.local);
-        fs::create_dir_all(destination.parent().ok_or("invalid validation path")?)
-            .map_err(|error| error.to_string())?;
-        fs::hard_link(source, destination)
-            .map_err(|error| format!("cannot link model validation view: {error}"))?;
+        fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| AppError::validation("invalid validation path"))?,
+        )
+        .map_err(|error| AppError::from_io(&error))?;
+        fs::hard_link(source, destination).map_err(|error| {
+            io_error(
+                &error,
+                format!("cannot link model validation view: {error}"),
+            )
+        })?;
     }
     if let Some((entrypoint, companions)) = &plan.installed.gguf {
         if *companions {
             snapshots::validate_gguf_companions(
-                &view.join(entrypoint.rsplit('/').next().ok_or("invalid GGUF path")?),
+                &view.join(
+                    entrypoint
+                        .rsplit('/')
+                        .next()
+                        .ok_or_else(|| AppError::validation("invalid GGUF path"))?,
+                ),
             )?;
         }
     } else {
         fs::write(view.join(SNAPSHOT_MANIFEST), &plan.metadata)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         let artifact = crate::providers::artifacts::inspect_snapshot(&view);
         if !artifact.missing.is_empty()
             || (plan.installed.selected_file.is_none()
                 && artifact.format == crate::providers::artifacts::ArtifactFormat::Unknown)
         {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "updated snapshot loading files are invalid: {}",
                 artifact.missing.join(", ")
-            ));
+            )));
         }
     }
     Ok(())
@@ -911,7 +991,7 @@ struct CommitEntry {
     activated: bool,
     activated_stamp: Option<crate::benchmark::identity::Stamp>,
 }
-fn rollback(entries: &mut [CommitEntry]) -> Result<(), String> {
+fn rollback(entries: &mut [CommitEntry]) -> Result<(), AppError> {
     let mut failures = Vec::new();
     for entry in entries.iter_mut().rev() {
         if entry.activated {
@@ -949,7 +1029,7 @@ fn rollback(entries: &mut [CommitEntry]) -> Result<(), String> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(failures.join("; "))
+        Err(AppError::internal(failures.join("; ")))
     }
 }
 fn commit_file(
@@ -958,21 +1038,27 @@ fn commit_file(
     expected_exists: bool,
     backup_directory: &Path,
     entries: &mut Vec<CommitEntry>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let backup = match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.is_file() => {
             Some(backup_directory.join(entries.len().to_string()))
         }
-        Ok(_) => return Err("update commit destination is not a regular file".into()),
+        Ok(_) => {
+            return Err(AppError::validation(
+                "update commit destination is not a regular file",
+            ))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(AppError::from_io(&error)),
     };
     if backup.is_some() != expected_exists {
-        return Err("model file appeared or disappeared during commit".into());
+        return Err(AppError::validation(
+            "model file appeared or disappeared during commit",
+        ));
     }
     if let Some(backup) = &backup {
         fs::rename(&target, backup)
-            .map_err(|error| format!("cannot back up model file: {error}"))?;
+            .map_err(|error| io_error(&error, format!("cannot back up model file: {error}")))?;
     }
     entries.push(CommitEntry {
         target: target.clone(),
@@ -983,14 +1069,14 @@ fn commit_file(
     if let Some(source) = source {
         // Hard-link activation is exclusive: no racing user file is overwritten.
         fs::hard_link(source, &target)
-            .map_err(|error| format!("cannot activate updated file: {error}"))?;
+            .map_err(|error| io_error(&error, format!("cannot activate updated file: {error}")))?;
         entries
             .last_mut()
-            .ok_or("missing commit journal entry")?
+            .ok_or_else(|| AppError::internal("missing commit journal entry"))?
             .activated = true;
         entries
             .last_mut()
-            .ok_or("missing commit journal entry")?
+            .ok_or_else(|| AppError::internal("missing commit journal entry"))?
             .activated_stamp = Some(crate::benchmark::identity::stamp(&target)?);
     }
     Ok(())
@@ -1001,9 +1087,9 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
     cancel: &AtomicBool,
     mut progress: F,
     source: &TransferSource,
-) -> Result<ModelUpdateResult, String> {
+) -> Result<ModelUpdateResult, AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     if plan.changed.is_empty() && plan.removed.is_empty() && !plan.adopted_companions {
         verify_baseline(&plan, cancel).await?;
@@ -1022,30 +1108,36 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
         .installed
         .root
         .join(format!(".aiolm-update-{}", Uuid::new_v4().simple()));
-    fs::create_dir(&stage_path).map_err(|error| format!("cannot stage model update: {error}"))?;
+    fs::create_dir(&stage_path)
+        .map_err(|error| io_error(&error, format!("cannot stage model update: {error}")))?;
     let mut stage = Staging {
         path: stage_path,
         preserve: false,
     };
-    fs::create_dir(stage.path.join("data")).map_err(|error| error.to_string())?;
-    fs::create_dir(stage.path.join("backup")).map_err(|error| error.to_string())?;
+    fs::create_dir(stage.path.join("data")).map_err(|error| AppError::from_io(&error))?;
+    fs::create_dir(stage.path.join("backup")).map_err(|error| AppError::from_io(&error))?;
     progress("starting", 0, plan.download_bytes);
     let mut completed = 0u64;
     for &index in &plan.changed {
         let file = &plan.files[index];
         let response = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-            response = download_client()?.get(source.url(&plan.installed.repository, &file.remote, &plan.revision)).send() => response.map_err(|error| format!("model update download failed: {error}"))?
+            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            response = download_client()?.get(source.url(&plan.installed.repository, &file.remote, &plan.revision)).send() => response.map_err(|error| network_error(&error, format!("model update download failed: {error}")))?
         };
         source.validate(&response)?;
         if !response.status().is_success() {
-            return Err(format!("model update HTTP status: {}", response.status()));
+            return Err(http_error(
+                response.status(),
+                format!("model update HTTP status: {}", response.status()),
+            ));
         }
         if response
             .content_length()
             .is_some_and(|length| length != file.size)
         {
-            return Err("model update length differs from repository metadata".into());
+            return Err(AppError::validation(
+                "model update length differs from repository metadata",
+            ));
         }
         let staged = stage.path.join("data").join(index.to_string());
         receive_download(
@@ -1067,27 +1159,27 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
             .write(true)
             .open(&staged)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(|error| AppError::from_io(&error))?
             .sync_all()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         completed = completed
             .checked_add(file.size)
-            .ok_or("update size overflow")?;
+            .ok_or_else(|| AppError::validation("update size overflow"))?;
     }
     validate_staged_model(&plan, &stage.path)?;
     let staged_metadata = stage.path.join("metadata.json");
-    fs::write(&staged_metadata, &plan.metadata).map_err(|error| error.to_string())?;
+    fs::write(&staged_metadata, &plan.metadata).map_err(|error| AppError::from_io(&error))?;
     fs::OpenOptions::new()
         .write(true)
         .open(&staged_metadata)
         .and_then(|file| file.sync_all())
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     // Recheck ALL old digests and metadata after downloading, not just changed
     // files. An external editor must not be silently incorporated into ownership.
     verify_baseline(&plan, cancel).await?;
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let mut journal = Vec::new();
     let commit = (|| {
@@ -1125,15 +1217,15 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
             &stage.path.join("backup"),
             &mut journal,
         )?;
-        Ok::<(), String>(())
+        Ok::<(), AppError>(())
     })();
     if let Err(error) = commit {
         if let Err(rollback_error) = rollback(&mut journal) {
             stage.preserve = true;
-            return Err(format!(
+            return Err(AppError::internal(format!(
                 "{error}; rollback failed: {rollback_error}; original backups retained at {}",
                 stage.path.display()
-            ));
+            )));
         }
         return Err(error);
     }
@@ -1166,9 +1258,9 @@ pub async fn update_model(
     models_dir: &str,
     expected_revision: &str,
     cancel: &AtomicBool,
-) -> Result<ModelUpdateResult, String> {
+) -> Result<ModelUpdateResult, AppError> {
     if !valid_revision(expected_revision) {
-        return Err("invalid expected model revision".into());
+        return Err(AppError::validation("invalid expected model revision"));
     }
     let receipt_root = crate::benchmark::data_root().ok();
     let installed = load_installed(path, models_dir, receipt_root.as_deref())?;
@@ -1194,7 +1286,7 @@ pub async fn update_model(
     .await;
     if result
         .as_ref()
-        .is_err_and(|error| error == DOWNLOAD_CANCELLED)
+        .is_err_and(|error| error.kind == ErrorKind::Cancelled)
     {
         emit_progress(&app, &repository, path, "cancelled", 0, download_bytes);
     }

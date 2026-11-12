@@ -1,4 +1,5 @@
 //! Cancellation ownership across preflight, queued admission and serving.
+use crate::error::AppError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -29,29 +30,29 @@ pub(crate) struct ServingLaunch {
     id: String,
 }
 
-fn validate(id: &str) -> Result<(), String> {
+fn validate(id: &str) -> Result<(), AppError> {
     if id.is_empty()
         || id.len() > 128
         || !id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
     {
-        return Err("invalid launch operation identifier".into());
+        return Err(AppError::validation("invalid launch operation identifier"));
     }
     Ok(())
 }
 
 impl LaunchJobs {
-    pub(crate) fn begin(self: &Arc<Self>, id: String) -> Result<PreflightJob, String> {
+    pub(crate) fn begin(self: &Arc<Self>, id: String) -> Result<PreflightJob, AppError> {
         validate(&id)?;
         let mut jobs = self
             .0
             .lock()
             .map_err(|_| "launch preflight lock was poisoned")?;
         if jobs.active.contains_key(&id) || jobs.active.len() >= 64 {
-            return Err(
-                "launch preflight is already active or too many preflights are running".into(),
-            );
+            return Err(AppError::busy(
+                "launch preflight is already active or too many preflights are running",
+            ));
         }
         let cancel = Arc::new(AtomicBool::new(jobs.cancelled.remove(&id)));
         jobs.order.retain(|entry| entry != &id);
@@ -63,7 +64,7 @@ impl LaunchJobs {
         })
     }
 
-    pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
+    pub(crate) fn cancel(&self, id: &str) -> Result<(), AppError> {
         validate(id)?;
         let mut jobs = self
             .0
@@ -88,11 +89,13 @@ impl LaunchJobs {
         self: &Arc<Self>,
         id: String,
         cancel: Arc<AtomicBool>,
-    ) -> Result<ServingLaunch, String> {
+    ) -> Result<ServingLaunch, AppError> {
         validate(&id)?;
         let mut jobs = self.0.lock().map_err(|_| "launch jobs lock was poisoned")?;
         if jobs.serving.contains_key(&id) || jobs.serving.len() >= 64 {
-            return Err("launch is already active or too many launches are running".into());
+            return Err(AppError::busy(
+                "launch is already active or too many launches are running",
+            ));
         }
         if jobs.cancelled_serving.remove(&id) {
             cancel.store(true, Ordering::Release);
@@ -106,7 +109,7 @@ impl LaunchJobs {
     }
 
     /// Release this registry lock before looking up or locking any session.
-    pub(crate) fn cancel_operation(&self, id: &str) -> Result<(), String> {
+    pub(crate) fn cancel_operation(&self, id: &str) -> Result<(), AppError> {
         self.cancel(id)?;
         let mut jobs = self.0.lock().map_err(|_| "launch jobs lock was poisoned")?;
         if let Some(cancel) = jobs.serving.get(id) {
@@ -169,6 +172,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invalid_launch_identifiers_are_validation_errors() {
+        let error = LaunchJobs::default().cancel("../launch").unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(error.message, "invalid launch operation identifier");
+    }
+
+    #[test]
     fn queued_and_active_cancellation_preserve_other_launch_targets() {
         let jobs = Arc::new(LaunchJobs::default());
         jobs.cancel("queued").unwrap();
@@ -176,7 +186,10 @@ mod tests {
         let other = jobs.begin("other".into()).unwrap();
         assert!(queued.cancel.load(Ordering::Acquire));
         assert!(!other.cancel.load(Ordering::Acquire));
-        assert!(jobs.begin("other".into()).is_err());
+        assert_eq!(
+            jobs.begin("other".into()).err().unwrap().kind,
+            crate::error::ErrorKind::Busy
+        );
         drop(queued);
         let retried = jobs.begin("queued".into()).unwrap();
         assert!(!retried.cancel.load(Ordering::Acquire));

@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs::File,
     io::Read,
     path::{Path, PathBuf},
@@ -93,19 +93,29 @@ pub struct Identity {
     pub parser_version: u32,
 }
 
-fn sha256(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
-    let mut file = File::open(path)
-        .map_err(|e| format!("cannot read help artifact {}: {e}", path.display()))?;
+fn sha256(path: &Path, cancel: &AtomicBool) -> Result<String, crate::error::AppError> {
+    let mut file = File::open(path).map_err(|e| {
+        crate::error::AppError::new(
+            crate::error::AppError::io_kind(&e),
+            format!("cannot read help artifact {}: {e}", path.display()),
+        )
+    })?;
     if !file.metadata().is_ok_and(|m| m.is_file()) {
-        return Err("help artifacts must be regular files".into());
+        return Err(crate::error::AppError::validation(
+            "help artifacts must be regular files",
+        ));
     }
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         if cancel.load(Ordering::Acquire) {
-            return Err("help discovery cancelled".into());
+            return Err(crate::error::AppError::cancelled(
+                "help discovery cancelled",
+            ));
         }
-        let size = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        let size = file
+            .read(&mut buffer)
+            .map_err(|e| crate::error::AppError::from_io(&e))?;
         if size == 0 {
             break;
         }
@@ -115,7 +125,20 @@ fn sha256(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
 }
 
 impl HelpCommand {
-    pub fn identity(&self, cancel: &AtomicBool) -> Result<Identity, String> {
+    /// Approval covers every execution input, not parsing or capture settings.
+    pub(crate) fn execution_fingerprint(&self) -> Result<String, crate::error::AppError> {
+        let directory = self
+            .working_directory
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(std::env::current_dir)
+            .map_err(|error| crate::error::AppError::from_io(&error))?;
+        let bytes = serde_json::to_vec(&(&self.program, &self.args, &self.environment, directory))
+            .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    pub fn identity(&self, cancel: &AtomicBool) -> Result<Identity, crate::error::AppError> {
         // Windows Command implicitly runs batch files through cmd.exe. Require
         // a real executable/interpreter so our argv boundary stays shell-free.
         if cfg!(windows)
@@ -125,7 +148,7 @@ impl HelpCommand {
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
         {
-            return Err("select an executable or an explicit interpreter; implicit Windows batch execution is not a help command".into());
+            return Err(crate::error::AppError::validation("select an executable or an explicit interpreter; implicit Windows batch execution is not a help command"));
         }
         if !self.program.is_absolute()
             || !self.program.is_file()
@@ -162,10 +185,19 @@ impl HelpCommand {
                     || s.chars().any(char::is_whitespace)
             })
         {
-            return Err("invalid help command: use an absolute executable, bounded argv/environment and explicit limits".into());
+            let kind = if self.program.is_absolute() && !self.program.exists() {
+                crate::error::ErrorKind::NotFound
+            } else {
+                crate::error::ErrorKind::Validation
+            };
+            return Err(crate::error::AppError::new(kind, "invalid help command: use an absolute executable, bounded argv/environment and explicit limits"));
         }
-        let program = self.program.canonicalize().map_err(|e| e.to_string())?;
-        let current_directory = std::env::current_dir().map_err(|e| e.to_string())?;
+        let program = self
+            .program
+            .canonicalize()
+            .map_err(|e| crate::error::AppError::from_io(&e))?;
+        let current_directory =
+            std::env::current_dir().map_err(|e| crate::error::AppError::from_io(&e))?;
         let working_directory = Some(
             self.working_directory
                 .as_ref()
@@ -173,11 +205,18 @@ impl HelpCommand {
         )
         .map(|path| {
             if !path.is_absolute() || !path.is_dir() {
-                return Err(
-                    "help working directory must be an existing absolute directory".to_string(),
-                );
+                let kind = if path.is_absolute() && !path.exists() {
+                    crate::error::ErrorKind::NotFound
+                } else {
+                    crate::error::ErrorKind::Validation
+                };
+                return Err(crate::error::AppError::new(
+                    kind,
+                    "help working directory must be an existing absolute directory",
+                ));
             }
-            path.canonicalize().map_err(|e| e.to_string())
+            path.canonicalize()
+                .map_err(|e| crate::error::AppError::from_io(&e))
         })
         .transpose()?;
         let executable_sha256 = sha256(&program, cancel)?;
@@ -185,14 +224,20 @@ impl HelpCommand {
         let mut artifact_paths = BTreeMap::new();
         for artifact in &self.artifacts {
             if !artifact.is_absolute() {
-                return Err("help artifacts need absolute paths".into());
+                return Err(crate::error::AppError::validation(
+                    "help artifacts need absolute paths",
+                ));
             }
-            let path = artifact.canonicalize().map_err(|e| e.to_string())?;
+            let path = artifact
+                .canonicalize()
+                .map_err(|e| crate::error::AppError::from_io(&e))?;
             if artifact_paths
                 .insert(artifact.clone(), path.clone())
                 .is_some()
             {
-                return Err("duplicate help artifact".into());
+                return Err(crate::error::AppError::validation(
+                    "duplicate help artifact",
+                ));
             }
             // Library SONAME aliases may name one file. Preserve every alias
             // and target in the identity while hashing each resolved file once.
@@ -236,40 +281,6 @@ pub struct TextOutput {
     /// Omitted for the old successful Auto path and old stored reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_bytes_base64: Option<String>,
-}
-
-fn without_ansi(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            if ch != '\r' {
-                out.push(ch);
-            }
-            continue;
-        }
-        match chars.next() {
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\u{7}' || (c == '\u{1b}' && chars.peek() == Some(&'\\')) {
-                        if c == '\u{1b}' {
-                            chars.next();
-                        }
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 fn decode(stream: procutil::CapturedStream, requested: Encoding) -> TextOutput {
@@ -331,10 +342,12 @@ fn decode(stream: procutil::CapturedStream, requested: Encoding) -> TextOutput {
             )
         }
     };
+    let mut clean_text = crate::process_output::strip_ansi(&text);
+    clean_text.retain(|ch| ch != '\r');
     TextOutput {
         raw_bytes_base64: (requested != Encoding::Auto || decoding_loss)
             .then(|| base64::engine::general_purpose::STANDARD.encode(&stream.bytes)),
-        clean_text: without_ansi(&text),
+        clean_text,
         text,
         encoding: name.into(),
         decoding_loss,
@@ -371,9 +384,25 @@ impl HelpReport {
                 .iter()
                 .all(|s| !s.truncated && !s.decoding_loss && s.read_error.is_none())
     }
+
+    pub(crate) fn incomplete_error(&self, message: impl Into<String>) -> crate::error::AppError {
+        let kind = if self.cancelled {
+            crate::error::ErrorKind::Cancelled
+        } else if self.timed_out {
+            crate::error::ErrorKind::Timeout
+        } else if !self.success || self.error.is_some() {
+            crate::error::ErrorKind::Internal
+        } else {
+            crate::error::ErrorKind::Validation
+        };
+        crate::error::AppError::new(kind, message)
+    }
 }
 
-pub fn discover(command: &HelpCommand, cancel: &AtomicBool) -> Result<HelpReport, String> {
+pub fn discover(
+    command: &HelpCommand,
+    cancel: &AtomicBool,
+) -> Result<HelpReport, crate::error::AppError> {
     let before = Instant::now();
     let identity = command.identity(cancel)?;
     let mut process = procutil::std_command(&command.program);
@@ -385,7 +414,7 @@ pub fn discover(command: &HelpCommand, cancel: &AtomicBool) -> Result<HelpReport
         command
             .working_directory
             .clone()
-            .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?),
+            .unwrap_or(std::env::current_dir().map_err(|e| crate::error::AppError::from_io(&e))?),
     );
     let captured = procutil::capture_help_cancellable(
         &mut process,
@@ -393,7 +422,12 @@ pub fn discover(command: &HelpCommand, cancel: &AtomicBool) -> Result<HelpReport
         command.output_limit,
         Some(cancel),
     )
-    .map_err(|e| procutil::spawn_error(&command.program, &e))?;
+    .map_err(|e| {
+        crate::error::AppError::new(
+            crate::error::AppError::io_kind(&e),
+            procutil::spawn_error(&command.program, &e),
+        )
+    })?;
     let (success, exit_code, cancelled, timed_out, mut error) = match captured.status {
         Ok(status) => (status.success(), status.code(), false, false, None),
         Err(error) => (
@@ -432,6 +466,7 @@ pub struct DiscoveryTicket {
 struct ServiceState {
     active: BTreeMap<String, DiscoveryTicket>,
     cache: BTreeMap<String, HelpReport>,
+    insertion_order: VecDeque<String>,
 }
 
 /// Each settings owner has one publication slot. Starting a new discovery
@@ -440,16 +475,20 @@ struct ServiceState {
 pub struct HelpService(Mutex<ServiceState>);
 
 impl HelpService {
-    pub fn begin(&self, owner: &str) -> Result<DiscoveryTicket, String> {
+    pub fn begin(&self, owner: &str) -> Result<DiscoveryTicket, crate::error::AppError> {
         if owner.is_empty() || owner.len() > 512 || owner.contains('\0') {
-            return Err("invalid discovery owner".into());
+            return Err(crate::error::AppError::validation(
+                "invalid discovery owner",
+            ));
         }
         let mut state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         if state.active.len() >= 128 && !state.active.contains_key(owner) {
-            return Err("too many active help discoveries".into());
+            return Err(crate::error::AppError::busy(
+                "too many active help discoveries",
+            ));
         }
         let ticket = DiscoveryTicket {
             id: uuid::Uuid::new_v4().to_string(),
@@ -462,11 +501,11 @@ impl HelpService {
         Ok(ticket)
     }
 
-    pub fn cancel(&self, id: &str) -> Result<bool, String> {
+    pub fn cancel(&self, id: &str) -> Result<bool, crate::error::AppError> {
         let state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         if let Some(ticket) = state.active.values().find(|t| t.id == id) {
             ticket.cancel.store(true, Ordering::Release);
             Ok(true)
@@ -475,11 +514,11 @@ impl HelpService {
         }
     }
 
-    pub fn cancel_owner(&self, owner: &str) -> Result<bool, String> {
+    pub fn cancel_owner(&self, owner: &str) -> Result<bool, crate::error::AppError> {
         let state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         if let Some(ticket) = state.active.get(owner) {
             ticket.cancel.store(true, Ordering::Release);
             Ok(true)
@@ -493,11 +532,11 @@ impl HelpService {
     /// `failed` still frees its own owner; other owners are never touched
     /// beyond their own flag. App shutdown uses this stop path; runtime
     /// lifecycle flags stay with the caller and are not changed here.
-    pub fn cancel_all(&self) -> Result<usize, String> {
+    pub fn cancel_all(&self) -> Result<usize, crate::error::AppError> {
         let state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         let count = state.active.len();
         for ticket in state.active.values() {
             ticket.cancel.store(true, Ordering::Release);
@@ -521,59 +560,90 @@ impl HelpService {
         &self,
         command: &HelpCommand,
         cancel: &AtomicBool,
-    ) -> Result<Option<HelpReport>, String> {
+    ) -> Result<Option<HelpReport>, crate::error::AppError> {
         let identity = command.identity(cancel)?;
         let state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
         Ok(state.cache.get(&identity.fingerprint).cloned())
     }
 
-    pub fn finish(&self, ticket: &DiscoveryTicket, report: &HelpReport) -> Result<(), String> {
+    pub fn finish(
+        &self,
+        ticket: &DiscoveryTicket,
+        report: &HelpReport,
+    ) -> Result<(), crate::error::AppError> {
         self.publish(ticket, report, || Ok(()))
     }
 
-    /// Linearizable publication: the ownership/cancellation check, the
-    /// caller's persistent write and the cache update happen under one lock.
-    /// `cancel`, `cancel_owner`, `cancel_all` and `begin` take the same lock,
-    /// so a ticket either publishes completely before a competing call or not
-    /// at all; nothing is written and later rolled back.
+    /// Persist without holding the service lock, then recheck ownership
+    /// before publishing to the cache.
     pub fn publish(
         &self,
         ticket: &DiscoveryTicket,
         report: &HelpReport,
-        persist: impl FnOnce() -> Result<(), String>,
-    ) -> Result<(), String> {
+        persist: impl FnOnce() -> Result<(), crate::error::AppError>,
+    ) -> Result<(), crate::error::AppError> {
+        self.publish_staged(ticket, report, persist, || Ok(()))
+    }
+
+    /// Large writes belong to `prepare`; `commit` only atomically renames the
+    /// staged file while cancellation and supersession are excluded.
+    pub(crate) fn publish_staged(
+        &self,
+        ticket: &DiscoveryTicket,
+        report: &HelpReport,
+        prepare: impl FnOnce() -> Result<(), crate::error::AppError>,
+        commit: impl FnOnce() -> Result<(), crate::error::AppError>,
+    ) -> Result<(), crate::error::AppError> {
+        {
+            let mut state = self.0.lock().map_err(|_| {
+                crate::error::AppError::internal("help discovery lock was poisoned")
+            })?;
+            Self::check_publication(&mut state, ticket)?;
+        }
+        let persisted = prepare();
         let mut state = self
             .0
             .lock()
-            .map_err(|_| "help discovery lock was poisoned")?;
+            .map_err(|_| crate::error::AppError::internal("help discovery lock was poisoned"))?;
+        Self::check_publication(&mut state, ticket)?;
+        state.active.remove(&ticket.owner);
+        persisted?;
+        commit()?;
+        if report.complete() {
+            let fingerprint = &report.identity.fingerprint;
+            state.insertion_order.retain(|key| key != fingerprint);
+            if !state.cache.contains_key(fingerprint) && state.cache.len() >= CACHE_ENTRIES {
+                if let Some(key) = state.insertion_order.pop_front() {
+                    state.cache.remove(&key);
+                }
+            }
+            state.insertion_order.push_back(fingerprint.clone());
+            state.cache.insert(fingerprint.clone(), report.clone());
+        }
+        Ok(())
+    }
+
+    fn check_publication(
+        state: &mut ServiceState,
+        ticket: &DiscoveryTicket,
+    ) -> Result<(), crate::error::AppError> {
         if !state
             .active
             .get(&ticket.owner)
             .is_some_and(|t| t.id == ticket.id)
         {
-            return Err("help discovery superseded; late result discarded".into());
+            return Err(crate::error::AppError::cancelled(
+                "help discovery superseded; late result discarded",
+            ));
         }
         if ticket.cancel.load(Ordering::Acquire) {
             state.active.remove(&ticket.owner);
-            return Err("help discovery cancelled".into());
-        }
-        if let Err(error) = persist() {
-            state.active.remove(&ticket.owner);
-            return Err(error);
-        }
-        state.active.remove(&ticket.owner);
-        if report.complete() {
-            if state.cache.len() >= CACHE_ENTRIES {
-                if let Some(key) = state.cache.keys().next().cloned() {
-                    state.cache.remove(&key);
-                }
-            }
-            state
-                .cache
-                .insert(report.identity.fingerprint.clone(), report.clone());
+            return Err(crate::error::AppError::cancelled(
+                "help discovery cancelled",
+            ));
         }
         Ok(())
     }
@@ -775,7 +845,10 @@ mod tests {
         assert_eq!(identity.artifacts_sha256.len(), 1);
         request.artifacts.push(alias);
         assert_eq!(
-            request.identity(&AtomicBool::new(false)).unwrap_err(),
+            request
+                .identity(&AtomicBool::new(false))
+                .unwrap_err()
+                .message,
             "duplicate help artifact"
         );
     }
@@ -851,6 +924,7 @@ mod tests {
         );
         assert!(discover(&command, &AtomicBool::new(true))
             .unwrap_err()
+            .message
             .contains("cancelled"));
         assert_eq!(fs::read(&artifact.path).unwrap(), b"build one");
     }
@@ -921,10 +995,9 @@ mod tests {
         assert!(!other.cancel.load(Ordering::Acquire));
         assert!(!latest.cancel.load(Ordering::Acquire));
         let report = discover(&command("normal"), &AtomicBool::new(false)).unwrap();
-        assert!(service
-            .finish(&first, &report)
-            .unwrap_err()
-            .contains("superseded"));
+        let error = service.finish(&first, &report).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert!(error.message.contains("superseded"));
         assert!(service
             .cached(&command("normal"), &AtomicBool::new(false))
             .unwrap()
@@ -1001,7 +1074,7 @@ mod tests {
         command.program = batch.clone();
         let error = command.identity(&AtomicBool::new(false)).unwrap_err();
         fs::remove_file(batch).unwrap();
-        assert!(error.contains("implicit Windows batch"));
+        assert!(error.message.contains("implicit Windows batch"));
     }
 
     #[test]
@@ -1032,6 +1105,7 @@ mod tests {
         assert!(service
             .finish(&old, &obsolete)
             .unwrap_err()
+            .message
             .contains("superseded"));
         assert_eq!(
             service
@@ -1070,6 +1144,7 @@ mod tests {
         assert!(service
             .finish(&first, &report)
             .unwrap_err()
+            .message
             .contains("cancelled"));
         assert_eq!(service.cancel_all().unwrap(), 1);
         service.failed(&other);
@@ -1077,13 +1152,13 @@ mod tests {
     }
 
     #[test]
-    fn publication_is_linearized_with_cancellation_and_supersession() {
+    fn persistence_does_not_block_cancellation_and_rechecks_publication() {
         let service = Arc::new(HelpService::default());
         let report = discover(&command("normal"), &AtomicBool::new(false)).unwrap();
-        // A cancel issued while the persistent write is in progress waits for
-        // the lock: the write completes and the ticket is no longer active.
+        // Cancellation can acquire the state lock while disk I/O is blocked.
         let ticket = service.begin("linear").unwrap();
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let worker = service.clone();
         let worker_report = report.clone();
         let written = Arc::new(AtomicBool::new(false));
@@ -1091,15 +1166,27 @@ mod tests {
         let handle = std::thread::spawn(move || {
             worker.publish(&ticket, &worker_report, || {
                 entered_tx.send(()).unwrap();
-                std::thread::sleep(Duration::from_millis(300));
+                release_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
                 worker_written.store(true, Ordering::Release);
                 Ok(())
             })
         });
         entered_rx.recv().unwrap();
-        assert!(!service.cancel_owner("linear").unwrap());
-        assert!(written.load(Ordering::Acquire));
-        handle.join().unwrap().unwrap();
+        assert!(service.cancel_owner("linear").unwrap());
+        assert!(!written.load(Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        assert!(handle
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .message
+            .contains("cancelled"));
+        assert!(service
+            .cached(&command("normal"), &AtomicBool::new(false))
+            .unwrap()
+            .is_none());
         // A superseded or cancelled ticket never runs its write at all.
         let old = service.begin("linear").unwrap();
         let _fresh = service.begin("linear").unwrap();
@@ -1110,6 +1197,7 @@ mod tests {
                 Ok(())
             })
             .unwrap_err()
+            .message
             .contains("superseded"));
         let cancelled = service.begin("other").unwrap();
         service.cancel_all().unwrap();
@@ -1119,13 +1207,14 @@ mod tests {
                 Ok(())
             })
             .unwrap_err()
+            .message
             .contains("cancelled"));
         assert!(!ran.load(Ordering::Acquire));
         // A failed write frees the owner for an immediate retry.
         let failing = service.begin("retry").unwrap();
         assert_eq!(
             service.publish(&failing, &report, || Err("disk full".into())),
-            Err("disk full".to_string())
+            Err(crate::error::AppError::internal("disk full"))
         );
         assert!(!service.cancel_owner("retry").unwrap());
     }
@@ -1169,7 +1258,7 @@ mod tests {
         );
         assert!(invalid.decoding_loss);
         assert!(invalid.encoding.contains("unrecognized"));
-        assert_eq!(without_ansi("a\u{1b}]0;synthetic title\u{7}b\u{1b}]8;;https://example.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\"),"ablink");
+        assert_eq!(crate::process_output::strip_ansi("a\u{1b}]0;synthetic title\u{7}b\u{1b}]8;;https://example.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\"),"ablink");
     }
 
     #[test]

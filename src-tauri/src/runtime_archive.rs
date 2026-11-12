@@ -2,6 +2,7 @@
 //! materialized as files so installed bundles need no symlink privileges and
 //! cannot retain links out of their private staging directory.
 
+use crate::error::AppError;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -46,38 +47,54 @@ impl<R: Read> Read for TarReader<'_, R> {
     }
 }
 
-fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
+fn archive_read_error(error: std::io::Error, cancel: &AtomicBool) -> AppError {
     if cancel.load(Ordering::Acquire) {
-        Err("runtime install cancelled".into())
+        AppError::cancelled(error.to_string())
+    } else {
+        AppError::validation(error.to_string())
+    }
+}
+
+fn cancelled(cancel: &AtomicBool) -> Result<(), AppError> {
+    if cancel.load(Ordering::Acquire) {
+        Err(AppError::cancelled("runtime install cancelled"))
     } else {
         Ok(())
     }
 }
 
-fn safe_path(value: &str) -> Result<PathBuf, String> {
+fn safe_path(value: &str) -> Result<PathBuf, AppError> {
     if value.len() > MAX_ARCHIVE_PATH_BYTES
         || value.starts_with('/')
         || value.contains(['\\', ':', '\0'])
     {
-        return Err("runtime archive contains an unsafe path".into());
+        return Err(AppError::validation(
+            "runtime archive contains an unsafe path",
+        ));
     }
     let mut path = PathBuf::new();
     for component in value.split('/') {
         match component {
             "" | "." => {}
-            ".." => return Err("runtime archive contains an unsafe path".into()),
+            ".." => {
+                return Err(AppError::validation(
+                    "runtime archive contains an unsafe path",
+                ))
+            }
             _ => path.push(component),
         }
     }
     Ok(path)
 }
 
-fn link_target(path: &Path, value: &str, hard_link: bool) -> Result<PathBuf, String> {
+fn link_target(path: &Path, value: &str, hard_link: bool) -> Result<PathBuf, AppError> {
     if value.len() > MAX_ARCHIVE_PATH_BYTES
         || value.starts_with('/')
         || value.contains(['\\', ':', '\0'])
     {
-        return Err("runtime archive link has an unsafe target".into());
+        return Err(AppError::validation(
+            "runtime archive link has an unsafe target",
+        ));
     }
     let mut target = if hard_link {
         PathBuf::new()
@@ -89,59 +106,69 @@ fn link_target(path: &Path, value: &str, hard_link: bool) -> Result<PathBuf, Str
             "" | "." => {}
             ".." => {
                 if !target.pop() {
-                    return Err("runtime archive link escapes staging directory".into());
+                    return Err(AppError::validation(
+                        "runtime archive link escapes staging directory",
+                    ));
                 }
             }
             _ => target.push(component),
         }
     }
     if target.as_os_str().is_empty() {
-        return Err("runtime archive link has an empty target".into());
+        return Err(AppError::validation(
+            "runtime archive link has an empty target",
+        ));
     }
     Ok(target)
 }
 
-fn prepare_root(root: &Path) -> Result<(), String> {
+fn prepare_root(root: &Path) -> Result<(), AppError> {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(root).map_err(|error| error.to_string())?;
-            fs::symlink_metadata(root).map_err(|error| error.to_string())?
+            fs::create_dir_all(root).map_err(|error| AppError::from_io(&error))?;
+            fs::symlink_metadata(root).map_err(|error| AppError::from_io(&error))?
         }
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(AppError::from_io(&error)),
     };
     // Only the private extraction root must be plain. A selected data
     // directory above it may legitimately be reached through an alias.
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(
-            "Cannot extract runtime files into a linked folder or an existing file.".into(),
-        );
+        return Err(AppError::validation(
+            "Cannot extract runtime files into a linked folder or an existing file.",
+        ));
     }
     Ok(())
 }
 
-fn prepare_parent(root: &Path, relative: &Path) -> Result<PathBuf, String> {
+fn prepare_parent(root: &Path, relative: &Path) -> Result<PathBuf, AppError> {
     let mut current = root.to_path_buf();
     for component in relative.parent().unwrap_or(Path::new("")).components() {
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => return Err("runtime archive parent is not a regular directory".into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current).map_err(|error| error.to_string())?
+            Ok(_) => {
+                return Err(AppError::validation(
+                    "runtime archive parent is not a regular directory",
+                ))
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|error| AppError::from_io(&error))?
+            }
+            Err(error) => return Err(AppError::from_io(&error)),
         }
     }
     Ok(root.join(relative))
 }
 
-fn add_size(total: &mut u64, bytes: u64) -> Result<(), String> {
+fn add_size(total: &mut u64, bytes: u64) -> Result<(), AppError> {
     *total = total
         .checked_add(bytes)
-        .ok_or("runtime archive expanded size overflow")?;
+        .ok_or_else(|| AppError::validation("runtime archive expanded size overflow"))?;
     if *total > MAX_EXTRACTED_BYTES {
-        return Err("runtime archive expands beyond the configured size limit".into());
+        return Err(AppError::validation(
+            "runtime archive expands beyond the configured size limit",
+        ));
     }
     Ok(())
 }
@@ -152,12 +179,18 @@ fn copy_entry(
     path: &Path,
     mode: Option<u32>,
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                AppError::validation(error.to_string())
+            } else {
+                AppError::from_io(&error)
+            }
+        })?;
     let mut reader = reader.take(size.saturating_add(1));
     let mut buffer = [0_u8; 64 * 1024];
     let mut copied = 0_u64;
@@ -165,25 +198,29 @@ fn copy_entry(
         cancelled(cancel)?;
         let bytes = reader
             .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| archive_read_error(error, cancel))?;
         if bytes == 0 {
             break;
         }
         copied += bytes as u64;
         if copied > size {
-            return Err("runtime archive entry size changed while extracting".into());
+            return Err(AppError::validation(
+                "runtime archive entry size changed while extracting",
+            ));
         }
         std::io::Write::write_all(&mut output, &buffer[..bytes])
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
     }
     if copied != size {
-        return Err("runtime archive entry size changed while extracting".into());
+        return Err(AppError::validation(
+            "runtime archive entry size changed while extracting",
+        ));
     }
     set_file_mode(path, mode)?;
     Ok(())
 }
 
-fn set_file_mode(path: &Path, mode: Option<u32>) -> Result<(), String> {
+fn set_file_mode(path: &Path, mode: Option<u32>) -> Result<(), AppError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -192,21 +229,21 @@ fn set_file_mode(path: &Path, mode: Option<u32>) -> Result<(), String> {
             path,
             fs::Permissions::from_mode(mode.unwrap_or(0o644) & 0o755 | 0o600),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     }
     #[cfg(not(unix))]
     let _ = (path, mode);
     Ok(())
 }
 
-pub(super) fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+pub(super) fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), AppError> {
     prepare_root(dest)?;
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut file = fs::File::open(path).map_err(|error| AppError::from_io(&error))?;
     let mut magic = [0_u8; 2];
     file.read_exact(&mut magic)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::validation(error.to_string()))?;
     drop(file);
-    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let file = fs::File::open(path).map_err(|error| AppError::from_io(&error))?;
     if magic == [0x1f, 0x8b] {
         extract_tar(
             flate2::read::GzDecoder::new(BufReader::new(file)),
@@ -218,20 +255,30 @@ pub(super) fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Res
     }
 }
 
-fn extract_zip(file: fs::File, dest: &Path, cancel: &AtomicBool) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+fn extract_zip(file: fs::File, dest: &Path, cancel: &AtomicBool) -> Result<(), AppError> {
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| AppError::validation(error.to_string()))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
-        return Err("runtime archive contains too many entries".into());
+        return Err(AppError::validation(
+            "runtime archive contains too many entries",
+        ));
     }
     let mut total = 0;
     for index in 0..archive.len() {
         cancelled(cancel)?;
-        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| AppError::validation(error.to_string()))?;
         let mode = entry.unix_mode();
         if mode.is_some_and(|mode| (mode & 0o170000) == 0o120000) {
-            return Err("runtime archive contains a symbolic link".into());
+            return Err(AppError::validation(
+                "runtime archive contains a symbolic link",
+            ));
         }
-        let relative = safe_path(entry.name())?;
+        let name = entry
+            .name()
+            .map_err(|error| AppError::validation(error.to_string()))?;
+        let relative = safe_path(&name)?;
         if relative.as_os_str().is_empty() {
             continue;
         }
@@ -247,7 +294,7 @@ fn extract_zip(file: fs::File, dest: &Path, cancel: &AtomicBool) -> Result<(), S
     Ok(())
 }
 
-fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<(), String> {
+fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<(), AppError> {
     let remaining = Rc::new(Cell::new(MAX_TAR_METADATA_BYTES));
     let mut archive = tar::Archive::new(TarReader {
         inner: reader,
@@ -257,7 +304,9 @@ fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<()
     let mut total = 0;
     let mut files = HashSet::new();
     let mut links = HashMap::new();
-    let mut entries = archive.entries().map_err(|error| error.to_string())?;
+    let mut entries = archive
+        .entries()
+        .map_err(|error| archive_read_error(error, cancel))?;
     let mut count = 0;
     loop {
         cancelled(cancel)?;
@@ -267,19 +316,23 @@ fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<()
         };
         count += 1;
         if count > MAX_ARCHIVE_ENTRIES {
-            return Err("runtime archive contains too many entries".into());
+            return Err(AppError::validation(
+                "runtime archive contains too many entries",
+            ));
         }
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = entry.map_err(|error| archive_read_error(error, cancel))?;
         let relative = safe_path(
             &String::from_utf8(entry.path_bytes().into_owned())
-                .map_err(|_| "runtime archive path is not UTF-8")?,
+                .map_err(|_| AppError::validation("runtime archive path is not UTF-8"))?,
         )?;
         let kind = entry.header().entry_type();
         if relative.as_os_str().is_empty() {
             if kind.is_dir() {
                 continue;
             }
-            return Err("runtime archive contains an empty file path".into());
+            return Err(AppError::validation(
+                "runtime archive contains an empty file path",
+            ));
         }
         let output = prepare_parent(dest, &relative)?;
         if kind.is_dir() {
@@ -287,27 +340,32 @@ fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<()
             continue;
         }
         if files.contains(&relative) || links.contains_key(&relative) {
-            return Err("runtime archive repeats a file path".into());
+            return Err(AppError::validation("runtime archive repeats a file path"));
         }
         if kind.is_symlink() || kind.is_hard_link() {
             let target = entry
                 .link_name_bytes()
-                .ok_or("runtime archive link has no target")?;
+                .ok_or_else(|| AppError::validation("runtime archive link has no target"))?;
             let target = std::str::from_utf8(&target)
-                .map_err(|_| "runtime archive link target is not UTF-8")?;
+                .map_err(|_| AppError::validation("runtime archive link target is not UTF-8"))?;
             links.insert(
                 relative.clone(),
                 link_target(&relative, target, kind.is_hard_link())?,
             );
         } else if kind.is_file() {
             let size = entry.size();
-            let mode = entry.header().mode().map_err(|error| error.to_string())?;
+            let mode = entry
+                .header()
+                .mode()
+                .map_err(|error| AppError::validation(error.to_string()))?;
             add_size(&mut total, size)?;
             remaining.set(size.saturating_add(1));
             copy_entry(entry, size, &output, Some(mode), cancel)?;
             files.insert(relative);
         } else {
-            return Err("runtime archive contains an unsupported special file".into());
+            return Err(AppError::validation(
+                "runtime archive contains an unsupported special file",
+            ));
         }
     }
     // Resolve only against regular archive files. Never create a filesystem
@@ -318,20 +376,25 @@ fn extract_tar(reader: impl Read, dest: &Path, cancel: &AtomicBool) -> Result<()
         let mut visited = HashSet::new();
         while let Some(next) = links.get(target) {
             if visited.len() >= 64 || !visited.insert(target) {
-                return Err("runtime archive contains cyclic or overly deep links".into());
+                return Err(AppError::validation(
+                    "runtime archive contains cyclic or overly deep links",
+                ));
             }
             target = next;
         }
         if !files.contains(target) {
-            return Err("runtime archive link does not target a regular archive file".into());
+            return Err(AppError::validation(
+                "runtime archive link does not target a regular archive file",
+            ));
         }
         let source = dest.join(target);
-        let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
+        let metadata = fs::metadata(&source).map_err(|error| AppError::from_io(&error))?;
         add_size(&mut total, metadata.len())?;
         let output = prepare_parent(dest, relative)?;
-        let file = fs::File::open(source).map_err(|error| error.to_string())?;
+        let file = fs::File::open(source).map_err(|error| AppError::from_io(&error))?;
         copy_entry(file, metadata.len(), &output, None, cancel)?;
-        fs::set_permissions(&output, metadata.permissions()).map_err(|error| error.to_string())?;
+        fs::set_permissions(&output, metadata.permissions())
+            .map_err(|error| AppError::from_io(&error))?;
     }
     Ok(())
 }
@@ -342,27 +405,27 @@ pub(super) fn extract_release(
     path: &Path,
     dest: &Path,
     cancel: &Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     prepare_root(dest)?;
     let unpacked = dest.join(format!(".unpack-{}", uuid::Uuid::new_v4().simple()));
     extract(path, &unpacked, cancel)?;
     let entries = fs::read_dir(&unpacked)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     let root = if entries.len() == 1
         && entries[0]
             .file_type()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| AppError::from_io(&error))?
             .is_dir()
     {
         entries[0].path()
     } else {
         unpacked.clone()
     };
-    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+    for entry in fs::read_dir(&root).map_err(|error| AppError::from_io(&error))? {
         cancelled(cancel)?;
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = entry.map_err(|error| AppError::from_io(&error))?;
         let output = dest.join(entry.file_name());
         if output.exists() {
             if output.is_file()
@@ -371,11 +434,13 @@ pub(super) fn extract_release(
             {
                 continue;
             }
-            return Err("runtime release archives contain conflicting files".into());
+            return Err(AppError::validation(
+                "runtime release archives contain conflicting files",
+            ));
         }
-        fs::rename(entry.path(), output).map_err(|error| error.to_string())?;
+        fs::rename(entry.path(), output).map_err(|error| AppError::from_io(&error))?;
     }
-    fs::remove_dir_all(&unpacked).map_err(|error| error.to_string())?;
+    fs::remove_dir_all(&unpacked).map_err(|error| AppError::from_io(&error))?;
     Ok(())
 }
 
@@ -591,7 +656,8 @@ mod tests {
             &Arc::new(AtomicBool::new(false)),
         )
         .unwrap_err();
-        assert!(error.contains("metadata exceeds"), "{error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("metadata exceeds"), "{error}");
     }
 
     #[test]
@@ -623,7 +689,8 @@ mod tests {
             cancel: &cancel,
         };
         let error = extract_tar(reader, &fixture.0, &cancel).unwrap_err();
-        assert!(error.contains("cancelled"), "{error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert!(error.message.contains("cancelled"), "{error}");
         assert!(!fixture.0.join("root/file").exists());
     }
 
@@ -697,7 +764,8 @@ mod tests {
             "C:/absolute",
             "root\\escape",
         ] {
-            assert!(safe_path(value).is_err(), "{value}");
+            let error = safe_path(value).unwrap_err();
+            assert_eq!(error.kind, crate::error::ErrorKind::Validation, "{value}");
         }
         assert_eq!(
             safe_path("./root/llama-server").unwrap(),
@@ -741,6 +809,7 @@ mod tests {
         assert!(
             extract_release(&path, &dest, &Arc::new(AtomicBool::new(true)))
                 .unwrap_err()
+                .message
                 .contains("cancelled")
         );
         assert!(!dest.join("llama-server").exists());

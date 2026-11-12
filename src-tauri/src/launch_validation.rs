@@ -1,4 +1,5 @@
 //! Launch configuration and runtime capability validation shared by desktop and CLI.
+use crate::error::AppError;
 use crate::{config, gpu, hardware, runtime, tuning_defaults};
 use std::fs;
 use std::path::Path;
@@ -7,19 +8,21 @@ use std::sync::{
     Arc,
 };
 
-pub(crate) fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
+pub(crate) fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), AppError> {
     cfg.normalize();
-    cfg.validate()?;
+    cfg.validate().map_err(AppError::validation)?;
     if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
-        return crate::providers::execution::validate(cfg);
+        return crate::providers::execution::validate(cfg).map_err(AppError::validation);
     }
     if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-        return Err(
-            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
-        );
+        return Err(AppError::validation(
+            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used",
+        ));
     }
     if cfg.active_model.trim().is_empty() {
-        return Err("select a GGUF model before starting the server".into());
+        return Err(AppError::validation(
+            "select a GGUF model before starting the server",
+        ));
     }
     validate_adapter_file(&cfg.active_model, "model", &["gguf"])?;
     validate_llama_model_role(&cfg.active_model, "model", false)?;
@@ -39,34 +42,34 @@ pub(crate) fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), S
             .unwrap_or_default()
             .to_ascii_lowercase();
         if draft_name.contains("dflash") && cfg.spec_type != "draft-dflash" {
-            return Err(
-                "a DFlash draft model requires speculative type 'draft-dflash' and a runtime supporting DFlash"
-                    .into(),
-            );
+            return Err(AppError::validation(
+                "a DFlash draft model requires speculative type 'draft-dflash' and a runtime supporting DFlash",
+            ));
         }
     }
     if tuning_defaults::speculative_enabled(cfg)
         && cfg.spec_type == "draft-dflash"
         && cfg.spec_draft_model.trim().is_empty()
     {
-        return Err(
-            "DFlash2 requires a draft model. Set the draft model GGUF path in Tuning before starting the server.".into(),
-        );
+        return Err(AppError::validation(
+            "DFlash2 requires a draft model. Set the draft model GGUF path in Tuning before starting the server.",
+        ));
     }
-    runtime::validate_runtime_identifiers(&cfg.active_backend, &cfg.active_build)?;
+    runtime::validate_runtime_identifiers(&cfg.active_backend, &cfg.active_build)
+        .map_err(AppError::validation)?;
     Ok(())
 }
 
 pub async fn validate_launch_config(
     cfg: &mut config::AppConfig,
-) -> Result<gpu::ResolvedGpu, String> {
+) -> Result<gpu::ResolvedGpu, AppError> {
     validate_launch_config_with_cancel(cfg, None).await
 }
 
 pub(crate) async fn validate_launch_config_with_cancel(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
-) -> Result<gpu::ResolvedGpu, String> {
+) -> Result<gpu::ResolvedGpu, AppError> {
     validate_launch(cfg, cancel, true).await
 }
 
@@ -74,14 +77,14 @@ pub(crate) async fn validate_launch(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
     repair: bool,
-) -> Result<gpu::ResolvedGpu, String> {
+) -> Result<gpu::ResolvedGpu, AppError> {
     cfg.normalize();
-    cfg.validate()?;
+    cfg.validate().map_err(AppError::validation)?;
     crate::providers::adapter::prepare_launch(cfg, cancel.cloned()).await?;
     validate_start_config(cfg)?;
     if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-            return Err("server start cancelled".into());
+            return Err(AppError::cancelled("server start cancelled"));
         }
         // A stored deep failure for this exact engine, model and settings
         // blocks the launch, as it does for llama.cpp placements.
@@ -104,14 +107,16 @@ pub(crate) async fn validate_launch(
         None => runtime::probe(&cfg.active_backend, &cfg.active_build).await?,
     };
     validate_runtime_adapter_capabilities(cfg, &capabilities)?;
-    gpu::validate_safe_auto_placement(&cfg.gpu, &cfg.active_backend, &capabilities.devices)?;
+    gpu::validate_safe_auto_placement(&cfg.gpu, &cfg.active_backend, &capabilities.devices)
+        .map_err(AppError::validation)?;
     let profile = hardware::detect();
     let resolved = gpu::resolve_with_runtime_devices(
         &cfg.gpu,
         &cfg.active_backend,
         &profile,
         &capabilities.devices,
-    )?;
+    )
+    .map_err(AppError::validation)?;
     // Nothing above this point has checked that the runtime computes correct
     // results here; it has only checked that it can start. Do that last, once
     // the exact device placement is known.
@@ -126,12 +131,17 @@ pub(crate) async fn validate_launch(
     Ok(resolved)
 }
 
-fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result<(), String> {
+fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result<(), AppError> {
     let metadata = fs::metadata(path).map_err(|error| {
-        format!("{label} file does not exist or is unreadable: {path} ({error})")
+        AppError::new(
+            AppError::io_kind(&error),
+            format!("{label} file does not exist or is unreadable: {path} ({error})"),
+        )
     })?;
     if !metadata.is_file() {
-        return Err(format!("{label} path is not a regular file: {path}"));
+        return Err(AppError::validation(format!(
+            "{label} path is not a regular file: {path}"
+        )));
     }
     let extension = Path::new(path)
         .extension()
@@ -141,10 +151,10 @@ fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result
         .as_deref()
         .is_some_and(|value| extensions.contains(&value))
     {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "{label} must use one of [{}]: {path}",
             extensions.join(", ")
-        ));
+        )));
     }
     crate::models::validate_model_shards(Path::new(path))?;
     Ok(())
@@ -153,19 +163,19 @@ fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result
 /// llama.cpp b10840 loads CLIP projectors through mtmd/clip.cpp, separately
 /// from primary and draft language models. Only an inspected architecture is
 /// used here; filenames cannot establish a matching projector/model pair.
-fn validate_llama_model_role(path: &str, label: &str, projector: bool) -> Result<(), String> {
+fn validate_llama_model_role(path: &str, label: &str, projector: bool) -> Result<(), AppError> {
     let architecture = crate::gguf::read_metadata(Path::new(path))
         .ok()
         .and_then(|metadata| metadata.architecture);
     if let Some(architecture) = architecture {
         if (architecture == "clip") != projector {
-            return Err(if projector {
+            return Err(AppError::validation(if projector {
                 format!(
                     "{label} must be a multimodal projector, not a {architecture} language model"
                 )
             } else {
                 format!("{label} cannot be a multimodal projector; attach it through mmproj")
-            });
+            }));
         }
     }
     Ok(())
@@ -182,32 +192,43 @@ fn runtime_has_flag(capabilities: &runtime::RuntimeCapabilities, aliases: &[&str
 fn validate_runtime_adapter_capabilities(
     cfg: &config::AppConfig,
     capabilities: &runtime::RuntimeCapabilities,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if capabilities.state != "available" {
         let details = capabilities.diagnostics.join("; ");
-        return Err(format!(
-            "selected runtime failed preflight ({}): {}",
-            capabilities.state,
-            if details.is_empty() {
-                "no diagnostics"
+        return Err(AppError::new(
+            if capabilities.state == "not installed" {
+                crate::error::ErrorKind::NotFound
             } else {
-                &details
-            }
+                crate::error::ErrorKind::Unavailable
+            },
+            format!(
+                "selected runtime failed preflight ({}): {}",
+                capabilities.state,
+                if details.is_empty() {
+                    "no diagnostics"
+                } else {
+                    &details
+                }
+            ),
         ));
     }
     if tuning_defaults::speculative_enabled(cfg)
         && cfg.spec_type == "draft-dflash"
         && !capabilities.supports_dflash
     {
-        return Err("the selected runtime does not advertise draft-dflash support. Select a current DFlash-capable release, compatibility build, or PR #27342 runtime.".into());
+        return Err(AppError::validation("the selected runtime does not advertise draft-dflash support. Select a current DFlash-capable release, compatibility build, or PR #27342 runtime."));
     }
     if !cfg.mmproj.trim().is_empty() && !runtime_has_flag(capabilities, &["--mmproj", "-mm"]) {
-        return Err("selected runtime does not expose an mmproj/projector flag".into());
+        return Err(AppError::validation(
+            "selected runtime does not expose an mmproj/projector flag",
+        ));
     }
     if cfg.lora_adapters.iter().any(|adapter| adapter.enabled)
         && !runtime_has_flag(capabilities, &["--lora"])
     {
-        return Err("selected runtime does not expose the --lora flag".into());
+        return Err(AppError::validation(
+            "selected runtime does not expose the --lora flag",
+        ));
     }
     if cfg
         .lora_adapters
@@ -215,7 +236,9 @@ fn validate_runtime_adapter_capabilities(
         .any(|adapter| adapter.enabled && (adapter.scale - 1.0).abs() >= f32::EPSILON)
         && !runtime_has_flag(capabilities, &["--lora-scaled"])
     {
-        return Err("a scaled LoRA adapter requires the runtime --lora-scaled flag".into());
+        return Err(AppError::validation(
+            "a scaled LoRA adapter requires the runtime --lora-scaled flag",
+        ));
     }
     Ok(())
 }
@@ -253,17 +276,20 @@ mod tests {
         cfg.active_model = projector.to_string_lossy().into_owned();
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("model cannot be a multimodal projector"));
         cfg.active_model = primary.to_string_lossy().into_owned();
         cfg.mmproj = primary.to_string_lossy().into_owned();
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("projector must be a multimodal projector"));
         cfg.mmproj.clear();
         cfg.spec_type = "draft".into();
         cfg.spec_draft_model = projector.to_string_lossy().into_owned();
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("draft model cannot be a multimodal projector"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -284,12 +310,14 @@ mod tests {
         };
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("shard is missing"));
         fs::write(&second, b"synthetic shard").unwrap();
         assert!(validate_start_config(&mut cfg).is_ok());
         cfg.active_model = second.to_string_lossy().into_owned();
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("first GGUF shard"));
         fs::remove_dir_all(&root).unwrap();
     }
@@ -310,6 +338,7 @@ mod tests {
         };
         assert!(validate_start_config(&mut invalid_cfg)
             .unwrap_err()
+            .message
             .contains("model must use"));
         let mut cfg = config::AppConfig {
             active_model: model.to_string_lossy().into_owned(),
@@ -321,9 +350,9 @@ mod tests {
                 .into_owned(),
             ..config::AppConfig::default()
         };
-        assert!(validate_start_config(&mut cfg)
-            .unwrap_err()
-            .contains("projector"));
+        let error = validate_start_config(&mut cfg).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::NotFound);
+        assert!(error.message.contains("projector"));
         cfg.mmproj.clear();
         cfg.lora_adapters.push(config::LoraAdapterConfig {
             path: root
@@ -335,6 +364,7 @@ mod tests {
         });
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("LoRA"));
         let mut dflash_cfg = config::AppConfig {
             active_model: model.to_string_lossy().into_owned(),
@@ -345,11 +375,13 @@ mod tests {
         };
         assert!(validate_start_config(&mut dflash_cfg)
             .unwrap_err()
+            .message
             .contains("draft model"));
         dflash_cfg.active_backend = "cpu".into();
         dflash_cfg.active_build = "pr27342".into();
         assert!(validate_start_config(&mut dflash_cfg)
             .unwrap_err()
+            .message
             .contains("draft model"));
         let draft = root.join("draft.gguf");
         fs::write(&draft, b"draft model fixture").expect("write draft model fixture");
@@ -371,7 +403,7 @@ mod tests {
             .expect("write mismatched draft fixture");
         let error = validate_start_config(&mut mismatched_cfg)
             .expect_err("DFlash model cannot be launched as MTP");
-        assert!(error.contains("draft-dflash"));
+        assert!(error.message.contains("draft-dflash"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -383,15 +415,18 @@ mod tests {
         };
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("installed in AioLM"));
         cfg.active_backend = "cpu".into();
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("must be selected together"));
         cfg.active_build = "b123".into();
         // A complete runtime pair moves past the gate to the model check.
         assert!(validate_start_config(&mut cfg)
             .unwrap_err()
+            .message
             .contains("model file does not exist"));
     }
 
@@ -421,6 +456,7 @@ mod tests {
         };
         assert!(validate_runtime_adapter_capabilities(&cfg, &capabilities)
             .unwrap_err()
+            .message
             .contains("lora-scaled"));
         capabilities.flags.push("--lora-scaled=PATH SCALE".into());
         assert!(validate_runtime_adapter_capabilities(&cfg, &capabilities).is_ok());
@@ -431,6 +467,7 @@ mod tests {
         assert!(
             validate_runtime_adapter_capabilities(&dflash_cfg, &capabilities)
                 .unwrap_err()
+                .message
                 .contains("draft-dflash")
         );
         capabilities.supports_dflash = true;

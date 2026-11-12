@@ -108,23 +108,27 @@ pub struct DiscoveryReport {
     pub truncated: bool,
 }
 
-fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
+fn cancelled(cancel: &AtomicBool) -> Result<(), crate::error::AppError> {
     if cancel.load(Ordering::Acquire) {
-        Err("runtime discovery cancelled".into())
+        Err(crate::error::AppError::cancelled(
+            "runtime discovery cancelled",
+        ))
     } else {
         Ok(())
     }
 }
 
-fn bounded_read(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+fn bounded_read(path: &Path, limit: usize) -> Result<Vec<u8>, crate::error::AppError> {
     let mut bytes = Vec::new();
     fs::File::open(path)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::error::AppError::from_io(&e))?
         .take((limit + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::from_io(&e))?;
     if bytes.len() > limit {
-        return Err("discovery metadata exceeds its size limit".into());
+        return Err(crate::error::AppError::validation(
+            "discovery metadata exceeds its size limit",
+        ));
     }
     Ok(bytes)
 }
@@ -190,11 +194,17 @@ fn candidate(
     }
 }
 
-fn file_fingerprint(path: &Path) -> Result<String, String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| "The entry point is no longer available.")?;
+fn file_fingerprint(path: &Path) -> Result<String, crate::error::AppError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        crate::error::AppError::new(
+            crate::error::AppError::io_kind(&error),
+            "The entry point is no longer available.",
+        )
+    })?;
     if !path.is_absolute() || !metadata.is_file() {
-        return Err("The selected entry point is no longer a regular local file.".into());
+        return Err(crate::error::AppError::validation(
+            "The selected entry point is no longer a regular local file.",
+        ));
     }
     let mut digest = Sha256::new();
     digest.update(path.to_string_lossy().as_bytes());
@@ -217,24 +227,31 @@ fn file_fingerprint(path: &Path) -> Result<String, String> {
     }
     let mut prefix = Vec::new();
     fs::File::open(path)
-        .map_err(|_| "The entry point is no longer readable.")?
+        .map_err(|error| {
+            crate::error::AppError::new(
+                crate::error::AppError::io_kind(&error),
+                "The entry point is no longer readable.",
+            )
+        })?
         .take(512)
         .read_to_end(&mut prefix)
-        .map_err(|_| "The entry point identity is unavailable.")?;
+        .map_err(|_| {
+            crate::error::AppError::unavailable("The entry point identity is unavailable.")
+        })?;
     digest.update(prefix);
     Ok(format!("{:x}", digest.finalize()))
 }
 
 /// Re-snapshot OS ownership immediately before using cached discovery data.
 /// This grants no right to terminate an existing process.
-pub fn revalidate(candidate: &RuntimeCandidate) -> Result<(), String> {
+pub fn revalidate(candidate: &RuntimeCandidate) -> Result<(), crate::error::AppError> {
     revalidate_with_cancel(candidate, &AtomicBool::new(false))
 }
 
 pub fn revalidate_with_cancel(
     candidate: &RuntimeCandidate,
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     cancelled(cancel)?;
     match candidate.source {
         DiscoverySource::LocalProcess => {
@@ -244,7 +261,7 @@ pub fn revalidate_with_cancel(
                     .as_ref()
                     .is_none_or(String::is_empty)
             {
-                return Err("The process creation identity is unavailable; discover the local server again.".into());
+                return Err(crate::error::AppError::unavailable("The process creation identity is unavailable; discover the local server again."));
             }
             let mut current = DiscoveryReport::default();
             discover_processes(&mut current, cancel)?;
@@ -256,22 +273,24 @@ pub fn revalidate_with_cancel(
             }) {
                 Ok(())
             } else {
-                Err("The process or its listener changed; discover the local server again.".into())
+                Err(crate::error::AppError::not_found(
+                    "The process or its listener changed; discover the local server again.",
+                ))
             }
         }
         DiscoverySource::SelectedFolder => {
-            let path = candidate
-                .entrypoint_path
-                .as_deref()
-                .ok_or("The selected entry-point path is unavailable.")?;
-            let expected = candidate
-                .entrypoint_fingerprint
-                .as_ref()
-                .ok_or("The selected entry-point identity is unavailable.")?;
+            let path = candidate.entrypoint_path.as_deref().ok_or_else(|| {
+                crate::error::AppError::not_found("The selected entry-point path is unavailable.")
+            })?;
+            let expected = candidate.entrypoint_fingerprint.as_ref().ok_or_else(|| {
+                crate::error::AppError::unavailable(
+                    "The selected entry-point identity is unavailable.",
+                )
+            })?;
             if &file_fingerprint(Path::new(path))? != expected {
-                return Err(
-                    "The selected entry point changed; discover the installation again.".into(),
-                );
+                return Err(crate::error::AppError::validation(
+                    "The selected entry point changed; discover the installation again.",
+                ));
             }
             Ok(())
         }
@@ -292,7 +311,10 @@ fn push(report: &mut DiscoveryReport, value: RuntimeCandidate) {
 /// Explicit user action only. Selected folders are bounded and links are not
 /// traversed. Running candidates belong to the current user, but are not owned
 /// by AioLM and must never be stopped or adopted by discovery.
-pub fn discover(folder: Option<&Path>, cancel: &AtomicBool) -> Result<DiscoveryReport, String> {
+pub fn discover(
+    folder: Option<&Path>,
+    cancel: &AtomicBool,
+) -> Result<DiscoveryReport, crate::error::AppError> {
     cancelled(cancel)?;
     let mut report = DiscoveryReport::default();
     discover_processes(&mut report, cancel)?;
@@ -374,7 +396,10 @@ fn process_creation(path: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
+fn discover_processes(
+    report: &mut DiscoveryReport,
+    cancel: &AtomicBool,
+) -> Result<(), crate::error::AppError> {
     use std::os::unix::fs::MetadataExt;
     let uid = unsafe { libc::geteuid() };
     let mut listeners = BTreeMap::new();
@@ -490,7 +515,11 @@ fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Resu
 }
 
 #[cfg(target_os = "macos")]
-fn system_inventory(program: &Path, args: &[&str], cancel: &AtomicBool) -> Result<Vec<u8>, String> {
+fn system_inventory(
+    program: &Path,
+    args: &[&str],
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, crate::error::AppError> {
     let mut command = crate::procutil::std_command(program);
     command
         .env_clear()
@@ -502,12 +531,18 @@ fn system_inventory(program: &Path, args: &[&str], cancel: &AtomicBool) -> Resul
         4 * 1024 * 1024,
         Some(cancel),
     )
-    .map_err(|_| "Local process inventory was unavailable or incomplete.".into())
+    .map_err(|_| {
+        crate::error::AppError::unavailable(
+            "Local process inventory was unavailable or incomplete.",
+        )
+    })
     .and_then(|output| {
         if output.status.success() {
             Ok(output.stdout)
         } else {
-            Err("Local process inventory was unavailable or incomplete.".into())
+            Err(crate::error::AppError::unavailable(
+                "Local process inventory was unavailable or incomplete.",
+            ))
         }
     })
 }
@@ -592,7 +627,10 @@ fn mac_arguments(pid: u32) -> Option<(PathBuf, Vec<String>)> {
 }
 
 #[cfg(target_os = "macos")]
-fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
+fn discover_processes(
+    report: &mut DiscoveryReport,
+    cancel: &AtomicBool,
+) -> Result<(), crate::error::AppError> {
     let uid = unsafe { libc::geteuid() }.to_string();
     let bytes = match system_inventory(
         Path::new("/usr/sbin/lsof"),
@@ -602,7 +640,7 @@ fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Resu
         Ok(bytes) => bytes,
         Err(message) => {
             cancelled(cancel)?;
-            report.warnings.push(message);
+            report.warnings.push(message.message);
             return Ok(());
         }
     };
@@ -657,12 +695,18 @@ fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Resu
 mod windows_inventory;
 
 #[cfg(windows)]
-fn discover_processes(report: &mut DiscoveryReport, cancel: &AtomicBool) -> Result<(), String> {
+fn discover_processes(
+    report: &mut DiscoveryReport,
+    cancel: &AtomicBool,
+) -> Result<(), crate::error::AppError> {
     windows_inventory::discover(report, cancel)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn discover_processes(report: &mut DiscoveryReport, _: &AtomicBool) -> Result<(), String> {
+fn discover_processes(
+    report: &mut DiscoveryReport,
+    _: &AtomicBool,
+) -> Result<(), crate::error::AppError> {
     report
         .warnings
         .push("Local process discovery is unavailable on this platform.".into());
@@ -855,12 +899,17 @@ fn discover_folder(
     folder: &Path,
     report: &mut DiscoveryReport,
     cancel: &AtomicBool,
-) -> Result<(), String> {
-    let root = folder
-        .canonicalize()
-        .map_err(|_| "The selected folder is unavailable.")?;
+) -> Result<(), crate::error::AppError> {
+    let root = folder.canonicalize().map_err(|error| {
+        crate::error::AppError::new(
+            crate::error::AppError::io_kind(&error),
+            "The selected folder is unavailable.",
+        )
+    })?;
     if !root.is_dir() {
-        return Err("Select an existing installation folder.".into());
+        return Err(crate::error::AppError::validation(
+            "Select an existing installation folder.",
+        ));
     }
     // Every entry is ranked before publication so the bound keeps the most
     // useful ones: (launch tier, folder depth, path). Tier 0 is a launchable
@@ -1098,16 +1147,15 @@ mod tests {
         assert_ne!(a.id, b.id);
         revalidate(a).unwrap();
         fs::write(&first, b"\x7fELFchanged-entry").unwrap();
-        assert!(revalidate(a).unwrap_err().contains("changed"));
+        assert!(revalidate(a).unwrap_err().message.contains("changed"));
         revalidate(b).unwrap();
     }
 
     #[test]
     fn cancellation_and_bounds_do_not_publish_silent_success() {
-        assert_eq!(
-            discover(None, &AtomicBool::new(true)).unwrap_err(),
-            "runtime discovery cancelled"
-        );
+        let error = discover(None, &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "runtime discovery cancelled");
         assert!(!valid_arguments(&vec!["a".into(); MAX_ARGUMENTS + 1]));
         let folder = Folder::new();
         for index in 0..=MAX_CANDIDATES {

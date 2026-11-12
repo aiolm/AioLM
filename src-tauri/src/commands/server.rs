@@ -1,4 +1,5 @@
 //! Model process IPC, shared session lifecycle operations and idle tracking.
+use crate::error::AppError;
 use crate::launch_jobs::ServingLaunch;
 use crate::launch_validation::validate_launch_config_with_cancel;
 use crate::{config, gpu, server, session, state::AppState, tuning_defaults};
@@ -24,19 +25,25 @@ struct LaunchGuard {
 
 impl Drop for LaunchGuard {
     fn drop(&mut self) {
-        let mut model = self.target.lock().unwrap_or_else(|e| e.into_inner());
-        if model.is_current_launch(self.generation)
-            && model.lifecycle == server::Lifecycle::Starting
-        {
-            server::kill(&mut model.child, None);
-            model.cancel_launch();
-            model.url.clear();
-            model.api_key.clear();
-            model.redaction_secret.clear();
-            model.model.clear();
-            model.mmproj.clear();
-            model.draft_model.clear();
-        }
+        let teardown = {
+            let mut model = self.target.lock().unwrap_or_else(|e| e.into_inner());
+            if model.is_current_launch(self.generation)
+                && model.lifecycle == server::Lifecycle::Starting
+            {
+                let teardown = model.take_child();
+                model.cancel_launch();
+                model.url.clear();
+                model.api_key.clear();
+                model.redaction_secret.clear();
+                model.model.clear();
+                model.mmproj.clear();
+                model.draft_model.clear();
+                teardown
+            } else {
+                None
+            }
+        };
+        drop(teardown);
     }
 }
 
@@ -46,7 +53,7 @@ pub(super) async fn prepare_launch(
     mut cfg: config::AppConfig,
     persist: bool,
     launch_cancel: &Arc<AtomicBool>,
-) -> Result<PreparedLaunch, String> {
+) -> Result<PreparedLaunch, AppError> {
     ensure_launch_allowed(state, launch_cancel)?;
     // Probes and dependency repair stop with their own cancellation messages.
     // Normalize a failed owned launch before post-success admission checks;
@@ -55,7 +62,7 @@ pub(super) async fn prepare_launch(
         .await
         .map_err(|error| {
             if launch_cancel.load(Ordering::Acquire) {
-                "server start cancelled".to_string()
+                AppError::cancelled("server start cancelled")
             } else {
                 error
             }
@@ -65,23 +72,24 @@ pub(super) async fn prepare_launch(
         let _config_write = state.config_write.lock().await;
         ensure_launch_allowed(state, launch_cancel)?;
         let latest = config::load_result()?;
-        cfg = config::save(&config::execution::merge_launch(&latest, &cfg)?)?;
+        cfg = config::save(
+            &config::execution::merge_launch(&latest, &cfg).map_err(AppError::validation)?,
+        )?;
     }
     Ok(PreparedLaunch { cfg, gpu })
 }
 
-fn ensure_launch_allowed(state: &AppState, launch_cancel: &AtomicBool) -> Result<(), String> {
+fn ensure_launch_allowed(state: &AppState, launch_cancel: &AtomicBool) -> Result<(), AppError> {
     if state.runtime_busy.load(Ordering::Acquire) {
-        return Err(
-            "a runtime operation is in progress; wait for it to finish before starting the server"
-                .into(),
-        );
+        return Err(AppError::busy(
+            "a runtime operation is in progress; wait for it to finish before starting the server",
+        ));
     }
     if state.exiting.load(Ordering::Acquire) {
-        return Err("application is exiting".into());
+        return Err(AppError::cancelled("application is exiting"));
     }
     if launch_cancel.load(Ordering::Acquire) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
     Ok(())
 }
@@ -92,7 +100,7 @@ pub(super) fn ensure_no_active_requests(
     state: &AppState,
     target_id: &str,
     stop_existing: bool,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mut targets = Vec::new();
     if target_id == session::DEFAULT_SESSION_ID || stop_existing {
         targets.push((
@@ -113,9 +121,9 @@ pub(super) fn ensure_no_active_requests(
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
         if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
-            return Err(format!(
+            return Err(AppError::busy(format!(
                 "finish or stop the active response in session '{id}' before loading a model"
-            ));
+            )));
         }
     }
     Ok(())
@@ -125,11 +133,11 @@ pub(super) fn ensure_no_active_requests(
 /// target is locked before checking activity, so a late API request cannot make
 /// a later session refuse after an earlier session has already been stopped.
 /// The caller holds `state.operation`, which serializes model launches.
-pub(super) fn stop_models_for_replacement(
+pub(super) async fn stop_models_for_replacement(
     state: &AppState,
     target_id: &str,
     launch_cancel: Option<&AtomicBool>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mut targets = vec![(
         session::DEFAULT_SESSION_ID.to_string(),
         state.server.clone(),
@@ -143,31 +151,43 @@ pub(super) fn stop_models_for_replacement(
             .map(|entry| (entry.id.clone(), entry.state.clone(), entry.err.clone())),
     );
     targets.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut locked = targets
-        .iter()
-        .map(|(_, target, _)| {
-            target
-                .lock()
-                .map_err(|_| "server state lock was poisoned".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    for ((id, _, _), model) in targets.iter().zip(&locked) {
-        if model.lifecycle.blocks_resource_change() && model.active_requests > 0 {
-            return Err(format!(
-                "finish or stop the active response in session '{id}' before loading a model"
-            ));
+    let teardown = {
+        let mut locked = targets
+            .iter()
+            .map(|(_, target, _)| {
+                target
+                    .lock()
+                    .map_err(|_| "server state lock was poisoned".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for ((id, _, _), model) in targets.iter().zip(&locked) {
+            if model.lifecycle.blocks_resource_change() && model.active_requests > 0 {
+                return Err(AppError::busy(format!(
+                    "finish or stop the active response in session '{id}' before loading a model"
+                )));
+            }
         }
-    }
-    if let Some(cancel) = launch_cancel {
-        ensure_launch_allowed(state, cancel)?;
-    }
-    // All checks passed. Keep the locks through teardown so neither a client
-    // lease nor a manual stop can interleave with the accepted replacement.
-    for ((id, _, err), model) in targets.iter().zip(&mut locked) {
-        if id != target_id {
-            state.sessions.cancel_pending_start(id);
+        if let Some(cancel) = launch_cancel {
+            ensure_launch_allowed(state, cancel)?;
         }
-        stop_target(model, err);
+        // Commit every state transition together, but reclaim process resources
+        // only after every session lock has been released.
+        targets
+            .iter()
+            .zip(&mut locked)
+            .map(|((id, _, err), model)| {
+                if id != target_id {
+                    state.sessions.cancel_pending_start(id);
+                }
+                stop_target(model, err)
+            })
+            .collect::<Vec<_>>()
+    };
+    drop(teardown);
+    for (_, target, err) in &targets {
+        server::wait_teardowns(target).await;
+        err.clear();
+        err.clear_secret();
     }
     Ok(())
 }
@@ -180,23 +200,25 @@ pub(super) async fn start_on_target(
     prepared: PreparedLaunch,
     launch_cancel: &Arc<AtomicBool>,
     operation: Option<&ServingLaunch>,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     ensure_launch_allowed(state, launch_cancel)?;
     let PreparedLaunch {
         cfg: saved,
         gpu: resolved_gpu,
     } = prepared;
-    let (launch_generation, worker_cfg) = {
+    let (launch_generation, worker_cfg, teardown) = {
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
         // Stop/unload can complete while this launch waits for the target lock.
         ensure_launch_allowed(state, launch_cancel)?;
         if server.retired {
-            return Err("session was unloaded".into());
+            return Err(AppError::cancelled("session was unloaded"));
         }
         if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
-            return Err("finish or stop the active response before replacing this model".into());
+            return Err(AppError::busy(
+                "finish or stop the active response before replacing this model",
+            ));
         }
         // The saved port belongs to the external API. Internal chat and the
         // API router use this process's live URL, never the configured port.
@@ -212,21 +234,24 @@ pub(super) async fn start_on_target(
         server.model.clear();
         server.mmproj.clear();
         server.draft_model.clear();
-        server::kill(&mut server.child, Some(err.clone()));
-        (generation, worker_cfg)
+        let teardown = server.take_child_clearing(err);
+        (generation, worker_cfg, teardown)
     };
     let _launch_owner = LaunchGuard {
         target: target.clone(),
         generation: launch_generation,
     };
+    drop(teardown);
+    server::wait_teardowns(target).await;
     err.clear();
+    err.clear_secret();
 
     {
         let server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
         if !server.is_current_launch(launch_generation) || launch_cancel.load(Ordering::Acquire) {
-            return Err("server start cancelled".into());
+            return Err(AppError::cancelled("server start cancelled"));
         }
     }
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
@@ -244,30 +269,30 @@ pub(super) async fn start_on_target(
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
             if !server.is_current_launch(launch_generation) {
-                return Err("server start cancelled".into());
+                return Err(AppError::cancelled("server start cancelled"));
             }
             server.lifecycle = if state.exiting.load(Ordering::Acquire) {
                 server::Lifecycle::Stopped
             } else {
                 server::Lifecycle::Failed
             };
-            server.last_error = Some(error.clone());
+            server.last_error = Some(error.to_string());
             return Err(error);
         }
     };
 
-    {
-        let mut server = target
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?;
-        if !server.is_current_launch(launch_generation)
+    let mut orphan = Some(child);
+    let (cancelled, teardown) = {
+        let (mut server, poisoned) = match target.lock() {
+            Ok(server) => (server, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        if poisoned
+            || !server.is_current_launch(launch_generation)
             || state.exiting.load(Ordering::Acquire)
             || launch_cancel.load(Ordering::Acquire)
         {
-            let mut orphan = Some(child);
-            server::kill(&mut orphan, Some(err.clone()));
-            server::cleanup_api_key_file(api_key_file.as_deref());
-            if server.is_current_launch(launch_generation) {
+            if !poisoned && server.is_current_launch(launch_generation) {
                 server.lifecycle = server::Lifecycle::Stopped;
                 server.url.clear();
                 server.api_key.clear();
@@ -276,28 +301,46 @@ pub(super) async fn start_on_target(
                 server.mmproj.clear();
                 server.draft_model.clear();
             }
-            return Err(if state.exiting.load(Ordering::Acquire) {
-                "application is exiting".into()
+            let teardown = orphan
+                .take()
+                .map(|child| server.queue_child(child).clearing(err.clone()));
+            let error = if poisoned {
+                AppError::internal("server state lock was poisoned")
+            } else if state.exiting.load(Ordering::Acquire) {
+                AppError::cancelled("application is exiting")
             } else {
-                "server start cancelled".into()
-            });
+                AppError::cancelled("server start cancelled")
+            };
+            (Some(error), teardown)
+        } else {
+            if let Some(child) = orphan.take() {
+                server.attach_starting(
+                    child,
+                    url.clone(),
+                    api_key.clone(),
+                    saved.active_model.clone(),
+                    saved.mmproj.clone(),
+                    if tuning_defaults::speculative_enabled(&saved) {
+                        saved.spec_draft_model.clone()
+                    } else {
+                        String::new()
+                    },
+                );
+                server.engine = Some(engine);
+            }
+            (None, None)
         }
-        server.attach_starting(
-            child,
-            url.clone(),
-            api_key.clone(),
-            saved.active_model.clone(),
-            saved.mmproj.clone(),
-            if tuning_defaults::speculative_enabled(&saved) {
-                saved.spec_draft_model.clone()
-            } else {
-                String::new()
-            },
-        );
-        server.engine = Some(engine);
+    };
+    drop(teardown);
+    if let Some(error) = cancelled {
+        server::wait_teardowns(target).await;
+        err.clear();
+        err.clear_secret();
+        server::cleanup_api_key_file(api_key_file.as_deref());
+        return Err(error);
     }
 
-    match server::wait_ready(
+    let readiness_result = server::wait_ready(
         target.clone(),
         &url,
         &api_key,
@@ -305,66 +348,73 @@ pub(super) async fn start_on_target(
         err,
         readiness,
     )
-    .await
-    {
-        Ok(()) => {
-            let mut server = target
-                .lock()
-                .map_err(|_| "server state lock was poisoned".to_string())?;
-            if !server.is_current_launch(launch_generation)
-                || state.exiting.load(Ordering::Acquire)
-                || launch_cancel.load(Ordering::Acquire)
-            {
-                server::cleanup_api_key_file(api_key_file.as_deref());
-                if server.is_current_launch(launch_generation) {
-                    server::kill(&mut server.child, Some(err.clone()));
-                    server.url.clear();
+    .await;
+    let (result, teardown) = {
+        let mut server = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        match readiness_result {
+            Ok(()) => {
+                if !server.is_current_launch(launch_generation)
+                    || state.exiting.load(Ordering::Acquire)
+                    || launch_cancel.load(Ordering::Acquire)
+                {
+                    let teardown = if server.is_current_launch(launch_generation) {
+                        let teardown = server.take_child_clearing(err);
+                        server.url.clear();
+                        server.api_key.clear();
+                        server.redaction_secret.clear();
+                        server.mmproj.clear();
+                        server.draft_model.clear();
+                        server.lifecycle = server::Lifecycle::Stopped;
+                        teardown
+                    } else {
+                        None
+                    };
+                    (
+                        Err(if state.exiting.load(Ordering::Acquire) {
+                            AppError::cancelled("application is exiting")
+                        } else {
+                            AppError::cancelled("server start cancelled")
+                        }),
+                        teardown,
+                    )
+                } else {
+                    server.lifecycle = server::Lifecycle::Ready;
+                    server.execution = Some(saved);
+                    server.last_error = None;
+                    server.touch_activity();
+                    (Ok(url), None)
+                }
+            }
+            Err(error) => {
+                if !server.is_current_launch(launch_generation) {
+                    (Err(AppError::cancelled("server start cancelled")), None)
+                } else {
+                    let teardown = server.take_child();
+                    server.url = url;
                     server.api_key.clear();
-                    server.redaction_secret.clear();
                     server.mmproj.clear();
                     server.draft_model.clear();
-                    server.lifecycle = server::Lifecycle::Stopped;
+                    server.lifecycle = if state.exiting.load(Ordering::Acquire) {
+                        server.url.clear();
+                        server::Lifecycle::Stopped
+                    } else {
+                        server::Lifecycle::Failed
+                    };
+                    server.last_error = Some(error.to_string());
+                    (Err(error), teardown)
                 }
-                return Err(if state.exiting.load(Ordering::Acquire) {
-                    "application is exiting".into()
-                } else {
-                    "server start cancelled".into()
-                });
             }
-            server.lifecycle = server::Lifecycle::Ready;
-            server.execution = Some(saved);
-            server.last_error = None;
-            server.touch_activity();
-            server::cleanup_api_key_file(api_key_file.as_deref());
-            Ok(url)
         }
-        Err(error) => {
-            let mut server = target
-                .lock()
-                .map_err(|_| "server state lock was poisoned".to_string())?;
-            if !server.is_current_launch(launch_generation) {
-                server::cleanup_api_key_file(api_key_file.as_deref());
-                return Err("server start cancelled".into());
-            }
-            server::kill(&mut server.child, None);
-            server::cleanup_api_key_file(api_key_file.as_deref());
-            server.url = url;
-            server.api_key.clear();
-            server.mmproj.clear();
-            server.draft_model.clear();
-            server.lifecycle = if state.exiting.load(Ordering::Acquire) {
-                server.url.clear();
-                server::Lifecycle::Stopped
-            } else {
-                server::Lifecycle::Failed
-            };
-            server.last_error = Some(error.clone());
-            Err(error)
-        }
-    }
+    };
+    drop(teardown);
+    server::wait_teardowns(target).await;
+    server::cleanup_api_key_file(api_key_file.as_deref());
+    result
 }
 
-fn private_worker_config(saved: &config::AppConfig) -> Result<config::AppConfig, String> {
+fn private_worker_config(saved: &config::AppConfig) -> Result<config::AppConfig, AppError> {
     let mut worker = saved.clone();
     worker.port = session::effective_port(0, &[saved.port])?;
     Ok(worker)
@@ -376,7 +426,7 @@ pub(crate) async fn start_server(
     cfg: config::AppConfig,
     persist: Option<bool>,
     operation_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     run_start_server(&state, cfg, persist, operation_id).await
 }
 
@@ -385,7 +435,7 @@ pub(super) async fn run_start_server(
     cfg: config::AppConfig,
     persist: Option<bool>,
     operation_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let pending = state
         .sessions
         .begin_pending_start(session::DEFAULT_SESSION_ID)?;
@@ -395,7 +445,7 @@ pub(super) async fn run_start_server(
         .transpose()?;
     let _operation = state.operation.lock().await;
     if launch_cancel.load(Ordering::Acquire) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
     ensure_no_active_requests(
         state,
@@ -409,7 +459,8 @@ pub(super) async fn run_start_server(
         prepared.cfg.stop_existing_sessions_on_load,
     )?;
     if prepared.cfg.stop_existing_sessions_on_load {
-        stop_models_for_replacement(state, session::DEFAULT_SESSION_ID, Some(&launch_cancel))?;
+        stop_models_for_replacement(state, session::DEFAULT_SESSION_ID, Some(&launch_cancel))
+            .await?;
     }
     let target = state.server.clone();
     let err = state.err.clone();
@@ -426,9 +477,12 @@ pub(super) async fn run_start_server(
 
 /// Tear down one session's process and reset it to `Stopped`. Shared by the
 /// default and named model sessions. The external API has its own lifecycle.
-fn stop_target(server: &mut server::ServerState, err: &Arc<server::ErrBuf>) {
+fn stop_target(
+    server: &mut server::ServerState,
+    err: &Arc<server::ErrBuf>,
+) -> Option<server::Teardown> {
     server.lifecycle = server::Lifecycle::Stopping;
-    server::kill(&mut server.child, Some(err.clone()));
+    let teardown = server.take_child_clearing(err);
     server.cancel_launch();
     server.url.clear();
     server.api_key.clear();
@@ -439,13 +493,14 @@ fn stop_target(server: &mut server::ServerState, err: &Arc<server::ErrBuf>) {
     server.last_error = None;
     server.active_requests = 0;
     server.touch_activity();
+    teardown
 }
 
 pub(super) fn cancel_launch_operation(
     state: &AppState,
     operation_id: &str,
     session_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     state.launch_jobs.cancel_operation(operation_id)?;
     let id = session_id.unwrap_or(session::DEFAULT_SESSION_ID).trim();
     let id = if id.is_empty() {
@@ -465,58 +520,70 @@ pub(super) fn cancel_launch_operation(
         Some(entry) => (&entry.state, &entry.err),
         None => (&state.server, &state.err),
     };
-    let mut model = target
-        .lock()
-        .map_err(|_| "server state lock was poisoned")?;
-    if model.owns_launch_operation(operation_id)
-        && matches!(
-            model.lifecycle,
-            server::Lifecycle::Starting | server::Lifecycle::Ready
-        )
-    {
-        ensure_can_unload(&model)?;
-        stop_target(&mut model, err);
-    }
+    let teardown = {
+        let mut model = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned")?;
+        if model.owns_launch_operation(operation_id)
+            && matches!(
+                model.lifecycle,
+                server::Lifecycle::Starting | server::Lifecycle::Ready
+            )
+        {
+            ensure_can_unload(&model)?;
+            stop_target(&mut model, err)
+        } else {
+            None
+        }
+    };
+    drop(teardown);
     Ok(())
 }
 
 /// Stop the default session or one tracked extra session by id. Stopping an
 /// id nothing is tracked under is a no-op success: it is already stopped as
 /// far as any caller can observe.
-pub(super) async fn stop_session_by_id(state: &AppState, id: &str) -> Result<(), String> {
+pub(super) async fn stop_session_by_id(state: &AppState, id: &str) -> Result<(), AppError> {
     // A policy-driven stop must also invalidate starts queued behind the
     // operation lock, otherwise they could launch after the replacement.
     state.sessions.cancel_pending_start(id);
-    if id == session::DEFAULT_SESSION_ID {
-        let mut server = state
-            .server
+    let entry = if id == session::DEFAULT_SESSION_ID {
+        None
+    } else {
+        let Some(entry) = state.sessions.get(id) else {
+            return Ok(());
+        };
+        Some(entry)
+    };
+    let (target, err) = match &entry {
+        Some(entry) => (&entry.state, &entry.err),
+        None => (&state.server, &state.err),
+    };
+    let teardown = {
+        let mut model = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        ensure_can_unload(&server)?;
-        stop_target(&mut server, &state.err);
-        return Ok(());
-    }
-    let Some(entry) = state.sessions.get(id) else {
-        return Ok(());
+        ensure_can_unload(&model)?;
+        stop_target(&mut model, err)
     };
-    let mut server = entry
-        .state
-        .lock()
-        .map_err(|_| "server state lock was poisoned".to_string())?;
-    ensure_can_unload(&server)?;
-    stop_target(&mut server, &entry.err);
+    drop(teardown);
+    server::wait_teardowns(target).await;
+    err.clear();
+    err.clear_secret();
     Ok(())
 }
 
-fn ensure_can_unload(server: &server::ServerState) -> Result<(), String> {
+fn ensure_can_unload(server: &server::ServerState) -> Result<(), AppError> {
     if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
-        return Err("finish or stop the active response before unloading this model".into());
+        return Err(AppError::busy(
+            "finish or stop the active response before unloading this model",
+        ));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) async fn stop_server(state: State<'_, AppState>) -> Result<(), AppError> {
     state
         .sessions
         .cancel_pending_start(session::DEFAULT_SESSION_ID);
@@ -524,7 +591,7 @@ pub(crate) async fn stop_server(state: State<'_, AppState>) -> Result<(), String
 }
 
 #[tauri::command]
-pub(crate) async fn unload_model(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) async fn unload_model(state: State<'_, AppState>) -> Result<(), AppError> {
     // llama-server is configured as a single-model process in this app. A
     // safe unload tears down the process instead of claiming the model remains resident.
     stop_server(state).await
@@ -535,19 +602,25 @@ pub(crate) async fn server_activity(
     state: State<'_, AppState>,
     phase: String,
     session_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let target = activity_target(&state, session_id.as_deref())?;
     let mut server = target
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
     if server.lifecycle != server::Lifecycle::Ready {
-        return Err("server is not ready for activity tracking".into());
+        return Err(AppError::unavailable(
+            "server is not ready for activity tracking",
+        ));
     }
     match phase.as_str() {
         "start" => server.begin_request(),
         "end" => server.end_request(),
         "touch" => server.touch_activity(),
-        _ => return Err("server activity phase must be start, end, or touch".into()),
+        _ => {
+            return Err(AppError::validation(
+                "server activity phase must be start, end, or touch",
+            ))
+        }
     }
     Ok(())
 }
@@ -555,14 +628,14 @@ pub(crate) async fn server_activity(
 fn activity_target(
     state: &AppState,
     session_id: Option<&str>,
-) -> Result<Arc<Mutex<server::ServerState>>, String> {
+) -> Result<Arc<Mutex<server::ServerState>>, AppError> {
     match session_id.map(str::trim).filter(|id| !id.is_empty()) {
         None | Some(session::DEFAULT_SESSION_ID) => Ok(state.server.clone()),
         Some(id) => state
             .sessions
             .get(id)
             .map(|entry| entry.state.clone())
-            .ok_or_else(|| format!("session is not running: {id}")),
+            .ok_or_else(|| AppError::not_found(format!("session is not running: {id}"))),
     }
 }
 
@@ -571,20 +644,23 @@ pub(crate) async fn apply_request_settings(
     state: State<'_, AppState>,
     cfg: config::AppConfig,
     session_id: Option<String>,
-) -> Result<config::execution::ExecutionSettings, String> {
+) -> Result<config::execution::ExecutionSettings, AppError> {
     let _operation = state.operation.lock().await;
     let target = activity_target(&state, session_id.as_deref())?;
     let mut server = target
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
     if server.lifecycle != server::Lifecycle::Ready {
-        return Err("server is not ready for request settings".into());
+        return Err(AppError::unavailable(
+            "server is not ready for request settings",
+        ));
     }
     let live = server
         .execution
         .as_ref()
         .ok_or_else(|| "running execution settings are unavailable".to_string())?;
-    let next = config::execution::apply_request_settings(live, &cfg)?;
+    let next =
+        config::execution::apply_request_settings(live, &cfg).map_err(AppError::validation)?;
     let snapshot = config::execution::snapshot(&next);
     let mut engine = crate::providers::execution::info(&next)?;
     if let Some(previous) = &server.engine {
@@ -597,7 +673,7 @@ pub(crate) async fn apply_request_settings(
 
 async fn unload_idle_server(state: &AppState) -> bool {
     let _operation = state.operation.lock().await;
-    let should_unload = {
+    let teardown = {
         let Ok(mut server) = state.server.lock() else {
             return false;
         };
@@ -609,31 +685,36 @@ async fn unload_idle_server(state: &AppState) -> bool {
         {
             return false;
         }
-        stop_target(&mut server, &state.err);
-        true
+        stop_target(&mut server, &state.err)
     };
-    if !should_unload {
-        return false;
-    }
+    drop(teardown);
+    server::wait_teardowns(&state.server).await;
     state.err.clear();
+    state.err.clear_secret();
     true
 }
 
 async fn unload_idle_named_sessions(state: &AppState) {
     let _operation = state.operation.lock().await;
     for entry in state.sessions.entries() {
-        let Ok(mut server) = entry.state.lock() else {
-            continue;
+        let teardown = {
+            let Ok(mut server) = entry.state.lock() else {
+                continue;
+            };
+            if server.lifecycle == server::Lifecycle::Ready
+                && server.execution.as_ref().is_some_and(|cfg| {
+                    server.auto_unload_due(tuning_defaults::app_idle_timeout(cfg))
+                })
+            {
+                stop_target(&mut server, &entry.err)
+            } else {
+                continue;
+            }
         };
-        if server.lifecycle == server::Lifecycle::Ready
-            && server
-                .execution
-                .as_ref()
-                .is_some_and(|cfg| server.auto_unload_due(tuning_defaults::app_idle_timeout(cfg)))
-        {
-            stop_target(&mut server, &entry.err);
-            entry.err.clear();
-        }
+        drop(teardown);
+        server::wait_teardowns(&entry.state).await;
+        entry.err.clear();
+        entry.err.clear_secret();
     }
 }
 
@@ -652,16 +733,17 @@ pub(crate) async fn idle_watchdog(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     server_status_response(&state)
 }
 
-fn server_status_response(state: &AppState) -> Result<serde_json::Value, String> {
+fn server_status_response(state: &AppState) -> Result<serde_json::Value, AppError> {
+    let teardown;
     let mut server = state
         .server
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
-    server::reap_if_exited(&mut server, &state.err);
+    teardown = server::reap_if_exited(&mut server, &state.err);
 
     let mut response = serde_json::Map::new();
     response.insert("state".into(), server.lifecycle.as_str().into());
@@ -742,6 +824,8 @@ fn server_status_response(state: &AppState) -> Result<serde_json::Value, String>
             }),
         );
     }
+    drop(server);
+    drop(teardown);
     Ok(response.into())
 }
 
@@ -839,7 +923,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error, "session was unloaded");
+        assert_eq!(error.message, "session was unloaded");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
         assert!(original.state.lock().unwrap().child.is_none());
         assert_eq!(
             original.state.lock().unwrap().lifecycle,
@@ -854,8 +939,8 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn abandoning_readiness_reclaims_a_poisoned_session_without_stopping_a_replacement() {
+    #[tokio::test]
+    async fn abandoning_readiness_reclaims_a_poisoned_session_without_stopping_a_replacement() {
         let target = Arc::new(Mutex::new(server::ServerState::new()));
         let child = crate::procutil::std_command("cmd")
             .args(["/c", "ping -n 60 127.0.0.1 > nul"])
@@ -885,6 +970,7 @@ mod tests {
             target: target.clone(),
             generation,
         });
+        server::wait_teardowns(&target).await;
         assert!(exit.exited());
         {
             let mut model = target.lock().unwrap_or_else(|e| e.into_inner());
@@ -936,7 +1022,8 @@ mod tests {
         }
         for (id, target) in [("default", &state.server), ("named", &named.state)] {
             let error = stop_session_by_id(&state, id).await.unwrap_err();
-            assert!(error.contains("active response"));
+            assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+            assert!(error.message.contains("active response"));
             {
                 let mut model = target.lock().unwrap();
                 assert_eq!(model.lifecycle, server::Lifecycle::Ready);
@@ -969,7 +1056,7 @@ mod tests {
             let mut model = state.server.lock().unwrap();
             model.lifecycle = server::Lifecycle::Ready;
             model.active_requests = 2;
-            server::reap_if_exited(&mut model, &state.err);
+            assert!(server::reap_if_exited(&mut model, &state.err).is_none());
             assert_eq!(model.lifecycle, server::Lifecycle::Crashed);
             assert_eq!(model.active_requests, 0);
             // A recovered older state must also be cleared at the start of a
@@ -984,8 +1071,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn replacing_all_models_refuses_before_stopping_any_active_session() {
+    #[tokio::test]
+    async fn replacing_all_models_refuses_before_stopping_any_active_session() {
         let state = AppState::default();
         let named = state.sessions.get_or_create("named", "Named").unwrap();
         state.server.lock().unwrap().lifecycle = server::Lifecycle::Ready;
@@ -994,7 +1081,9 @@ mod tests {
             model.lifecycle = server::Lifecycle::Ready;
             model.begin_request();
         }
-        assert!(stop_models_for_replacement(&state, "default", None).is_err());
+        assert!(stop_models_for_replacement(&state, "default", None)
+            .await
+            .is_err());
         assert_eq!(
             state.server.lock().unwrap().lifecycle,
             server::Lifecycle::Ready
@@ -1006,15 +1095,17 @@ mod tests {
         assert_eq!(named.state.lock().unwrap().active_requests, 1);
     }
 
-    #[test]
-    fn replacing_all_models_cancels_other_pending_loads_but_preserves_its_own() {
+    #[tokio::test]
+    async fn replacing_all_models_cancels_other_pending_loads_but_preserves_its_own() {
         let state = AppState::default();
         let named = state.sessions.get_or_create("named", "Named").unwrap();
         let current = state.sessions.begin_pending_start("default").unwrap();
         let other = state.sessions.begin_pending_start("named").unwrap();
         state.server.lock().unwrap().lifecycle = server::Lifecycle::Ready;
         named.state.lock().unwrap().lifecycle = server::Lifecycle::Ready;
-        stop_models_for_replacement(&state, "default", None).unwrap();
+        stop_models_for_replacement(&state, "default", None)
+            .await
+            .unwrap();
         assert!(!current.cancel_flag().load(Ordering::Acquire));
         assert!(other.cancel_flag().load(Ordering::Acquire));
         assert_eq!(
@@ -1168,7 +1259,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(result.unwrap_err().contains("active response"));
+        assert!(result.unwrap_err().message.contains("active response"));
         let current = state.server.lock().unwrap();
         assert_eq!(current.lifecycle, server::Lifecycle::Ready);
         assert_eq!(current.model, "current.gguf");
@@ -1196,7 +1287,11 @@ mod tests {
         };
         let result =
             prepare_launch(&state, replacement, true, &Arc::new(AtomicBool::new(false))).await;
-        assert!(result.err().unwrap().contains("select a GGUF model"));
+        assert!(result
+            .err()
+            .unwrap()
+            .message
+            .contains("select a GGUF model"));
         let current = state.server.lock().unwrap();
         assert_eq!(current.lifecycle, server::Lifecycle::Ready);
         assert_eq!(current.model, "current.gguf");

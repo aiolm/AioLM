@@ -184,7 +184,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
     assert!(
-        error.contains("fresh_count") && error.contains("accept its help"),
+        error.message.contains("fresh_count") && error.message.contains("accept its help"),
         "{error}"
     );
 
@@ -237,6 +237,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     };
     assert!(runtime_schema::help_command(&cfg, &unprefixed)
         .unwrap_err()
+        .message
         .contains("entry point"));
 
     // Discovery alone changes nothing: help success is not acceptance and
@@ -543,7 +544,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     assert_eq!(stale.help_state, HelpState::Stale);
     let error = providers::registry::command(&loaded, port, "synthetic-key").unwrap_err();
     assert!(
-        error.contains("changed") && error.contains("retained"),
+        error.message.contains("changed") && error.message.contains("retained"),
         "{error}"
     );
     assert_eq!(
@@ -646,6 +647,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     // is required before the changed runtime runs.
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()
+        .message
         .contains("fresh adapter probe"));
     providers::adapter::refresh(&loaded, None).await.unwrap();
     let planned = providers::registry::command(&loaded, port, "synthetic-key").unwrap();

@@ -27,22 +27,28 @@ pub struct RuntimeKey {
     pub runtime: String,
 }
 
-pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, String> {
+pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, crate::error::AppError> {
     let provider = super::super::provider_of(cfg);
     let runtime = if provider == ProviderId::Llama {
         if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-            return Err("select an installed llama.cpp runtime first".into());
+            return Err(crate::error::AppError::validation(
+                "select an installed llama.cpp runtime first",
+            ));
         }
         format!("{}-{}", cfg.active_backend, cfg.active_build)
     } else {
         if cfg.active_runtime.is_empty() {
-            return Err("select an installed runtime first".into());
+            return Err(crate::error::AppError::validation(
+                "select an installed runtime first",
+            ));
         }
         cfg.active_runtime.clone()
     };
     let engine = provider.as_str().to_owned();
     if !runtime_help_store::valid_segment(&engine) || !runtime_help_store::valid_segment(&runtime) {
-        return Err("this runtime's identity cannot hold a help snapshot".into());
+        return Err(crate::error::AppError::validation(
+            "this runtime's identity cannot hold a help snapshot",
+        ));
     }
     Ok(RuntimeKey {
         provider,
@@ -59,7 +65,7 @@ pub struct Selected {
 }
 
 impl Selected {
-    pub fn from_config(cfg: &AppConfig) -> Result<Self, String> {
+    pub fn from_config(cfg: &AppConfig) -> Result<Self, crate::error::AppError> {
         let key = runtime_key(cfg)?;
         let python = if key.provider.is_python() {
             Some(super::super::selected_python_runtime(cfg)?)
@@ -71,12 +77,14 @@ impl Selected {
 
     pub fn python(
         runtime: &super::super::python_env::PythonRuntimeManifest,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::error::AppError> {
         let engine = runtime.provider.as_str().to_owned();
         if !runtime_help_store::valid_segment(&engine)
             || !runtime_help_store::valid_segment(&runtime.id)
         {
-            return Err("this runtime's identity cannot hold a help snapshot".into());
+            return Err(crate::error::AppError::validation(
+                "this runtime's identity cannot hold a help snapshot",
+            ));
         }
         Ok(Self {
             key: RuntimeKey {
@@ -88,10 +96,12 @@ impl Selected {
         })
     }
 
-    fn python_runtime(&self) -> Result<&super::super::python_env::PythonRuntimeManifest, String> {
-        self.python
-            .as_ref()
-            .ok_or_else(|| "this runtime has no Python entry point".into())
+    fn python_runtime(
+        &self,
+    ) -> Result<&super::super::python_env::PythonRuntimeManifest, crate::error::AppError> {
+        self.python.as_ref().ok_or_else(|| {
+            crate::error::AppError::not_found("this runtime has no Python entry point")
+        })
     }
 }
 
@@ -99,19 +109,22 @@ pub(crate) fn help_target(
     cfg: &AppConfig,
     selected: &Selected,
     accepted: Option<AcceptedHelp>,
-) -> Result<HelpTarget, String> {
+) -> Result<HelpTarget, crate::error::AppError> {
     let key = &selected.key;
     let (program, fixed, prefix, default) = match key.provider {
         ProviderId::Custom(_) => {
             let registered = registry::manifest(key.provider, &key.runtime)?;
             if !super::super::runtime_auto::supports_launch_args(&registered) {
-                return Err("attached services have no launch help or launch options".into());
+                return Err(crate::error::AppError::validation(
+                    "attached services have no launch help or launch options",
+                ));
             }
             let manifest =
                 super::super::runtime_auto::option_manifest(&registered)?.unwrap_or(registered);
             let prefix = registry::launch_prefix(&manifest);
             let scope =
-                super::super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?;
+                super::super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)
+                    .map_err(crate::error::AppError::validation)?;
             let mut args = prefix.clone();
             args.push("--help".into());
             let request = HelpRequest {
@@ -141,7 +154,8 @@ pub(crate) fn help_target(
         ),
         _ => {
             let runtime = selected.python_runtime()?;
-            let (args, scope) = super::super::launch::help_entry(runtime)?;
+            let (args, scope) = super::super::launch::help_entry(runtime)
+                .map_err(crate::error::AppError::validation)?;
             (
                 runtime.python.clone(),
                 true,
@@ -176,7 +190,7 @@ pub(crate) fn help_command(
     cfg: &AppConfig,
     selected: &Selected,
     request: &HelpRequest,
-) -> Result<HelpCommand, String> {
+) -> Result<HelpCommand, crate::error::AppError> {
     let key = &selected.key;
     let command = match key.provider {
         ProviderId::Custom(_) => runtime_schema::manifest_help_command(
@@ -186,7 +200,9 @@ pub(crate) fn help_command(
         ProviderId::Llama => {
             if request.args != ["--help"] || request.program.is_some() || !request.scope.is_empty()
             {
-                return Err("built-in runtimes use their own help command".into());
+                return Err(crate::error::AppError::validation(
+                    "built-in runtimes use their own help command",
+                ));
             }
             HelpCommand {
                 program: crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?,
@@ -198,7 +214,8 @@ pub(crate) fn help_command(
                 working_directory: super::super::execution_context::requested(
                     None,
                     request.working_directory.as_deref(),
-                )?,
+                )
+                .map_err(crate::error::AppError::validation)?,
                 artifacts: Vec::new(),
                 runtime_version: crate::runtime::installed_version_label(
                     &cfg.active_backend,
@@ -212,9 +229,12 @@ pub(crate) fn help_command(
         }
         _ => {
             let runtime = selected.python_runtime()?;
-            let (args, scope) = super::super::launch::help_entry(runtime)?;
+            let (args, scope) = super::super::launch::help_entry(runtime)
+                .map_err(crate::error::AppError::validation)?;
             if request.args != args || request.program.is_some() || request.scope != scope {
-                return Err("built-in runtimes use their own help command".into());
+                return Err(crate::error::AppError::validation(
+                    "built-in runtimes use their own help command",
+                ));
             }
             HelpCommand {
                 program: PathBuf::from(&runtime.python),
@@ -223,7 +243,8 @@ pub(crate) fn help_command(
                 working_directory: super::super::execution_context::requested(
                     None,
                     request.working_directory.as_deref(),
-                )?,
+                )
+                .map_err(crate::error::AppError::validation)?,
                 artifacts: Vec::new(),
                 runtime_version: runtime
                     .probe
@@ -251,7 +272,7 @@ pub(crate) struct Compat {
     pub(crate) entry: Option<CommandEntry>,
 }
 
-pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
+pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, crate::error::AppError> {
     let key = &selected.key;
     // Dedicated tuning remains adapter-owned; lifecycle bindings additionally
     // carry the private identity that benchmark metadata cannot unlock.
@@ -308,7 +329,9 @@ pub(crate) fn option_descriptor(selected: &Selected) -> Result<Compat, String> {
             // `--flag=value`) is part of what was registered and probed.
             let prefix = registry::launch_prefix(&manifest);
             let fixed = match &manifest.command_layout {
-                Some(layout) => layout.fixed_flags(&prefix)?,
+                Some(layout) => layout
+                    .fixed_flags(&prefix)
+                    .map_err(crate::error::AppError::validation)?,
                 None => prefix,
             };
             for token in fixed {

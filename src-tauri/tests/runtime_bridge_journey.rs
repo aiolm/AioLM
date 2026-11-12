@@ -278,6 +278,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     });
     assert!(runtime_schema::draft_acceptance(&root, &wrong, &manifest)
         .unwrap_err()
+        .message
         .contains("inspection only"));
     runtime_schema::register_entrypoint(&root, &draft, None)
         .await
@@ -296,6 +297,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     assert!(
         runtime_schema::accept(&root, &cfg, &inspect_descriptor.fingerprint, &inspection)
             .unwrap_err()
+            .message
             .contains("inspection only")
     );
     assert_eq!(

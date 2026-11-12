@@ -109,6 +109,7 @@ fn discover(
         &[],
         Baseline::Latest,
     )
+    .map_err(Into::into)
 }
 
 #[tokio::test]
@@ -190,7 +191,7 @@ async fn code_page_help_needs_an_explicit_encoding_and_keeps_its_locale() {
         Baseline::Latest,
     )
     .unwrap_err();
-    assert!(failure.contains("help encoding"), "{failure}");
+    assert!(failure.message.contains("help encoding"), "{failure}");
     // Encoding and locale are part of what was reviewed.
     let (_, other_locale) = discover(
         &area,
@@ -354,7 +355,7 @@ async fn code_page_help_needs_an_explicit_encoding_and_keeps_its_locale() {
     ] {
         runtime_schema::accept(&root, &cfg, &fingerprint, &next).unwrap();
         let refusal = providers::registry::command(&cfg, cfg.port, "").unwrap_err();
-        assert!(refusal.contains("fresh adapter probe"), "{refusal}");
+        assert!(refusal.message.contains("fresh adapter probe"), "{refusal}");
         providers::adapter::refresh(&cfg, None).await.unwrap();
         providers::registry::command(&cfg, cfg.port, "").unwrap();
     }

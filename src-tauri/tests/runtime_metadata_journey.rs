@@ -110,6 +110,7 @@ async fn register(area: &Path, manifest: &Value) -> Result<(), String> {
     providers::registry::register(&source, None)
         .await
         .map(|_| ())
+        .map_err(Into::into)
 }
 
 fn engine() -> providers::ProviderId {
@@ -426,7 +427,7 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
     assert_eq!(stale.help_state, HelpState::Stale);
     providers::adapter::refresh(&loaded, None).await.unwrap();
     let error = providers::registry::command(&loaded, port, "synthetic-key").unwrap_err();
-    assert!(error.contains("retained"), "{error}");
+    assert!(error.message.contains("retained"), "{error}");
     assert_eq!(
         Value::Object(aiolm_lib::config::load_result().unwrap().provider_options[ENGINE].clone()),
         values
@@ -437,6 +438,7 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
     discover_and_accept(&root, &loaded);
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()
+        .message
         .contains("fresh adapter probe"));
     providers::adapter::refresh(&loaded, None).await.unwrap();
     let planned = providers::registry::command(&loaded, port, "synthetic-key").unwrap();

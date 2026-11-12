@@ -29,6 +29,85 @@ const MAX_SNAPSHOT_BYTES: usize = 12 * 1024 * 1024;
 /// Bounds a directory scan so a bloated snapshot directory cannot stall reads.
 const MAX_SNAPSHOT_FILES: usize = 4096;
 
+const MAX_APPROVALS: usize = 256;
+const MAX_APPROVAL_BYTES: usize = 32 * 1024;
+static APPROVAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn approved_commands(root: &Path) -> Result<Vec<String>, crate::error::AppError> {
+    let path = root.join("approved-help-commands.json");
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(crate::error::AppError::from_io(&error)),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_APPROVAL_BYTES as u64 {
+        return Err(crate::error::AppError::validation(
+            "invalid runtime help approval file",
+        ));
+    }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|error| crate::error::AppError::from_io(&error))?
+        .take((MAX_APPROVAL_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| crate::error::AppError::from_io(&error))?;
+    if bytes.len() > MAX_APPROVAL_BYTES {
+        return Err(crate::error::AppError::validation(
+            "runtime help approval file is too large",
+        ));
+    }
+    let commands: Vec<String> = serde_json::from_slice(&bytes)
+        .map_err(|error| crate::error::AppError::validation(error.to_string()))?;
+    if commands.len() > MAX_APPROVALS
+        || commands
+            .iter()
+            .any(|value| value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(crate::error::AppError::validation(
+            "invalid runtime help approval fingerprints",
+        ));
+    }
+    Ok(commands)
+}
+
+pub(crate) fn command_approved(
+    root: &Path,
+    fingerprint: &str,
+) -> Result<bool, crate::error::AppError> {
+    let _lock = APPROVAL_LOCK
+        .lock()
+        .map_err(|_| crate::error::AppError::internal("runtime help approval lock was poisoned"))?;
+    Ok(approved_commands(root)?
+        .iter()
+        .any(|value| value == fingerprint))
+}
+
+pub(crate) fn approve_command(
+    root: &Path,
+    fingerprint: &str,
+) -> Result<(), crate::error::AppError> {
+    if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(crate::error::AppError::validation(
+            "invalid runtime help approval fingerprint",
+        ));
+    }
+    let _lock = APPROVAL_LOCK
+        .lock()
+        .map_err(|_| crate::error::AppError::internal("runtime help approval lock was poisoned"))?;
+    let mut commands = approved_commands(root)?;
+    commands.retain(|value| value != fingerprint);
+    if commands.len() >= MAX_APPROVALS {
+        commands.remove(0);
+    }
+    commands.push(fingerprint.to_owned());
+    crate::config::atomic_write(
+        &root.join("approved-help-commands.json"),
+        &serde_json::to_vec(&commands)
+            .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
+    )
+}
+
 /// A complete discovery result: the owned help run plus its parsed schema.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,9 +145,15 @@ pub(crate) fn valid_segment(value: &str) -> bool {
         && !value.starts_with(['-', '.'])
 }
 
-pub(crate) fn snapshot_root(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+pub(crate) fn snapshot_root(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<PathBuf, crate::error::AppError> {
     if !valid_segment(engine) || !valid_segment(runtime) {
-        return Err("invalid engine or runtime identity for help snapshots".into());
+        return Err(crate::error::AppError::validation(
+            "invalid engine or runtime identity for help snapshots",
+        ));
     }
     // Engine IDs are `custom.*`; the directory layout mirrors registrations.
     let dir = root.join(engine).join(runtime).join("help");
@@ -78,7 +163,9 @@ pub(crate) fn snapshot_root(root: &Path, engine: &str, runtime: &str) -> Result<
         dir.clone(),
     ] {
         if std::fs::symlink_metadata(&component).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("help snapshot paths must not be symbolic links".into());
+            return Err(crate::error::AppError::validation(
+                "help snapshot paths must not be symbolic links",
+            ));
         }
     }
     Ok(dir)
@@ -89,9 +176,11 @@ fn snapshot_path_for(
     engine: &str,
     runtime: &str,
     fingerprint: &str,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, crate::error::AppError> {
     if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("help snapshot fingerprint must be SHA-256 hex".into());
+        return Err(crate::error::AppError::validation(
+            "help snapshot fingerprint must be SHA-256 hex",
+        ));
     }
     Ok(snapshot_root(root, engine, runtime)?.join(format!("{fingerprint}.json")))
 }
@@ -103,7 +192,7 @@ pub fn save_snapshot(
     engine: &str,
     runtime: &str,
     snapshot: &HelpSnapshot,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, crate::error::AppError> {
     save_snapshot_parts(root, engine, runtime, &snapshot.report, &snapshot.schema)
 }
 
@@ -119,27 +208,47 @@ fn save_snapshot_parts(
     runtime: &str,
     report: &HelpReport,
     schema: &OptionSchema,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, crate::error::AppError> {
+    let bytes = snapshot_bytes(engine, runtime, report, schema)?;
+    let path = snapshot_path_for(root, engine, runtime, &report.identity.fingerprint)?;
+    crate::config::atomic_write(&path, &bytes)?;
+    Ok(path)
+}
+
+fn snapshot_bytes(
+    engine: &str,
+    runtime: &str,
+    report: &HelpReport,
+    schema: &OptionSchema,
+) -> Result<Vec<u8>, crate::error::AppError> {
     if !report.complete() {
-        return Err("only complete help results become persistent snapshots".into());
+        return Err(
+            report.incomplete_error("only complete help results become persistent snapshots")
+        );
     }
-    schema.validate()?;
+    schema
+        .validate()
+        .map_err(crate::error::AppError::validation)?;
     if schema.binding.fingerprint != report.identity.fingerprint {
-        return Err("snapshot schema must match its help fingerprint".into());
+        return Err(crate::error::AppError::validation(
+            "snapshot schema must match its help fingerprint",
+        ));
     }
     // The schema binding pins the exact engine/runtime the snapshot was
     // discovered for; a foreign binding must never be filed under this path.
     if schema.binding.engine != engine || schema.binding.runtime != runtime {
-        return Err("snapshot schema binding must match its engine and runtime".into());
+        return Err(crate::error::AppError::validation(
+            "snapshot schema binding must match its engine and runtime",
+        ));
     }
-    let path = snapshot_path_for(root, engine, runtime, &report.identity.fingerprint)?;
-    let bytes =
-        serde_json::to_vec_pretty(&SnapshotRef { report, schema }).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&SnapshotRef { report, schema })
+        .map_err(|e| crate::error::AppError::internal(e.to_string()))?;
     if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err("help snapshot exceeds 12 MiB".into());
+        return Err(crate::error::AppError::validation(
+            "help snapshot exceeds 12 MiB",
+        ));
     }
-    crate::config::atomic_write(&path, &bytes)?;
-    Ok(path)
+    Ok(bytes)
 }
 
 /// Load a snapshot only when its fingerprint is requested. Callers compare
@@ -149,34 +258,43 @@ pub fn load_snapshot(
     engine: &str,
     runtime: &str,
     fingerprint: &str,
-) -> Result<Option<HelpSnapshot>, String> {
+) -> Result<Option<HelpSnapshot>, crate::error::AppError> {
     let path = snapshot_path_for(root, engine, runtime, fingerprint)?;
     // Never follow a reparse link to a snapshot, and never allocate a file
     // before its metadata proves it is a bounded regular file.
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(crate::error::AppError::from_io(&error)),
     };
     if metadata.file_type().is_symlink() {
-        return Err("help snapshot must not be a symbolic link".into());
+        return Err(crate::error::AppError::validation(
+            "help snapshot must not be a symbolic link",
+        ));
     }
     if !metadata.file_type().is_file() {
         return Ok(None);
     }
     if metadata.len() > MAX_SNAPSHOT_BYTES as u64 {
-        return Err("help snapshot exceeds 12 MiB".into());
+        return Err(crate::error::AppError::validation(
+            "help snapshot exceeds 12 MiB",
+        ));
     }
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&path).map_err(|e| crate::error::AppError::from_io(&e))?;
     if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err("help snapshot exceeds 12 MiB".into());
+        return Err(crate::error::AppError::validation(
+            "help snapshot exceeds 12 MiB",
+        ));
     }
-    let snapshot: HelpSnapshot =
-        serde_json::from_slice(&bytes).map_err(|e| format!("invalid help snapshot: {e}"))?;
+    let snapshot: HelpSnapshot = serde_json::from_slice(&bytes)
+        .map_err(|e| crate::error::AppError::validation(format!("invalid help snapshot: {e}")))?;
     if !snapshot.report.complete() {
         return Ok(None);
     }
-    snapshot.schema.validate()?;
+    snapshot
+        .schema
+        .validate()
+        .map_err(crate::error::AppError::validation)?;
     if snapshot.report.identity.fingerprint != fingerprint
         || snapshot.schema.binding.fingerprint != fingerprint
         || snapshot.schema.binding.engine != engine
@@ -217,18 +335,12 @@ pub fn latest_snapshot(
     root: &Path,
     engine: &str,
     runtime: &str,
-) -> Result<Option<HelpSnapshot>, String> {
+) -> Result<Option<HelpSnapshot>, crate::error::AppError> {
     let dir = snapshot_root(root, engine, runtime)?;
-    let entries = std::fs::read_dir(&dir).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            return "no help snapshot for this runtime".to_string();
-        }
-        e.to_string()
-    });
-    let entries = match entries {
+    let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(message) if message.contains("no help snapshot") => return Ok(None),
-        Err(message) => return Err(message),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(crate::error::AppError::from_io(&error)),
     };
     let mut candidates: Vec<(std::time::SystemTime, String, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
@@ -299,10 +411,14 @@ pub fn describe(
     schema: &OptionSchema,
     previous: Option<&HelpSnapshot>,
     saved_keys: &[String],
-) -> Result<RuntimeDescriptor, String> {
-    schema.validate()?;
+) -> Result<RuntimeDescriptor, crate::error::AppError> {
+    schema
+        .validate()
+        .map_err(crate::error::AppError::validation)?;
     if schema.binding.fingerprint != report.identity.fingerprint {
-        return Err("descriptor schema must match its help report".into());
+        return Err(crate::error::AppError::validation(
+            "descriptor schema must match its help report",
+        ));
     }
     let (diff, retained) = match previous {
         None => {
@@ -410,24 +526,59 @@ struct PublishScope<'a> {
     persist: bool,
 }
 
-/// Guarded publication for one discovery ticket: only the ticket that still
-/// owns its slot publishes, and only while it is not cancelled. The check and
-/// the atomic snapshot write run under the service lock, so a superseded or
-/// cancelled predecessor never writes disk/latest and nothing is rolled back.
-/// Never touches another owner's slot.
+/// Serialize and flush outside the service lock; only the final atomic
+/// rename and cache publication run under its ownership check. Pending files
+/// are not JSON snapshots, so directory scans never promote a cancelled run.
 fn publish_current(
     service: &HelpService,
     ticket: &DiscoveryTicket,
     report: &HelpReport,
     schema: &OptionSchema,
     scope: PublishScope<'_>,
-) -> Result<(), String> {
-    service.publish(ticket, report, || {
-        if scope.persist && report.complete() {
-            save_snapshot_parts(scope.root, scope.engine, scope.runtime, report, schema)?;
-        }
-        Ok(())
-    })
+) -> Result<(), crate::error::AppError> {
+    let pending = if scope.persist && report.complete() {
+        let target = snapshot_path_for(
+            scope.root,
+            scope.engine,
+            scope.runtime,
+            &report.identity.fingerprint,
+        )?;
+        Some(PendingSnapshot {
+            path: target.with_extension(format!("pending-{}", ticket.id)),
+            target,
+        })
+    } else {
+        None
+    };
+    service.publish_staged(
+        ticket,
+        report,
+        || {
+            if let Some(pending) = &pending {
+                let bytes = snapshot_bytes(scope.engine, scope.runtime, report, schema)?;
+                crate::config::atomic_write(&pending.path, &bytes)?;
+            }
+            Ok(())
+        },
+        || {
+            if let Some(pending) = &pending {
+                crate::config::replace_atomically(&pending.path, &pending.target)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+struct PendingSnapshot {
+    path: PathBuf,
+    target: PathBuf,
+}
+
+impl Drop for PendingSnapshot {
+    fn drop(&mut self) {
+        // This uniquely ticket-named file was created only by this publication.
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Run shell-free discovery for one owner, parse, persist and describe.
@@ -442,7 +593,7 @@ pub fn discover_persist_describe(
     runtime: &str,
     command: &HelpCommand,
     saved_keys: &[String],
-) -> Result<(HelpReport, RuntimeDescriptor), String> {
+) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
     discover_against(
         service,
         root,
@@ -508,9 +659,11 @@ pub fn discover_against(
     command: &HelpCommand,
     saved_keys: &[String],
     baseline: Baseline,
-) -> Result<(HelpReport, RuntimeDescriptor), String> {
+) -> Result<(HelpReport, RuntimeDescriptor), crate::error::AppError> {
     if !valid_segment(engine) || !valid_segment(runtime) {
-        return Err("invalid engine or runtime identity for help snapshots".into());
+        return Err(crate::error::AppError::validation(
+            "invalid engine or runtime identity for help snapshots",
+        ));
     }
     let ticket = service.begin(owner)?;
     // The owned capture runs under this ticket's flag; a spawn failure frees
@@ -526,7 +679,9 @@ pub fn discover_against(
     // ticket publishes nothing and frees its owner for an immediate retry.
     if ticket.cancel.load(Ordering::Acquire) {
         service.failed(&ticket);
-        return Err("help discovery cancelled".into());
+        return Err(crate::error::AppError::cancelled(
+            "help discovery cancelled",
+        ));
     }
     let binding = super::runtime_options::SchemaBinding {
         engine: engine.into(),
@@ -539,7 +694,10 @@ pub fn discover_against(
         Ok(schema) => schema,
         Err(error) => {
             service.failed(&ticket);
-            return Err(discovery_diagnostic(&error, &report));
+            return Err(crate::error::AppError::new(
+                error.kind,
+                discovery_diagnostic(&error.message, &report),
+            ));
         }
     };
     let previous = match baseline {
@@ -623,6 +781,87 @@ mod tests {
     use super::super::runtime_options::{SchemaBinding, SCHEMA_VERSION};
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn command_approvals_persist_only_for_exact_execution_inputs() {
+        let root = temp_root();
+        let original = help_command("normal", 10_000);
+        let fingerprint = original.execution_fingerprint().unwrap();
+        assert!(!command_approved(&root, &fingerprint).unwrap());
+        approve_command(&root, &fingerprint).unwrap();
+        assert!(command_approved(&root, &fingerprint).unwrap());
+        for field in 0..4 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.program = root.join("different-program"),
+                1 => changed.args.push("different-argument".into()),
+                2 => {
+                    changed
+                        .environment
+                        .insert("SYNTHETIC_VARIABLE".into(), "different-value".into());
+                }
+                _ => changed.working_directory = Some(root.join("different-directory")),
+            }
+            assert!(!command_approved(&root, &changed.execution_fingerprint().unwrap()).unwrap());
+        }
+        let bytes = std::fs::read(root.join("approved-help-commands.json")).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Vec<String>>(&bytes).unwrap(),
+            vec![fingerprint]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_staged_snapshot_is_never_visible_to_snapshot_readers() {
+        let root = temp_root();
+        let service = HelpService::default();
+        let ticket = service.begin("staged-owner").unwrap();
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let schema = test_schema(&report.identity.fingerprint);
+        let target = snapshot_path_for(
+            &root,
+            "custom.example",
+            "build-a",
+            &report.identity.fingerprint,
+        )
+        .unwrap();
+        let pending = PendingSnapshot {
+            path: target.with_extension(format!("pending-{}", ticket.id)),
+            target,
+        };
+        let error = service
+            .publish_staged(
+                &ticket,
+                &report,
+                || {
+                    let bytes = snapshot_bytes("custom.example", "build-a", &report, &schema)?;
+                    crate::config::atomic_write(&pending.path, &bytes)?;
+                    service.cancel_owner("staged-owner")?;
+                    Ok(())
+                },
+                || crate::config::replace_atomically(&pending.path, &pending.target),
+            )
+            .unwrap_err();
+        assert!(error.message.contains("cancelled"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert!(pending.path.is_file());
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        assert!(load_snapshot(
+            &root,
+            "custom.example",
+            "build-a",
+            &report.identity.fingerprint
+        )
+        .unwrap()
+        .is_none());
+        let staged_path = pending.path.clone();
+        drop(pending);
+        assert!(!staged_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn test_report(text: &str) -> HelpReport {
         test_report_with_fp(text, &"a".repeat(64))
@@ -1156,7 +1395,11 @@ mod tests {
             &HelpSnapshot { report, schema },
         )
         .unwrap_err();
-        assert!(error.contains("binding"), "unexpected error: {error}");
+        assert!(
+            error.message.contains("binding"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -1182,7 +1425,10 @@ mod tests {
         let big = vec![b'x'; MAX_SNAPSHOT_BYTES + 1];
         write_snapshot_bytes(&root, "custom.example", "build-a", &stem, &big);
         let error = load_snapshot(&root, "custom.example", "build-a", &stem).unwrap_err();
-        assert!(error.contains("exceeds"), "unexpected error: {error}");
+        assert!(
+            error.message.contains("exceeds"),
+            "unexpected error: {error}"
+        );
         assert!(latest_snapshot(&root, "custom.example", "build-a")
             .unwrap()
             .is_none());
@@ -1222,7 +1468,10 @@ mod tests {
         )
         .unwrap();
         let error = load_snapshot(&root, "custom.example", "build-a", &link_stem).unwrap_err();
-        assert!(error.contains("symbolic"), "unexpected error: {error}");
+        assert!(
+            error.message.contains("symbolic"),
+            "unexpected error: {error}"
+        );
         // The reparse link is skipped; the real snapshot still wins.
         let latest = latest_snapshot(&root, "custom.example", "build-a")
             .unwrap()
@@ -1263,7 +1512,10 @@ mod tests {
             Ok(()) => {
                 let error =
                     load_snapshot(&root, "custom.example", "build-a", &"e".repeat(64)).unwrap_err();
-                assert!(error.contains("symbolic"), "unexpected error: {error}");
+                assert!(
+                    error.message.contains("symbolic"),
+                    "unexpected error: {error}"
+                );
                 let latest = latest_snapshot(&root, "custom.example", "build-a")
                     .unwrap()
                     .unwrap();
@@ -1355,14 +1607,24 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(error.contains("exit_code=17"), "{error}");
-        assert!(error.contains("earlier operation cancelled"), "{error}");
-        assert!(error.contains("한🦀") && error.contains("🙂é"), "{error}");
-        assert!(!error.contains('\u{fffd}'), "UTF-8 was split: {error}");
+        assert!(error.message.contains("exit_code=17"), "{error}");
         assert!(
-            !error.contains("UNEXPOSED_STDOUT_TAIL") && !error.contains("UNEXPOSED_STDERR_TAIL")
+            error.message.contains("earlier operation cancelled"),
+            "{error}"
         );
-        let (_, streams) = error.split_once("stdout (").unwrap();
+        assert!(
+            error.message.contains("한🦀") && error.message.contains("🙂é"),
+            "{error}"
+        );
+        assert!(
+            !error.message.contains('\u{fffd}'),
+            "UTF-8 was split: {error}"
+        );
+        assert!(
+            !error.message.contains("UNEXPOSED_STDOUT_TAIL")
+                && !error.message.contains("UNEXPOSED_STDERR_TAIL")
+        );
+        let (_, streams) = error.message.split_once("stdout (").unwrap();
         let (stdout, stderr) = streams.split_once("\nstderr (").unwrap();
         for stream in [stdout, stderr] {
             assert!(stream.starts_with(
@@ -1386,11 +1648,15 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.contains("stdout (encoding=utf-8, decoding_loss=false, truncated=true"),
+            error
+                .message
+                .contains("stdout (encoding=utf-8, decoding_loss=false, truncated=true"),
             "{error}"
         );
         assert!(
-            error.contains("stderr (encoding=utf-8, decoding_loss=false, truncated=true"),
+            error
+                .message
+                .contains("stderr (encoding=utf-8, decoding_loss=false, truncated=true"),
             "{error}"
         );
         assert!(latest_snapshot(&root, "custom.example", "build-a")
@@ -1414,12 +1680,15 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(error.starts_with("help output is incomplete"), "{error}");
-        assert!(error.contains("exit_code=9"), "{error}");
-        assert!(error.contains("timed_out=false"), "{error}");
-        assert!(error.contains("stdout (encoding=utf-8"), "{error}");
-        assert!(error.contains("stderr (encoding=utf-8"), "{error}");
-        assert!(error.contains("synthetic help failed"), "{error}");
+        assert!(
+            error.message.starts_with("help output is incomplete"),
+            "{error}"
+        );
+        assert!(error.message.contains("exit_code=9"), "{error}");
+        assert!(error.message.contains("timed_out=false"), "{error}");
+        assert!(error.message.contains("stdout (encoding=utf-8"), "{error}");
+        assert!(error.message.contains("stderr (encoding=utf-8"), "{error}");
+        assert!(error.message.contains("synthetic help failed"), "{error}");
         assert!(!service.cancel_owner("owner-diagnostic").unwrap());
         assert!(latest_snapshot(&root, "custom.example", "build-a")
             .unwrap()
@@ -1455,9 +1724,16 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(error.contains("incomplete"), "unexpected error: {error}");
-        assert!(error.contains("timed_out=true"), "{error}");
-        assert!(error.contains("partial help before timeout"), "{error}");
+        assert!(
+            error.message.contains("incomplete"),
+            "unexpected error: {error}"
+        );
+        assert!(error.message.contains("timed_out=true"), "{error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Timeout);
+        assert!(
+            error.message.contains("partial help before timeout"),
+            "{error}"
+        );
         // No stale active ticket may survive the failure path.
         assert!(!service.cancel_owner("owner-x").unwrap());
         assert!(latest_snapshot(&root, "custom.example", "build-a")
@@ -1611,7 +1887,8 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("cancelled"), "unexpected: {error}");
+        assert!(error.message.contains("cancelled"), "unexpected: {error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
         assert!(latest_snapshot(&root, "custom.example", "build-a")
             .unwrap()
             .is_none());
@@ -1634,7 +1911,8 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("superseded"), "unexpected: {error}");
+        assert!(error.message.contains("superseded"), "unexpected: {error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
         assert!(latest_snapshot(&root, "custom.example", "build-a")
             .unwrap()
             .is_none());
@@ -1690,7 +1968,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(500));
         assert!(service.cancel_owner("owner-race").unwrap());
         let error = handle.join().unwrap().unwrap_err();
-        assert!(error.contains("cancel"), "unexpected: {error}");
+        assert!(error.message.contains("cancel"), "unexpected: {error}");
         assert!(latest_snapshot(&root, "custom.example", "build-race")
             .unwrap()
             .is_none());
@@ -1736,7 +2014,7 @@ mod tests {
         let _successor = service.begin("owner-sup").unwrap();
         let error = handle.join().unwrap().unwrap_err();
         assert!(
-            error.contains("cancelled") || error.contains("superseded"),
+            error.message.contains("cancelled") || error.message.contains("superseded"),
             "unexpected: {error}"
         );
         assert!(latest_snapshot(&root, "custom.example", "build-sup")

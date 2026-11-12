@@ -11,7 +11,10 @@
 //! Linux vLLM v0.31.0, macOS vllm-metal v0.30.0 with matching vLLM core,
 //! and mlx-vlm v0.7.6. Standard engines accept other installed versions once
 //! probed; Metal additionally enforces the checked plugin/core and native ABI.
+//! Standard managed installs accept binary wheels only; missing wheels fail
+//! explicitly instead of running source-build hooks.
 use super::{metal_env, ProviderId};
+use crate::error::{AppError, ErrorKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -198,7 +201,7 @@ fn provider_root(provider: ProviderId) -> PathBuf {
     providers_root().join(provider.as_str())
 }
 
-pub fn validate_id(id: &str) -> Result<(), String> {
+pub fn validate_id(id: &str) -> Result<(), AppError> {
     if id.is_empty()
         || id.len() > MAX_ID_LEN
         || !id
@@ -206,12 +209,12 @@ pub fn validate_id(id: &str) -> Result<(), String> {
             .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-')
         || id.starts_with('-')
     {
-        return Err(format!("invalid runtime id: {id}"));
+        return Err(AppError::validation(format!("invalid runtime id: {id}")));
     }
     Ok(())
 }
 
-fn runtime_dir(provider: ProviderId, id: &str) -> Result<PathBuf, String> {
+fn runtime_dir(provider: ProviderId, id: &str) -> Result<PathBuf, AppError> {
     validate_id(id)?;
     Ok(provider_root(provider).join(id))
 }
@@ -248,27 +251,34 @@ pub fn external_id(python: &Path) -> String {
     format!("external-{:x}", hash)[..57].to_owned()
 }
 
-pub fn read(provider: ProviderId, id: &str) -> Result<PythonRuntimeManifest, String> {
+pub fn read(provider: ProviderId, id: &str) -> Result<PythonRuntimeManifest, AppError> {
     let path = runtime_dir(provider, id)?.join(MANIFEST);
     let raw = fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "{} runtime '{id}' is not installed ({error})",
-            provider.server()
+        AppError::new(
+            AppError::from_io(&error).kind,
+            format!(
+                "{} runtime '{id}' is not installed ({error})",
+                provider.server()
+            ),
         )
     })?;
-    let manifest: PythonRuntimeManifest = serde_json::from_str(&raw)
-        .map_err(|error| format!("runtime manifest {} is invalid: {error}", path.display()))?;
+    let manifest: PythonRuntimeManifest = serde_json::from_str(&raw).map_err(|error| {
+        AppError::validation(format!(
+            "runtime manifest {} is invalid: {error}",
+            path.display()
+        ))
+    })?;
     if manifest.provider != provider || manifest.id != id || manifest.format != MANIFEST_FORMAT {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "runtime manifest {} does not describe {} runtime '{id}'",
             path.display(),
             provider.server()
-        ));
+        )));
     }
     Ok(manifest)
 }
 
-fn write(manifest: &PythonRuntimeManifest, dir: &Path) -> Result<(), String> {
+fn write(manifest: &PythonRuntimeManifest, dir: &Path) -> Result<(), AppError> {
     fs::create_dir_all(dir)
         .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
     let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| error.to_string())?;
@@ -292,7 +302,7 @@ pub fn list(provider: ProviderId) -> Vec<PythonRuntimeManifest> {
     out
 }
 
-fn venv_python(venv: &Path) -> PathBuf {
+pub(super) fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -351,68 +361,7 @@ fn configure_server_help_output(command: &mut std::process::Command) {
 
 const VLLM_PROBE: &str = include_str!("vllm_probe.py");
 
-const MLX_VLM_PROBE: &str = r#"
-import json, sys, pkgutil, platform, sysconfig, importlib.metadata as m
-out = {"python_version": "%d.%d.%d" % sys.version_info[:3], "errors": [],
-       "python_arch": platform.machine(), "python_implementation": platform.python_implementation(),
-       "python_abi": sysconfig.get_config_var("SOABI") or "", "package_versions": {},
-       "platform_system": platform.system(), "macos_version": platform.mac_ver()[0]}
-for name in ("mlx-vlm", "mlx", "mlx-lm", "transformers", "tokenizers", "safetensors"):
-    try:
-        out["package_versions"][name] = m.version(name)
-    except m.PackageNotFoundError:
-        pass
-try:
-    out["version"] = m.version("mlx-vlm")
-except Exception as e:
-    out["errors"].append("mlx-vlm: %s" % e)
-if out.get("version"):
-    try:
-        import mlx_vlm.models as models
-        out["model_types"] = sorted(n for _, n, p in pkgutil.iter_modules(models.__path__) if p)
-        # Package sources are read as text, never imported: a model package
-        # is only executed when mlx-vlm loads that model.
-        import os, re
-        root = models.__path__[0]
-        def sources(name):
-            base = os.path.join(root, name)
-            for directory, _, files in os.walk(base):
-                for file in sorted(files):
-                    if file.endswith(".py"):
-                        path = os.path.join(directory, file)
-                        try:
-                            with open(path, encoding="utf-8", errors="replace") as f:
-                                yield os.path.relpath(path, base).replace(os.sep, "/"), f.read(4194304)
-                        except OSError:
-                            pass
-        image_generation = re.compile(r"is_image_generation_model\s*(?::\s*ClassVar\[bool\]\s*)?=\s*True")
-        out["audio_model_types"], out["embedding_model_types"], out["image_generation_model_types"] = [], [], []
-        for n in out["model_types"]:
-            texts = list(sources(n))
-            if any(f == "config.py" and ("AudioConfig" in t or "audio_config" in t) for f, t in texts):
-                out["audio_model_types"].append(n)
-            if any("EmbeddingOutput" in t for _, t in texts):
-                out["embedding_model_types"].append(n)
-            if any(image_generation.search(t) for _, t in texts):
-                out["image_generation_model_types"].append(n)
-        out["package_scan"] = 1
-    except Exception as e:
-        out["errors"].append("models: %s" % e)
-    try:
-        from mlx_vlm.utils import MODEL_REMAPPING
-        out["model_type_aliases"] = {str(k): str(v) for k, v in MODEL_REMAPPING.items()}
-        from mlx_vlm.embedding_loader import EMBEDDING_MODEL_REMAPPING
-        out["embedding_model_type_aliases"] = {str(k): str(v) for k, v in EMBEDDING_MODEL_REMAPPING.items()}
-    except Exception as e:
-        out["errors"].append("remapping: %s" % e)
-    try:
-        import mlx.core as mx
-        out["mlx_version"] = m.version("mlx")
-        out["accelerator"] = "metal" if mx.metal.is_available() else str(mx.default_device())
-    except Exception as e:
-        out["errors"].append("mlx: %s" % e)
-print("AIOLM_PROBE=" + json.dumps(out))
-"#;
+const MLX_VLM_PROBE: &str = include_str!("mlx_probe.py");
 
 fn probe_script(provider: ProviderId) -> String {
     match provider {
@@ -456,7 +405,7 @@ fn server_help_diagnostic(output: &crate::procutil::CaptureReport) -> String {
     } else {
         ("stderr", &output.stderr.bytes)
     };
-    let text = crate::server::strip_ansi(&String::from_utf8_lossy(bytes));
+    let text = crate::process_output::strip_ansi(&String::from_utf8_lossy(bytes));
     let text = text
         .lines()
         .map(|line| {
@@ -513,7 +462,7 @@ fn server_help_diagnostic(output: &crate::procutil::CaptureReport) -> String {
 fn record_server_options(
     record: &mut ProbeRecord,
     output: crate::procutil::CaptureReport,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     // A partial or failed help report is diagnostic evidence only.
     record.server_flags.clear();
     let problem = match &output.status {
@@ -523,7 +472,14 @@ fn record_server_options(
                 std::io::ErrorKind::Interrupted => "server option probe cancelled".to_string(),
                 _ => format!("server option probe failed: {error}"),
             };
-            return Err(format!("{reason}{}", server_help_diagnostic(&output)));
+            return Err(AppError::new(
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    ErrorKind::Cancelled
+                } else {
+                    AppError::from_io(error).kind
+                },
+                format!("{reason}{}", server_help_diagnostic(&output)),
+            ));
         }
         Ok(status) if !status.success() => Some(format!(
             "the installed engine server could not report its supported options ({status})"
@@ -571,7 +527,7 @@ pub async fn probe_interpreter(
     python: &Path,
     kind: InstallationKind,
     cancel: Option<Arc<AtomicBool>>,
-) -> Result<ProbeRecord, String> {
+) -> Result<ProbeRecord, AppError> {
     let python = python.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut command = crate::procutil::std_command(&python);
@@ -589,11 +545,15 @@ pub async fn probe_interpreter(
             cancel.as_deref(),
         )
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::TimedOut => "runtime probe timed out".to_string(),
-            std::io::ErrorKind::Interrupted => "runtime probe cancelled".to_string(),
-            _ => crate::procutil::spawn_error(&python, &error),
+            std::io::ErrorKind::TimedOut => AppError::timeout("runtime probe timed out"),
+            std::io::ErrorKind::Interrupted => AppError::cancelled("runtime probe cancelled"),
+            _ => AppError::new(
+                AppError::from_io(&error).kind,
+                crate::procutil::spawn_error(&python, &error),
+            ),
         })?;
-        let mut record = parse_probe_output(&String::from_utf8_lossy(&output.stdout))?;
+        let mut record = parse_probe_output(&String::from_utf8_lossy(&output.stdout))
+            .map_err(AppError::validation)?;
         if !output.status.success() {
             record
                 .errors
@@ -616,9 +576,15 @@ pub async fn probe_interpreter(
                 ProviderId::MlxVlm => {
                     help.args(["-m", "mlx_vlm.server", "--help"]);
                 }
-                ProviderId::Llama => return Err("llama.cpp uses its native runtime probe".into()),
+                ProviderId::Llama => {
+                    return Err(AppError::validation(
+                        "llama.cpp uses its native runtime probe",
+                    ))
+                }
                 ProviderId::Custom(_) => {
-                    return Err("external engines use their registered probe".into())
+                    return Err(AppError::validation(
+                        "external engines use their registered probe",
+                    ))
                 }
             }
             let output = crate::procutil::capture_help_cancellable(
@@ -627,17 +593,31 @@ pub async fn probe_interpreter(
                 PROBE_OUTPUT_CAP,
                 cancel.as_deref(),
             )
-            .map_err(|error| format!("server option probe failed: {error}"))?;
+            .map_err(|error| {
+                AppError::new(
+                    AppError::from_io(&error).kind,
+                    format!("server option probe failed: {error}"),
+                )
+            })?;
             record_server_options(&mut record, output)?;
         }
         Ok(record)
     })
     .await
-    .map_err(|error| format!("runtime probe failed: {error}"))?
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("runtime probe failed: {error}"),
+        )
+    })?
 }
 
 /// Re-probe a registered runtime and store what it reports now.
-pub async fn reprobe(provider: ProviderId, id: &str) -> Result<PythonRuntimeManifest, String> {
+pub async fn reprobe(provider: ProviderId, id: &str) -> Result<PythonRuntimeManifest, AppError> {
     reprobe_cancellable(provider, id, None).await
 }
 
@@ -645,11 +625,16 @@ pub async fn reprobe_cancellable(
     provider: ProviderId,
     id: &str,
     cancel: Option<Arc<AtomicBool>>,
-) -> Result<PythonRuntimeManifest, String> {
+) -> Result<PythonRuntimeManifest, AppError> {
     if let Some(cancel) = &cancel {
         ensure_not_cancelled(cancel)?;
     }
-    let mut manifest = read(provider, id)?;
+    let mut manifest = tokio::task::spawn_blocking({
+        let id = id.to_owned();
+        move || read(provider, &id)
+    })
+    .await
+    .map_err(AppError::from)??;
     let record = probe_interpreter(
         provider,
         Path::new(&manifest.python),
@@ -661,26 +646,43 @@ pub async fn reprobe_cancellable(
         ensure_not_cancelled(cancel)?;
     }
     manifest.probe = Some(record);
-    write(&manifest, &runtime_dir(provider, id)?)?;
-    Ok(manifest)
+    tokio::task::spawn_blocking(move || {
+        write(&manifest, &runtime_dir(provider, &manifest.id)?)?;
+        Ok(manifest)
+    })
+    .await
+    .map_err(AppError::from)?
 }
 
 /// Register an existing interpreter that already has the engine installed.
 pub async fn register_external(
     provider: ProviderId,
     python: &Path,
-) -> Result<PythonRuntimeManifest, String> {
-    let availability = provider.availability();
+) -> Result<PythonRuntimeManifest, AppError> {
+    let availability = tokio::task::spawn_blocking(move || provider.availability())
+        .await
+        .map_err(AppError::from)?;
     if !availability.supported {
-        return Err(availability.detail);
+        return Err(AppError::unavailable(availability.detail));
     }
     // Resolving a venv's symlink changes sys.prefix to the base interpreter.
     // Keep the selected executable path for execution and registration.
-    let python = std::path::absolute(python)
-        .map_err(|error| format!("cannot open {}: {error}", python.display()))?;
-    if !python.is_file() {
-        return Err(format!("{} is not an interpreter file", python.display()));
-    }
+    let python = tokio::task::spawn_blocking({
+        let python = python.to_path_buf();
+        move || {
+            let python = std::path::absolute(&python)
+                .map_err(|error| format!("cannot open {}: {error}", python.display()))?;
+            if !python.is_file() {
+                return Err(AppError::not_found(format!(
+                    "{} is not an interpreter file",
+                    python.display()
+                )));
+            }
+            Ok(python)
+        }
+    })
+    .await
+    .map_err(AppError::from)??;
     let record = probe_interpreter(provider, &python, InstallationKind::External, None).await?;
     if provider == ProviderId::Vllm
         && (managed_metal(provider) || record.variant == metal_env::VARIANT)
@@ -688,14 +690,14 @@ pub async fn register_external(
         let mut problems = record.errors.clone();
         problems.extend(metal_env::probe_problems(&record));
         if !problems.is_empty() {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "vllm-metal interpreter is not compatible: {}",
                 problems.join("; ")
-            ));
+            )));
         }
     }
     if record.version.is_empty() {
-        return Err(format!(
+        return Err(AppError::unavailable(format!(
             "{} is not installed for {}{}",
             package_name(provider),
             python.display(),
@@ -704,7 +706,7 @@ pub async fn register_external(
                 .first()
                 .map(|error| format!(" ({error})"))
                 .unwrap_or_default()
-        ));
+        )));
     }
     let id = if record.variant == metal_env::VARIANT {
         external_id(&python).replacen("external-", "external-metal-", 1)
@@ -720,25 +722,38 @@ pub async fn register_external(
         requested_version: None,
         probe: Some(record),
     };
-    write(&manifest, &runtime_dir(provider, &id)?)?;
-    Ok(manifest)
+    tokio::task::spawn_blocking(move || {
+        write(&manifest, &runtime_dir(provider, &manifest.id)?)?;
+        Ok(manifest)
+    })
+    .await
+    .map_err(AppError::from)?
 }
 
 /// Remove a runtime. A managed runtime's directory is deleted; an external
 /// runtime only loses its registration.
-pub fn remove(provider: ProviderId, id: &str) -> Result<(), String> {
+pub fn remove(provider: ProviderId, id: &str) -> Result<(), AppError> {
     let manifest = read(provider, id)?;
     let dir = runtime_dir(provider, id)?;
     remove_registration_at(&manifest, &dir)
 }
 
-fn remove_registration_at(manifest: &PythonRuntimeManifest, dir: &Path) -> Result<(), String> {
+fn remove_registration_at(manifest: &PythonRuntimeManifest, dir: &Path) -> Result<(), AppError> {
     match manifest.kind {
-        InstallationKind::Managed => fs::remove_dir_all(dir)
-            .map_err(|error| format!("failed to remove {}: {error}", dir.display())),
+        InstallationKind::Managed => fs::remove_dir_all(dir).map_err(|error| {
+            AppError::new(
+                AppError::from_io(&error).kind,
+                format!("failed to remove {}: {error}", dir.display()),
+            )
+        }),
         InstallationKind::External => fs::remove_file(dir.join(MANIFEST))
             .and_then(|_| fs::remove_dir(dir))
-            .map_err(|error| format!("failed to forget runtime {}: {error}", manifest.id)),
+            .map_err(|error| {
+                AppError::new(
+                    AppError::from_io(&error).kind,
+                    format!("failed to forget runtime {}: {error}", manifest.id),
+                )
+            }),
     }
 }
 
@@ -783,10 +798,10 @@ fn python_version_of(python: &Path, cancel: Option<&AtomicBool>) -> Option<(u32,
         .flatten()
 }
 
-fn interpreter_provenance(
+pub(super) fn interpreter_provenance(
     python: &Path,
     cancel: Option<&AtomicBool>,
-) -> Result<ProbeRecord, String> {
+) -> Result<ProbeRecord, AppError> {
     let mut command = crate::procutil::std_command(python);
     command.env_clear().envs(engine_environment()).args([
         "-I", "-c",
@@ -798,11 +813,20 @@ fn interpreter_provenance(
         4096,
         cancel,
     )
-    .map_err(|error| format!("interpreter provenance check failed: {error}"))?;
+    .map_err(|error| {
+        AppError::new(
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                ErrorKind::Cancelled
+            } else {
+                AppError::from_io(&error).kind
+            },
+            format!("interpreter provenance check failed: {error}"),
+        )
+    })?;
     if !output.status.success() {
-        return Err("interpreter provenance check failed".into());
+        return Err(AppError::unavailable("interpreter provenance check failed"));
     }
-    parse_probe_output(&String::from_utf8_lossy(&output.stdout))
+    parse_probe_output(&String::from_utf8_lossy(&output.stdout)).map_err(AppError::validation)
 }
 
 /// Base interpreters that can create a managed environment, best first.
@@ -859,7 +883,7 @@ pub struct InstallProgress {
 
 /// Longest installer output line kept, in bytes; pip progress bars and
 /// compiler output can emit very long lines without a newline.
-const MAX_OUTPUT_LINE: usize = 4096;
+pub(super) const MAX_OUTPUT_LINE: usize = 4096;
 
 /// Splits a byte stream into lines across read boundaries. A line longer than
 /// `MAX_OUTPUT_LINE` is cut there and the rest of it is dropped, so memory
@@ -893,7 +917,14 @@ impl LineSplitter {
 
     fn take(&mut self) -> String {
         let mut line = String::from_utf8_lossy(&self.pending).into_owned();
-        if std::mem::take(&mut self.truncated) {
+        let mut truncated = std::mem::take(&mut self.truncated);
+        // Invalid input expands to UTF-8 replacement characters; bound the
+        // delivered text too, not just the bytes retained from the pipe.
+        if line.len() > MAX_OUTPUT_LINE {
+            line.truncate(line.floor_char_boundary(MAX_OUTPUT_LINE));
+            truncated = true;
+        }
+        if truncated {
             line.push_str(" [truncated]");
         }
         self.pending.clear();
@@ -901,26 +932,93 @@ impl LineSplitter {
     }
 }
 
-async fn run_logged(
+#[derive(Clone, Copy)]
+pub(super) enum LoggedOperation {
+    ManagedInstall,
+    Portable,
+}
+
+impl LoggedOperation {
+    fn error(self, reason: &str) -> String {
+        let operation = match self {
+            Self::ManagedInstall => "runtime installation",
+            Self::Portable => "portable runtime operation",
+        };
+        format!("{operation} {reason}")
+    }
+}
+
+fn missing_wheel_message(line: &str) -> Option<String> {
+    let requirement = [
+        "Could not find a version that satisfies the requirement ",
+        "No matching distribution found for ",
+    ]
+    .into_iter()
+    .find_map(|marker| line.split_once(marker).map(|(_, value)| value.trim()))?;
+    let package = requirement
+        .split(|c: char| c.is_whitespace() || "<>=!~[;(,".contains(c))
+        .next()
+        .filter(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        });
+    Some(match package {
+        Some(package) => format!(
+            "No compatible binary wheel is available for {package}. Source builds are disabled for safety."
+        ),
+        None => "A dependency has no compatible binary wheel. Source builds are disabled for safety.".into(),
+    })
+}
+
+async fn read_logged_output(
+    mut stream: impl tokio::io::AsyncRead + Unpin,
+    sender: tokio::sync::mpsc::Sender<String>,
+) {
+    use tokio::io::AsyncReadExt;
+    let mut buffer = [0u8; 8192];
+    let mut lines = LineSplitter::default();
+    while let Ok(count) = stream.read(&mut buffer).await {
+        if count == 0 {
+            break;
+        }
+        for line in lines.push(&buffer[..count]) {
+            if sender.send(line).await.is_err() {
+                return;
+            }
+        }
+    }
+    if let Some(line) = lines.finish() {
+        let _ = sender.send(line).await;
+    }
+}
+
+pub(super) async fn run_logged(
     program: &Path,
     args: &[&str],
     cancel: &Arc<AtomicBool>,
     mut progress: impl FnMut(String),
-) -> Result<(), String> {
-    ensure_not_cancelled(cancel)?;
+    operation: LoggedOperation,
+) -> Result<(), AppError> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(AppError::cancelled(operation.error("cancelled")));
+    }
     let mut command = crate::procutil::tokio_command(program);
     let mut environment = engine_environment();
     environment.retain(|(key, _)| key != "HF_HUB_OFFLINE" && key != "TRANSFORMERS_OFFLINE");
-    for name in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "SSL_CERT_FILE",
-        "REQUESTS_CA_BUNDLE",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            environment.push((name.into(), value));
+    if matches!(operation, LoggedOperation::ManagedInstall) {
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "REQUESTS_CA_BUNDLE",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                environment.push((name.into(), value));
+            }
         }
     }
     command
@@ -930,41 +1028,23 @@ async fn run_logged(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = crate::procutil::TransientChild::spawn(&mut command)
-        .map_err(|error| crate::procutil::spawn_error(program, &error))?;
+    let mut child = crate::procutil::TransientChild::spawn(&mut command).map_err(|error| {
+        AppError::new(
+            AppError::from_io(&error).kind,
+            crate::procutil::spawn_error(program, &error),
+        )
+    })?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(32);
-    for stream in [
-        stdout.map(|value| Box::new(value) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-        stderr.map(|value| Box::new(value) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let sender = sender.clone();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut stream = stream;
-            let mut buffer = [0u8; 8192];
-            let mut lines = LineSplitter::default();
-            while let Ok(count) = stream.read(&mut buffer).await {
-                if count == 0 {
-                    break;
-                }
-                for line in lines.push(&buffer[..count]) {
-                    if sender.send(line).await.is_err() {
-                        return;
-                    }
-                }
-            }
-            if let Some(line) = lines.finish() {
-                let _ = sender.send(line).await;
-            }
-        });
-    }
+    let readers: [Option<crate::procutil::OwnedTask<()>>; 2] = [
+        stdout.map(|stream| tokio::spawn(read_logged_output(stream, sender.clone())).into()),
+        stderr.map(|stream| tokio::spawn(read_logged_output(stream, sender.clone())).into()),
+    ];
     drop(sender);
     let mut tail = std::collections::VecDeque::new();
+    let binary_only_install = args.contains(&"install") && args.contains(&"--only-binary=:all:");
+    let mut missing_wheel = None;
     let remember = |line: String, tail: &mut std::collections::VecDeque<String>| {
         if tail.len() >= 40 {
             tail.pop_front();
@@ -983,48 +1063,70 @@ async fn run_logged(
             // loop waits on the child instead of spinning.
             line = receiver.recv(), if output_open => match line {
                 Some(line) => {
+                    if binary_only_install {
+                        missing_wheel = missing_wheel_message(&line).or(missing_wheel);
+                    }
                     remember(line.clone(), &mut tail);
                     progress(line);
                 }
                 None => output_open = false,
             },
-            status = child.wait() => break status.map_err(|error| error.to_string())?,
+            status = child.wait() => break status.map_err(|error| AppError::from_io(&error)),
             _ = &mut cancellation_poll => {
                 if cancel.load(Ordering::Acquire) {
-                    child.terminate();
-                    return Err("runtime installation cancelled".into());
+                    break Err(AppError::cancelled(operation.error("cancelled")));
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    child.terminate();
-                    return Err("runtime installation timed out".into());
+                    break Err(AppError::timeout(operation.error("timed out")));
                 }
                 cancellation_poll.as_mut().reset(tokio::time::Instant::now() + poll_interval);
             }
         }
     };
+    if status.is_err() {
+        child.terminate();
+        let _ = child.wait().await;
+    }
     // The process tree is gone once `wait` returns, so the readers reach end
     // of stream promptly; the bound only guards against a stuck pipe.
     let drain_until = tokio::time::Instant::now() + Duration::from_secs(2);
     while let Ok(Some(line)) = tokio::time::timeout_at(drain_until, receiver.recv()).await {
+        if binary_only_install {
+            missing_wheel = missing_wheel_message(&line).or(missing_wheel);
+        }
         remember(line, &mut tail);
     }
+    // Retain ownership through every return, including pipe drain timeout and
+    // wait failure. OwnedTask also aborts readers if this future is dropped.
+    for reader in readers.iter().flatten() {
+        reader.abort();
+    }
+    for reader in readers.into_iter().flatten() {
+        let _ = reader.await;
+    }
+    let status = status?;
     if !status.success() {
-        return Err(format!(
+        if let Some(message) = missing_wheel {
+            tail.push_back(message);
+        }
+        return Err(AppError::unavailable(format!(
             "{} failed ({}): {}",
             program.display(),
             status
                 .code()
                 .map_or("signal".into(), |code| code.to_string()),
             tail.into_iter().collect::<Vec<_>>().join("\n")
-        ));
+        )));
     }
-    ensure_not_cancelled(cancel)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err(AppError::cancelled(operation.error("cancelled")));
+    }
     Ok(())
 }
 
-fn ensure_not_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+fn ensure_not_cancelled(cancel: &AtomicBool) -> Result<(), AppError> {
     if cancel.load(Ordering::Acquire) {
-        Err("runtime installation cancelled".into())
+        Err(AppError::cancelled("runtime installation cancelled"))
     } else {
         Ok(())
     }
@@ -1061,6 +1163,7 @@ fn install_arguments(
             format!("vllm-metal[gguf,stt] @ {}", metal_env::PLUGIN_WHEEL),
         ]);
     } else {
+        args.push("--only-binary=:all:".into());
         args.push(format!("{}=={version}", package_name(provider)));
     }
     Ok(args)
@@ -1105,26 +1208,32 @@ pub async fn install_managed(
     version: Option<String>,
     cancel: Arc<AtomicBool>,
     mut progress: impl FnMut(InstallProgress) + Send,
-) -> Result<PythonRuntimeManifest, String> {
+) -> Result<PythonRuntimeManifest, AppError> {
     ensure_not_cancelled(&cancel)?;
-    let availability = provider.availability();
+    let availability = tokio::task::spawn_blocking(move || provider.availability())
+        .await
+        .map_err(AppError::from)?;
     if !availability.supported {
-        return Err(availability.detail);
+        return Err(AppError::unavailable(availability.detail));
     }
     let version = version
         .filter(|value| !value.trim().is_empty())
         .or_else(|| pinned_version(provider).map(str::to_owned))
-        .ok_or("this provider has no managed installation")?;
+        .ok_or_else(|| AppError::unavailable("this provider has no managed installation"))?;
     if !version
         .chars()
         .all(|value| value.is_ascii_alphanumeric() || ".-+".contains(value))
         || version.len() > 32
     {
-        return Err(format!("invalid package version: {version}"));
+        return Err(AppError::validation(format!(
+            "invalid package version: {version}"
+        )));
     }
     let metal = managed_metal(provider);
     if metal && version != metal_env::VERSION {
-        return Err("managed vllm-metal installs require the pinned matched 0.30.0 release".into());
+        return Err(AppError::validation(
+            "managed vllm-metal installs require the pinned matched 0.30.0 release",
+        ));
     }
     let base = match base_python {
         Some(path) => path,
@@ -1134,12 +1243,13 @@ pub async fn install_managed(
                 move || discover_base_interpreters_with_cancel(provider, Some(&cancel))
             })
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(AppError::from)?;
             ensure_not_cancelled(&cancel)?;
-            found
-                .into_iter()
-                .next()
-                .ok_or("no supported Python 3 interpreter was found; select one explicitly")?
+            found.into_iter().next().ok_or_else(|| {
+                AppError::unavailable(
+                    "no supported Python 3 interpreter was found; select one explicitly",
+                )
+            })?
         }
     };
     let version_result = tokio::task::spawn_blocking({
@@ -1149,15 +1259,17 @@ pub async fn install_managed(
     })
     .await;
     ensure_not_cancelled(&cancel)?;
-    let (major, minor) = version_result
-        .ok()
-        .flatten()
-        .ok_or_else(|| format!("{} is not a usable Python interpreter", base.display()))?;
+    let (major, minor) = version_result.ok().flatten().ok_or_else(|| {
+        AppError::unavailable(format!(
+            "{} is not a usable Python interpreter",
+            base.display()
+        ))
+    })?;
     if !python_supported(provider, major, minor) {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "{} requires a different Python version than {major}.{minor}",
             package_name(provider)
-        ));
+        )));
     }
     if metal {
         let provenance = tokio::task::spawn_blocking({
@@ -1166,10 +1278,10 @@ pub async fn install_managed(
             move || interpreter_provenance(&base, Some(&cancel))
         })
         .await
-        .map_err(|error| error.to_string())??;
+        .map_err(AppError::from)??;
         let problems = metal_env::interpreter_problems(&provenance);
         if !problems.is_empty() {
-            return Err(problems.join("; "));
+            return Err(AppError::validation(problems.join("; ")));
         }
     }
     ensure_not_cancelled(&cancel)?;
@@ -1185,15 +1297,13 @@ pub async fn install_managed(
         ),
         &uuid::Uuid::new_v4().simple().to_string()[..12]
     );
-    let root = provider_root(provider);
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("failed to create {}: {error}", root.display()))?;
-    let target = root.join(&id);
-    // Acquire ownership before arming cleanup; an existing directory is never
-    // removed if identity allocation unexpectedly collides.
-    fs::create_dir(&target)
-        .map_err(|error| format!("failed to create {}: {error}", target.display()))?;
-    let cleanup = StagingCleanup(target.clone());
+    let cleanup = tokio::task::spawn_blocking({
+        let id = id.clone();
+        move || create_managed_target(provider, &id)
+    })
+    .await
+    .map_err(AppError::from)??;
+    let target = cleanup.0.clone();
     let venv = target.join("venv");
     let mut emit = |phase: &'static str, line: String| {
         progress(InstallProgress {
@@ -1208,16 +1318,23 @@ pub async fn install_managed(
         format!("creating environment with {}", base.display()),
     );
     let venv_arg = venv.to_string_lossy().into_owned();
-    run_logged(&base, &["-I", "-m", "venv", &venv_arg], &cancel, |line| {
-        emit("environment", line)
-    })
+    run_logged(
+        &base,
+        &["-I", "-m", "venv", &venv_arg],
+        &cancel,
+        |line| emit("environment", line),
+        LoggedOperation::ManagedInstall,
+    )
     .await?;
     let python = venv_python(&venv);
     let constraints = target.join("metal-constraints.txt");
     if metal {
-        fs::write(&constraints, metal_env::CONSTRAINTS).map_err(|error| error.to_string())?;
+        tokio::fs::write(&constraints, metal_env::CONSTRAINTS)
+            .await
+            .map_err(|error| AppError::from_io(&error))?;
     }
-    let install_args = install_arguments(provider, &version, metal, &constraints)?;
+    let install_args =
+        install_arguments(provider, &version, metal, &constraints).map_err(AppError::validation)?;
     emit(
         "packages",
         if metal {
@@ -1232,9 +1349,13 @@ pub async fn install_managed(
         },
     );
     let install_refs = install_args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_logged(&python, &install_refs, &cancel, |line| {
-        emit("packages", line)
-    })
+    run_logged(
+        &python,
+        &install_refs,
+        &cancel,
+        |line| emit("packages", line),
+        LoggedOperation::ManagedInstall,
+    )
     .await?;
     emit("probe", String::new());
     let record = probe_interpreter(
@@ -1244,7 +1365,7 @@ pub async fn install_managed(
         Some(cancel.clone()),
     )
     .await?;
-    validate_installed_probe(provider, &record, metal)?;
+    validate_installed_probe(provider, &record, metal).map_err(AppError::unavailable)?;
     let manifest = PythonRuntimeManifest {
         format: MANIFEST_FORMAT,
         provider,
@@ -1257,17 +1378,77 @@ pub async fn install_managed(
         probe: Some(record),
     };
     ensure_not_cancelled(&cancel)?;
-    write(&manifest, &target)?;
-    std::mem::forget(cleanup);
+    let manifest = tokio::task::spawn_blocking(move || {
+        write(&manifest, &target)?;
+        cleanup.persist();
+        Ok::<_, AppError>(manifest)
+    })
+    .await
+    .map_err(AppError::from)??;
     emit("complete", String::new());
     Ok(manifest)
 }
 
-struct StagingCleanup(PathBuf);
+pub(super) fn create_managed_target(
+    provider: ProviderId,
+    id: &str,
+) -> Result<StagingCleanup, AppError> {
+    validate_id(id)?;
+    let root = provider_root(provider);
+    fs::create_dir_all(&root).map_err(|error| {
+        AppError::new(
+            AppError::from_io(&error).kind,
+            format!("failed to create {}: {error}", root.display()),
+        )
+    })?;
+    let target = root.join(id);
+    // Arm cleanup only after acquiring a fresh directory, never an existing
+    // runtime whose identity happens to collide.
+    fs::create_dir(&target).map_err(|error| {
+        AppError::new(
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                ErrorKind::Busy
+            } else {
+                AppError::from_io(&error).kind
+            },
+            format!("failed to create {}: {error}", target.display()),
+        )
+    })?;
+    Ok(StagingCleanup(target))
+}
+
+pub(super) struct StagingCleanup(pub(super) PathBuf);
+
+impl StagingCleanup {
+    pub(super) fn persist(mut self) {
+        self.0.clear();
+    }
+}
 
 impl Drop for StagingCleanup {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if self.0.as_os_str().is_empty() {
+            return;
+        }
+        let path = std::mem::take(&mut self.0);
+        let remove = move || {
+            let _ = fs::remove_dir_all(path);
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(remove);
+            }
+            Err(_) => {
+                // Without an async runtime the caller is already synchronous.
+                // Complete the handoff before returning, as in sync CLI/tests.
+                if let Ok(worker) = std::thread::Builder::new()
+                    .name("python-runtime-cleanup".into())
+                    .spawn(remove)
+                {
+                    let _ = worker.join();
+                }
+            }
+        }
     }
 }
 
@@ -1555,12 +1736,20 @@ mod tests {
             );
             let mut record = ProbeRecord::default();
             let error = record_server_options(&mut record, output).unwrap_err();
-            assert!(error.contains(if cancellation {
+            assert_eq!(
+                error.kind,
+                if cancellation {
+                    ErrorKind::Cancelled
+                } else {
+                    ErrorKind::Timeout
+                }
+            );
+            assert!(error.message.contains(if cancellation {
                 "cancelled"
             } else {
                 "timed out"
             }));
-            assert!(error.contains("synthetic initialization pending"));
+            assert!(error.message.contains("synthetic initialization pending"));
             assert!(record.server_flags.is_empty());
             fs::remove_dir_all(root).unwrap();
         }
@@ -1579,6 +1768,7 @@ mod tests {
         let mut record = ProbeRecord::default();
         assert!(record_server_options(&mut record, output)
             .unwrap_err()
+            .message
             .contains("cancelled"));
         assert!(record.server_flags.is_empty());
     }
@@ -1613,7 +1803,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.contains("cancelled"));
+        assert_eq!(error.kind, ErrorKind::Cancelled);
+        assert!(error.message.contains("cancelled"));
     }
 
     #[test]
@@ -1721,6 +1912,18 @@ mod tests {
         assert!(lines.push(b"tail without newline").is_empty());
         assert_eq!(lines.finish().as_deref(), Some("tail without newline"));
         assert_eq!(lines.finish(), None);
+        for eof in [false, true] {
+            assert!(lines.push(&[0xff; MAX_OUTPUT_LINE]).is_empty());
+            let output = if eof {
+                lines.finish().unwrap()
+            } else {
+                lines.push(b"\n").pop().unwrap()
+            };
+            assert!(output.len() <= MAX_OUTPUT_LINE + " [truncated]".len());
+            let content = output.strip_suffix(" [truncated]").unwrap();
+            assert!(!content.is_empty());
+            assert!(content.chars().all(|ch| ch == '\u{fffd}'));
+        }
     }
 
     #[test]
@@ -1781,9 +1984,11 @@ mod tests {
         let linux =
             install_arguments(ProviderId::Vllm, "0.31.0", false, Path::new("unused")).unwrap();
         assert_eq!(linux.last().unwrap(), "vllm==0.31.0");
+        assert!(linux.iter().any(|arg| arg == "--only-binary=:all:"));
         let mlx =
             install_arguments(ProviderId::MlxVlm, "0.7.6", false, Path::new("unused")).unwrap();
         assert_eq!(mlx.last().unwrap(), "mlx-vlm==0.7.6");
+        assert!(mlx.iter().any(|arg| arg == "--only-binary=:all:"));
     }
 
     #[test]
@@ -1798,6 +2003,50 @@ mod tests {
         assert_eq!(round_trip, manifest);
     }
 
+    #[test]
+    fn missing_wheel_errors_name_the_package_and_explain_source_build_policy() {
+        for line in [
+            "ERROR: Could not find a version that satisfies the requirement synthetic-dependency[extra]>=2 (from vllm) (from versions: none)",
+            "ERROR: No matching distribution found for synthetic-dependency>=2",
+        ] {
+            assert_eq!(
+                missing_wheel_message(line).as_deref(),
+                Some("No compatible binary wheel is available for synthetic-dependency. Source builds are disabled for safety.")
+            );
+        }
+        assert!(missing_wheel_message("ERROR: Connection refused").is_none());
+        assert_eq!(
+            missing_wheel_message("ERROR: No matching distribution found for <invalid>").as_deref(),
+            Some("A dependency has no compatible binary wheel. Source builds are disabled for safety.")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_only_install_failure_surfaces_the_missing_dependency() {
+        let error = run_logged(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "printf '%s\\n' 'ERROR: No matching distribution found for synthetic-dependency>=2' >&2; exit 1",
+                "install",
+                "--only-binary=:all:",
+            ],
+            &Arc::new(AtomicBool::new(false)),
+            |_| {},
+            LoggedOperation::ManagedInstall,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unavailable);
+        assert!(error
+            .message
+            .contains("No compatible binary wheel is available for synthetic-dependency."));
+        assert!(error
+            .message
+            .contains("Source builds are disabled for safety."));
+    }
+
     #[tokio::test]
     async fn cancelled_installer_never_starts_a_child() {
         let cancel = Arc::new(AtomicBool::new(true));
@@ -1806,16 +2055,17 @@ mod tests {
             &[],
             &cancel,
             |_| {},
+            LoggedOperation::ManagedInstall,
         )
         .await
         .unwrap_err();
-        assert_eq!(error, "runtime installation cancelled");
+        assert_eq!(error, AppError::cancelled("runtime installation cancelled"));
     }
 
     #[test]
     #[ignore = "subprocess fixture invoked by the cancellation test"]
     fn synthetic_installer_waits_for_cancellation() {
-        println!("AIOLM_SYNTHETIC_INSTALLER_STARTED");
+        println!("AIOLM_SYNTHETIC_INSTALLER_STARTED={}", std::process::id());
         std::thread::sleep(Duration::from_secs(30));
     }
 
@@ -1828,6 +2078,9 @@ mod tests {
         let cleanup = StagingCleanup(root.clone());
         let cancel = Arc::new(AtomicBool::new(false));
         let runner = std::env::current_exe().unwrap();
+        let mut installer_pid = None;
+        #[cfg(windows)]
+        let mut exit_probe = None;
         let result = run_logged(
             &runner,
             &[
@@ -1838,15 +2091,51 @@ mod tests {
             ],
             &cancel,
             |line| {
-                if line.contains("AIOLM_SYNTHETIC_INSTALLER_STARTED") {
+                if let Some((_, pid)) = line.split_once("AIOLM_SYNTHETIC_INSTALLER_STARTED=") {
+                    let pid = pid.parse::<u32>().unwrap();
+                    installer_pid = Some(pid);
+                    #[cfg(windows)]
+                    {
+                        exit_probe = crate::procutil::ProcessExitProbe::open(pid);
+                    }
                     cancel.store(true, Ordering::Release);
                 }
             },
+            LoggedOperation::ManagedInstall,
         )
         .await;
-        assert_eq!(result.unwrap_err(), "runtime installation cancelled");
+        assert_eq!(
+            result.unwrap_err(),
+            AppError::cancelled("runtime installation cancelled")
+        );
+        assert!(installer_pid.is_some(), "installer did not report its PID");
+        #[cfg(unix)]
+        {
+            // ECHILD proves the runner has already reaped its direct child.
+            let result = unsafe {
+                libc::waitpid(
+                    installer_pid.unwrap() as i32,
+                    std::ptr::null_mut(),
+                    libc::WNOHANG,
+                )
+            };
+            assert_eq!(result, -1, "installer was not reaped before return");
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
+        #[cfg(windows)]
+        assert!(exit_probe
+            .expect("retained installer process handle")
+            .exited());
         assert!(!root.join(MANIFEST).exists());
         drop(cleanup);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::fs::try_exists(&root).await.unwrap() && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert!(!root.exists());
     }
 
@@ -1923,7 +2212,7 @@ mod tests {
     #[cfg(windows)]
     #[derive(Debug, Default)]
     struct ContinuingOutputObservation {
-        result: Option<Result<(), String>>,
+        result: Option<Result<(), AppError>>,
         outer_elapsed: bool,
         starts: usize,
         cancel_points: usize,
@@ -2025,6 +2314,7 @@ mod tests {
                             observed.natural_completion_lines += 1;
                         }
                     },
+                    LoggedOperation::ManagedInstall,
                 );
                 // A failing baseline still runs a finite producer; this bound
                 // drops work and its process-tree owner on a fixture failure.
@@ -2120,7 +2410,7 @@ mod tests {
         assert!(cancelled.cancelled_by_progress, "{cancelled:#?}");
         assert_eq!(
             cancelled.result,
-            Some(Err("runtime installation cancelled".into())),
+            Some(Err(AppError::cancelled("runtime installation cancelled"))),
             "{cancelled:#?}"
         );
         assert_ne!(

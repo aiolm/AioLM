@@ -5,7 +5,9 @@
 //! controllable while a model is loading, and stopping the API never unloads a
 //! model. The legacy Anthropic gateway commands remain as aliases of the same
 //! listener.
-use crate::{config, gateway, state::AppState};
+//! Exit gates report `busy`, listener bind failures `unavailable`, and poisoned
+//! state locks `internal`; configuration errors retain their original kind.
+use crate::{config, error::AppError, gateway, state::AppState};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use tauri::State;
@@ -49,7 +51,7 @@ fn configured_port() -> u16 {
 fn status_of(
     state: &AppState,
     configured_port: impl FnOnce() -> u16,
-) -> Result<ApiServerStatus, String> {
+) -> Result<ApiServerStatus, AppError> {
     let gateway = state
         .gateway
         .lock()
@@ -74,10 +76,10 @@ fn status_of(
 
 /// Start the listener on `port` unless it is already running, in which case
 /// the running listener is reported unchanged.
-async fn start_api(state: &AppState, port: u16) -> Result<ApiServerStatus, String> {
+async fn start_api(state: &AppState, port: u16) -> Result<ApiServerStatus, AppError> {
     let _control = state.api_control.lock().await;
     if state.exiting.load(Ordering::Acquire) {
-        return Err("application is exiting".into());
+        return Err(AppError::busy("application is exiting"));
     }
     let running = state
         .gateway
@@ -96,7 +98,7 @@ async fn start_api(state: &AppState, port: u16) -> Result<ApiServerStatus, Strin
 /// began exiting in the meantime. Shutdown raises `exiting` before it takes the
 /// listener under the same lock, so checking under that lock means shutdown
 /// either sees this listener and stops it, or this refuses and stops it here.
-async fn publish(state: &AppState, handle: gateway::GatewayHandle) -> Result<(), String> {
+async fn publish(state: &AppState, handle: gateway::GatewayHandle) -> Result<(), AppError> {
     let refused = {
         // A poisoned lock still holds a usable slot; refusing to publish would
         // leave a running listener that nothing can stop.
@@ -114,14 +116,14 @@ async fn publish(state: &AppState, handle: gateway::GatewayHandle) -> Result<(),
     match refused {
         Some(handle) => {
             gateway::stop(handle).await;
-            Err("application is exiting".into())
+            Err(AppError::busy("application is exiting"))
         }
         None => Ok(()),
     }
 }
 
 /// Stop the listener and its open connections. Model processes are untouched.
-async fn stop_api(state: &AppState) -> Result<(), String> {
+async fn stop_api(state: &AppState) -> Result<(), AppError> {
     let _control = state.api_control.lock().await;
     let handle = state
         .gateway
@@ -137,17 +139,17 @@ async fn stop_api(state: &AppState) -> Result<(), String> {
 #[tauri::command]
 pub(crate) async fn start_api_server(
     state: State<'_, AppState>,
-) -> Result<ApiServerStatus, String> {
+) -> Result<ApiServerStatus, AppError> {
     start_api(&state, config::load_result()?.port).await
 }
 
 #[tauri::command]
-pub(crate) async fn stop_api_server(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) async fn stop_api_server(state: State<'_, AppState>) -> Result<(), AppError> {
     stop_api(&state).await
 }
 
 #[tauri::command]
-pub(crate) fn api_server_status(state: State<'_, AppState>) -> Result<ApiServerStatus, String> {
+pub(crate) fn api_server_status(state: State<'_, AppState>) -> Result<ApiServerStatus, AppError> {
     status_of(&state, configured_port)
 }
 
@@ -157,20 +159,23 @@ fn legacy_messages_url(status: &ApiServerStatus) -> Option<String> {
 }
 
 #[tauri::command]
-pub(crate) async fn start_anthropic_gateway(state: State<'_, AppState>) -> Result<String, String> {
+pub(crate) async fn start_anthropic_gateway(
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
     let status = start_api(&state, config::load_result()?.port).await?;
-    legacy_messages_url(&status).ok_or_else(|| "the API listener did not start".to_string())
+    legacy_messages_url(&status)
+        .ok_or_else(|| AppError::unavailable("the API listener did not start"))
 }
 
 #[tauri::command]
-pub(crate) async fn stop_anthropic_gateway(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) async fn stop_anthropic_gateway(state: State<'_, AppState>) -> Result<(), AppError> {
     stop_api(&state).await
 }
 
 #[tauri::command]
 pub(crate) fn anthropic_gateway_status(
     state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     let status = status_of(&state, configured_port)?;
     Ok(serde_json::json!({
         "running": status.running,
@@ -230,6 +235,15 @@ mod tests {
         })
         .join();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_poisoned_status_slot_reports_internal_without_exposing_a_key() {
+        let state = AppState::default();
+        poison_gateway_slot(&state);
+        let error = status_of(&state, || 8080).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Internal);
+        assert_eq!(error.message, "gateway state lock was poisoned");
     }
 
     #[tokio::test]
@@ -340,7 +354,11 @@ mod tests {
         let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = occupied.local_addr().unwrap().port();
         let error = start_api(&state, port).await.unwrap_err();
-        assert!(error.contains(&format!("127.0.0.1:{port}")), "{error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert!(
+            error.message.contains(&format!("127.0.0.1:{port}")),
+            "{error}"
+        );
         assert!(!status_of(&state, || port).unwrap().running);
         drop(occupied);
         assert!(start_api(&state, port).await.unwrap().running);
@@ -371,7 +389,9 @@ mod tests {
         let port = handle.port;
         // Exit begins between "listener started" and "listener published".
         state.begin_normal_exit();
-        assert!(publish(&state, handle).await.is_err());
+        let error = publish(&state, handle).await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        assert_eq!(error.message, "application is exiting");
         assert!(state.gateway.lock().unwrap().is_none());
         assert!(
             tokio::net::TcpStream::connect(("127.0.0.1", port))
@@ -385,7 +405,9 @@ mod tests {
     async fn a_start_after_exit_began_is_refused() {
         let state = AppState::default();
         state.begin_normal_exit();
-        assert!(start_api(&state, 0).await.is_err());
+        let error = start_api(&state, 0).await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        assert_eq!(error.message, "application is exiting");
         assert!(!status_of(&state, || 0).unwrap().running);
     }
 

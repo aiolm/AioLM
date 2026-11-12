@@ -217,9 +217,24 @@ async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
     let path = target.split('?').next().unwrap_or_default().to_string();
     let mut headers = HashMap::new();
     for line in lines.filter(|line| !line.is_empty()) {
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| bad_request("malformed request header"))?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+            || value
+                .bytes()
+                .any(|byte| byte == 0x7f || (byte < 0x20 && byte != b'\t'))
+        {
+            return Err(bad_request("invalid request header name or value"));
         }
+        let name = name.to_ascii_lowercase();
+        if name == "host" && headers.contains_key(&name) {
+            return Err(bad_request("multiple Host headers are not supported"));
+        }
+        headers.insert(name, value.trim_matches([' ', '\t']).to_string());
     }
     if headers.contains_key("transfer-encoding") {
         return Err(ApiError::new(
@@ -369,12 +384,10 @@ pub(super) async fn write_preflight(
 ) -> Result<(), String> {
     let mut head = String::from("HTTP/1.1 204 No Content\r\n");
     if let Some(origin) = allowed_origin(headers) {
-        let requested = headers.get("access-control-request-headers").map_or(
-            "authorization, content-type, x-api-key, anthropic-version",
-            |value| value.as_str(),
-        );
+        // Browser-managed headers (Host, Origin, Content-Length and the
+        // preflight metadata) are not caller-requestable CORS permissions.
         head.push_str(&format!(
-            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: {requested}\r\nAccess-Control-Max-Age: 600\r\n"
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: authorization, content-type, x-api-key, anthropic-version, expect\r\nAccess-Control-Max-Age: 600\r\n"
         ));
     }
     head.push_str("Content-Length: 0\r\nConnection: close\r\n\r\n");

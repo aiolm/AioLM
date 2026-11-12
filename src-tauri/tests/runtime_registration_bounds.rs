@@ -147,7 +147,7 @@ async fn oversized_registrations_are_refused_before_probe_and_publication() {
         let error = runtime_schema::register_entrypoint(&root, &draft, None)
             .await
             .unwrap_err();
-        assert!(error.contains("KiB"), "{name}: {error}");
+        assert!(error.message.contains("KiB"), "{name}: {error}");
         assert!(!marker.exists(), "{name}: the probe must not run");
         assert!(!registration.exists(), "{name}: nothing is published");
         assert_eq!(fs::read(&kept).unwrap(), b"{\"synthetic\":true}");
@@ -182,7 +182,7 @@ async fn oversized_registrations_are_refused_before_probe_and_publication() {
     let error = providers::registry::register(&source, None)
         .await
         .unwrap_err();
-    assert!(error.contains("KiB"), "{error}");
+    assert!(error.message.contains("KiB"), "{error}");
     assert!(!marker.exists(), "the probe must not run");
     assert!(!registration.exists());
     assert_eq!(fs::read(&kept).unwrap(), b"{\"synthetic\":true}");

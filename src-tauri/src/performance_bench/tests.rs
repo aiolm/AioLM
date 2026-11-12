@@ -19,6 +19,40 @@ fn request() -> PerformanceBenchRequest {
     }
 }
 
+#[tokio::test]
+async fn command_rejects_operation_gate_and_invalid_request_with_source_kinds() {
+    let state = crate::state::AppState::default();
+    let progress: Progress = Arc::new(|_| {});
+    let operation = state.operation.try_lock().unwrap();
+    let busy = crate::commands::benchmark::run_performance_bench_with_progress(
+        &state,
+        AppConfig::default(),
+        request(),
+        progress.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        busy,
+        AppError::busy("another server or benchmark operation is in progress")
+    );
+    drop(operation);
+    let mut invalid = request();
+    invalid.run_id.clear();
+    let validation = crate::commands::benchmark::run_performance_bench_with_progress(
+        &state,
+        AppConfig::default(),
+        invalid,
+        progress,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        validation,
+        AppError::validation("benchmark run_id must contain 1 to 128 bytes")
+    );
+}
+
 #[test]
 fn byte_inputs_are_exact_utf8_and_hash_the_final_user_content() {
     for profile in [
@@ -431,7 +465,15 @@ async fn completed_forced_trials_checkpoint_but_eof_count_mismatch_and_cancel_di
         )
         .await
         .unwrap_err();
-        assert!(failure.contains("repetition 2"), "{label}: {failure}");
+        assert_eq!(
+            failure.kind,
+            crate::error::ErrorKind::Unavailable,
+            "{label}"
+        );
+        assert!(
+            failure.message.contains("repetition 2"),
+            "{label}: {failure}"
+        );
         assert_eq!(serde_json::to_value(&result.rows).unwrap(), kept, "{label}");
     }
     let (client, buffered, owner) = fixture(vec![
@@ -456,7 +498,7 @@ async fn completed_forced_trials_checkpoint_but_eof_count_mismatch_and_cancel_di
         }
         trigger.store(true, Ordering::Release);
     });
-    assert!(trial(
+    let cancelled = trial(
         &request,
         &client,
         &buffered,
@@ -466,10 +508,15 @@ async fn completed_forced_trials_checkpoint_but_eof_count_mismatch_and_cancel_di
         &cancel,
         &mut result,
         Some(&checkpoint),
-        &progress
+        &progress,
     )
     .await
-    .is_err());
+    .unwrap_err();
+    assert_eq!(cancelled.kind, crate::error::ErrorKind::Cancelled);
+    assert_eq!(
+        cancelled.message,
+        "point b256/c2/o1024, repetition 3: benchmark cancelled"
+    );
     canceller.await.unwrap();
     assert_eq!(serde_json::to_value(&result.rows).unwrap(), kept);
     assert_eq!(events.lock().unwrap().len(), 1);
@@ -568,7 +615,8 @@ async fn largest_fixed_output_target_streams_and_counts_exactly_over_http() {
     )
     .await
     .unwrap_err();
-    assert!(error.contains("204799 of 204800"), "{error}");
+    assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+    assert!(error.message.contains("204799 of 204800"), "{error}");
     assert_eq!(result.rows.len(), 1);
 }
 
@@ -902,7 +950,8 @@ async fn native_benchmark_rejection_preserves_history_and_measurement_permits_on
         )
         .await
         .unwrap_err();
-        assert_eq!(error, expected_error);
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert_eq!(error.message, expected_error);
         assert_eq!(permits::epoch(), epoch);
         assert_eq!(permits::live_permit("existing-submission"), permit);
         assert_eq!(journal_bytes(&root), journals_before);

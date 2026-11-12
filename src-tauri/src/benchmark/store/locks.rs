@@ -1,5 +1,6 @@
 //! OS locks coordinate separate application processes. Lock files are permanent
 //! names; closing a handle (including process exit) releases ownership.
+use crate::error::AppError;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -13,26 +14,26 @@ pub(super) struct StoreLock {
     _local: MutexGuard<'static, ()>,
 }
 
-fn open_lock(path: &Path) -> Result<File, String> {
+fn open_lock(path: &Path) -> Result<File, AppError> {
     fs::create_dir_all(path.parent().ok_or("benchmark lock has no directory")?)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path)
-        .map_err(|error| format!("cannot open benchmark coordination lock: {error}"))
+        .map_err(|error| AppError::io("cannot open benchmark coordination lock", &error))
 }
 
 impl StoreLock {
-    pub(super) fn acquire(root: &Path) -> Result<Self, String> {
+    pub(super) fn acquire(root: &Path) -> Result<Self, AppError> {
         let local = LOCAL_STORE_LOCK
             .lock()
             .map_err(|_| "benchmark store lock was poisoned")?;
         let file = open_lock(&root.join(".store.lock"))?;
         file.lock()
-            .map_err(|error| format!("cannot lock benchmark storage: {error}"))?;
+            .map_err(|error| AppError::io("cannot lock benchmark storage", &error))?;
         Ok(Self {
             _file: file,
             _local: local,
@@ -64,21 +65,21 @@ fn run_lock_path(root: &Path, run_id: &str) -> PathBuf {
         .join(format!("{:x}.lock", Sha256::digest(run_id.as_bytes())))
 }
 
-fn try_lock(path: &Path) -> Result<Option<RunLock>, String> {
+fn try_lock(path: &Path) -> Result<Option<RunLock>, AppError> {
     let file = open_lock(path)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(RunLock { _file: file })),
         Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(error)) => Err(format!("cannot lock benchmark run: {error}")),
+        Err(TryLockError::Error(error)) => Err(AppError::io("cannot lock benchmark run", &error)),
     }
 }
 
 impl RunLock {
-    pub(super) fn acquire(root: &Path, run_id: &str) -> Result<Option<Self>, String> {
+    pub(super) fn acquire(root: &Path, run_id: &str) -> Result<Option<Self>, AppError> {
         try_lock(&run_lock_path(root, run_id))
     }
 
-    pub(super) fn for_journal(root: &Path, journal: &Path) -> Result<Option<Self>, String> {
+    pub(super) fn for_journal(root: &Path, journal: &Path) -> Result<Option<Self>, AppError> {
         let digest = Self::journal_digest(journal)?;
         try_lock(&root.join("run-locks").join(format!("{digest}.lock")))
     }
@@ -98,7 +99,7 @@ impl RunLock {
     }
 }
 
-pub(super) fn mark_active(root: &Path, run_id: &str) -> Result<PathBuf, String> {
+pub(super) fn mark_active(root: &Path, run_id: &str) -> Result<PathBuf, AppError> {
     let path = root
         .join("active-runs")
         .join(format!("{:x}.active", Sha256::digest(run_id.as_bytes())));
@@ -108,7 +109,7 @@ pub(super) fn mark_active(root: &Path, run_id: &str) -> Result<PathBuf, String> 
     Ok(path)
 }
 
-pub(super) fn active_digests(root: &Path) -> Result<(HashSet<String>, Vec<String>), String> {
+pub(super) fn active_digests(root: &Path) -> Result<(HashSet<String>, Vec<String>), AppError> {
     let mut active = HashSet::new();
     let mut warnings = Vec::new();
     let entries = match fs::read_dir(root.join("active-runs")) {
@@ -116,10 +117,10 @@ pub(super) fn active_digests(root: &Path) -> Result<(HashSet<String>, Vec<String
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok((active, warnings))
         }
-        Err(error) => return Err(format!("cannot inspect active benchmark runs: {error}")),
+        Err(error) => return Err(AppError::io("cannot inspect active benchmark runs", &error)),
     };
     for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = entry.map_err(|error| AppError::from_io(&error))?;
         let path = entry.path();
         let Some(digest) = path
             .file_stem()
@@ -150,7 +151,7 @@ pub(super) fn active_digests(root: &Path) -> Result<(HashSet<String>, Vec<String
             }
             Err(error) => {
                 active.insert(digest.to_owned());
-                warnings.push(error);
+                warnings.push(error.to_string());
             }
         }
     }

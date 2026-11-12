@@ -45,14 +45,17 @@ impl ModelSource {
         let mut ready = Vec::new();
         let mut loading = 0;
         for (session_id, target, err) in targets {
+            let teardown;
             let mut state = lock(&target);
             // A crashed worker must stop being advertised as soon as it is
             // noticed, not only when the desktop UI next polls its status. A
             // session with no tracked process is left alone: requests to it
             // fail as upstream errors instead of being second-guessed here.
-            if state.child.is_some() {
-                server::reap_if_exited(&mut state, &err);
-            }
+            teardown = if state.child.is_some() {
+                server::reap_if_exited(&mut state, &err)
+            } else {
+                None
+            };
             match state.lifecycle {
                 Lifecycle::Ready if !state.url.is_empty() && !state.api_key.is_empty() => {
                     let model_id = file_name(&state.model)
@@ -71,6 +74,8 @@ impl ModelSource {
                 Lifecycle::Starting => loading += 1,
                 _ => {}
             }
+            drop(state);
+            drop(teardown);
         }
         ready.sort_by(|a, b| (&a.model_id, &a.session_id).cmp(&(&b.model_id, &b.session_id)));
         // Two sessions serving the same file must stay individually

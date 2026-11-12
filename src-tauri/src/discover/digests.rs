@@ -1,8 +1,10 @@
 //! Published SHA256 content identities and Git blob SHA1 identities.
+use super::io_error;
 use super::{
     hash_existing_file, AtomicBool, Ordering, Path, DOWNLOAD_BUFFER_BYTES, DOWNLOAD_CANCELLED,
     DOWNLOAD_UPDATE_INTERVAL,
 };
+use crate::error::AppError;
 use crate::providers::artifacts::SnapshotFile;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -67,8 +69,9 @@ pub(super) struct FileDigest<'a> {
 }
 
 impl<'a> FileDigest<'a> {
-    pub(super) fn new(oid: &'a str, size: u64) -> Result<Self, String> {
-        let (algorithm, expected) = identity(oid).ok_or("snapshot file has an invalid digest")?;
+    pub(super) fn new(oid: &'a str, size: u64) -> Result<Self, AppError> {
+        let (algorithm, expected) = identity(oid)
+            .ok_or_else(|| AppError::validation("snapshot file has an invalid digest"))?;
         let hasher = match algorithm {
             Algorithm::Sha256 => Hasher::Sha256(Sha256::new()),
             Algorithm::GitBlob => {
@@ -114,7 +117,7 @@ pub(super) async fn verify_file_digest(
     path: &Path,
     file: &SnapshotFile,
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     verify_file_digest_with_progress(path, file, cancel, |_| {}).await
 }
 
@@ -123,29 +126,45 @@ pub(super) async fn verify_file_digest_with_progress<F: FnMut(u64)>(
     file: &SnapshotFile,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
-    let oid = file.oid.as_deref().ok_or("snapshot file has no digest")?;
-    let (algorithm, expected) = identity(oid).ok_or("snapshot file has an invalid digest")?;
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| format!("cannot inspect snapshot file {}: {error}", file.path))?;
+    let oid = file
+        .oid
+        .as_deref()
+        .ok_or_else(|| AppError::validation("snapshot file has no digest"))?;
+    let (algorithm, expected) =
+        identity(oid).ok_or_else(|| AppError::validation("snapshot file has an invalid digest"))?;
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot inspect snapshot file {}: {error}", file.path),
+        )
+    })?;
     if !metadata.is_file() || metadata.len() != file.size {
-        return Err(format!("snapshot file failed verification: {}", file.path));
+        return Err(AppError::validation(format!(
+            "snapshot file failed verification: {}",
+            file.path
+        )));
     }
     let matches = match algorithm {
         Algorithm::Sha256 => hash_existing_file(path, file.size, cancel, progress)
             .await?
             .eq_ignore_ascii_case(expected),
         Algorithm::GitBlob => {
-            let mut input = tokio::fs::File::open(path)
+            let mut input = tokio::fs::File::open(path).await.map_err(|error| {
+                io_error(&error, format!("cannot verify snapshot file: {error}"))
+            })?;
+            let metadata = input
+                .metadata()
                 .await
-                .map_err(|error| format!("cannot verify snapshot file: {error}"))?;
-            let metadata = input.metadata().await.map_err(|error| error.to_string())?;
+                .map_err(|error| AppError::from_io(&error))?;
             if !metadata.is_file() || metadata.len() != file.size {
-                return Err(format!("snapshot file failed verification: {}", file.path));
+                return Err(AppError::validation(format!(
+                    "snapshot file failed verification: {}",
+                    file.path
+                )));
             }
             let mut hash = FileDigest::new(oid, file.size)?;
             let mut buffer = vec![0; DOWNLOAD_BUFFER_BYTES];
@@ -153,18 +172,19 @@ pub(super) async fn verify_file_digest_with_progress<F: FnMut(u64)>(
             let mut last_progress = std::time::Instant::now();
             loop {
                 if cancel.load(Ordering::Acquire) {
-                    return Err(DOWNLOAD_CANCELLED.into());
+                    return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
                 }
-                let count = input
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|error| format!("cannot hash snapshot file: {error}"))?;
+                let count = input.read(&mut buffer).await.map_err(|error| {
+                    io_error(&error, format!("cannot hash snapshot file: {error}"))
+                })?;
                 if count == 0 {
                     break;
                 }
                 read = read.saturating_add(count as u64);
                 if read > file.size {
-                    return Err("snapshot file grew while it was verified".into());
+                    return Err(AppError::validation(
+                        "snapshot file grew while it was verified",
+                    ));
                 }
                 hash.update(&buffer[..count]);
                 if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL {
@@ -173,14 +193,19 @@ pub(super) async fn verify_file_digest_with_progress<F: FnMut(u64)>(
                 }
             }
             if read != file.size {
-                return Err("snapshot file shrank while it was verified".into());
+                return Err(AppError::validation(
+                    "snapshot file shrank while it was verified",
+                ));
             }
             progress(read);
             hash.matches()
         }
     };
     if !matches {
-        return Err(format!("snapshot file failed verification: {}", file.path));
+        return Err(AppError::validation(format!(
+            "snapshot file failed verification: {}",
+            file.path
+        )));
     }
     Ok(())
 }
@@ -274,20 +299,32 @@ mod tests {
         let idle = AtomicBool::new(false);
         for oid in [None, Some("invalid".into())] {
             file.oid = oid;
-            assert!(verify_file_digest(&path, &file, &idle).await.is_err());
+            assert_eq!(
+                verify_file_digest(&path, &file, &idle)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                crate::error::ErrorKind::Validation,
+            );
         }
         file.oid = Some(HELLO_GIT.into());
         assert_eq!(
             verify_file_digest(&path, &file, &AtomicBool::new(true))
                 .await
                 .unwrap_err(),
-            DOWNLOAD_CANCELLED
+            AppError::cancelled(DOWNLOAD_CANCELLED)
         );
         file.size = 5;
         assert!(verify_file_digest(&path, &file, &idle).await.is_err());
         file.size = 6;
         std::fs::remove_file(&path).unwrap();
-        assert!(verify_file_digest(&path, &file, &idle).await.is_err());
+        assert_eq!(
+            verify_file_digest(&path, &file, &idle)
+                .await
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::NotFound,
+        );
         std::fs::create_dir(&path).unwrap();
         assert!(verify_file_digest(&path, &file, &idle).await.is_err());
         std::fs::remove_dir_all(root).unwrap();

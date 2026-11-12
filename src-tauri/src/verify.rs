@@ -33,6 +33,7 @@
 //! was asked to verify did not happen.
 
 use crate::config::AppConfig;
+use crate::error::AppError;
 use crate::gpu::ResolvedGpu;
 use crate::runtime;
 use serde::{Deserialize, Serialize};
@@ -42,11 +43,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 
 pub(crate) mod engine;
+
+// Verification can also be entered by preflight and CLI callers that do not
+// own the desktop's model-operation lock.
+static VERIFY_OPERATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CACHE_ACCESS: Mutex<()> = Mutex::new(());
 
 /// Bump when the probe text, canary weights, or comparison change meaning, so
 /// stored verdicts are never reinterpreted under a different procedure.
@@ -219,38 +225,121 @@ fn cache_path() -> PathBuf {
     crate::home::aiolm_home().join("verification.json")
 }
 
-fn load_cache() -> Cache {
-    fs::read_to_string(cache_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+fn quarantine_cache(path: &Path, parse_error: &serde_json::Error) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or("verification cache has no parent directory")?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("verification cache has no file name")?;
+    let prefix = format!("{name}.corrupt-");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
+        .as_millis();
+    let backup = parent.join(format!(
+        "{prefix}{timestamp:020}-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::rename(path, &backup)
+        .map_err(|error| AppError::io("cannot preserve malformed verification cache", &error))?;
+    eprintln!(
+        "cannot parse verification cache ({parse_error}); preserved it at {}",
+        backup.display()
+    );
+    let backups = fs::read_dir(parent).map(|entries| {
+        let mut backups = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                if !entry.file_type().ok()?.is_file() {
+                    return None;
+                }
+                let name = entry.file_name().into_string().ok()?;
+                let suffix = name.strip_prefix(&prefix)?;
+                let (timestamp, id) = suffix.split_once('-')?;
+                if timestamp.len() != 20
+                    || timestamp.parse::<u128>().is_err()
+                    || uuid::Uuid::parse_str(id).is_err()
+                {
+                    return None;
+                }
+                Some((name, entry.path()))
+            })
+            .collect::<Vec<_>>();
+        backups.sort_by(|left, right| left.0.cmp(&right.0));
+        backups
+    });
+    match backups {
+        Ok(backups) => {
+            let excess = backups.len().saturating_sub(3);
+            for (_, path) in backups.into_iter().take(excess) {
+                if let Err(error) = fs::remove_file(path) {
+                    eprintln!("cannot prune an old verification cache backup: {error}");
+                }
+            }
+        }
+        Err(error) => eprintln!("cannot list verification cache backups: {error}"),
+    }
+    Ok(())
 }
 
-fn write_cache(cache: &Cache) {
-    let path = cache_path();
+fn read_cache(path: &Path) -> Result<Cache, AppError> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Cache::default()),
+        Err(error) => return Err(AppError::io("cannot read verification cache", &error)),
+    };
+    match serde_json::from_str(&text) {
+        Ok(cache) => Ok(cache),
+        Err(error) => {
+            quarantine_cache(path, &error)?;
+            Ok(Cache::default())
+        }
+    }
+}
+
+fn load_cache() -> Result<Cache, AppError> {
+    let _access = CACHE_ACCESS
+        .lock()
+        .map_err(|_| "verification cache lock was poisoned")?;
+    read_cache(&cache_path())
+}
+
+fn update_cache(path: &Path, update: impl FnOnce(&mut Cache)) -> Result<(), AppError> {
+    let _access = CACHE_ACCESS
+        .lock()
+        .map_err(|_| "verification cache lock was poisoned")?;
+    let mut cache = read_cache(path)?;
+    update(&mut cache);
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|error| AppError::from_io(&error))?;
     }
-    if let Ok(text) = serde_json::to_string_pretty(cache) {
-        let _ = fs::write(path, text);
-    }
+    let text = serde_json::to_vec_pretty(&cache).map_err(|error| error.to_string())?;
+    crate::config::atomic_write(path, &text)
 }
 
-fn store(key: &str, record: Record) {
-    let mut cache = load_cache();
-    cache.entries.insert(key.to_string(), record);
-    write_cache(&cache);
+fn store(key: &str, record: Record) -> Result<(), AppError> {
+    update_cache(&cache_path(), |cache| {
+        cache.entries.insert(key.to_string(), record);
+    })
 }
 
-fn store_deep(key: &str, record: Record) {
-    let mut cache = load_cache();
-    cache.deep.insert(key.to_string(), record);
-    write_cache(&cache);
+fn store_deep(key: &str, record: Record) -> Result<(), AppError> {
+    update_cache(&cache_path(), |cache| {
+        cache.deep.insert(key.to_string(), record);
+    })
 }
 
 /// The stored deep verdict for a combination, if one was ever produced.
 pub fn deep_record(key: &str) -> Option<Record> {
-    load_cache().deep.get(key).cloned()
+    match load_cache() {
+        Ok(cache) => cache.deep.get(key).cloned(),
+        Err(error) => {
+            eprintln!("{error}");
+            None
+        }
+    }
 }
 
 /// Record that the user accepted the risk for exactly this combination.
@@ -259,20 +348,17 @@ pub fn deep_record(key: &str) -> Option<Record> {
 /// change the result is in the key: a different runtime build, GPU selection,
 /// split, or machine produces a different key and is blocked again. An override
 /// therefore cannot silently widen to cover a setup nobody agreed to.
-pub fn allow_override(key: &str) -> Result<(), String> {
+pub fn allow_override(key: &str) -> Result<(), AppError> {
     if key.len() != 64 || !key.chars().all(|value| value.is_ascii_hexdigit()) {
-        return Err("that is not a verification override key".into());
+        return Err(AppError::validation(
+            "that is not a verification override key",
+        ));
     }
-    let mut cache = load_cache();
-    if !cache.overrides.iter().any(|item| item == key) {
-        cache.overrides.push(key.to_string());
-    }
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(&cache).map_err(|error| error.to_string())?;
-    fs::write(path, text).map_err(|error| error.to_string())
+    update_cache(&cache_path(), |cache| {
+        if !cache.overrides.iter().any(|item| item == key) {
+            cache.overrides.push(key.to_string());
+        }
+    })
 }
 
 /// Identify the weights without hashing them: a multi-gigabyte model cannot be
@@ -478,21 +564,41 @@ fn canary_dir() -> PathBuf {
     crate::home::aiolm_home().join("verification")
 }
 
-async fn ensure_canary() -> Result<PathBuf, String> {
+async fn ensure_canary() -> Result<PathBuf, AppError> {
     let path = canary_dir().join(format!("{}.gguf", CANARY.id));
     if path.is_file() && runtime::file_sha256(&path)? == CANARY.sha256 {
         return Ok(path);
     }
-    fs::create_dir_all(canary_dir()).map_err(|error| error.to_string())?;
+    fs::create_dir_all(canary_dir()).map_err(|error| AppError::from_io(&error))?;
     runtime::download_verified(CANARY.url, &path, CANARY.sha256, CANARY.bytes).await?;
     Ok(path)
 }
 
-fn write_probe_text() -> Result<PathBuf, String> {
-    let path = canary_dir().join("probe.txt");
-    fs::create_dir_all(canary_dir()).map_err(|error| error.to_string())?;
-    fs::write(&path, PROBE_TEXT).map_err(|error| error.to_string())?;
-    Ok(path)
+struct RunFiles(PathBuf);
+
+impl RunFiles {
+    fn new() -> Result<Self, AppError> {
+        Self::new_in(&canary_dir())
+    }
+
+    fn new_in(root: &Path) -> Result<Self, AppError> {
+        fs::create_dir_all(root).map_err(|error| AppError::from_io(&error))?;
+        let path = root.join(format!("run-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&path).map_err(|error| AppError::from_io(&error))?;
+        let files = Self(path);
+        fs::write(files.text(), PROBE_TEXT).map_err(|error| AppError::from_io(&error))?;
+        Ok(files)
+    }
+
+    fn text(&self) -> PathBuf {
+        self.0.join("probe.txt")
+    }
+}
+
+impl Drop for RunFiles {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Both passes share every argument except device placement. `--fit off` is
@@ -521,18 +627,26 @@ fn common_args<'a>(model: &'a str, text: &'a str) -> Vec<&'a str> {
 /// A cached pass costs a hash and a file read. A miss costs two short passes
 /// over the canary — measured at 0.6s and 3.1s — and is paid once per
 /// combination.
+///
+/// Numerical and cached refusals are validation errors. This attempt's source
+/// failures keep their kind without changing stored records or refusal text;
+/// a raised cancellation flag is cancellation.
 pub async fn ensure_verified(
     cfg: &AppConfig,
     resolved: &ResolvedGpu,
     hardware_fingerprint: &str,
     runtime_devices: &[String],
     cancel: Option<&Arc<AtomicBool>>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if !uses_accelerator(cfg, resolved) {
         return Ok(());
     }
+    let _verification = VERIFY_OPERATION.lock().await;
+    if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err(AppError::cancelled("server start cancelled"));
+    }
     let key = cache_key(cfg, resolved, hardware_fingerprint, runtime_devices);
-    let cache = load_cache();
+    let cache = load_cache()?;
     if cache.overrides.iter().any(|item| item == &key) {
         return Ok(());
     }
@@ -554,23 +668,27 @@ pub async fn ensure_verified(
             _ => Err(refusal(&key, record)),
         };
     }
-    let record = measure(cfg, resolved, cancel).await;
+    let (record, source_kind) = measure(cfg, resolved, cancel).await;
     if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
-    store(&key, record.clone());
+    store(&key, record.clone())?;
     match record.verdict {
         Verdict::Pass => Ok(()),
-        _ => Err(refusal(&key, &record)),
+        _ => {
+            let mut error = refusal(&key, &record);
+            error.kind = source_kind.unwrap_or(error.kind);
+            Err(error)
+        }
     }
 }
 
-fn refusal(key: &str, record: &Record) -> String {
+fn refusal(key: &str, record: &Record) -> AppError {
     let measured = record
         .ratio
         .map(|ratio| format!(" Measured perplexity ratio {ratio:.3} against a limit of {MAX_PERPLEXITY_RATIO:.0}; 1.0 means the device agrees with the host."))
         .unwrap_or_default();
-    match record.verdict {
+    AppError::validation(match record.verdict {
         Verdict::Fail => format!(
             "this runtime computed wrong results with the selected GPUs on this machine, so the server was not started.{measured} {} Select a different runtime build or GPU selection, or start it anyway with verification override key {key}.",
             record.detail
@@ -579,7 +697,7 @@ fn refusal(key: &str, record: &Record) -> String {
             "the selected GPUs could not be verified on this machine, so correctness is unknown and the server was not started. {} Retry, select a different runtime build or GPU selection, or start it anyway with verification override key {key}.",
             record.detail
         ),
-    }
+    })
 }
 
 fn record(verdict: Verdict, ratio: Option<f64>, detail: impl Into<String>) -> Record {
@@ -604,45 +722,62 @@ fn chrono_now() -> String {
         .unwrap_or_default()
 }
 
+// Source kinds describe this attempt only; cached records retain their existing
+// schema and cannot recover an earlier operational failure's kind.
 async fn measure(
     cfg: &AppConfig,
     resolved: &ResolvedGpu,
     cancel: Option<&Arc<AtomicBool>>,
-) -> Record {
+) -> (Record, Option<crate::error::ErrorKind>) {
     #[cfg(test)]
     canary_cancel_public_flow_tests::measurement_started(cancel);
     let binary = match runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build) {
         Ok(path) if path.is_file() => path,
         Ok(path) => {
-            return record(
-                Verdict::Unsupported,
-                None,
-                format!("this runtime does not ship {}.", path.display()),
+            return (
+                record(
+                    Verdict::Unsupported,
+                    None,
+                    format!("this runtime does not ship {}.", path.display()),
+                ),
+                Some(crate::error::ErrorKind::NotFound),
             )
         }
-        Err(error) => return record(Verdict::Unsupported, None, error),
+        Err(error) => {
+            return (
+                record(Verdict::Unsupported, None, error.message),
+                Some(error.kind),
+            )
+        }
     };
     let model = match ensure_canary().await {
         Ok(path) => path,
         Err(error) => {
-            return record(
-                Verdict::Unsupported,
-                None,
-                format!("the verification model could not be prepared: {error}."),
+            return (
+                record(
+                    Verdict::Unsupported,
+                    None,
+                    format!("the verification model could not be prepared: {error}."),
+                ),
+                Some(error.kind),
             )
         }
     };
-    let text = match write_probe_text() {
-        Ok(path) => path,
+    let files = match RunFiles::new() {
+        Ok(files) => files,
         Err(error) => {
-            return record(
-                Verdict::Unsupported,
-                None,
-                format!("the verification text could not be written: {error}."),
+            return (
+                record(
+                    Verdict::Unsupported,
+                    None,
+                    format!("the verification text could not be written: {error}."),
+                ),
+                Some(error.kind),
             )
         }
     };
-    let baseline = canary_dir().join("baseline.logits");
+    let text = files.text();
+    let baseline = files.0.join("baseline.logits");
     let model_arg = model.to_string_lossy().into_owned();
     let text_arg = text.to_string_lossy().into_owned();
     let baseline_arg = baseline.to_string_lossy().into_owned();
@@ -664,28 +799,27 @@ async fn measure(
     )
     .await;
     let outcome = match reference_output {
-        Err(error) => record(
+        Err(error) => (record(
             Verdict::Unsupported,
             None,
             format!("the host reference pass did not complete: {error}."),
-        ),
+        ), Some(error.kind)),
         Ok(text) => match parse_final_ppl(&text) {
             Some(ppl) if reference_is_usable(ppl) => {
                 candidate(&binary, cfg, resolved, &model_arg, &text_arg, &baseline_arg, cancel).await
             }
-            Some(ppl) => record(
+            Some(ppl) => (record(
                 Verdict::Unsupported,
                 None,
                 format!("this runtime's own host pass scored {ppl:.1} on weights that score {REFERENCE_PPL_EXPECTED:.1} on a working host path, so its host results cannot be trusted as the reference."),
-            ),
-            None => record(
+            ), None),
+            None => (record(
                 Verdict::Unsupported,
                 None,
                 "the host reference pass printed no perplexity.".to_string(),
-            ),
+            ), None),
         },
     };
-    let _ = fs::remove_file(&baseline);
     outcome
 }
 
@@ -697,7 +831,7 @@ async fn candidate(
     text: &str,
     baseline: &str,
     cancel: Option<&Arc<AtomicBool>>,
-) -> Record {
+) -> (Record, Option<crate::error::ErrorKind>) {
     let mut args = common_args(model, text);
     args.extend_from_slice(&["--kl-divergence", "--kl-divergence-base", baseline]);
     // Mirror the pending launch's placement exactly: the point is to exercise
@@ -738,10 +872,13 @@ async fn candidate(
     {
         Ok(output) => output,
         Err(error) => {
-            return record(
-                Verdict::Unsupported,
-                None,
-                format!("the device pass did not complete: {error}."),
+            return (
+                record(
+                    Verdict::Unsupported,
+                    None,
+                    format!("the device pass did not complete: {error}."),
+                ),
+                Some(error.kind),
             )
         }
     };
@@ -761,24 +898,27 @@ async fn candidate(
         _ => None,
     };
     if requested > 1 && reached.len() < 2 {
-        return record(
+        return (record(
             Verdict::Unsupported,
             None,
             format!(
                 "the runtime placed the verification model on {} instead of spreading it over the {requested} selected devices, so the cross-device path was never exercised.",
                 if reached.is_empty() { "no device".to_string() } else { reached.join(", ") }
             ),
-        );
+        ), None);
     }
     let (Some(ratio), Some(median_kld)) = (parse_ratio(&output), parse_median_kld(&output)) else {
-        return record(
-            Verdict::Unsupported,
+        return (
+            record(
+                Verdict::Unsupported,
+                None,
+                "the device pass printed no divergence statistics.".to_string(),
+            ),
             None,
-            "the device pass printed no divergence statistics.".to_string(),
         );
     };
     let limit = limit_for(calibration);
-    record(
+    (record(
         decide(median_kld, ratio, calibration),
         Some(ratio),
         format!(
@@ -792,7 +932,7 @@ async fn candidate(
                 reached.join(", ")
             }
         ),
-    )
+    ), None)
 }
 
 /// Score the user's own weights on their own placement, host against device.
@@ -818,19 +958,26 @@ pub async fn run_deep(
     hardware_fingerprint: &str,
     runtime_devices: &[String],
     cancel: Option<&Arc<AtomicBool>>,
-) -> Result<Record, String> {
+) -> Result<Record, AppError> {
+    let _verification = VERIFY_OPERATION.lock().await;
     if !uses_accelerator(cfg, resolved) {
-        return Err("deep verification compares a device placement against the host, so there is nothing to compare for a host-only configuration".into());
+        return Err(AppError::validation("deep verification compares a device placement against the host, so there is nothing to compare for a host-only configuration"));
     }
     if cfg.active_model.trim().is_empty() {
-        return Err("select a model before running deep verification".into());
+        return Err(AppError::validation(
+            "select a model before running deep verification",
+        ));
     }
     let binary = runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build)?;
     if !binary.is_file() {
-        return Err(format!("this runtime does not ship {}", binary.display()));
+        return Err(AppError::not_found(format!(
+            "this runtime does not ship {}",
+            binary.display()
+        )));
     }
-    let text = write_probe_text()?;
-    let baseline = canary_dir().join("deep-baseline.logits");
+    let files = RunFiles::new()?;
+    let text = files.text();
+    let baseline = files.0.join("deep-baseline.logits");
     let text_arg = text.to_string_lossy().into_owned();
     let baseline_arg = baseline.to_string_lossy().into_owned();
     let ngl = cfg.ngl.to_string();
@@ -922,7 +1069,6 @@ pub async fn run_deep(
             ),
         },
     };
-    let _ = fs::remove_file(&baseline);
     let key = deep_key(cfg, resolved, hardware_fingerprint, runtime_devices);
     finish_deep(outcome, cancel, |record| store_deep(&key, record))
 }
@@ -930,12 +1076,12 @@ pub async fn run_deep(
 fn finish_deep(
     outcome: Record,
     cancel: Option<&Arc<AtomicBool>>,
-    persist: impl FnOnce(Record),
-) -> Result<Record, String> {
+    persist: impl FnOnce(Record) -> Result<(), AppError>,
+) -> Result<Record, AppError> {
     if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-        return Err("deep verification cancelled".into());
+        return Err(AppError::cancelled("deep verification cancelled"));
     }
-    persist(outcome.clone());
+    persist(outcome.clone())?;
     Ok(outcome)
 }
 
@@ -1043,17 +1189,137 @@ mod tests {
     use super::*;
     use crate::config::SplitMode;
 
+    struct CacheArea(PathBuf);
+
+    impl CacheArea {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("aiolm-verification-cache-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+
+        fn path(&self) -> PathBuf {
+            self.0.join("verification.json")
+        }
+    }
+
+    impl Drop for CacheArea {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn verification_runs_keep_separate_inputs_and_remove_their_outputs() {
+        let area = CacheArea::new();
+        let first = RunFiles::new_in(&area.0).unwrap();
+        let second = RunFiles::new_in(&area.0).unwrap();
+        assert_ne!(first.text(), second.text());
+        let first_root = first.0.clone();
+        let second_root = second.0.clone();
+        for files in [&first, &second] {
+            assert_eq!(fs::read_to_string(files.text()).unwrap(), PROBE_TEXT);
+            fs::write(files.0.join("baseline.logits"), b"synthetic baseline").unwrap();
+            fs::write(
+                files.0.join("deep-baseline.logits"),
+                b"synthetic deep baseline",
+            )
+            .unwrap();
+        }
+        drop(first);
+        assert!(!first_root.exists());
+        assert!(second.text().exists());
+        drop(second);
+        assert!(!second_root.exists());
+    }
+
+    #[test]
+    fn an_unreadable_cache_is_not_replaced_by_a_new_verdict() {
+        let area = CacheArea::new();
+        let path = area.path();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            read_cache(&path).err().unwrap().kind,
+            crate::error::ErrorKind::Internal
+        );
+        assert!(update_cache(&path, |_| {}).is_err());
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn a_malformed_cache_is_preserved_before_verification_can_run_again() {
+        let area = CacheArea::new();
+        let path = area.path();
+        let original = b"{ existing verdict data interrupted";
+        fs::write(&path, original).unwrap();
+        assert!(read_cache(&path).unwrap().entries.is_empty());
+        assert!(!path.exists());
+        let backups = fs::read_dir(&area.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), original);
+        update_cache(&path, |cache| {
+            cache
+                .entries
+                .insert("new".into(), record(Verdict::Pass, None, "new result"));
+        })
+        .unwrap();
+        assert_eq!(read_cache(&path).unwrap().entries.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), original);
+        for _ in 0..4 {
+            fs::write(&path, original).unwrap();
+            assert!(read_cache(&path).unwrap().entries.is_empty());
+        }
+        assert_eq!(fs::read_dir(&area.0).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn concurrent_cache_updates_preserve_every_verdict_and_override() {
+        let area = CacheArea::new();
+        let path = Arc::new(area.path());
+        let writers = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    update_cache(&path, |cache| {
+                        let key = format!("synthetic-{index}");
+                        cache
+                            .entries
+                            .insert(key.clone(), record(Verdict::Fail, None, "measured failure"));
+                        cache.overrides.push(key);
+                    })
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let cache = read_cache(&path).unwrap();
+        assert_eq!(cache.entries.len(), 8);
+        assert_eq!(cache.overrides.len(), 8);
+        assert!(cache
+            .entries
+            .values()
+            .all(|record| record.verdict == Verdict::Fail));
+    }
+
     #[test]
     fn cancelled_deep_pass_does_not_replace_an_existing_verdict() {
         let cancel = Arc::new(AtomicBool::new(true));
         let original = record(Verdict::Pass, Some(1.0), "Existing measured result");
         let mut stored = original.clone();
         let interrupted = record(Verdict::Unsupported, None, "Host pass interrupted");
-        assert!(
-            finish_deep(interrupted, Some(&cancel), |outcome| stored = outcome)
-                .unwrap_err()
-                .contains("cancelled")
-        );
+        let error = finish_deep(interrupted, Some(&cancel), |outcome| {
+            stored = outcome;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "deep verification cancelled");
         assert_eq!(stored.detail, original.detail);
         assert!(matches!(stored.verdict, Verdict::Pass));
         cancel.store(false, Ordering::Release);
@@ -1062,10 +1328,38 @@ mod tests {
             None,
             "Runtime has no comparison backend",
         );
-        let completed =
-            finish_deep(measured.clone(), Some(&cancel), |outcome| stored = outcome).unwrap();
+        let completed = finish_deep(measured.clone(), Some(&cancel), |outcome| {
+            stored = outcome;
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(completed.detail, measured.detail);
         assert_eq!(stored.detail, measured.detail);
+    }
+
+    #[tokio::test]
+    async fn deep_verification_requires_a_device_placement_and_a_selected_model() {
+        let cfg = AppConfig::default();
+        let host = run_deep(&cfg, &placement("none"), "hardware", &[], None)
+            .await
+            .unwrap_err();
+        assert_eq!(host.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(host.message, "deep verification compares a device placement against the host, so there is nothing to compare for a host-only configuration");
+
+        let cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            ngl: 99,
+            active_model: String::new(),
+            ..Default::default()
+        };
+        let missing_model = run_deep(&cfg, &placement("Vulkan0"), "hardware", &[], None)
+            .await
+            .unwrap_err();
+        assert_eq!(missing_model.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(
+            missing_model.message,
+            "select a model before running deep verification"
+        );
     }
 
     fn placement(devices: &str) -> ResolvedGpu {
@@ -1205,10 +1499,13 @@ mod tests {
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|value| value.is_ascii_hexdigit()));
         for rejected in ["", "yes", &key[..63], &format!("{key}0"), &"z".repeat(64)] {
-            assert!(
-                allow_override(rejected).is_err(),
-                "{rejected} is not a key this gate prints"
+            let error = allow_override(rejected).unwrap_err();
+            assert_eq!(
+                error.kind,
+                crate::error::ErrorKind::Validation,
+                "{rejected}"
             );
+            assert_eq!(error.message, "that is not a verification override key");
         }
     }
 
@@ -1504,6 +1801,19 @@ mod canary_cancel_public_flow_tests {
                 .unwrap()
                 .exists()
         );
+        let missing_binary = run_deep(&cfg, &placement, hardware, &devices, None)
+            .await
+            .unwrap_err();
+        assert_eq!(missing_binary.kind, crate::error::ErrorKind::NotFound);
+        assert_eq!(
+            missing_binary.message,
+            format!(
+                "this runtime does not ship {}",
+                runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build)
+                    .unwrap()
+                    .display()
+            )
+        );
         let old_key = cache_key(&cfg, &placement, hardware, &devices);
         let old_deep = deep_key(&cfg, &placement, hardware, &devices);
         // Preserve the original public key's exact byte composition, separately
@@ -1527,7 +1837,9 @@ mod canary_cancel_public_flow_tests {
             .await
             .unwrap_err();
         let cached_reads = observation.take_identity_requests();
-        assert_eq!(first, cached);
+        assert_eq!(first.message, cached.message);
+        assert_eq!(first.kind, crate::error::ErrorKind::NotFound);
+        assert_eq!(cached.kind, crate::error::ErrorKind::Validation);
         assert_eq!(observation.count(), 1);
 
         // A deterministic size change avoids mtime granularity and sleeping.
@@ -1542,12 +1854,19 @@ mod canary_cancel_public_flow_tests {
             .unwrap_err();
         let refreshed_reads = observation.take_identity_requests();
         assert_eq!(observation.count(), 2);
-        let cache = load_cache();
+        let cache = load_cache().unwrap();
         assert_eq!(cache.entries.len(), 2);
         assert_eq!(cache.entries[&old_key].verdict, Verdict::Unsupported);
         assert_eq!(cache.entries[&new_key].verdict, Verdict::Unsupported);
-        assert_eq!(first, refusal(&old_key, &cache.entries[&old_key]));
-        assert_eq!(refreshed, refusal(&new_key, &cache.entries[&new_key]));
+        assert_eq!(
+            first.message,
+            refusal(&old_key, &cache.entries[&old_key]).message
+        );
+        assert_eq!(
+            refreshed.message,
+            refusal(&new_key, &cache.entries[&new_key]).message
+        );
+        assert_eq!(refreshed.kind, crate::error::ErrorKind::NotFound);
 
         fs::write(&cfg.active_model, b"changed synthetic model metadata").unwrap();
         let changed_weights = deep_key(&cfg, &placement, hardware, &devices);
@@ -1564,12 +1883,13 @@ mod canary_cancel_public_flow_tests {
             deep_key(&shallower, &placement, hardware, &devices)
         );
         let deep_failure = record(Verdict::Fail, None, "synthetic cached deep failure");
-        store_deep(&changed_weights, deep_failure.clone());
+        store_deep(&changed_weights, deep_failure.clone()).unwrap();
         observation.take_identity_requests();
         let deep_refusal = ensure_verified(&cfg, &placement, hardware, &devices, None)
             .await
             .unwrap_err();
         let deep_reads = observation.take_identity_requests();
+        assert_eq!(deep_refusal.kind, crate::error::ErrorKind::Validation);
         assert_eq!(deep_refusal, refusal(&changed_weights, &deep_failure));
         allow_override(&new_key).unwrap();
         assert!(ensure_verified(&cfg, &placement, hardware, &devices, None)
@@ -1646,7 +1966,7 @@ mod canary_cancel_public_flow_tests {
             .expect_err("a cancelled/unverified launch must not be accepted");
         assert!(cancel.load(Ordering::Acquire));
         let starts_after_cancel = observation.count();
-        let after_cancel = load_cache();
+        let after_cancel = load_cache().unwrap();
         let cancelled_entry = after_cancel.entries.get(&key).cloned();
         let cache_after_cancel = fs::read_to_string(home.join("verification.json")).ok();
 
@@ -1658,7 +1978,7 @@ mod canary_cancel_public_flow_tests {
             .await
             .expect_err("missing synthetic tool remains a completed Unsupported result");
         let starts_after_retry = observation.count();
-        let after_retry = load_cache();
+        let after_retry = load_cache().unwrap();
         let retry_entry = after_retry.entries.get(&key).cloned();
 
         // A completed Unsupported result retains its existing caching policy.
@@ -1684,10 +2004,8 @@ mod canary_cancel_public_flow_tests {
             cache_after_cancel.is_none(),
             "an empty isolated cache must stay unwritten after cancellation"
         );
-        assert!(
-            cancelled_error.contains("cancelled"),
-            "cancellation must remain a cancellation error: {cancelled_error}"
-        );
+        assert_eq!(cancelled_error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(cancelled_error.message, "server start cancelled");
         assert_eq!(
             starts_after_retry, 2,
             "same-key retry must reach measure again"
@@ -1696,7 +2014,9 @@ mod canary_cancel_public_flow_tests {
         assert_eq!(retry_entry.verdict, Verdict::Unsupported);
         assert!(retry_entry.detail.contains("does not ship"));
         assert_eq!(starts_after_cached_call, 2);
-        assert_eq!(retry_error, cached_error);
+        assert_eq!(retry_error.message, cached_error.message);
+        assert_eq!(retry_error.kind, crate::error::ErrorKind::NotFound);
+        assert_eq!(cached_error.kind, crate::error::ErrorKind::Validation);
         assert_eq!(key, cache_key(&cfg, &placement, hardware, &devices));
         assert!(!cancel.load(Ordering::Acquire));
         assert!(

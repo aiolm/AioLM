@@ -8,6 +8,7 @@
 //! descriptions from both roots, and asks for a full `SKILL.md` by id when it
 //! needs one. No skill script is ever run. Only an explicit save writes, and
 //! only the chosen root's `AGENTS.md`.
+use crate::error::{AppError, ErrorKind as AppErrorKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -98,25 +99,33 @@ pub(crate) struct SkillContent {
 
 /// Where each source lives, resolved when a command runs.
 pub(crate) struct Roots {
-    aiolm: Result<PathBuf, String>,
-    agents: Result<PathBuf, String>,
+    aiolm: Result<PathBuf, AppError>,
+    agents: Result<PathBuf, AppError>,
 }
 
 impl Roots {
     pub(crate) fn current() -> Self {
+        let configured = std::env::var_os("AIOLM_HOME").filter(|value| !value.is_empty());
         Self {
-            aiolm: crate::home::resolve_aiolm_home(),
+            aiolm: crate::home::resolve_aiolm_home().map_err(|message| {
+                if configured.is_some_and(|path| !Path::new(&path).is_absolute()) {
+                    AppError::validation(message)
+                } else {
+                    AppError::unavailable(message)
+                }
+            }),
             agents: std::env::home_dir()
                 .filter(|home| home.is_absolute())
                 .map(|home| home.join(".agents"))
                 .ok_or_else(|| {
-                    "The home folder could not be determined, so ~/.agents was not read."
-                        .to_string()
+                    AppError::unavailable(
+                        "The home folder could not be determined, so ~/.agents was not read.",
+                    )
                 }),
         }
     }
 
-    fn get(&self, source: Source) -> Result<&Path, String> {
+    fn get(&self, source: Source) -> Result<&Path, AppError> {
         let root = match source {
             Source::Aiolm => &self.aiolm,
             Source::Agents => &self.agents,
@@ -137,7 +146,7 @@ pub(crate) fn load(roots: &Roots, instruction_sources: &[Source]) -> ChatPersona
         let root = match roots.get(source) {
             Ok(root) => root,
             Err(error) => {
-                warnings.push(error);
+                warnings.push(error.to_string());
                 continue;
             }
         };
@@ -146,7 +155,7 @@ pub(crate) fn load(roots: &Roots, instruction_sources: &[Source]) -> ChatPersona
         }
         match read_instructions(root, source) {
             Ok(file) => instructions.push(file),
-            Err(error) => warnings.push(error),
+            Err(error) => warnings.push(error.to_string()),
         }
     }
     let skills = catalog(roots, Some(&mut warnings))
@@ -160,7 +169,10 @@ pub(crate) fn load(roots: &Roots, instruction_sources: &[Source]) -> ChatPersona
     }
 }
 
-pub(crate) fn read_agents(roots: &Roots, source: Source) -> Result<AgentInstructionsFile, String> {
+pub(crate) fn read_agents(
+    roots: &Roots,
+    source: Source,
+) -> Result<AgentInstructionsFile, AppError> {
     read_instructions(roots.get(source)?, source)
 }
 
@@ -174,7 +186,7 @@ pub(crate) fn save_agents(
     source: Source,
     content: &str,
     expected_revision: Option<&str>,
-) -> Result<AgentInstructionsFile, String> {
+) -> Result<AgentInstructionsFile, AppError> {
     let root = roots.get(source)?;
     let path = root.join(AGENTS_FILE);
     let _guard = SAVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -186,10 +198,10 @@ pub(crate) fn save_agents(
     };
     let current_revision = current.as_deref().map(revision);
     if current_revision.as_deref() != expected_revision {
-        return Err(format!(
+        return Err(AppError::busy(format!(
             "Save conflict: {} changed after it was opened. Your draft was not saved; reload the file before saving again.",
             path.display()
-        ));
+        )));
     }
     // A byte-order mark already on disk stays there; the editor never sees it.
     let mut bytes = Vec::with_capacity(BOM.len() + content.len());
@@ -203,14 +215,18 @@ pub(crate) fn save_agents(
     // The limit applies to what lands on disk, so the saved file can always
     // be read back.
     if bytes.len() > MAX_FILE_BYTES {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "{} cannot be saved: it would be larger than {} KiB.",
             path.display(),
             MAX_FILE_BYTES / 1024
-        ));
+        )));
     }
-    replace_file(&target, &bytes)
-        .map_err(|error| format!("{} could not be saved: {error}", path.display()))?;
+    replace_file(&target, &bytes).map_err(|error| {
+        AppError::new(
+            file_error_kind(&error),
+            format!("{} could not be saved: {error}", path.display()),
+        )
+    })?;
     Ok(AgentInstructionsFile {
         source,
         path: path.display().to_string(),
@@ -222,12 +238,13 @@ pub(crate) fn save_agents(
 
 /// The full `SKILL.md` of a skill in the current catalog. Ids that are not in
 /// the catalog, including any that try to name a path, are refused.
-pub(crate) fn read_skill(roots: &Roots, id: &str) -> Result<SkillContent, String> {
-    let unknown = || format!("The skill {id} is not available.");
-    let (source, _) = id.split_once(':').ok_or_else(unknown)?;
-    let source = Source::parse(source).ok_or_else(unknown)?;
-    if !is_safe_id(id) {
-        return Err(unknown());
+pub(crate) fn read_skill(roots: &Roots, id: &str) -> Result<SkillContent, AppError> {
+    let unknown = || AppError::not_found(format!("The skill {id} is not available."));
+    let invalid = || AppError::validation(format!("The skill {id} is not available."));
+    let (source, folder) = id.split_once(':').ok_or_else(invalid)?;
+    let source = Source::parse(source).ok_or_else(invalid)?;
+    if folder.is_empty() || !is_safe_id(id) {
+        return Err(invalid());
     }
     let folders = [Source::Agents, Source::Aiolm].map(|source| {
         roots
@@ -252,7 +269,7 @@ pub(crate) fn read_skill(roots: &Roots, id: &str) -> Result<SkillContent, String
     })
 }
 
-fn read_instructions(root: &Path, source: Source) -> Result<AgentInstructionsFile, String> {
+fn read_instructions(root: &Path, source: Source) -> Result<AgentInstructionsFile, AppError> {
     let path = root.join(AGENTS_FILE);
     let display = path.display().to_string();
     let bytes = match read_bounded(&path) {
@@ -282,14 +299,17 @@ fn read_instructions(root: &Path, source: Source) -> Result<AgentInstructionsFil
 /// The file a save replaces: `path` itself, or the file a link at `path`
 /// points to. A link that cannot be followed to a file is an error rather
 /// than something to replace with a plain file.
-fn write_target(path: &Path) -> Result<PathBuf, String> {
+fn write_target(path: &Path) -> Result<PathBuf, AppError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(path.to_path_buf()),
         Err(error) => return Err(file_error(path, error)),
     };
     if metadata.is_dir() {
-        return Err(format!("{} is a folder, not a file.", path.display()));
+        return Err(AppError::validation(format!(
+            "{} is a folder, not a file.",
+            path.display()
+        )));
     }
     if !metadata.file_type().is_symlink() {
         return Ok(path.to_path_buf());
@@ -300,9 +320,10 @@ fn write_target(path: &Path) -> Result<PathBuf, String> {
             path.display()
         )
     };
-    let target = fs::canonicalize(path).map_err(|_| link_error())?;
+    let target = fs::canonicalize(path)
+        .map_err(|error| AppError::new(file_error_kind(&error), link_error()))?;
     if !fs::metadata(&target).is_ok_and(|metadata| metadata.is_file()) {
-        return Err(link_error());
+        return Err(AppError::validation(link_error()));
     }
     Ok(target)
 }
@@ -483,19 +504,22 @@ fn skill_folders(root: &Path, mut warnings: Option<&mut Vec<String>>) -> Vec<(St
 /// Reads `SKILL.md` of one skill folder. The folder may be a link; the file
 /// must resolve inside the folder it belongs to, so a linked `SKILL.md`
 /// cannot pull in a file from elsewhere.
-fn read_skill_file(folder: &Path) -> Result<String, String> {
+fn read_skill_file(folder: &Path) -> Result<String, AppError> {
     let display = folder.join(SKILL_FILE);
     let resolved_folder = fs::canonicalize(folder).map_err(|error| file_error(folder, error))?;
     if !resolved_folder.is_dir() {
-        return Err(format!("{} is not a folder.", folder.display()));
+        return Err(AppError::validation(format!(
+            "{} is not a folder.",
+            folder.display()
+        )));
     }
     let file = fs::canonicalize(resolved_folder.join(SKILL_FILE))
         .map_err(|error| file_error(&display, error))?;
     if !file.starts_with(&resolved_folder) {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "{} points outside its skill folder.",
             display.display()
-        ));
+        )));
     }
     let bytes = read_bounded(&file).map_err(|error| file_error(&display, error))?;
     decode(&display, bytes)
@@ -616,16 +640,29 @@ fn replace_file(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
-fn file_error(path: &Path, error: std::io::Error) -> String {
-    format!("{} could not be read: {error}.", path.display())
+fn file_error(path: &Path, error: std::io::Error) -> AppError {
+    AppError::new(
+        file_error_kind(&error),
+        format!("{} could not be read: {error}.", path.display()),
+    )
+}
+
+fn file_error_kind(error: &std::io::Error) -> AppErrorKind {
+    match error.kind() {
+        ErrorKind::InvalidData | ErrorKind::InvalidInput | ErrorKind::FileTooLarge => {
+            AppErrorKind::Validation
+        }
+        _ => AppError::io_kind(error),
+    }
 }
 
 /// UTF-8 text, with a leading byte-order mark removed.
-fn decode(path: &Path, mut bytes: Vec<u8>) -> Result<String, String> {
+fn decode(path: &Path, mut bytes: Vec<u8>) -> Result<String, AppError> {
     if bytes.starts_with(BOM) {
         drop(bytes.drain(..BOM.len()));
     }
-    String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text.", path.display()))
+    String::from_utf8(bytes)
+        .map_err(|_| AppError::validation(format!("{} is not UTF-8 text.", path.display())))
 }
 
 fn revision(bytes: &[u8]) -> String {
@@ -927,11 +964,14 @@ mod tests {
     fn an_unresolvable_root_is_a_warning_and_the_other_root_still_loads() {
         let mut fixture = Fixture::new();
         fixture.write(Source::Aiolm, "AGENTS.md", "Use metric units.");
-        fixture.roots.agents = Err("no home folder".to_string());
+        fixture.roots.agents = Err(AppError::unavailable("no home folder"));
         let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.warnings, vec!["no home folder".to_string()]);
         assert_eq!(loaded.instructions.len(), 1);
         assert_eq!(loaded.instructions[0].content, "Use metric units.");
+        let error = read_agents(&fixture.roots, Source::Agents).unwrap_err();
+        assert_eq!(error.kind, AppErrorKind::Unavailable);
+        assert_eq!(error.message, "no home folder");
     }
 
     #[test]
@@ -1005,7 +1045,7 @@ mod tests {
         );
         assert_eq!(
             decode(path, vec![0xff]),
-            Err("AGENTS.md is not UTF-8 text.".to_string())
+            Err(AppError::validation("AGENTS.md is not UTF-8 text."))
         );
     }
 
@@ -1112,7 +1152,10 @@ mod tests {
                         assert_eq!(read.skill.path, offered.path, "{id}");
                         assert_eq!(read.content, fs::read_to_string(&offered.path).unwrap());
                     }
-                    (None, Err(error)) => assert!(error.contains("is not available"), "{error}"),
+                    (None, Err(error)) => {
+                        assert_eq!(error.kind, AppErrorKind::NotFound);
+                        assert!(error.message.contains("is not available"), "{error}");
+                    }
                     (offered, read) => panic!("{id}: catalog {offered:?}, read_skill {read:?}"),
                 }
                 checked += 1;
@@ -1320,7 +1363,9 @@ mod tests {
             "real",
             "AIOLM:real",
         ] {
-            assert!(read_skill(&fixture.roots, id).is_err(), "{id}");
+            let error = read_skill(&fixture.roots, id).unwrap_err();
+            assert_eq!(error.kind, AppErrorKind::Validation, "{id}");
+            assert_eq!(error.message, format!("The skill {id} is not available."));
         }
         assert!(read_skill(&fixture.roots, "aiolm:real").is_ok());
     }
@@ -1444,7 +1489,8 @@ mod tests {
         );
         // Saving as if the file were still missing is a conflict.
         let error = save_agents(&fixture.roots, Source::Aiolm, "Other.", None).unwrap_err();
-        assert!(error.starts_with("Save conflict:"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Busy);
+        assert!(error.message.starts_with("Save conflict:"), "{error}");
         let next = save_agents(
             &fixture.roots,
             Source::Aiolm,
@@ -1476,18 +1522,20 @@ mod tests {
             opened.revision.as_deref(),
         )
         .unwrap_err();
-        assert!(error.starts_with("Save conflict:"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Busy);
+        assert!(error.message.starts_with("Save conflict:"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), b"Edited elsewhere.");
         // A file deleted elsewhere is a conflict too, and is not recreated.
         fs::remove_file(&path).unwrap();
-        assert!(save_agents(
+        let error = save_agents(
             &fixture.roots,
             Source::Agents,
             "Draft.",
-            opened.revision.as_deref()
+            opened.revision.as_deref(),
         )
-        .unwrap_err()
-        .starts_with("Save conflict:"));
+        .unwrap_err();
+        assert_eq!(error.kind, AppErrorKind::Busy);
+        assert!(error.message.starts_with("Save conflict:"));
         assert!(!path.exists());
     }
 
@@ -1526,7 +1574,8 @@ mod tests {
             saved.revision.as_deref(),
         )
         .unwrap_err();
-        assert!(error.contains("larger than 64 KiB"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Validation);
+        assert!(error.message.contains("larger than 64 KiB"), "{error}");
 
         // With a kept mark, the mark counts: the limit minus three bytes fits.
         let path = fixture.write(Source::Aiolm, "AGENTS.md", b"\xEF\xBB\xBFOld.");
@@ -1538,7 +1587,8 @@ mod tests {
             opened.revision.as_deref(),
         )
         .unwrap_err();
-        assert!(error.contains("larger than 64 KiB"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Validation);
+        assert!(error.message.contains("larger than 64 KiB"), "{error}");
         // A refused save leaves the file as it was and nothing beside it.
         assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFOld.");
         assert_eq!(
@@ -1594,7 +1644,8 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
         // Opening a FIFO for reading would block here without the check.
         let error = read_agents(&fixture.roots, Source::Aiolm).unwrap_err();
-        assert!(error.contains("not a regular file"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Validation);
+        assert!(error.message.contains("not a regular file"), "{error}");
         let loaded = load(&fixture.roots, &[Source::Agents, Source::Aiolm]);
         assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
@@ -1604,7 +1655,8 @@ mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.root(Source::Agents).join("AGENTS.md")).unwrap();
         let error = read_agents(&fixture.roots, Source::Agents).unwrap_err();
-        assert!(error.contains("not a regular file"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::Validation);
+        assert!(error.message.contains("not a regular file"), "{error}");
     }
 
     #[test]
@@ -1678,7 +1730,11 @@ mod tests {
         fs::remove_file(&target).unwrap();
         assert!(!read_agents(&fixture.roots, Source::Agents).unwrap().exists);
         let error = save_agents(&fixture.roots, Source::Agents, "New.", None).unwrap_err();
-        assert!(error.contains("will not replace the link"), "{error}");
+        assert_eq!(error.kind, AppErrorKind::NotFound);
+        assert!(
+            error.message.contains("will not replace the link"),
+            "{error}"
+        );
         assert!(fs::symlink_metadata(&link)
             .unwrap()
             .file_type()

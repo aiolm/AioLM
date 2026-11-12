@@ -112,6 +112,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     assert!(providers::registry::register(&source, None)
         .await
         .unwrap_err()
+        .message
         .contains("already registered"));
     assert_eq!(providers::ProviderId::ALL.len(), 3);
     // An advertised container is not a model-family compatibility result.
@@ -267,7 +268,11 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
             .await
             .err()
             .expect("an undeclared adapter cannot run fixed output");
-        assert!(refused.contains("fixed-output control"), "{refused}");
+        assert_eq!(refused.kind, aiolm_lib::error::ErrorKind::Unavailable);
+        assert!(
+            refused.message.contains("fixed-output control"),
+            "{refused}"
+        );
         // The same engine, registered with an explicit `ignore_eos` declaration
         // and its matching request option.
         let mut fixed = manifest.clone();
@@ -364,6 +369,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     assert!(providers::registry::register(&wrong_source, None)
         .await
         .unwrap_err()
+        .message
         .contains("mismatch"));
     assert!(!providers::registry::root()
         .join(engine.as_str())
@@ -378,6 +384,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     assert!(providers::registry::register(&failed_source, None)
         .await
         .unwrap_err()
+        .message
         .contains("selected loader dependency is missing"));
     // Cancellation of an actual probe is authoritative and publishes no staging.
     let mut slow = manifest;
@@ -396,7 +403,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         providers::registry::register(&slow_source, Some(cancel))
             .await
             .unwrap_err(),
-        "runtime probe cancelled"
+        aiolm_lib::error::AppError::cancelled("runtime probe cancelled")
     );
     cancellation.await.unwrap();
     assert!(!providers::registry::root()

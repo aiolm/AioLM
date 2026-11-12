@@ -1025,6 +1025,146 @@ async fn stopping_the_api_closes_open_streams_and_releases_them_without_touching
 }
 
 #[tokio::test]
+async fn control_characters_and_non_token_header_names_are_rejected() {
+    let api = TestApi::start().await;
+    for header in [
+        "Access-Control-Request-Headers: authorization\nInjected: yes",
+        "X-Test: value\rinjected",
+        "X-Test: value\0injected",
+        "X-Test: value\u{1f}",
+        "X-Test: value\u{7f}",
+        "X-Test: \u{b}value",
+        "Bad Name: value",
+        "Bad\tName: value",
+        "Bad(Name): value",
+        ": value",
+        "X-Test : value",
+        "Missing-Colon",
+    ] {
+        let mut socket = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
+        socket
+            .write_all(
+                format!(
+                    "OPTIONS /v1/models HTTP/1.1\r\nHost: localhost\r\nOrigin: tauri://localhost\r\nAccess-Control-Request-Method: GET\r\n{header}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        tokio::time::timeout(WAIT, socket.read_to_string(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 "),
+            "{header:?}: {response}"
+        );
+        let response_head = response.split("\r\n\r\n").next().unwrap();
+        assert!(!response_head.contains("Injected"), "{response_head}");
+        assert!(
+            !response_head.contains("Access-Control-Allow-Headers"),
+            "{response_head}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn foreign_and_missing_hosts_are_rejected_before_authentication_or_preflight() {
+    let api = TestApi::start().await;
+    for host in [
+        "evil.example",
+        "localhost.evil.example",
+        "127.0.0.1.evil.example",
+        "192.168.1.1",
+        "[2001:db8::1]",
+        "::1",
+        "localhost:",
+        "localhost:abc",
+        "localhost:65536",
+        "user@localhost",
+    ] {
+        for method in [reqwest::Method::GET, reqwest::Method::OPTIONS] {
+            let response = api
+                .http
+                .request(method, api.url("/v1/models"))
+                .header("host", host)
+                .header("origin", "tauri://localhost")
+                .header("access-control-request-method", "GET")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 421, "{host}");
+            assert!(response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none());
+        }
+    }
+    let mut socket = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
+    socket
+        .write_all(b"GET /v1/models HTTP/1.1\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(WAIT, socket.read_to_string(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.starts_with("HTTP/1.1 421 "), "{response}");
+}
+
+#[tokio::test]
+async fn loopback_hosts_with_and_without_ports_are_accepted() {
+    let api = TestApi::start().await;
+    for host in ["127.0.0.1", "localhost", "LOCALHOST", "[::1]"] {
+        for authority in [host.to_string(), format!("{host}:{}", api.port)] {
+            let response = api
+                .get("/v1/models")
+                .header("host", authority.as_str())
+                .header("x-test", "\tallowed\tvalue\t")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200, "{authority}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn connections_beyond_the_active_limit_are_closed() {
+    let api = TestApi::start().await;
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONNECTIONS {
+        let mut socket = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
+        socket
+            .write_all(
+                format!(
+                    "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut interim = [0_u8; 25];
+        tokio::time::timeout(WAIT, socket.read_exact(&mut interim))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
+        held.push(socket);
+    }
+    let mut overflow = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
+    let mut byte = [0];
+    let count = tokio::time::timeout(WAIT, overflow.read(&mut byte))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count, 0, "an excess connection must not retain a handler");
+    drop(held);
+}
+
+#[tokio::test]
 async fn malformed_requests_are_refused_with_a_status_before_they_reach_a_model() {
     let api = TestApi::start().await;
     let upstream = Upstream::json(200, completion("hi")).await;
@@ -1101,14 +1241,14 @@ async fn an_oversized_or_chunked_request_gets_an_error_instead_of_a_dropped_conn
     for (head, expected) in [
         (
             format!(
-                "POST /v1/chat/completions HTTP/1.1\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nContent-Length: {}\r\n\r\n",
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nContent-Length: {}\r\n\r\n",
                 http::MAX_BODY + 1
             ),
             "413",
         ),
         (
             format!(
-                "POST /v1/chat/completions HTTP/1.1\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
             ),
             "411",
         ),
@@ -1846,7 +1986,7 @@ async fn a_caller_without_the_key_is_refused_before_its_body_is_read() {
     let mut socket = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
     socket
         .write_all(
-            b"POST /v1/chat/completions HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 1000000\r\n\r\n",
+            b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 1000000\r\n\r\n",
         )
         .await
         .unwrap();
@@ -1864,7 +2004,7 @@ async fn a_caller_without_the_key_is_refused_before_its_body_is_read() {
     socket
         .write_all(
             format!(
-                "POST /v1/chat/completions HTTP/1.1\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nExpect: 100-continue\r\nContent-Length: {}\r\n\r\n",
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nExpect: 100-continue\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             )
             .as_bytes(),
@@ -1965,7 +2105,7 @@ async fn the_apps_own_origin_may_preflight_without_the_key_and_other_origins_get
             .header("access-control-request-method", "GET")
             .header(
                 "access-control-request-headers",
-                "authorization,content-type",
+                "authorization,content-type,x-client-controlled",
             )
     };
     for origin in [
@@ -1979,7 +2119,7 @@ async fn the_apps_own_origin_may_preflight_without_the_key_and_other_origins_get
         assert_eq!(response.headers()["access-control-allow-origin"], origin);
         assert_eq!(
             response.headers()["access-control-allow-headers"],
-            "authorization,content-type"
+            "authorization, content-type, x-api-key, anthropic-version, expect"
         );
         assert!(response.headers()["access-control-allow-methods"]
             .to_str()
@@ -2709,9 +2849,10 @@ async fn native_transcribe_uses_the_exact_named_session_without_fallback() {
     )
     .await;
     let error = missing.unwrap_err();
-    assert!(
-        error.contains("transcription_session_unavailable") || error.contains("not running"),
-        "{error}"
+    assert_eq!(error.kind, crate::error::ErrorKind::NotFound);
+    assert_eq!(
+        error.message,
+        "the selected transcription session is not running"
     );
     assert_eq!(
         (default_upstream.count(), named_upstream.count()),
@@ -2727,8 +2868,9 @@ async fn native_transcribe_uses_the_exact_named_session_without_fallback() {
         Arc::new(AtomicBool::new(false)),
     )
     .await;
-    assert!(
-        gone.is_err(),
+    assert_eq!(
+        gone.unwrap_err().kind,
+        crate::error::ErrorKind::NotFound,
         "an unloaded session is not replaced by the default"
     );
     assert_eq!(
@@ -2799,7 +2941,8 @@ async fn native_transcribe_cancellation_while_upstream_pending_releases_lease() 
     cancel.store(true, Ordering::Release);
     let result = work.await.unwrap();
     let error = result.unwrap_err();
-    assert!(error.contains("media preparation cancelled"), "{error}");
+    assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+    assert_eq!(error.message, "media preparation cancelled");
     eventually(|| api.active() == 0).await;
 
     // A caller that is already cancelled never contacts the model.
@@ -2816,14 +2959,15 @@ async fn native_transcribe_cancellation_while_upstream_pending_releases_lease() 
     )
     .await
     .unwrap_err();
-    assert!(error.contains("media preparation cancelled"), "{error}");
+    assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+    assert_eq!(error.message, "media preparation cancelled");
     assert_eq!(upstream.count(), 0);
     assert_eq!(api.active(), 0);
 }
 
 #[tokio::test]
 async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
-    async fn failed_with(api: &TestApi, session: &str) -> String {
+    async fn failed_with(api: &TestApi, session: &str) -> crate::error::AppError {
         let models = native_models(api);
         super::transcribe_audio(
             models,
@@ -2840,7 +2984,11 @@ async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
     api.load_default(&failed, "worker", "/m/stt.gguf");
     install_stt_engine(&api.default, &["transcription", "translate"], "private");
     let error = failed_with(&api, "default").await;
-    assert!(error.contains("transcription failed (HTTP 500)"), "{error}");
+    assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+    assert!(
+        error.message.contains("transcription failed (HTTP 500)"),
+        "{error}"
+    );
     assert_eq!(api.active(), 0);
 
     for (label, body) in [
@@ -2854,7 +3002,11 @@ async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
         api.load_default(&upstream, "worker", "/m/stt.gguf");
         install_stt_engine(&api.default, &["transcription", "translate"], "private");
         let error = failed_with(&api, "default").await;
-        assert!(error.contains("empty or oversized"), "{label}: {error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert!(
+            error.message.contains("empty or oversized"),
+            "{label}: {error}"
+        );
         assert_eq!(upstream.count(), 1, "{label}");
         assert_eq!(api.active(), 0, "{label}");
     }
@@ -2871,6 +3023,10 @@ async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
     api.load_default(&invalid, "worker", "/m/stt.gguf");
     install_stt_engine(&api.default, &["transcription", "translate"], "private");
     let error = failed_with(&api, "default").await;
-    assert!(error.contains("invalid transcription response"), "{error}");
+    assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+    assert!(
+        error.message.contains("invalid transcription response"),
+        "{error}"
+    );
     assert_eq!(api.active(), 0);
 }

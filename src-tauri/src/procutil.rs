@@ -19,6 +19,8 @@ struct ProcessTree {
     job: windows_job::ProcessJob,
     #[cfg(unix)]
     pid: u32,
+    #[cfg(unix)]
+    inherited_group: bool,
 }
 
 impl ProcessTree {
@@ -32,7 +34,11 @@ impl ProcessTree {
         #[cfg(windows)]
         self.job.terminate();
         #[cfg(unix)]
-        terminate_process_group(self.pid);
+        if self.inherited_group {
+            terminate_descendants(self.pid);
+        } else {
+            terminate_process_group(self.pid);
+        }
     }
 }
 
@@ -66,6 +72,8 @@ impl ProcessHandle {
             job: windows_job::ProcessJob::new().unwrap(),
             #[cfg(unix)]
             pid: 0,
+            #[cfg(unix)]
+            inherited_group: false,
         }))
     }
 }
@@ -146,10 +154,149 @@ pub fn terminate_process_group(pid: u32) {
     }
 }
 
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct UnixProcess {
+    pid: u32,
+    parent: u32,
+    started: u128,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unix_process(pid: u32) -> Option<UnixProcess> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+    fields.next()?;
+    let parent = fields.next()?.parse().ok()?;
+    let started = fields.nth(17)?.parse().ok()?;
+    Some(UnixProcess {
+        pid,
+        parent,
+        started,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn unix_process(pid: u32) -> Option<UnixProcess> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (read == size && info.pbi_pid == pid).then_some(UnixProcess {
+        pid,
+        parent: info.pbi_ppid,
+        started: ((info.pbi_start_tvsec as u128) << 64) | info.pbi_start_tvusec as u128,
+    })
+}
+
+#[cfg(unix)]
+fn descendant_processes(root: u32) -> Vec<UnixProcess> {
+    const MAX_PROCESSES: usize = 16_384;
+    #[cfg(not(target_os = "macos"))]
+    let processes: Vec<_> = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .take(MAX_PROCESSES)
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .filter_map(unix_process)
+        .collect();
+    #[cfg(target_os = "macos")]
+    let processes: Vec<_> = {
+        let mut pids = vec![0_u32; MAX_PROCESSES];
+        let count = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<u32>()) as libc::c_int,
+            )
+        };
+        pids.truncate((count.max(0) as usize).min(pids.len()));
+        pids.into_iter().filter_map(unix_process).collect()
+    };
+    let mut children = std::collections::HashMap::<u32, Vec<UnixProcess>>::new();
+    for process in processes {
+        children.entry(process.parent).or_default().push(process);
+    }
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut descendants = children.remove(&root).unwrap_or_default();
+    let mut index = 0;
+    while index < descendants.len() {
+        let process = descendants[index];
+        index += 1;
+        if seen.insert(process.pid) {
+            descendants.extend(children.remove(&process.pid).unwrap_or_default());
+        }
+    }
+    descendants
+}
+
+/// Snapshot descendants by parent PID, including children that share their
+/// owner's process group rather than leading a group of their own.
+#[cfg(unix)]
+pub(crate) fn descendant_pids(root: u32) -> Vec<u32> {
+    descendant_processes(root)
+        .into_iter()
+        .map(|process| process.pid)
+        .collect()
+}
+
+#[cfg(unix)]
+fn signal_process(process: UnixProcess, signal: libc::c_int) {
+    if process.pid > 1
+        && process.pid != std::process::id()
+        && unix_process(process.pid).is_some_and(|current| current.started == process.started)
+    {
+        unsafe {
+            let _ = libc::kill(process.pid as libc::pid_t, signal);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn terminate_descendants(pid: u32) {
+    let Some(root) = unix_process(pid) else {
+        return;
+    };
+    // Keep the inherited group intact for an outer owner's SIGKILL. On normal
+    // drop, freeze this subtree before walking it so it cannot keep forking.
+    signal_process(root, libc::SIGSTOP);
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::from([pid]);
+    for _ in 0..8 {
+        let mut added = false;
+        for process in descendant_processes(pid) {
+            if seen.insert(process.pid) {
+                signal_process(process, libc::SIGSTOP);
+                members.push(process);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    for process in members.into_iter().rev() {
+        signal_process(process, libc::SIGKILL);
+    }
+    signal_process(root, libc::SIGKILL);
+}
+
 /// Observe exit without releasing the group leader's PID. Group cleanup must
 /// precede reaping so shutdown cannot accidentally address a reused group ID.
 #[cfg(unix)]
 fn exited_without_reaping(pid: u32) -> std::io::Result<bool> {
+    exit_status_without_reaping(pid).map(|status| status.is_some())
+}
+
+#[cfg(unix)]
+fn exit_status_without_reaping(pid: u32) -> std::io::Result<Option<std::process::ExitStatus>> {
+    use std::os::unix::process::ExitStatusExt;
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     if unsafe {
         libc::waitid(
@@ -162,7 +309,17 @@ fn exited_without_reaping(pid: u32) -> std::io::Result<bool> {
     {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(unsafe { info.si_pid() } != 0)
+    if unsafe { info.si_pid() } == 0 {
+        return Ok(None);
+    }
+    let status = unsafe { info.si_status() };
+    let raw = match info.si_code {
+        libc::CLD_EXITED => status << 8,
+        libc::CLD_KILLED => status,
+        libc::CLD_DUMPED => status | 0x80,
+        _ => return Err(std::io::Error::other("unexpected child exit event")),
+    };
+    Ok(Some(std::process::ExitStatus::from_raw(raw)))
 }
 
 /// Synchronous model/helper processes have the same cancellation and exit
@@ -174,7 +331,17 @@ pub struct OwnedChild {
 
 impl OwnedChild {
     pub fn spawn(command: &mut std::process::Command) -> std::io::Result<Self> {
-        Self::spawn_with_flags(command, 0)
+        Self::spawn_with_flags(command, 0, false)
+    }
+
+    /// An internal helper's engine must remain inside the helper's outer group
+    /// so killing that group also reaches the engine. Normal drop instead walks
+    /// and terminates just this child's descendants, never the owner's group.
+    #[cfg(unix)]
+    pub(crate) fn spawn_inherited_process_group(
+        command: &mut std::process::Command,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_flags(command, 0, true)
     }
 
     /// A headless CLI server is detached from the CLI's console, yet its job
@@ -185,13 +352,14 @@ impl OwnedChild {
         command: &mut std::process::Command,
         creation_flags: u32,
     ) -> std::io::Result<Self> {
-        Self::spawn_with_flags(command, creation_flags)
+        Self::spawn_with_flags(command, creation_flags, false)
     }
 
-    #[cfg_attr(not(windows), allow(unused_variables))]
+    #[allow(unused_variables)]
     fn spawn_with_flags(
         command: &mut std::process::Command,
         creation_flags: u32,
+        inherited_group: bool,
     ) -> std::io::Result<Self> {
         let mut active = transient_processes()
             .lock()
@@ -199,7 +367,9 @@ impl OwnedChild {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            command.process_group(0);
+            if !inherited_group {
+                command.process_group(0);
+            }
         }
         #[cfg(windows)]
         let job = {
@@ -229,6 +399,8 @@ impl OwnedChild {
             job,
             #[cfg(unix)]
             pid: child.id(),
+            #[cfg(unix)]
+            inherited_group,
         });
         if active.shutting_down {
             tree.terminate();
@@ -257,8 +429,8 @@ impl OwnedChild {
                 .remove(&token);
             tree.terminate();
         } else if let Some(child) = &mut self.child {
-            // CLI startup and legacy fixtures transfer a raw child here. Its
-            // handle still reserves the PID while the live tree is terminated.
+            // Legacy fixtures transfer a raw child here. Its handle still
+            // reserves the PID while the live tree is terminated.
             if matches!(child.try_wait(), Ok(None)) {
                 terminate_pid(child.id());
             }
@@ -284,6 +456,26 @@ impl OwnedChild {
                 .trees
                 .remove(&token);
         }
+    }
+
+    /// Observe readiness/exit without terminating descendants or taking the
+    /// transient-process registry lock. Unix leaves the PID reserved until the
+    /// owner performs teardown and reaps the child outside shared state locks.
+    pub fn poll_exit(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("child ownership was released"))?;
+        #[cfg(unix)]
+        {
+            match exit_status_without_reaping(child.id()) {
+                // A previous explicit wait may already have cached its status.
+                Err(error) if error.raw_os_error() == Some(libc::ECHILD) => child.try_wait(),
+                result => result,
+            }
+        }
+        #[cfg(not(unix))]
+        child.try_wait()
     }
 
     pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
@@ -593,6 +785,8 @@ impl TransientChild {
             job,
             #[cfg(unix)]
             pid: child.id().expect("new child has a process ID"),
+            #[cfg(unix)]
+            inherited_group: false,
         });
         let token = uuid::Uuid::new_v4();
         if active.shutting_down {
@@ -611,6 +805,13 @@ impl TransientChild {
 
     pub fn terminate(&self) {
         self.tree.terminate();
+    }
+
+    /// Retain the owned Windows tree while cleanup waits for all descendants
+    /// on a blocking worker after the root's async wait has completed.
+    #[cfg(windows)]
+    pub fn process_handle(&self) -> ProcessHandle {
+        ProcessHandle(self.tree.clone())
     }
 
     pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
@@ -1203,6 +1404,58 @@ mod unix_tests {
             .expect("the background child must release its inherited stdout")
             .unwrap();
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn inherited_group_owner_reclaims_its_subtree_without_killing_its_owner() {
+        let mut command = shell("sh -c 'sleep 60 & printf \"ready\\n\"; wait' & wait");
+        let mut child = OwnedChild::spawn_inherited_process_group(&mut command).unwrap();
+        assert_eq!(
+            unsafe { libc::getpgid(child.id() as libc::pid_t) },
+            unsafe { libc::getpgrp() },
+            "the engine must remain reachable by the helper's outer process-group kill"
+        );
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        stdout.read_line(&mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+        assert!(descendant_pids(child.id()).len() >= 2);
+        let (closed, completion) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let _ = closed.send(stdout.read_to_end(&mut Vec::new()));
+        });
+        drop(child);
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("all engine descendants must release their inherited stdout")
+            .unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn polling_exit_preserves_status_and_ownership_until_explicit_reaping() {
+        use std::os::unix::process::ExitStatusExt;
+        for (script, code, signal) in [
+            ("exit 7", Some(7), None),
+            ("kill -TERM $$", None, Some(libc::SIGTERM)),
+        ] {
+            let mut child = OwnedChild::spawn(&mut shell(script)).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let observed = loop {
+                if let Some(status) = child.poll_exit().unwrap() {
+                    break status;
+                }
+                assert!(std::time::Instant::now() < deadline, "fixture did not exit");
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(observed.code(), code);
+            assert_eq!(observed.signal(), signal);
+            assert_eq!(child.poll_exit().unwrap(), Some(observed));
+            // The owned wait must still be able to perform its own WNOWAIT
+            // observation before terminating the tree and reaping the root.
+            assert_eq!(child.try_wait().unwrap(), Some(observed));
+            assert_eq!(child.poll_exit().unwrap(), Some(observed));
+        }
     }
 
     #[test]

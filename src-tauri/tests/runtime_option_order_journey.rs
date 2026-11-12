@@ -316,7 +316,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
     ] {
         let error = runtime_schema::save_supplement(&root, &cfg, &fingerprint, confirmations(bad))
             .unwrap_err();
-        assert!(error.contains(needle), "{error}");
+        assert!(error.message.contains(needle), "{error}");
     }
     assert!(runtime_schema::save_supplement(
         &root,
@@ -380,6 +380,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
     // Confirmations and order are part of the launch identity.
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()
+        .message
         .contains("fresh adapter probe"));
     providers::adapter::refresh(&loaded, None).await.unwrap();
     let planned = providers::registry::command(&loaded, port, "synthetic-key").unwrap();
@@ -410,6 +411,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
         providers::adapter::refresh(&bad, None).await.unwrap();
         assert!(providers::registry::command(&bad, port, "synthetic-key")
             .unwrap_err()
+            .message
             .contains(needle));
         assert_eq!(bad.provider_options, before);
     }
@@ -439,6 +441,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
     providers::adapter::refresh(&loaded, None).await.unwrap();
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()
+        .message
         .contains("version 3"));
     let cleared = runtime_schema::clear_supplement(&root, &loaded).unwrap();
     assert!(cleared.supplement.is_none() && cleared.supplement_error.is_none());
@@ -584,7 +587,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
     let launch = |cfg: &AppConfig| {
         providers::adapter::resolve(cfg).launch(cfg, port, "synthetic-key", &Default::default())
     };
-    assert!(launch(&native).unwrap_err().contains("repetition"));
+    assert!(launch(&native).unwrap_err().message.contains("repetition"));
     runtime_schema::save_supplement(
         &root,
         &native,
@@ -615,5 +618,5 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
         "llama.cpp",
         &json!({"threads": "3", "@option_order": {"version": 1, "occurrences": [{"key": "threads"}]}}),
     );
-    assert!(launch(&owned).unwrap_err().contains("managed"));
+    assert!(launch(&owned).unwrap_err().message.contains("managed"));
 }

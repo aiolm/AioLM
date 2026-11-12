@@ -817,6 +817,25 @@ fn issue(key: &str, code: &'static str, message: String) -> OptionIssue {
         message,
     }
 }
+/// Manifest scalars use the common definition's type, choices and numeric
+/// constraints, plus the bounded payload shapes required by manifest v1.
+pub(super) fn valid_manifest_value(
+    definition: &super::runtime_options::OptionDefinition,
+    kind: &Value,
+    value: &Value,
+) -> bool {
+    let Ok(text) = definition.scalar(value) else {
+        return false;
+    };
+    match kind["type"].as_str() {
+        Some("text") => kind["max_len"]
+            .as_u64()
+            .is_some_and(|max| text.len() as u64 <= max),
+        Some("path") => !text.is_empty(),
+        Some("json") => value.is_object(),
+        _ => true,
+    }
+}
 
 fn check_value(spec: &OptionSpec, value: &Value) -> Option<OptionIssue> {
     let key = spec.key;

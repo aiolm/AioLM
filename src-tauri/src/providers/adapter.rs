@@ -33,14 +33,14 @@ pub trait InferenceRuntimeAdapter: Send + Sync {
         Ok(None)
     }
     fn kind(&self) -> RuntimeKind;
-    fn executable(&self, cfg: &AppConfig) -> Result<String, String>;
+    fn executable(&self, cfg: &AppConfig) -> Result<String, crate::error::AppError>;
     fn launch(
         &self,
         cfg: &AppConfig,
         port: u16,
         key: &str,
         gpu: &ResolvedGpu,
-    ) -> Result<EngineCommand, String>;
+    ) -> Result<EngineCommand, crate::error::AppError>;
     fn engine_info(&self, cfg: &AppConfig) -> Result<EngineInfo, String>;
 }
 
@@ -191,19 +191,19 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
             RuntimeKind::Native
         }
     }
-    fn executable(&self, cfg: &AppConfig) -> Result<String, String> {
+    fn executable(&self, cfg: &AppConfig) -> Result<String, crate::error::AppError> {
         if self.kind() == RuntimeKind::Python {
             return Ok(super::selected_python_runtime(cfg)?.python);
         }
         if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-            return Err("select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into());
+            return Err(crate::error::AppError::validation("select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used"));
         }
         let path = crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?;
         if !path.is_file() {
-            return Err(format!(
+            return Err(crate::error::AppError::not_found(format!(
                 "managed runtime is missing llama-server: {}",
                 path.display()
-            ));
+            )));
         }
         Ok(path.to_string_lossy().into_owned())
     }
@@ -213,14 +213,15 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         port: u16,
         key: &str,
         gpu: &ResolvedGpu,
-    ) -> Result<EngineCommand, String> {
+    ) -> Result<EngineCommand, crate::error::AppError> {
         if self.kind() == RuntimeKind::Python {
             let mut plan = super::launch::engine_command(
                 cfg,
                 &super::selected_python_runtime(cfg)?,
                 port,
                 key,
-            )?;
+            )
+            .map_err(crate::error::AppError::validation)?;
             let mut environment = super::python_env::engine_environment();
             environment.extend(plan.env);
             plan.env = environment;
@@ -228,7 +229,7 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         }
         let mut cfg = cfg.clone();
         cfg.port = port;
-        let args = native_arguments(&cfg, key, gpu)?;
+        let args = native_arguments(&cfg, key, gpu).map_err(crate::error::AppError::validation)?;
         let aliases = native_model_aliases(&args);
         let upstream_model = aliases.first().unwrap_or(&cfg.active_model).clone();
         Ok(EngineCommand {
@@ -275,7 +276,7 @@ impl InferenceRuntimeAdapter for ProcessAdapter {
     fn kind(&self) -> RuntimeKind {
         RuntimeKind::ExternalProcess
     }
-    fn executable(&self, cfg: &AppConfig) -> Result<String, String> {
+    fn executable(&self, cfg: &AppConfig) -> Result<String, crate::error::AppError> {
         Ok(
             super::registry::manifest(super::provider_of(cfg), &cfg.active_runtime)?
                 .launch
@@ -288,7 +289,7 @@ impl InferenceRuntimeAdapter for ProcessAdapter {
         port: u16,
         key: &str,
         _gpu: &ResolvedGpu,
-    ) -> Result<EngineCommand, String> {
+    ) -> Result<EngineCommand, crate::error::AppError> {
         let mut plan = super::registry::command(cfg, port, key)?;
         let mut environment = crate::runtime::child_environment();
         environment.extend(plan.env);
@@ -296,7 +297,7 @@ impl InferenceRuntimeAdapter for ProcessAdapter {
         Ok(plan)
     }
     fn engine_info(&self, cfg: &AppConfig) -> Result<EngineInfo, String> {
-        super::registry::info(cfg)
+        super::registry::info(cfg).map_err(Into::into)
     }
 }
 pub fn resolve(cfg: &AppConfig) -> Box<dyn InferenceRuntimeAdapter> {
@@ -307,7 +308,10 @@ pub fn resolve(cfg: &AppConfig) -> Box<dyn InferenceRuntimeAdapter> {
         Box::new(BuiltinAdapter(provider))
     }
 }
-pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result<(), String> {
+pub async fn refresh(
+    cfg: &AppConfig,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<(), crate::error::AppError> {
     match resolve(cfg).kind() {
         RuntimeKind::ExternalProcess => super::registry::refresh(cfg, cancel).await,
         RuntimeKind::Python => super::refresh_selected_python_runtime(cfg, cancel)
@@ -320,7 +324,7 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
 pub(crate) async fn prepare_launch(
     cfg: &AppConfig,
     cancel: Option<Arc<AtomicBool>>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     if super::registry::prepare_automatic_launch(cfg, cancel.as_deref())? {
         return Ok(());
     }

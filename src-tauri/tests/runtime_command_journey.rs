@@ -325,6 +325,9 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
         assert_eq!(serde_json::to_vec(&cfg).unwrap(), cfg_before);
         assert_eq!(serde_json::to_vec(&registered).unwrap(), manifest_before);
     }
+    // Manifest validation now shares the common scalar bounds: these 64 KiB
+    // JSON objects still exceed the 32 KiB value limit, but are refused by the
+    // manifest validator before the reviewed-help validator sees them.
     let expected_cases = vec![
         json!({"name":"legacy-integer-valid","issues":[]}),
         json!({"name":"legacy-integer-invalid","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
@@ -337,9 +340,9 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
         json!({"name":"legacy-null","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
         json!({"name":"legacy-nul-text","issues":[{"code":"type","key":"global_name","message":"unsupported or invalid adapter option: global_name"}]}),
         json!({"name":"structured-empty-text","issues":[]}),
-        json!({"name":"launch-json-limit","issues":[{"code":"type","key":"payload","message":"option value contains NUL or exceeds its size limit"}]}),
+        json!({"name":"launch-json-limit","issues":[{"code":"type","key":"payload","message":"unsupported or invalid adapter option: payload"}]}),
         json!({"name":"launch-json-too-large","issues":[{"code":"type","key":"payload","message":"unsupported or invalid adapter option: payload"}]}),
-        json!({"name":"request-json-limit","issues":[{"code":"type","key":"request_payload","message":"option value contains NUL or exceeds its size limit"}]}),
+        json!({"name":"request-json-limit","issues":[{"code":"type","key":"request_payload","message":"unsupported or invalid adapter option: request_payload"}]}),
         json!({"name":"request-json-too-large","issues":[{"code":"type","key":"request_payload","message":"unsupported or invalid adapter option: request_payload"}]}),
         json!({"name":"launch-json-envelope-looking","issues":[]}),
         json!({"name":"request-json-envelope-looking","issues":[{"code":"type","key":"request_payload","message":"saved alias is absent from this schema"}]}),
@@ -469,6 +472,7 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
         roles(json!({"role": "binding", "name": "model"}))
     )
     .unwrap_err()
+    .message
     .contains("not a positional binding"));
     let identity =
         |cfg: &AppConfig| runtime_schema::launch_identity(&root, cfg, &effective.compat_keys);

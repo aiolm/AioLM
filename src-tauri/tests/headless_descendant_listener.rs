@@ -208,6 +208,25 @@ fn get(port: u16, path: &str) -> Option<String> {
     Some(response)
 }
 
+fn wait_for_model(port: u16, tree: &Tree) -> String {
+    let deadline = Instant::now() + START_BOUND;
+    loop {
+        assert!(
+            tree.running(),
+            "the launcher and listener exited after the CLI"
+        );
+        let served = get(port, "/v1/models").unwrap_or_default();
+        if served.contains("fake-model") {
+            return served;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "listener did not serve the model: {served}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// The command a user runs, with app data and every OS profile folder that
 /// legacy imports or the earlier CLI state location read kept in this home.
 fn cli(home: &Path, args: &[&str]) -> Command {
@@ -233,6 +252,18 @@ fn cli(home: &Path, args: &[&str]) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+fn stage_fake_image(destination: &Path) -> std::io::Result<()> {
+    let fixture = Path::new(env!("CARGO_BIN_EXE_fake-llama-server"));
+    fs::copy(fixture, destination)?;
+    // Shared provider helpers may link the WebView loader dynamically. Keep
+    // it beside copied fixtures when their cleared environment cannot find it.
+    let loader = fixture.with_file_name("WebView2Loader.dll");
+    if loader.is_file() {
+        fs::copy(loader, destination.with_file_name("WebView2Loader.dll"))?;
+    }
+    Ok(())
 }
 
 fn json(output: &std::process::Output) -> Value {
@@ -1102,10 +1133,7 @@ impl PublicCase {
         ] {
             public_io(fs::create_dir_all(self.file(dir)))?;
         }
-        public_io(fs::copy(
-            env!("CARGO_BIN_EXE_fake-llama-server"),
-            &self.image,
-        ))?;
+        public_io(stage_fake_image(&self.image))?;
         for (name, bytes) in [
             (
                 "running-00001-of-00002.gguf",
@@ -1964,16 +1992,14 @@ impl PublicCase {
         let debris: Vec<_> = entries
             .iter()
             .filter(|e| {
-                e["path"].as_str().is_some_and(|p| {
-                    p.ends_with("headless-state.lock")
-                        || p.ends_with(".part")
-                        || p.contains("aiolm-api-key-")
-                })
+                e["path"]
+                    .as_str()
+                    .is_some_and(|p| p.ends_with(".part") || p.contains("aiolm-api-key-"))
             })
             .cloned()
             .collect();
         if !debris.is_empty() {
-            errors.push("command lock, part, or key debris".into());
+            errors.push("part or key debris".into());
         }
         self.evidence.push(serde_json::json!({"forced_harness_cleanup":{"files_before_root_removal":entries,"debris":debris,"all_native_exits":errors.is_empty()}}));
         // Never follow a reparse point, and never recursively remove outside this root.
@@ -2127,7 +2153,7 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
         "synthetic launcher{}",
         std::env::consts::EXE_SUFFIX
     ));
-    fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &image).unwrap();
+    stage_fake_image(&image).unwrap();
     let engine = image.to_string_lossy().into_owned();
     let model = home.join("synthetic model.bin");
     fs::write(&model, b"synthetic model").unwrap();
@@ -2213,12 +2239,7 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
             windows_sys::Win32::System::Threading::GetProcessId(first.launcher.0)
         }))
     );
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(
-        first.running(),
-        "the launcher and its listener must outlive the CLI that started them"
-    );
-    let served = get(port, "/v1/models").unwrap_or_default();
+    let served = wait_for_model(port, &first);
     assert!(served.contains("fake-model"), "{served}");
     let first_directory = staged("launcher-1");
     assert!(first_directory.join("effective-config.json").is_file());
@@ -2465,11 +2486,7 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         })),
         "the started process must be the redirector, not the listening interpreter"
     );
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(tree.running());
-    assert!(get(port, "/v1/models")
-        .unwrap_or_default()
-        .contains("fake-model"));
+    wait_for_model(port, &tree);
     let stopped = cli(&home, &["server", "stop"]).output().unwrap();
     assert!(stopped.status.success(), "venv stop failed: {stopped:?}");
     assert!(tree.exits_within(EXIT_BOUND));
@@ -2773,10 +2790,7 @@ impl PublicCase {
             b"owned synthetic fixture",
         ))?;
         for name in ["llama-server.exe", "llama-bench.exe"] {
-            public_io(fs::copy(
-                env!("CARGO_BIN_EXE_fake-llama-server"),
-                runtime.join(name),
-            ))?;
+            public_io(stage_fake_image(&runtime.join(name)))?;
         }
         let language = auxiliary_gguf(&[("general.architecture", "llama")]);
         let projector = auxiliary_gguf(&[("general.architecture", "clip")]);
@@ -4309,8 +4323,8 @@ async fn configured_file_retention_contracts() -> AuxiliaryFailures {
 }
 
 impl PublicCase {
-    // Only intentional partial-start controls enable this. Natural product
-    // cleanup has already been recorded separately and is never relabelled.
+    // Intentional partial-start controls prove that exiting commands release
+    // advisory ownership without removing the permanent coordination file.
     fn auxiliary_recover_interrupted_start_lock(&mut self) -> PublicResult<()> {
         let lock = self.file("cli/headless-state.lock");
         let metadata = match fs::symlink_metadata(&lock) {
@@ -4324,19 +4338,28 @@ impl PublicCase {
             "unknown interrupted lock retained",
         )?;
         let bytes = self.record_file("interrupted-lock-before-public-recovery", &lock)?;
-        let pid: u32 = std::str::from_utf8(&bytes)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .parse()
-            .map_err(|_| "unparseable interrupted lock retained")?;
-        let owner = self
-            .commands
-            .iter()
-            .position(|command| command.owner.id() == pid)
-            .ok_or("lock owner is not a retained fixture command")?;
-        let exited = public_io(std::process::Child::try_wait(
-            &mut self.commands[owner].owner,
-        ))?;
+        let mut owners_exited = true;
+        let mut owner_exits = Vec::new();
+        for command in &mut self.commands {
+            let exited = public_io(std::process::Child::try_wait(&mut command.owner))?;
+            owners_exited &= exited.is_some() && command.streams_done;
+            owner_exits.push(serde_json::json!({
+                "pid":command.owner.id(),"exit":exited.map(|status|status.code()),
+                "streams_done":command.streams_done
+            }));
+        }
+        let lock_available = || -> PublicResult<bool> {
+            let file = public_io(fs::OpenOptions::new().read(true).write(true).open(&lock))?;
+            match file.try_lock() {
+                Ok(()) => {
+                    public_io(file.unlock())?;
+                    Ok(true)
+                }
+                Err(fs::TryLockError::WouldBlock) => Ok(false),
+                Err(fs::TryLockError::Error(error)) => Err(error.to_string()),
+            }
+        };
+        let unlocked_before = lock_available()?;
         let jobs_empty = self.commands.iter().all(|command| {
             command
                 .owner
@@ -4350,13 +4373,13 @@ impl PublicCase {
                 .all(|process| process.exited(Instant::now()))
         });
         public_require(
-            exited.is_some() && self.commands[owner].streams_done && jobs_empty && handles_exited,
-            "interrupted owner or job not proved exited; lock retained",
+            owners_exited && jobs_empty && handles_exited && unlocked_before,
+            "interrupted owner, job, or advisory lock not proved released",
         )?;
         self.evidence
             .push(serde_json::json!({"forced_fixture_lock_recovery_before":{
-            "lock":lock,"raw":public_bytes(&bytes),"retained_owner_pid":pid,
-            "retained_owner_exit":exited.map(|status|status.code()),"all_jobs_empty":jobs_empty,
+            "lock":lock,"raw":public_bytes(&bytes),"retained_owner_exits":owner_exits,
+            "lock_available":unlocked_before,"all_jobs_empty":jobs_empty,
             "all_retained_handles_exited":handles_exited,"product_natural_cleanup":false}}));
         let first_recovery = self.commands.len();
         let contacts = self.contacts();
@@ -4367,8 +4390,10 @@ impl PublicCase {
                 errors.push(error);
             }
         }
+        let unlocked_after = lock_available()?;
         self.evidence.push(serde_json::json!({"forced_fixture_lock_recovery_after":{
-            "result":result,"lock_absent":!lock.exists(),"recovery_command_errors":errors,
+            "result":result,"lock_present":lock.is_file(),"lock_available":unlocked_after,
+            "recovery_command_errors":errors,
             "foreign_contacts_unchanged":contacts==self.contacts(),"product_natural_cleanup":false,
             "recovery_jobs":self.commands[first_recovery..].iter().map(|command|serde_json::json!({
                 "pid":command.owner.id(),"exit":command.root_exit,"streams_done":command.streams_done,
@@ -4378,7 +4403,8 @@ impl PublicCase {
             errors.is_empty()
                 && ok
                 && value["state"] == "stopped"
-                && !lock.exists()
+                && lock.is_file()
+                && unlocked_after
                 && contacts == self.contacts(),
             "public interrupted-lock recovery failed; residue retained",
         )

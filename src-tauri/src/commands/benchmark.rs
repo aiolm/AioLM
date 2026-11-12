@@ -1,5 +1,11 @@
 //! Benchmark execution, progress events and cancellation IPC.
-use crate::{benchmark, config, performance_bench, state::AppState};
+//! IPC failures retain their source kind; cancelled save dialogs remain `Ok(false)`.
+use crate::{
+    benchmark, config,
+    error::{AppError, ErrorKind},
+    performance_bench,
+    state::AppState,
+};
 use serde_json::{json, Value};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,31 +15,31 @@ use tauri::{Emitter, State};
 pub(crate) async fn benchmark_history_list(
     offset: Option<usize>,
     limit: Option<usize>,
-) -> Result<benchmark::store::HistoryPage, String> {
+) -> Result<benchmark::store::HistoryPage, AppError> {
     let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || {
         benchmark::store::list(&root, offset.unwrap_or(0), limit.unwrap_or(20))
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(AppError::from)?
 }
 
 #[tauri::command]
-pub(crate) async fn benchmark_history_import(records: Vec<Value>) -> Result<usize, String> {
+pub(crate) async fn benchmark_history_import(records: Vec<Value>) -> Result<usize, AppError> {
     let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::store::import(&root, records))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(AppError::from)?
 }
 
 /// Delete one local history record. Active runs are rejected by the store's
 /// OS locks; public submissions and upload receipts are left untouched.
 #[tauri::command]
-pub(crate) async fn benchmark_history_delete(run_id: String) -> Result<(), String> {
+pub(crate) async fn benchmark_history_delete(run_id: String) -> Result<(), AppError> {
     let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::store::delete(&root, &run_id))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(AppError::from)?
 }
 
 #[tauri::command]
@@ -41,15 +47,14 @@ pub(crate) async fn benchmark_acknowledge_upload(
     state: State<'_, AppState>,
     run_id: String,
     receipt: benchmark::store::UploadReceipt,
-) -> Result<benchmark::store::Acknowledgement, String> {
-    let _operation = state
-        .operation
-        .try_lock()
-        .map_err(|_| "wait for the current operation before acknowledging a benchmark upload")?;
+) -> Result<benchmark::store::Acknowledgement, AppError> {
+    let _operation = state.operation.try_lock().map_err(|_| {
+        AppError::busy("wait for the current operation before acknowledging a benchmark upload")
+    })?;
     let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::store::acknowledge(&root, &run_id, receipt))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(AppError::from)?
 }
 
 /// Save benchmark CSV text through a native save dialog. Returns `false` when
@@ -60,7 +65,7 @@ pub(crate) async fn benchmark_acknowledge_upload(
 pub(crate) async fn benchmark_export_csv(
     contents: String,
     file_name: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tokio::task::spawn_blocking(move || {
         let file_name = benchmark::csv_export::suggested_file_name(file_name.as_deref());
         benchmark::csv_export::save(&contents, || {
@@ -71,7 +76,16 @@ pub(crate) async fn benchmark_export_csv(
         })
     })
     .await
-    .map_err(|error| format!("The benchmark CSV export task failed: {error}"))?
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("The benchmark CSV export task failed: {error}"),
+        )
+    })?
 }
 
 /// Save a finished benchmark XLSX workbook through a native save dialog. The
@@ -83,7 +97,7 @@ pub(crate) async fn benchmark_export_csv(
 pub(crate) async fn benchmark_export_xlsx(
     contents: Vec<u8>,
     file_name: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tokio::task::spawn_blocking(move || {
         let file_name = benchmark::csv_export::suggested_xlsx_file_name(file_name.as_deref());
         benchmark::csv_export::save_xlsx(&contents, || {
@@ -94,11 +108,20 @@ pub(crate) async fn benchmark_export_xlsx(
         })
     })
     .await
-    .map_err(|error| format!("The benchmark XLSX export task failed: {error}"))?
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("The benchmark XLSX export task failed: {error}"),
+        )
+    })?
 }
 
 #[tauri::command]
-pub(crate) fn bench_cancel(state: State<'_, AppState>) {
+pub(crate) fn bench_cancel(state: State<'_, AppState>) -> Result<(), AppError> {
     state.bench_cancel.store(true, Ordering::Release);
     if let Some(process) = state
         .bench_process
@@ -108,6 +131,7 @@ pub(crate) fn bench_cancel(state: State<'_, AppState>) {
     {
         process.terminate();
     }
+    Ok(())
 }
 
 /// Inspect only existing target metadata; ordinary launch preflight still runs
@@ -116,8 +140,8 @@ pub(crate) fn bench_cancel(state: State<'_, AppState>) {
 pub(crate) async fn performance_bench_admission(
     cfg: config::AppConfig,
     request: performance_bench::PerformanceBenchRequest,
-) -> performance_bench::BenchmarkAdmission {
-    performance_bench::admission(cfg, request).await
+) -> Result<performance_bench::BenchmarkAdmission, AppError> {
+    Ok(performance_bench::admission(cfg, request).await)
 }
 
 /// Run the common chat workload on a private launch without touching the
@@ -128,7 +152,7 @@ pub(crate) async fn run_performance_bench(
     state: State<'_, AppState>,
     cfg: config::AppConfig,
     request: performance_bench::PerformanceBenchRequest,
-) -> Result<performance_bench::PerformanceBenchResult, String> {
+) -> Result<performance_bench::PerformanceBenchResult, AppError> {
     let progress: performance_bench::Progress = Arc::new(move |progress| {
         let _ = app.emit("performance-bench-progress", progress);
     });
@@ -140,39 +164,45 @@ pub(crate) async fn run_performance_bench_with_progress(
     mut cfg: config::AppConfig,
     mut request: performance_bench::PerformanceBenchRequest,
     progress: performance_bench::Progress,
-) -> Result<performance_bench::PerformanceBenchResult, String> {
+) -> Result<performance_bench::PerformanceBenchResult, AppError> {
     let _operation = state
         .operation
         .try_lock()
-        .map_err(|_| "another server or benchmark operation is in progress".to_string())?;
-    let validation = performance_bench::validate_execution_request(&mut request).and_then(|()| {
-        cfg.normalize();
-        cfg.validate()?;
-        if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
-            return Err("wait for the runtime operation to finish before benchmarking".into());
-        }
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned")?
-            .lifecycle
-            .blocks_resource_change()
-        {
-            return Err("stop the server before running a benchmark".into());
-        }
-        for session in state.sessions.entries() {
-            if session
-                .state
+        .map_err(|_| AppError::busy("another server or benchmark operation is in progress"))?;
+    let validation = performance_bench::validate_execution_request(&mut request)
+        .map_err(AppError::validation)
+        .and_then(|()| {
+            cfg.normalize();
+            cfg.validate().map_err(AppError::validation)?;
+            if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
+                return Err(AppError::busy(
+                    "wait for the runtime operation to finish before benchmarking",
+                ));
+            }
+            if state
+                .server
                 .lock()
-                .map_err(|_| "session state lock was poisoned")?
+                .map_err(|_| AppError::internal("server state lock was poisoned"))?
                 .lifecycle
                 .blocks_resource_change()
             {
-                return Err("stop all model sessions before running a benchmark".into());
+                return Err(AppError::busy("stop the server before running a benchmark"));
             }
-        }
-        Ok(())
-    });
+            for session in state.sessions.entries() {
+                if session
+                    .state
+                    .lock()
+                    .map_err(|_| AppError::internal("session state lock was poisoned"))?
+                    .lifecycle
+                    .blocks_resource_change()
+                {
+                    return Err(AppError::busy(
+                        "stop all model sessions before running a benchmark",
+                    ));
+                }
+            }
+            Ok(())
+        });
     validation?;
     // Admission may probe the target but is not a measurement: rejection must
     // neither invalidate sharing permits nor create an empty failed journal.
@@ -193,14 +223,16 @@ pub(crate) async fn run_performance_bench_with_progress(
             crate::launch_validation::validate_launch_config_with_cancel(&mut cfg, Some(&cancel))
                 .await?;
         let runtime = performance_bench::RuntimeInfo::prepare(&cfg, &request).await?;
-        Ok::<_, String>((gpu, runtime))
+        Ok::<_, AppError>((gpu, runtime))
     }
     .await;
     let (gpu, mut runtime) = match admitted {
         Ok(admitted) if !cancel.load(Ordering::Acquire) => admitted,
         Ok(_) => {
             state.bench_cancel.store(false, Ordering::Release);
-            return Err("benchmark cancelled before measurement".into());
+            return Err(AppError::cancelled(
+                "benchmark cancelled before measurement",
+            ));
         }
         Err(error) => {
             state.bench_cancel.store(false, Ordering::Release);

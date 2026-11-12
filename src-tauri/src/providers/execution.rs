@@ -49,20 +49,28 @@ fn vllm_chat_support(
     Some(artifacts::inspect_snapshot(tokenizer).has_chat_template)
 }
 
-pub fn inspect(path: &Path) -> Result<artifacts::ModelArtifact, String> {
+pub fn inspect(path: &Path) -> Result<artifacts::ModelArtifact, crate::error::AppError> {
     if path.is_dir() {
         return Ok(artifacts::inspect_snapshot(path));
     }
-    let metadata =
-        std::fs::metadata(path).map_err(|error| format!("model is unreadable: {error}"))?;
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        crate::error::AppError::new(
+            crate::error::AppError::from_io(&error).kind,
+            format!("model is unreadable: {error}"),
+        )
+    })?;
     if !metadata.is_file() {
-        return Err("select a model file or snapshot directory".into());
+        return Err(crate::error::AppError::validation(
+            "select a model file or snapshot directory",
+        ));
     }
     crate::models::validate_model_shards(path)?;
     Ok(artifacts::inspect_gguf(path, metadata.len(), &[]))
 }
 
-pub fn compatibility(cfg: &AppConfig) -> Result<compat::ModelCompatibility, String> {
+pub fn compatibility(
+    cfg: &AppConfig,
+) -> Result<compat::ModelCompatibility, crate::error::AppError> {
     if super::provider_of(cfg).is_custom() {
         return super::registry::compatibility(cfg);
     }
@@ -81,7 +89,9 @@ pub fn compatibility(cfg: &AppConfig) -> Result<compat::ModelCompatibility, Stri
     if provider == ProviderId::Llama && !cfg.mmproj.is_empty() {
         let projector = inspect(Path::new(&cfg.mmproj))?;
         if projector.role != artifacts::ArtifactRole::Projector {
-            return Err("select a multimodal projector for this model".into());
+            return Err(crate::error::AppError::validation(
+                "select a multimodal projector for this model",
+            ));
         }
         result.modalities.image = projector.modalities.image;
         result.modalities.audio = projector.modalities.audio;

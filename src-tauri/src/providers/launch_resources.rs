@@ -403,7 +403,7 @@ pub fn prepare(
         // handed to a child. A failed marker write must not leave staging.
         drop(lock);
         let _ = fs::remove_dir_all(&directory);
-        return Err(error);
+        return Err(error.into());
     }
     let guard = Directory {
         id,

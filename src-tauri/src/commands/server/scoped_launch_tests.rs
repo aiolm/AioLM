@@ -1,7 +1,7 @@
 //! Operation cancellation must never become an unconditional session stop.
 use super::*;
 
-async fn start_for_target(state: &AppState, id: &str, operation: &str) -> Result<(), String> {
+async fn start_for_target(state: &AppState, id: &str, operation: &str) -> Result<(), AppError> {
     let cfg = config::AppConfig {
         stop_existing_sessions_on_load: true,
         ..Default::default()
@@ -35,7 +35,7 @@ fn target_for(state: &AppState, id: &str) -> Arc<Mutex<server::ServerState>> {
     }
 }
 
-fn cancel_for_target(state: &AppState, operation: &str, id: &str) -> Result<(), String> {
+fn cancel_for_target(state: &AppState, operation: &str, id: &str) -> Result<(), AppError> {
     cancel_launch_operation(
         state,
         operation,
@@ -52,7 +52,8 @@ async fn scoped_cancel_before_admission_never_validates_or_spawns() {
         let error = start_for_target(&state, id, "before-admission")
             .await
             .unwrap_err();
-        assert_eq!(error, "server start cancelled");
+        assert_eq!(error.message, "server start cancelled");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
         assert!(state.server.lock().unwrap().child.is_none());
         assert!(state.sessions.get("named").is_none());
     }
@@ -81,7 +82,9 @@ async fn scoped_queued_cancel_preserves_current_models_and_other_pending_starts(
         cancel_for_target(&state, "queued", id).unwrap();
         assert!(!unrelated.cancel_flag().load(Ordering::Acquire));
         drop(gate);
-        assert_eq!(start.await.unwrap_err(), "server start cancelled");
+        let error = start.await.unwrap_err();
+        assert_eq!(error.message, "server start cancelled");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
         for target in [&state.server, &named] {
             let model = target.lock().unwrap();
             assert_eq!(model.lifecycle, server::Lifecycle::Ready);
@@ -180,9 +183,9 @@ fn scoped_cancel_respects_active_response_guard() {
             model.begin_request();
         }
         drop(owner);
-        assert!(cancel_for_target(&state, "responding", id)
-            .unwrap_err()
-            .contains("active response"));
+        let error = cancel_for_target(&state, "responding", id).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        assert!(error.message.contains("active response"));
         {
             let mut model = bound.target.lock().unwrap();
             assert!(model.is_current_launch(bound.generation));

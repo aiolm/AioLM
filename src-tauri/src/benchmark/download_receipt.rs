@@ -97,7 +97,7 @@ pub(crate) fn record_verified(
         digest: digest.map(str::to_owned),
     })
     .map_err(|error| error.to_string())?;
-    crate::config::atomic_write(&receipt_path(root, &path), &encoded)
+    crate::config::atomic_write(&receipt_path(root, &path), &encoded).map_err(Into::into)
 }
 
 /// The receipt for `path` while the file is unchanged since it was written.

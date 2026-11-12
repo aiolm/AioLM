@@ -1,9 +1,12 @@
 // Local MCP stdio client with explicit per-call approval.
+use crate::error::{AppError, ErrorKind};
 use crate::procutil::{OwnedTask, TransientChild};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -11,6 +14,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::time::timeout;
 
 const MCP_FILE: &str = "mcp-servers.json";
+const LAUNCH_APPROVAL_FILE: &str = "mcp-launch-approvals.json";
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RPC_LINE: usize = 1024 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
@@ -22,13 +26,10 @@ const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const TOOL_CALL_CANCELLED: &str = "MCP tool call cancelled";
 const APPROVAL_TITLE: &str = "MCP tool approval required";
 
-#[cfg(target_os = "linux")]
-mod linux_approval;
-#[cfg(target_os = "macos")]
-mod macos_approval;
-#[cfg(windows)]
-mod native_approval;
+static LAUNCH_APPROVAL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CONFIG_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+static MCP_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static LAUNCH_APPROVAL_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct McpServer {
@@ -68,12 +69,16 @@ fn valid_id(value: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
 }
 
-fn validate_server(server: &McpServer) -> Result<(), String> {
+fn validate_server(server: &McpServer) -> Result<(), AppError> {
     if !valid_id(&server.id) {
-        return Err("MCP server id must contain only letters, numbers, '-' or '_'.".into());
+        return Err(AppError::validation(
+            "MCP server id must contain only letters, numbers, '-' or '_'.",
+        ));
     }
     if server.name.trim().is_empty() || server.name.len() > 80 {
-        return Err("MCP server name must be between 1 and 80 characters.".into());
+        return Err(AppError::validation(
+            "MCP server name must be between 1 and 80 characters.",
+        ));
     }
     if server.command.trim().is_empty()
         || server.command.len() > 512
@@ -83,9 +88,9 @@ fn validate_server(server: &McpServer) -> Result<(), String> {
             .chars()
             .any(|character| matches!(character, '&' | '|' | ';' | '<' | '>'))
     {
-        return Err(
-            "MCP command must be one executable path; shell operators are not allowed.".into(),
-        );
+        return Err(AppError::validation(
+            "MCP command must be one executable path; shell operators are not allowed.",
+        ));
     }
     if server.args.len() > 64
         || server
@@ -93,92 +98,132 @@ fn validate_server(server: &McpServer) -> Result<(), String> {
             .iter()
             .any(|argument| argument.len() > 4096 || contains_forbidden_control(argument))
     {
-        return Err("MCP arguments must be at most 64 newline-free values.".into());
+        return Err(AppError::validation(
+            "MCP arguments must be at most 64 newline-free values.",
+        ));
     }
     Ok(())
 }
 
-fn config_path() -> Result<PathBuf, String> {
-    crate::home::resolve_aiolm_home().map(|home| home.join(MCP_FILE))
+fn config_path() -> Result<PathBuf, AppError> {
+    crate::home::resolve_aiolm_home()
+        .map(|home| home.join(MCP_FILE))
+        .map_err(AppError::validation)
 }
 
-async fn load_servers() -> Result<Vec<McpServer>, String> {
+async fn load_servers() -> Result<Vec<McpServer>, AppError> {
     let path = config_path()?;
-    if !tokio::fs::try_exists(&path)
+    tokio::task::spawn_blocking(move || load_servers_from_path(&path))
         .await
-        .map_err(|error| format!("cannot inspect MCP config: {error}"))?
-    {
-        return Ok(Vec::new());
-    }
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| format!("cannot read MCP config: {error}"))?;
-    let servers: Vec<McpServer> = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("cannot parse MCP config: {error}"))?;
+        .map_err(|error| {
+            AppError::new(
+                if error.is_cancelled() {
+                    ErrorKind::Cancelled
+                } else {
+                    ErrorKind::Internal
+                },
+                format!("MCP config load task failed: {error}"),
+            )
+        })?
+}
+
+fn load_servers_from_path(path: &Path) -> Result<Vec<McpServer>, AppError> {
+    let _guard = MCP_FILE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Older saves briefly moved the live document aside. Recover the
+            // most recent backup without discarding that recovery point.
+            let Some(parent) = path.parent().filter(|parent| parent.is_dir()) else {
+                return Ok(Vec::new());
+            };
+            let prefix = format!(
+                "{}.backup-",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
+            let mut backups = std::fs::read_dir(parent)
+                .map_err(|error| AppError::io("cannot inspect MCP backups", &error))?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.file_name().to_string_lossy().starts_with(&prefix)
+                        && entry.file_type().is_ok_and(|kind| kind.is_file())
+                })
+                .collect::<Vec<_>>();
+            backups.sort_by_key(|entry| {
+                entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+            });
+            let Some(backup) = backups.pop() else {
+                return Ok(Vec::new());
+            };
+            let bytes = std::fs::read(backup.path())
+                .map_err(|error| AppError::io("cannot read MCP backup", &error))?;
+            let servers = decode_servers(&bytes)?;
+            crate::config::atomic_write(path, &bytes).map_err(|mut error| {
+                error.message = format!("cannot recover MCP config: {error}");
+                error
+            })?;
+            return Ok(servers);
+        }
+        Err(error) => return Err(AppError::io("cannot read MCP config", &error)),
+    };
+    decode_servers(&bytes)
+}
+
+fn decode_servers(bytes: &[u8]) -> Result<Vec<McpServer>, AppError> {
+    let servers: Vec<McpServer> = serde_json::from_slice(bytes)
+        .map_err(|error| AppError::validation(format!("cannot parse MCP config: {error}")))?;
     for server in &servers {
         validate_server(server)?;
     }
     Ok(servers)
 }
 
-async fn save_servers(servers: &[McpServer]) -> Result<(), String> {
+async fn save_servers(servers: &[McpServer]) -> Result<(), AppError> {
+    save_servers_to_path(servers, config_path()?).await
+}
+
+async fn save_servers_to_path(servers: &[McpServer], path: PathBuf) -> Result<(), AppError> {
     for server in servers {
         validate_server(server)?;
     }
-    let path = config_path()?;
-    let directory = path
-        .parent()
-        .ok_or_else(|| "MCP config has no parent directory".to_string())?;
-    tokio::fs::create_dir_all(directory)
-        .await
-        .map_err(|error| format!("cannot create MCP config directory: {error}"))?;
-    let temp = directory.join(format!(".mcp-servers-{}.tmp", uuid::Uuid::new_v4()));
     let bytes = serde_json::to_vec_pretty(servers)
-        .map_err(|error| format!("cannot encode MCP config: {error}"))?;
-    tokio::fs::write(&temp, bytes)
-        .await
-        .map_err(|error| format!("cannot stage MCP config: {error}"))?;
-    if let Err(error) = activate_staged_file(&temp, &path).await {
-        let _ = tokio::fs::remove_file(&temp).await;
-        return Err(format!("cannot activate MCP config: {error}"));
-    }
-    Ok(())
-}
-
-/// Activate a staged config without relying on POSIX rename-overwrite semantics.
-/// Windows' `MoveFileEx` equivalent is not exposed by Tokio's portable API and
-/// `tokio::fs::rename` fails when the destination already exists. Moving the old
-/// file to a sibling backup first keeps replacement recoverable if activation
-/// fails, while retaining same-directory atomic renames for each step.
-async fn activate_staged_file(temp: &PathBuf, path: &PathBuf) -> Result<(), std::io::Error> {
-    let backup = path.with_extension(format!("json.backup-{}", uuid::Uuid::new_v4()));
-    let had_existing = tokio::fs::try_exists(path).await?;
-    if had_existing {
-        tokio::fs::rename(path, &backup).await?;
-    }
-    match tokio::fs::rename(temp, path).await {
-        Ok(()) => {
-            if had_existing {
-                let _ = tokio::fs::remove_file(&backup).await;
-            }
-            Ok(())
-        }
-        Err(error) => {
-            if had_existing && tokio::fs::try_exists(&backup).await.unwrap_or(false) {
-                let _ = tokio::fs::rename(&backup, path).await;
-            }
-            Err(error)
-        }
-    }
+        .map_err(|error| AppError::internal(format!("cannot encode MCP config: {error}")))?;
+    tokio::task::spawn_blocking(move || {
+        let _guard = MCP_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::config::atomic_write(&path, &bytes).map_err(|mut error| {
+            error.message = format!("cannot save MCP config: {error}");
+            error
+        })
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("MCP config save task failed: {error}"),
+        )
+    })?
 }
 
 fn config_lock() -> &'static tokio::sync::Mutex<()> {
     CONFIG_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-fn append_bounded_line(target: &mut Vec<u8>, bytes: &[u8]) -> Result<(), String> {
+fn append_bounded_line(target: &mut Vec<u8>, bytes: &[u8]) -> Result<(), AppError> {
     if target.len().saturating_add(bytes.len()) > MAX_RPC_LINE {
-        return Err("MCP response exceeded the 1 MiB safety limit".to_string());
+        return Err(AppError::validation(
+            "MCP response exceeded the 1 MiB safety limit",
+        ));
     }
     target.extend_from_slice(bytes);
     Ok(())
@@ -225,30 +270,201 @@ fn inherited_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         .collect()
 }
 
-async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
-    if !server.enabled {
-        return Err("MCP server is disabled".into());
+struct LaunchContext {
+    environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    cwd: PathBuf,
+}
+
+impl LaunchContext {
+    fn capture() -> Result<Self, AppError> {
+        Ok(Self {
+            environment: inherited_environment(),
+            cwd: std::env::current_dir()
+                .map_err(|error| AppError::io("cannot resolve MCP working directory", &error))?,
+        })
     }
+
+    fn fingerprint(&self, server: &McpServer) -> String {
+        let mut hash = Sha256::new();
+        fn field(hash: &mut Sha256, value: &[u8]) {
+            hash.update((value.len() as u64).to_le_bytes());
+            hash.update(value);
+        }
+        field(&mut hash, b"aiolm-mcp-launch-v1");
+        field(&mut hash, server.command.as_bytes());
+        hash.update((server.args.len() as u64).to_le_bytes());
+        for argument in &server.args {
+            field(&mut hash, argument.as_bytes());
+        }
+        hash.update((self.environment.len() as u64).to_le_bytes());
+        for (name, value) in &self.environment {
+            field(&mut hash, name.as_encoded_bytes());
+            field(&mut hash, value.as_encoded_bytes());
+        }
+        field(&mut hash, self.cwd.as_os_str().as_encoded_bytes());
+        format!("{:x}", hash.finalize())
+    }
+}
+
+fn launch_approval_description(server: &McpServer, launch: &LaunchContext) -> String {
+    // JSON preserves executable and argument boundaries without suggesting
+    // that a shell interprets this command line.
+    #[derive(Serialize)]
+    struct CommandLine<'a> {
+        executable: &'a str,
+        arguments: &'a [String],
+    }
+    let command_line = serde_json::to_string(&CommandLine {
+        executable: &server.command,
+        arguments: &server.args,
+    })
+    .expect("strings serialize");
+    let cwd = launch.cwd.to_string_lossy();
+    bounded_approval_description(&[
+        "Allow this MCP server executable to run?\nServer: ",
+        &server.name,
+        " (",
+        &server.id,
+        ")\nCommand line (executable and arguments): ",
+        &command_line,
+        "\nWorking directory: ",
+        &cwd,
+        "\n\nApproval is remembered for this command, arguments, environment and working directory.",
+    ])
+}
+
+fn read_launch_approvals(path: &Path) -> Result<BTreeSet<String>, AppError> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::validation(format!("cannot parse MCP launch approvals: {error}"))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+        Err(error) => Err(AppError::io("cannot read MCP launch approvals", &error)),
+    }
+}
+
+async fn approve_launch<F, Fut>(
+    path: &Path,
+    fingerprint: String,
+    approve: F,
+) -> Result<(), AppError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<bool, AppError>>,
+{
+    // Serialize read/approve/write so simultaneous first uses cannot discard
+    // each other's approvals or present duplicate prompts.
+    let _guard = LAUNCH_APPROVAL_LOCK.lock().await;
+    let read_path = path.to_owned();
+    let approvals = tokio::task::spawn_blocking(move || {
+        let _guard = LAUNCH_APPROVAL_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        read_launch_approvals(&read_path)
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("MCP approval load task failed: {error}"),
+        )
+    })??;
+    if approvals.contains(&fingerprint) {
+        return Ok(());
+    }
+    let approved = timeout(APPROVAL_TIMEOUT, approve())
+        .await
+        .map_err(|_| AppError::timeout("MCP server launch approval timed out"))??;
+    if !approved {
+        return Err(AppError::denied("MCP server launch rejected by the user"));
+    }
+    let write_path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        // A cancelled caller's blocking write may still finish. Merge while
+        // holding a synchronous file lock so that write cannot lose approvals.
+        let _guard = LAUNCH_APPROVAL_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut approvals = read_launch_approvals(&write_path)?;
+        approvals.insert(fingerprint);
+        let bytes = serde_json::to_vec_pretty(&approvals).map_err(|error| {
+            AppError::internal(format!("cannot encode MCP launch approvals: {error}"))
+        })?;
+        crate::config::atomic_write(&write_path, &bytes).map_err(|mut error| {
+            error.message = format!("cannot save MCP launch approval: {error}");
+            error
+        })
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("MCP approval save task failed: {error}"),
+        )
+    })?
+}
+
+async fn spawn_session(server: &McpServer) -> Result<McpSession, AppError> {
+    let path = config_path()?.with_file_name(LAUNCH_APPROVAL_FILE);
+    spawn_session_with_approval(server, &path, |description| async move {
+        crate::native_confirm::confirm("MCP server launch approval required", &description)
+            .await
+            .map_err(AppError::unavailable)
+    })
+    .await
+}
+
+async fn spawn_session_with_approval<F, Fut>(
+    server: &McpServer,
+    approvals: &Path,
+    approve: F,
+) -> Result<McpSession, AppError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = Result<bool, AppError>>,
+{
+    if !server.enabled {
+        return Err(AppError::busy("MCP server is disabled"));
+    }
+    validate_server(server)?;
+    let launch = LaunchContext::capture()?;
+    approve_launch(approvals, launch.fingerprint(server), || {
+        approve(launch_approval_description(server, &launch))
+    })
+    .await?;
     let mut command = crate::procutil::tokio_command(&server.command);
     crate::procutil::configure_process_group(&mut command);
     command
         .args(&server.args)
         .env_clear()
-        .envs(inherited_environment())
+        .envs(launch.environment)
+        .current_dir(launch.cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = TransientChild::spawn(&mut command)
-        .map_err(|error| format!("cannot start MCP server '{}': {error}", server.name))?;
+    let mut child = TransientChild::spawn(&mut command).map_err(|error| {
+        AppError::io(
+            &format!("cannot start MCP server '{}'", server.name),
+            &error,
+        )
+    })?;
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| "MCP server stdin was not captured".to_string())?;
+        .ok_or_else(|| AppError::internal("MCP server stdin was not captured"))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "MCP server stdout was not captured".to_string())?;
+        .ok_or_else(|| AppError::internal("MCP server stdout was not captured"))?;
     // Drained but discarded: an MCP server's stderr is diagnostic chatter,
     // not protocol traffic. The handle is still retained and joined in
     // `close_session` so the reader task cannot outlive the session it
@@ -305,7 +521,7 @@ async fn send_message(
     id: u64,
     method: &str,
     params: Value,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
     write_line(stdin, message).await
 }
@@ -314,69 +530,74 @@ async fn send_notification(
     stdin: &mut ChildStdin,
     method: &str,
     params: Value,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let message = json!({"jsonrpc": "2.0", "method": method, "params": params});
     write_line(stdin, message).await
 }
 
-async fn write_line(stdin: &mut ChildStdin, message: Value) -> Result<(), String> {
+async fn write_line(stdin: &mut ChildStdin, message: Value) -> Result<(), AppError> {
     let mut bytes = serde_json::to_vec(&message)
-        .map_err(|error| format!("cannot encode MCP request: {error}"))?;
+        .map_err(|error| AppError::internal(format!("cannot encode MCP request: {error}")))?;
     bytes.push(b'\n');
     timeout(RPC_TIMEOUT, async {
         stdin
             .write_all(&bytes)
             .await
-            .map_err(|error| format!("cannot write MCP request: {error}"))?;
+            .map_err(|error| AppError::unavailable(format!("cannot write MCP request: {error}")))?;
         stdin
             .flush()
             .await
-            .map_err(|error| format!("cannot flush MCP request: {error}"))
+            .map_err(|error| AppError::unavailable(format!("cannot flush MCP request: {error}")))
     })
     .await
-    .map_err(|_| "MCP request write timed out after 15 seconds".to_string())?
+    .map_err(|_| AppError::timeout("MCP request write timed out after 15 seconds"))?
 }
 
-async fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<Option<String>, String> {
+async fn read_bounded_line(
+    reader: &mut BufReader<ChildStdout>,
+) -> Result<Option<String>, AppError> {
     let mut bytes = Vec::new();
     loop {
         let buffer = reader
             .fill_buf()
             .await
-            .map_err(|error| format!("cannot read MCP response: {error}"))?;
+            .map_err(|error| AppError::unavailable(format!("cannot read MCP response: {error}")))?;
         if buffer.is_empty() {
             if bytes.is_empty() {
                 return Ok(None);
             }
-            return String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|error| format!("MCP response was not UTF-8: {error}"));
+            return String::from_utf8(bytes).map(Some).map_err(|error| {
+                AppError::validation(format!("MCP response was not UTF-8: {error}"))
+            });
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
         let take = newline.map_or(buffer.len(), |index| index + 1);
         append_bounded_line(&mut bytes, &buffer[..take])?;
         reader.consume(take);
         if newline.is_some() {
-            return String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|error| format!("MCP response was not UTF-8: {error}"));
+            return String::from_utf8(bytes).map(Some).map_err(|error| {
+                AppError::validation(format!("MCP response was not UTF-8: {error}"))
+            });
         }
     }
 }
 
-async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<Value, String> {
+async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<Value, AppError> {
     let read = timeout(RPC_TIMEOUT, async {
         loop {
             let Some(line) = read_bounded_line(reader).await? else {
-                return Err("MCP server closed stdout before responding".to_string());
+                return Err(AppError::unavailable(
+                    "MCP server closed stdout before responding",
+                ));
             };
-            let mut message: Value = serde_json::from_str(&line)
-                .map_err(|error| format!("MCP returned invalid JSON: {error}"))?;
+            let mut message: Value = serde_json::from_str(&line).map_err(|error| {
+                AppError::validation(format!("MCP returned invalid JSON: {error}"))
+            })?;
             if message.get("id").and_then(Value::as_u64) != Some(id) {
                 continue;
             }
             if let Some(error) = message.get("error") {
-                return Err(format!("MCP request failed: {error}"));
+                return Err(AppError::internal(format!("MCP request failed: {error}")));
             }
             return Ok(message
                 .as_object_mut()
@@ -385,15 +606,22 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
         }
     })
     .await
-    .map_err(|_| "MCP request timed out after 15 seconds".to_string())?;
+    .map_err(|_| AppError::timeout("MCP request timed out after 15 seconds"))?;
     read
 }
 
 async fn close_session(mut session: McpSession) {
     // The Job object (Windows) or process group (Unix) owns the whole tree, so
     // one terminate reaches every descendant before the root is reaped.
+    #[cfg(windows)]
+    let process_tree = session.child.process_handle();
     session.child.terminate();
     let _ = session.child.wait().await;
+    // Job termination can outlive the root's exit. Retain its process handles
+    // and wait off the async worker until every captured member has exited.
+    #[cfg(windows)]
+    let _ =
+        tokio::task::spawn_blocking(move || process_tree.wait_exited(Duration::from_secs(5))).await;
     // The child's stdio pipes close on exit, which lets this reader task
     // finish on its own; joining it here guarantees the task is gone before
     // the session is considered closed instead of leaking it indefinitely.
@@ -407,11 +635,11 @@ async fn close_session(mut session: McpSession) {
     }
 }
 
-pub async fn list() -> Result<Vec<McpServer>, String> {
+pub async fn list() -> Result<Vec<McpServer>, AppError> {
     load_servers().await
 }
 
-pub async fn save(server: McpServer) -> Result<Vec<McpServer>, String> {
+pub async fn save(server: McpServer) -> Result<Vec<McpServer>, AppError> {
     let _config_guard = config_lock().lock().await;
     let mut servers = load_servers().await?;
     validate_server(&server)?;
@@ -427,9 +655,9 @@ pub async fn save(server: McpServer) -> Result<Vec<McpServer>, String> {
     Ok(servers)
 }
 
-pub async fn remove(id: &str) -> Result<Vec<McpServer>, String> {
+pub async fn remove(id: &str) -> Result<Vec<McpServer>, AppError> {
     if !valid_id(id) {
-        return Err("invalid MCP server id".into());
+        return Err(AppError::validation("invalid MCP server id"));
     }
     let _config_guard = config_lock().lock().await;
     let mut servers = load_servers().await?;
@@ -438,12 +666,12 @@ pub async fn remove(id: &str) -> Result<Vec<McpServer>, String> {
     Ok(servers)
 }
 
-pub async fn tools(id: &str) -> Result<Vec<McpTool>, String> {
+pub async fn tools(id: &str) -> Result<Vec<McpTool>, AppError> {
     let server = load_servers()
         .await?
         .into_iter()
         .find(|server| server.id == id)
-        .ok_or_else(|| "MCP server was not found".to_string())?;
+        .ok_or_else(|| AppError::not_found("MCP server was not found"))?;
     let mut session = spawn_session(&server).await?;
     let result = send_tools_request(&mut session).await;
     close_session(session).await;
@@ -455,32 +683,37 @@ pub async fn tools(id: &str) -> Result<Vec<McpTool>, String> {
             Value::Array(tools) => Some(tools),
             _ => None,
         })
-        .ok_or_else(|| "MCP tools/list returned no tools array".to_string())?;
+        .ok_or_else(|| AppError::validation("MCP tools/list returned no tools array"))?;
     tools
         .into_iter()
         .map(|tool| {
-            serde_json::from_value(tool)
-                .map_err(|error| format!("invalid MCP tool metadata: {error}"))
+            serde_json::from_value(tool).map_err(|error| {
+                AppError::validation(format!("invalid MCP tool metadata: {error}"))
+            })
         })
         .collect()
 }
 
-async fn send_tools_request(session: &mut McpSession) -> Result<Value, String> {
+async fn send_tools_request(session: &mut McpSession) -> Result<Value, AppError> {
     send_message(&mut session.stdin, 2, "tools/list", json!({})).await?;
     read_response(&mut session.stdout, 2).await
 }
 
-fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
+fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), AppError> {
     let Some(schema) = schema.as_object() else {
         return Ok(());
     };
     let Some(arguments) = arguments.as_object() else {
-        return Err("MCP tool arguments must be a JSON object".into());
+        return Err(AppError::validation(
+            "MCP tool arguments must be a JSON object",
+        ));
     };
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for field in required.iter().filter_map(Value::as_str) {
             if !arguments.contains_key(field) {
-                return Err(format!("MCP tool argument '{field}' is required"));
+                return Err(AppError::validation(format!(
+                    "MCP tool argument '{field}' is required"
+                )));
             }
         }
     }
@@ -505,7 +738,9 @@ fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), Stri
                 _ => true,
             };
             if !valid {
-                return Err(format!("MCP tool argument '{field}' must be {expected}"));
+                return Err(AppError::validation(format!(
+                    "MCP tool argument '{field}' must be {expected}"
+                )));
             }
         }
     }
@@ -531,6 +766,10 @@ fn tool_approval_description(server: &McpServer, name: &str, serialized: &str) -
         serialized,
         "\n\nAllow this one-time MCP tool call?",
     ];
+    bounded_approval_description(&parts)
+}
+
+fn bounded_approval_description(parts: &[&str]) -> String {
     let full_len: usize = parts.iter().map(|part| part.len()).sum();
     if full_len <= MAX_APPROVAL_DESCRIPTION_BYTES {
         let mut description = String::with_capacity(full_len);
@@ -551,32 +790,19 @@ fn tool_approval_description(server: &McpServer, name: &str, serialized: &str) -
     bounded
 }
 
-async fn confirm_tool_call(server: &McpServer, name: &str, serialized: &str) -> Result<(), String> {
+async fn confirm_tool_call(
+    server: &McpServer,
+    name: &str,
+    serialized: &str,
+) -> Result<(), AppError> {
     let description = tool_approval_description(server, name, serialized);
-    // Windows: the prompt belongs to this future, so a Stop, the approval
-    // timeout or shutdown closes the dialog and ends its thread.
-    #[cfg(windows)]
-    let approved = native_approval::Prompt::open(APPROVAL_TITLE, &description)?
-        .answer()
-        .await?;
-    // Linux: rfd's detached command thread leaves zenity open when its future
-    // is dropped. Keep the dialog process owned by this cancellable future.
-    #[cfg(target_os = "linux")]
-    let approved = linux_approval::confirm(APPROVAL_TITLE, &description).await?;
-    #[cfg(target_os = "macos")]
-    let approved = macos_approval::confirm(APPROVAL_TITLE, &description).await?;
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    let approved = rfd::AsyncMessageDialog::new()
-        .set_title(APPROVAL_TITLE)
-        .set_description(description)
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show()
+    let approved = crate::native_confirm::confirm(APPROVAL_TITLE, &description)
         .await
-        == rfd::MessageDialogResult::Yes;
+        .map_err(AppError::unavailable)?;
     if approved {
         Ok(())
     } else {
-        Err("MCP tool call rejected by the user".into())
+        Err(AppError::denied("MCP tool call rejected by the user"))
     }
 }
 
@@ -588,7 +814,7 @@ pub async fn call_tool_with_id(
     name: &str,
     arguments: Value,
     call_id: Option<&str>,
-) -> Result<Value, String> {
+) -> Result<Value, AppError> {
     // A call without a caller id still registers under a private one, so
     // shutdown can cancel it like any other.
     let call_id = call_id
@@ -596,24 +822,29 @@ pub async fn call_tool_with_id(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let (_registration, mut cancel) = register_tool_call(&call_id)?;
     if name.is_empty() || name.len() > 256 || contains_forbidden_control(name) {
-        return Err("invalid MCP tool name".into());
+        return Err(AppError::validation("invalid MCP tool name"));
     }
     if !arguments.is_object() {
-        return Err("MCP tool arguments must be a JSON object".into());
+        return Err(AppError::validation(
+            "MCP tool arguments must be a JSON object",
+        ));
     }
-    let serialized_arguments = serde_json::to_string(&arguments)
-        .map_err(|error| format!("cannot encode MCP tool arguments: {error}"))?;
+    let serialized_arguments = serde_json::to_string(&arguments).map_err(|error| {
+        AppError::internal(format!("cannot encode MCP tool arguments: {error}"))
+    })?;
     if serialized_arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
-        return Err("MCP tool arguments exceed the 256 KiB safety limit".into());
+        return Err(AppError::validation(
+            "MCP tool arguments exceed the 256 KiB safety limit",
+        ));
     }
     let server = cancel
         .guard(load_servers())
         .await??
         .into_iter()
         .find(|server| server.id == id)
-        .ok_or_else(|| "MCP server was not found".to_string())?;
+        .ok_or_else(|| AppError::not_found("MCP server was not found"))?;
     run_tool_call(
-        &server,
+        spawn_session(&server),
         name,
         &arguments,
         cancel,
@@ -627,20 +858,20 @@ pub async fn call_tool_with_id(
 /// pending step (spawn, RPC or the approval wait) and always reclaims the
 /// session; a call cancelled before approval never sends `tools/call`.
 async fn run_tool_call<F, Fut>(
-    server: &McpServer,
+    launch: impl Future<Output = Result<McpSession, AppError>>,
     name: &str,
     arguments: &Value,
     mut cancel: CallCancel,
     approve: F,
     approval_timeout: Duration,
-) -> Result<Value, String>
+) -> Result<Value, AppError>
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
+    Fut: Future<Output = Result<(), AppError>>,
 {
     // A dropped spawn future still owns its TransientChild, which terminates
     // the process tree, so an early cancel needs no separate cleanup.
-    let mut session = cancel.guard(spawn_session(server)).await??;
+    let mut session = cancel.guard(launch).await??;
     let approval_cancel = cancel.clone();
     let work = async {
         let tool_list = send_tools_request(&mut session).await?;
@@ -652,17 +883,19 @@ where
                     .iter()
                     .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
             })
-            .ok_or_else(|| format!("MCP tool '{name}' is not declared by the server"))?;
+            .ok_or_else(|| {
+                AppError::not_found(format!("MCP tool '{name}' is not declared by the server"))
+            })?;
         if let Some(schema) = tool.get("inputSchema") {
             validate_tool_arguments(schema, arguments)?;
         }
         timeout(approval_timeout, approve())
             .await
-            .map_err(|_| "MCP tool approval timed out".to_string())??;
+            .map_err(|_| AppError::timeout("MCP tool approval timed out"))??;
         // The approval may have resolved in the same instant as a Stop; the
         // tool must not run once the caller has cancelled.
         if approval_cancel.is_cancelled() {
-            return Err(TOOL_CALL_CANCELLED.to_string());
+            return Err(AppError::cancelled(TOOL_CALL_CANCELLED));
         }
         send_message(
             &mut session.stdin,
@@ -724,9 +957,9 @@ fn lock_tool_calls() -> std::sync::MutexGuard<'static, HashMap<String, CallSlot>
 
 /// Cancel the tool call registered under `call_id`, or the one that is about
 /// to register under it.
-pub fn cancel_tool_call(call_id: &str) -> Result<(), String> {
+pub fn cancel_tool_call(call_id: &str) -> Result<(), AppError> {
     if !valid_id(call_id) {
-        return Err("invalid MCP tool call id".into());
+        return Err(AppError::validation("invalid MCP tool call id"));
     }
     record_cancel(&mut lock_tool_calls(), call_id);
     Ok(())
@@ -761,8 +994,7 @@ fn cancel_active_calls(calls: &HashMap<String, CallSlot>) {
 /// approval prompt at once, without waiting for their tasks to be polled.
 pub fn cancel_all_tool_calls() {
     cancel_active_calls(&lock_tool_calls());
-    #[cfg(windows)]
-    native_approval::dismiss_all();
+    crate::native_confirm::dismiss_all();
 }
 
 /// Keeps a call id registered for exactly as long as its call runs.
@@ -777,9 +1009,9 @@ impl Drop for CallRegistration {
     }
 }
 
-fn register_tool_call(call_id: &str) -> Result<(CallRegistration, CallCancel), String> {
+fn register_tool_call(call_id: &str) -> Result<(CallRegistration, CallCancel), AppError> {
     if !valid_id(call_id) {
-        return Err("invalid MCP tool call id".into());
+        return Err(AppError::validation("invalid MCP tool call id"));
     }
     let receiver = admit_call(&mut lock_tool_calls(), call_id)?;
     Ok((
@@ -791,13 +1023,13 @@ fn register_tool_call(call_id: &str) -> Result<(CallRegistration, CallCancel), S
 fn admit_call(
     calls: &mut HashMap<String, CallSlot>,
     call_id: &str,
-) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+) -> Result<tokio::sync::watch::Receiver<bool>, AppError> {
     prune_cancelled_calls(calls, MAX_CANCELLED_CALLS);
     match calls.get(call_id) {
-        Some(CallSlot::Active(_)) => Err("MCP tool call id is already in use".into()),
+        Some(CallSlot::Active(_)) => Err(AppError::busy("MCP tool call id is already in use")),
         Some(CallSlot::Cancelled(_)) => {
             calls.remove(call_id);
-            Err(TOOL_CALL_CANCELLED.into())
+            Err(AppError::cancelled(TOOL_CALL_CANCELLED))
         }
         None => {
             let active = calls
@@ -806,7 +1038,9 @@ fn admit_call(
                 .count();
             // Each running call owns an MCP server process.
             if active >= MAX_ACTIVE_CALLS {
-                return Err("too many MCP tool calls are already running".into());
+                return Err(AppError::busy(
+                    "too many MCP tool calls are already running",
+                ));
             }
             let (sender, receiver) = tokio::sync::watch::channel(false);
             calls.insert(call_id.to_string(), CallSlot::Active(sender));
@@ -839,10 +1073,10 @@ impl CallCancel {
 
     /// Run `work` unless the call is cancelled first. A cancel that is
     /// already pending wins over work that is ready in the same poll.
-    async fn guard<T>(&mut self, work: impl std::future::Future<Output = T>) -> Result<T, String> {
+    async fn guard<T>(&mut self, work: impl Future<Output = T>) -> Result<T, AppError> {
         tokio::select! {
             biased;
-            _ = self.cancelled() => Err(TOOL_CALL_CANCELLED.to_string()),
+            _ = self.cancelled() => Err(AppError::cancelled(TOOL_CALL_CANCELLED)),
             value = work => Ok(value),
         }
     }
@@ -851,6 +1085,16 @@ impl CallCancel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use crate::native_confirm::native_approval;
+
+    async fn spawn_test_session(server: &McpServer) -> Result<McpSession, AppError> {
+        let fixture = LifecycleFixture::new();
+        spawn_session_with_approval(server, &fixture.0.join(LAUNCH_APPROVAL_FILE), |_| async {
+            Ok(true)
+        })
+        .await
+    }
 
     #[cfg(any(windows, unix))]
     fn node_fixture(root: &std::path::Path, script: &str) -> McpServer {
@@ -889,10 +1133,8 @@ child.on('spawn', () => {{
         node_fixture(root, &script)
     }
 
-    #[cfg(any(windows, unix))]
     struct LifecycleFixture(std::path::PathBuf);
 
-    #[cfg(any(windows, unix))]
     impl LifecycleFixture {
         fn new() -> Self {
             let root =
@@ -902,7 +1144,6 @@ child.on('spawn', () => {{
         }
     }
 
-    #[cfg(any(windows, unix))]
     impl Drop for LifecycleFixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
@@ -985,7 +1226,9 @@ setTimeout(() => {{}}, 60000);
             let candidate =
                 unix_monitored_fixture(&fixture.0, listener.local_addr().unwrap().port(), mode);
             let task =
-                OwnedTask::from(tokio::spawn(async move { spawn_session(&candidate).await }));
+                OwnedTask::from(tokio::spawn(
+                    async move { spawn_test_session(&candidate).await },
+                ));
             let sockets = accept_lifetimes(&listener).await;
             if mode == "pending" {
                 task.abort();
@@ -995,7 +1238,9 @@ setTimeout(() => {{}}, 60000);
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(matches!(result, Err(ref error) if error.contains("invalid JSON")));
+                assert!(
+                    matches!(&result, Err(error) if error.kind == ErrorKind::Validation && error.message.contains("invalid JSON"))
+                );
             }
             assert_lifetimes_closed(sockets).await;
         }
@@ -1017,14 +1262,14 @@ setTimeout(() => {{}}, 60000);
             let call = OwnedTask::from(tokio::spawn(async move {
                 let _registration = registration;
                 run_tool_call(
-                    &candidate,
+                    spawn_test_session(&candidate),
                     "probe",
                     &json!({}),
                     cancel,
                     move || async move {
                         let _ = shown.send(());
                         if waiting_for_approval {
-                            std::future::pending::<Result<(), String>>().await
+                            std::future::pending::<Result<(), AppError>>().await
                         } else {
                             Ok(())
                         }
@@ -1052,7 +1297,7 @@ setTimeout(() => {{}}, 60000);
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+            assert_eq!(result, Err(AppError::cancelled(TOOL_CALL_CANCELLED)));
             assert_eq!(
                 fixture.0.join("tools-call.txt").exists(),
                 !waiting_for_approval
@@ -1067,9 +1312,9 @@ setTimeout(() => {{}}, 60000);
     async fn invalid_initialization_terminates_the_server_and_its_descendant() {
         let fixture = LifecycleFixture::new();
         let candidate = lifecycle_fixture(&fixture.0, "process.stdout.write('invalid-json\\n')");
-        let result = spawn_session(&candidate).await;
+        let result = spawn_test_session(&candidate).await;
         assert!(
-            matches!(result, Err(ref error) if error.contains("invalid JSON")),
+            matches!(&result, Err(error) if error.kind == ErrorKind::Validation && error.message.contains("invalid JSON")),
             "initialization returned {:?}",
             result.err()
         );
@@ -1089,7 +1334,9 @@ setTimeout(() => {{}}, 60000);
     async fn interrupting_initialization_terminates_the_server_and_its_descendant() {
         let fixture = LifecycleFixture::new();
         let candidate = lifecycle_fixture(&fixture.0, "process.stderr.write('fixture-ready\\n')");
-        let task = OwnedTask::from(tokio::spawn(async move { spawn_session(&candidate).await }));
+        let task = OwnedTask::from(tokio::spawn(
+            async move { spawn_test_session(&candidate).await },
+        ));
         let mut exits = Vec::new();
         timeout(Duration::from_secs(10), async {
             for name in ["parent.pid", "descendant.pid"] {
@@ -1224,7 +1471,7 @@ input.on('line', line => {
     #[cfg(any(windows, unix))]
     #[tokio::test]
     async fn responses_keep_numeric_id_error_precedence_null_and_line_limits() {
-        let ok = |result: Value| Ok::<Value, String>(result);
+        let ok = |result: Value| Ok::<Value, AppError>(result);
         let string_line = |padding: usize| {
             let mut line = br#"{"id":2,"result":""#.to_vec();
             line.resize(line.len() + padding, b'x');
@@ -1235,7 +1482,7 @@ input.on('line', line => {
         let utf8_prefix = br#"{"id":2,"result":""#;
         let mut invalid_utf8 = utf8_prefix.to_vec();
         invalid_utf8.extend_from_slice(b"\xff\"}\n");
-        let cases: Vec<(&str, Vec<u8>, Result<Value, String>)> = vec![
+        let cases: Vec<(&str, Vec<u8>, Result<Value, AppError>)> = vec![
             (
                 "object",
                 tools_list_reply(json!({"tools": [], "nested": {"list": [1, "가"]}})),
@@ -1286,7 +1533,7 @@ input.on('line', line => {
                 )
                 .as_bytes()
                 .to_vec(),
-                Err("MCP server closed stdout before responding".into()),
+                Err(AppError::unavailable("MCP server closed stdout before responding")),
             ),
             (
                 "error wins over result",
@@ -1316,20 +1563,20 @@ input.on('line', line => {
             (
                 "one byte over 1 MiB",
                 string_line(MAX_RPC_LINE - framing + 1),
-                Err("MCP response exceeded the 1 MiB safety limit".into()),
+                Err(AppError::validation("MCP response exceeded the 1 MiB safety limit")),
             ),
             (
                 "invalid UTF-8",
                 invalid_utf8,
-                Err(format!(
+                Err(AppError::validation(format!(
                     "MCP response was not UTF-8: invalid utf-8 sequence of 1 bytes from index {}",
                     utf8_prefix.len()
-                )),
+                ))),
             ),
             (
                 "invalid JSON",
                 b"x\n".to_vec(),
-                Err("MCP returned invalid JSON: expected value at line 1 column 1".into()),
+                Err(AppError::validation("MCP returned invalid JSON: expected value at line 1 column 1")),
             ),
         ];
         for (case, reply, expected) in cases {
@@ -1339,7 +1586,7 @@ input.on('line', line => {
                 "ignored ids then end of output" | "final line without LF"
             );
             let candidate = scripted_reply_fixture(&fixture.0, &reply, end_output);
-            let mut session = spawn_session(&candidate).await.unwrap();
+            let mut session = spawn_test_session(&candidate).await.unwrap();
             #[cfg(windows)]
             let exit = open_server_probe(&fixture.0);
             let result = send_tools_request(&mut session).await;
@@ -1377,7 +1624,7 @@ input.on('line', line => {
         #[cfg(windows)]
         let exit = std::cell::RefCell::new(None);
         let result = run_tool_call(
-            &candidate,
+            spawn_test_session(&candidate),
             "shout",
             &arguments,
             CallCancel(None),
@@ -1473,7 +1720,7 @@ input.on('line', line => {
         assert!(list().await.unwrap().is_empty());
         assert_eq!(
             tools("absent").await.unwrap_err(),
-            "MCP server was not found"
+            AppError::not_found("MCP server was not found")
         );
         let schema = json!({
             "type": "object",
@@ -1484,9 +1731,12 @@ input.on('line', line => {
             "type": "object",
             "properties": {"deep": {"type": "array", "items": {"type": "integer"}}}
         });
-        let no_tools_array =
-            || Err::<Value, String>("MCP tools/list returned no tools array".into());
-        let cases: Vec<(&str, Vec<u8>, Result<Value, String>)> = vec![
+        let no_tools_array = || {
+            Err::<Value, AppError>(AppError::validation(
+                "MCP tools/list returned no tools array",
+            ))
+        };
+        let cases: Vec<(&str, Vec<u8>, Result<Value, AppError>)> = vec![
             (
                 "ordered metadata",
                 tools_list_reply(json!({
@@ -1536,15 +1786,14 @@ input.on('line', line => {
             (
                 "wrong name type",
                 tools_list_reply(json!({"tools": [{"name": "ok"}, {"name": 5}]})),
-                Err(
-                    "invalid MCP tool metadata: invalid type: integer `5`, expected a string"
-                        .into(),
-                ),
+                Err(AppError::validation(
+                    "invalid MCP tool metadata: invalid type: integer `5`, expected a string",
+                )),
             ),
             (
                 "missing name",
                 tools_list_reply(json!({"tools": [{"description": "x"}]})),
-                Err("invalid MCP tool metadata: missing field `name`".into()),
+                Err(AppError::validation("invalid MCP tool metadata: missing field `name`")),
             ),
             (
                 "server error",
@@ -1555,7 +1804,18 @@ input.on('line', line => {
         for (case, reply, expected) in cases {
             let fixture = LifecycleFixture::new();
             let server = scripted_reply_fixture(&fixture.0, &reply, false);
-            std::fs::write(home.join(MCP_FILE), serde_json::to_vec(&[server]).unwrap()).unwrap();
+            save(server.clone()).await.unwrap();
+            assert!(
+                !fixture.0.join("server.pid").exists(),
+                "saving must not launch the server"
+            );
+            approve_launch(
+                &home.join(LAUNCH_APPROVAL_FILE),
+                LaunchContext::capture().unwrap().fingerprint(&server),
+                || async { Ok(true) },
+            )
+            .await
+            .unwrap();
             let result = tools("test-server")
                 .await
                 .map(|tools| serde_json::to_value(tools).unwrap());
@@ -1592,7 +1852,7 @@ input.on('line', line => {
         let call = OwnedTask::from(tokio::spawn(async move {
             let _registration = registration;
             run_tool_call(
-                &candidate,
+                spawn_test_session(&candidate),
                 "probe",
                 &json!({}),
                 cancel,
@@ -1600,12 +1860,13 @@ input.on('line', line => {
                     // The real prompt, held hidden at creation by the test gate.
                     let (gates, reached, release) = native_approval::tests::created_gates();
                     let mut prompt =
-                        native_approval::Prompt::open_with(APPROVAL_TITLE, "synthetic", gates)?;
+                        native_approval::Prompt::open_with(APPROVAL_TITLE, "synthetic", gates)
+                            .map_err(AppError::unavailable)?;
                     held_tx.send(prompt.hold(reached, release)).unwrap();
-                    if prompt.answer().await? {
+                    if prompt.answer().await.map_err(AppError::unavailable)? {
                         Ok(())
                     } else {
-                        Err("MCP tool call rejected by the user".into())
+                        Err(AppError::denied("MCP tool call rejected by the user"))
                     }
                 },
                 Duration::from_secs(60),
@@ -1627,7 +1888,7 @@ input.on('line', line => {
             .await
             .expect("Stop must end the approval wait")
             .unwrap();
-        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert_eq!(result, Err(AppError::cancelled(TOOL_CALL_CANCELLED)));
         assert!(held.withdrawn(), "Stop must answer the dialog No");
         tokio::task::spawn_blocking(move || held.release_withdrawn())
             .await
@@ -1651,12 +1912,14 @@ input.on('line', line => {
         }
         assert_eq!(
             admit_call(&mut calls, "one-too-many").err(),
-            Some("too many MCP tool calls are already running".to_string())
+            Some(AppError::busy(
+                "too many MCP tool calls are already running"
+            ))
         );
         // A cancel recorded for a waiting call is still honoured at the limit.
         assert_eq!(
             admit_call(&mut calls, &format!("stopped-{}", MAX_CANCELLED_CALLS + 4)).err(),
-            Some(TOOL_CALL_CANCELLED.to_string())
+            Some(AppError::cancelled(TOOL_CALL_CANCELLED))
         );
         drop(receivers);
     }
@@ -1692,13 +1955,13 @@ input.on('line', line => {
         let call = OwnedTask::from(tokio::spawn(async move {
             let _registration = registration;
             run_tool_call(
-                &candidate,
+                spawn_test_session(&candidate),
                 "probe",
                 &json!({}),
                 cancel,
                 move || async move {
                     let _ = shown.send(());
-                    std::future::pending::<Result<(), String>>().await
+                    std::future::pending::<Result<(), AppError>>().await
                 },
                 Duration::from_secs(60),
             )
@@ -1714,7 +1977,7 @@ input.on('line', line => {
             .await
             .expect("Stop must end the approval wait")
             .unwrap();
-        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert_eq!(result, Err(AppError::cancelled(TOOL_CALL_CANCELLED)));
         assert!(!fixture.0.join("tools-call.txt").exists());
         assert!(exit.exited(), "a cancelled call must close its MCP server");
         assert!(!call_registered(&call_id));
@@ -1729,7 +1992,7 @@ input.on('line', line => {
         let (registration, cancel) = register_tool_call(&call_id).unwrap();
         let exit = std::cell::RefCell::new(None);
         let result = run_tool_call(
-            &candidate,
+            spawn_test_session(&candidate),
             "probe",
             &json!({}),
             cancel,
@@ -1746,7 +2009,7 @@ input.on('line', line => {
             .into_inner()
             .unwrap_or_else(|| panic!("the call must reach approval: {result:?}"));
         drop(registration);
-        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert_eq!(result, Err(AppError::cancelled(TOOL_CALL_CANCELLED)));
         assert!(!fixture.0.join("tools-call.txt").exists());
         assert!(exit.exited());
         assert!(!call_registered(&call_id));
@@ -1762,7 +2025,7 @@ input.on('line', line => {
         let call = OwnedTask::from(tokio::spawn(async move {
             let _registration = registration;
             run_tool_call(
-                &candidate,
+                spawn_test_session(&candidate),
                 "probe",
                 &json!({}),
                 cancel,
@@ -1785,7 +2048,7 @@ input.on('line', line => {
             .await
             .expect("Stop must end the in-flight RPC")
             .unwrap();
-        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert_eq!(result, Err(AppError::cancelled(TOOL_CALL_CANCELLED)));
         assert!(stopped.elapsed() < RPC_TIMEOUT);
         assert!(exit.exited(), "a cancelled RPC must close its MCP server");
         assert!(!call_registered(&call_id));
@@ -1798,13 +2061,13 @@ input.on('line', line => {
         let candidate = tool_call_fixture(&fixture.0);
         let exit = std::cell::RefCell::new(None);
         let result = run_tool_call(
-            &candidate,
+            spawn_test_session(&candidate),
             "probe",
             &json!({}),
             CallCancel(None),
             || {
                 *exit.borrow_mut() = Some(open_server_probe(&fixture.0));
-                std::future::pending::<Result<(), String>>()
+                std::future::pending::<Result<(), AppError>>()
             },
             Duration::from_millis(200),
         )
@@ -1812,7 +2075,10 @@ input.on('line', line => {
         let exit = exit
             .into_inner()
             .unwrap_or_else(|| panic!("the call must reach approval: {result:?}"));
-        assert_eq!(result, Err("MCP tool approval timed out".to_string()));
+        assert_eq!(
+            result,
+            Err(AppError::timeout("MCP tool approval timed out"))
+        );
         assert!(!fixture.0.join("tools-call.txt").exists());
         assert!(exit.exited());
     }
@@ -1824,14 +2090,15 @@ input.on('line', line => {
         // The call is refused before it reads any configuration or starts a server.
         assert_eq!(
             call_tool_with_id("not-configured", "probe", json!({}), Some(&call_id)).await,
-            Err(TOOL_CALL_CANCELLED.to_string())
+            Err(AppError::cancelled(TOOL_CALL_CANCELLED))
         );
         assert!(!call_registered(&call_id));
         // The tombstone is consumed, so a later call may reuse the id.
         let (registration, cancel) = register_tool_call(&call_id).unwrap();
         assert!(!cancel.is_cancelled());
-        assert!(
-            register_tool_call(&call_id).is_err(),
+        assert_eq!(
+            register_tool_call(&call_id).err().unwrap().kind,
+            ErrorKind::Busy,
             "an id runs one call at a time"
         );
         cancel_tool_call(&call_id).unwrap();
@@ -1842,8 +2109,14 @@ input.on('line', line => {
 
     #[test]
     fn cancelled_call_tombstones_stay_bounded_and_ids_are_validated() {
-        assert!(cancel_tool_call("bad id\n").is_err());
-        assert!(register_tool_call("").is_err());
+        assert_eq!(
+            cancel_tool_call("bad id\n").unwrap_err().kind,
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            register_tool_call("").err().unwrap().kind,
+            ErrorKind::Validation
+        );
         // Pruning is checked on a private map so concurrent tests keep their
         // own tombstones in the shared registry.
         let now = std::time::Instant::now();
@@ -1882,39 +2155,309 @@ input.on('line', line => {
     #[test]
     fn rejects_shell_operators_and_control_characters() {
         assert!(validate_server(&server("npx")).is_ok());
-        assert!(validate_server(&server("npx && whoami")).is_err());
-        assert!(validate_server(&server("npx\nwhoami")).is_err());
+        assert_eq!(
+            validate_server(&server("npx && whoami")).unwrap_err().kind,
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            validate_server(&server("npx\nwhoami")).unwrap_err().kind,
+            ErrorKind::Validation
+        );
     }
 
     #[test]
     fn rejects_invalid_ids_and_oversized_arguments() {
         let mut candidate = server("npx");
         candidate.id = "../server".into();
-        assert!(validate_server(&candidate).is_err());
+        assert_eq!(
+            validate_server(&candidate).unwrap_err().kind,
+            ErrorKind::Validation
+        );
         candidate.id = "test-server".into();
         candidate.args = vec!["x".repeat(4097)];
-        assert!(validate_server(&candidate).is_err());
+        assert_eq!(
+            validate_server(&candidate).unwrap_err().kind,
+            ErrorKind::Validation
+        );
     }
 
     #[tokio::test]
-    async fn staged_config_replaces_existing_file_and_preserves_new_content() {
-        let root = std::env::temp_dir().join(format!("aiolm-mcp-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&root)
+    async fn concurrent_readers_only_observe_complete_server_documents_during_save() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(MCP_FILE);
+        save_servers_to_path(&[server("synthetic-initial")], path.clone())
             .await
-            .expect("temp directory");
-        let path = root.join("mcp-servers.json");
-        let temp = root.join(".mcp-servers.tmp");
-        tokio::fs::write(&path, b"old").await.expect("old config");
-        tokio::fs::write(&temp, b"new")
-            .await
-            .expect("staged config");
+            .unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let reader = {
+            let path = path.clone();
+            let stop = stop.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..100_000 {
+                    let servers = load_servers_from_path(&path)
+                        .expect("the live document is complete and remains available");
+                    assert_eq!(servers.len(), 1);
+                    assert!(servers[0].command.starts_with("synthetic-"));
+                    if stop.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                }
+            })
+        };
+        barrier.wait();
+        for index in 0..8 {
+            save_servers_to_path(&[server(&format!("synthetic-{index}"))], path.clone())
+                .await
+                .unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        reader.join().unwrap();
+        assert_eq!(
+            load_servers_from_path(&path).unwrap()[0].command,
+            "synthetic-7"
+        );
+    }
 
-        activate_staged_file(&temp, &path)
+    #[tokio::test]
+    async fn saved_servers_replace_atomically_and_invalid_updates_preserve_the_document() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(MCP_FILE);
+        let initial = server("synthetic-initial");
+        save_servers_to_path(&[initial], path.clone())
             .await
-            .expect("replacement should succeed");
-        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "new");
-        assert!(!tokio::fs::try_exists(&temp).await.unwrap());
-        let _ = tokio::fs::remove_dir_all(root).await;
+            .unwrap();
+        let updated = server("synthetic-updated");
+        save_servers_to_path(&[updated], path.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            load_servers_from_path(&path).unwrap()[0].command,
+            "synthetic-updated"
+        );
+        let before = std::fs::read(&path).unwrap();
+        let mut invalid = server("synthetic-invalid");
+        invalid.args = vec!["bad\nargument".into()];
+        assert!(save_servers_to_path(&[invalid], path.clone())
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(&fixture.0).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_file_held_by_another_application_preserves_saved_servers_and_can_be_retried() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(MCP_FILE);
+        save_servers_to_path(&[server("synthetic-original")], path.clone())
+            .await
+            .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        // Model an external reader that does not grant delete/rename sharing.
+        let external_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0001)
+            .open(&path)
+            .unwrap();
+        let error = save_servers_to_path(&[server("synthetic-updated")], path.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Busy);
+        assert!(error.message.contains("then retry"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&fixture.0).unwrap().count(), 1);
+        drop(external_reader);
+        save_servers_to_path(&[server("synthetic-updated")], path.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            load_servers_from_path(&path).unwrap()[0].command,
+            "synthetic-updated"
+        );
+    }
+
+    #[test]
+    fn missing_server_document_recovers_the_newest_legacy_backup() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(MCP_FILE);
+        let old_backup = fixture.0.join("mcp-servers.json.backup-old");
+        let newest_backup = fixture.0.join("mcp-servers.json.backup-new");
+        std::fs::write(&old_backup, serde_json::to_vec(&[server("old")]).unwrap()).unwrap();
+        let newest = serde_json::to_vec(&[server("newest")]).unwrap();
+        std::fs::write(&newest_backup, &newest).unwrap();
+        for (backup, seconds) in [(&old_backup, 10), (&newest_backup, 20)] {
+            std::fs::File::options()
+                .write(true)
+                .open(backup)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+                .unwrap();
+        }
+        assert_eq!(load_servers_from_path(&path).unwrap()[0].command, "newest");
+        assert_eq!(std::fs::read(&path).unwrap(), newest);
+        assert!(old_backup.exists());
+        assert!(newest_backup.exists());
+        // A live document is never replaced just because a backup exists.
+        std::fs::write(&path, serde_json::to_vec(&[server("live")]).unwrap()).unwrap();
+        assert_eq!(load_servers_from_path(&path).unwrap()[0].command, "live");
+    }
+
+    #[tokio::test]
+    async fn rejected_launch_never_starts_the_executable_or_records_approval() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(LAUNCH_APPROVAL_FILE);
+        let candidate = server("synthetic-missing-executable");
+        let result = spawn_session_with_approval(&candidate, &path, |description| async move {
+            assert!(description.contains("\"executable\":\"synthetic-missing-executable\""));
+            Ok(false)
+        })
+        .await;
+        assert!(
+            matches!(result, Err(error) if error.kind == ErrorKind::Denied && error.message == "MCP server launch rejected by the user")
+        );
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn unavailable_launch_approval_never_starts_or_records_approval() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(LAUNCH_APPROVAL_FILE);
+        let candidate = server("synthetic-missing-executable");
+        let result = spawn_session_with_approval(&candidate, &path, |_| async {
+            Err(AppError::unavailable(
+                "cannot open the MCP approval prompt: synthetic failure",
+            ))
+        })
+        .await;
+        let error = result.err().unwrap();
+        assert_eq!(error.kind, ErrorKind::Unavailable);
+        assert_eq!(
+            error.message,
+            "cannot open the MCP approval prompt: synthetic failure"
+        );
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn disabled_servers_are_busy_before_requesting_launch_approval() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(LAUNCH_APPROVAL_FILE);
+        let mut candidate = server("synthetic-missing-executable");
+        candidate.enabled = false;
+        let result = spawn_session_with_approval(&candidate, &path, |_| async {
+            panic!("a disabled server must not request approval");
+        })
+        .await;
+        let error = result.err().unwrap();
+        assert_eq!(error.kind, ErrorKind::Busy);
+        assert_eq!(error.message, "MCP server is disabled");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn malformed_server_and_approval_documents_are_validation_errors() {
+        assert_eq!(
+            decode_servers(b"{").unwrap_err().kind,
+            ErrorKind::Validation,
+        );
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(LAUNCH_APPROVAL_FILE);
+        std::fs::write(&path, b"{").unwrap();
+        assert_eq!(
+            read_launch_approvals(&path).unwrap_err().kind,
+            ErrorKind::Validation,
+        );
+    }
+
+    #[cfg(any(windows, unix))]
+    #[tokio::test]
+    async fn denied_tool_approval_preserves_kind_and_never_sends_tools_call() {
+        let fixture = LifecycleFixture::new();
+        let candidate = scripted_reply_fixture(
+            &fixture.0,
+            &tools_list_reply(json!({"tools": [{"name": "probe"}]})),
+            false,
+        );
+        let error = run_tool_call(
+            spawn_test_session(&candidate),
+            "probe",
+            &json!({}),
+            CallCancel(None),
+            || async { Err(AppError::denied("MCP tool call rejected by the user")) },
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Denied);
+        assert_eq!(error.message, "MCP tool call rejected by the user");
+        assert_eq!(recorded_requests(&fixture.0), handshake_requests());
+    }
+
+    #[tokio::test]
+    async fn approved_launch_is_persisted_and_reused_but_changed_inputs_require_approval() {
+        let fixture = LifecycleFixture::new();
+        let path = fixture.0.join(LAUNCH_APPROVAL_FILE);
+        let candidate = server("synthetic-missing-executable");
+        let result = spawn_session_with_approval(&candidate, &path, |_| async { Ok(true) }).await;
+        assert!(
+            matches!(result, Err(error) if error.kind == ErrorKind::NotFound && error.message.contains("cannot start MCP server"))
+        );
+        assert_eq!(read_launch_approvals(&path).unwrap().len(), 1);
+        let result = spawn_session_with_approval(&candidate, &path, |_| async {
+            panic!("a saved approval must not prompt again");
+        })
+        .await;
+        assert!(
+            matches!(result, Err(error) if error.kind == ErrorKind::NotFound && error.message.contains("cannot start MCP server"))
+        );
+
+        let launch = LaunchContext::capture().unwrap();
+        let original = launch.fingerprint(&candidate);
+        let mut changed_command = candidate.clone();
+        changed_command.command.push_str("-changed");
+        let mut changed_args = candidate.clone();
+        changed_args.args.push("new-argument".into());
+        let changed_env = LaunchContext {
+            environment: vec![("SYNTHETIC_ENV".into(), "changed".into())],
+            cwd: launch.cwd.clone(),
+        };
+        let changed_cwd = LaunchContext {
+            environment: launch.environment.clone(),
+            cwd: fixture.0.clone(),
+        };
+        for fingerprint in [
+            launch.fingerprint(&changed_command),
+            launch.fingerprint(&changed_args),
+            changed_env.fingerprint(&candidate),
+            changed_cwd.fingerprint(&candidate),
+        ] {
+            assert_ne!(fingerprint, original);
+            let error = approve_launch(&path, fingerprint, || async { Ok(false) })
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Denied);
+            assert_eq!(error.message, "MCP server launch rejected by the user");
+        }
+        assert_eq!(read_launch_approvals(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn launch_description_is_bounded_at_a_utf8_boundary() {
+        let mut candidate = server("synthetic-executable");
+        candidate.args = vec!["한".repeat(4000)];
+        let launch = LaunchContext {
+            environment: Vec::new(),
+            cwd: PathBuf::from("synthetic-working-directory"),
+        };
+        let description = launch_approval_description(&candidate, &launch);
+        assert!(description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES);
+        assert!(description.contains("synthetic-executable"));
+        assert!(description.ends_with(APPROVAL_TRUNCATION_SUFFIX));
     }
 
     #[test]
@@ -1942,8 +2485,14 @@ input.on('line', line => {
             "required": ["query"],
             "properties": {"query": {"type": "string"}}
         });
-        assert!(validate_tool_arguments(&schema, &json!({})).is_err());
-        assert!(validate_tool_arguments(&schema, &json!({"query": 4})).is_err());
+        assert_eq!(
+            validate_tool_arguments(&schema, &json!({})).unwrap_err(),
+            AppError::validation("MCP tool argument 'query' is required"),
+        );
+        assert_eq!(
+            validate_tool_arguments(&schema, &json!({"query": 4})).unwrap_err(),
+            AppError::validation("MCP tool argument 'query' must be string"),
+        );
         assert!(validate_tool_arguments(&schema, &json!({"query": "llama"})).is_ok());
     }
 

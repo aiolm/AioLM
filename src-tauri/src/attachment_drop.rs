@@ -1,4 +1,5 @@
 //! Short-lived native drop selections. Frontend events never supply file paths.
+use crate::error::AppError;
 use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -48,22 +49,28 @@ impl AttachmentDrops {
         window: &str,
         paths: &[PathBuf],
         now: Instant,
-    ) -> Result<String, String> {
+    ) -> Result<String, AppError> {
         ensure_main_window(window)?;
         if paths.is_empty() || paths.len() > MAX_PATHS_PER_BATCH {
-            return Err("drop between 1 and 64 attachments at a time".into());
+            return Err(AppError::validation(
+                "drop between 1 and 64 attachments at a time",
+            ));
         }
         let mut bytes = 0usize;
         for path in paths {
             let length = path.as_os_str().len();
             bytes = bytes.saturating_add(length);
             if !path.is_absolute() || length > MAX_PATH_BYTES || bytes > MAX_BATCH_PATH_BYTES {
-                return Err("dropped attachment paths exceed the selection safety limit".into());
+                return Err(AppError::validation(
+                    "dropped attachment paths exceed the selection safety limit",
+                ));
             }
         }
         self.expire(now);
         if self.batches.len() >= MAX_PENDING_BATCHES {
-            return Err("too many pending attachment drops; finish or retry the drop".into());
+            return Err(AppError::busy(
+                "too many pending attachment drops; finish or retry the drop",
+            ));
         }
         let id = Uuid::new_v4();
         self.batches.insert(
@@ -83,23 +90,27 @@ impl AttachmentDrops {
         window: &str,
         id: &str,
         now: Instant,
-    ) -> Result<AttachmentDropClaim, String> {
+    ) -> Result<AttachmentDropClaim, AppError> {
         ensure_main_window(window)?;
-        let id =
-            Uuid::parse_str(id).map_err(|_| "invalid attachment drop selection".to_string())?;
+        let id = Uuid::parse_str(id)
+            .map_err(|_| AppError::validation("invalid attachment drop selection"))?;
         self.expire(now);
         let batch = self
             .batches
             .get_mut(&id)
             .filter(|batch| batch.window == window)
-            .ok_or("attachment drop expired or unavailable; drop the files again")?;
+            .ok_or_else(|| {
+                AppError::not_found("attachment drop expired or unavailable; drop the files again")
+            })?;
         if batch.in_flight.is_some() {
-            return Err("an attachment from this drop is still being selected".into());
+            return Err(AppError::busy(
+                "an attachment from this drop is still being selected",
+            ));
         }
         let path = batch
             .paths
             .pop_front()
-            .ok_or("attachment drop has already been claimed")?;
+            .ok_or_else(|| AppError::not_found("attachment drop has already been claimed"))?;
         let ticket = Uuid::new_v4();
         batch.in_flight = Some(ticket);
         Ok(AttachmentDropClaim {
@@ -117,14 +128,18 @@ impl AttachmentDrops {
         window: &str,
         claim: &AttachmentDropClaim,
         now: Instant,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppError> {
         ensure_main_window(window)?;
         self.expire(now);
         let batch = self
             .batches
             .get_mut(&claim.batch)
             .filter(|batch| batch.window == window && batch.in_flight == Some(claim.ticket))
-            .ok_or("attachment drop cancelled or expired before selection completed")?;
+            .ok_or_else(|| {
+                AppError::cancelled(
+                    "attachment drop cancelled or expired before selection completed",
+                )
+            })?;
         batch.in_flight = None;
         if batch.paths.is_empty() {
             self.batches.remove(&claim.batch);
@@ -132,16 +147,18 @@ impl AttachmentDrops {
         Ok(())
     }
 
-    pub(crate) fn discard(&mut self, window: &str, id: &str, now: Instant) -> Result<(), String> {
+    pub(crate) fn discard(&mut self, window: &str, id: &str, now: Instant) -> Result<(), AppError> {
         ensure_main_window(window)?;
-        let id =
-            Uuid::parse_str(id).map_err(|_| "invalid attachment drop selection".to_string())?;
+        let id = Uuid::parse_str(id)
+            .map_err(|_| AppError::validation("invalid attachment drop selection"))?;
         if self
             .batches
             .get(&id)
             .is_some_and(|batch| batch.window != window)
         {
-            return Err("attachment drop belongs to another window".into());
+            return Err(AppError::denied(
+                "attachment drop belongs to another window",
+            ));
         }
         self.expire(now);
         // Idempotent after the last claim, including frontend finally cleanup.
@@ -155,14 +172,16 @@ impl AttachmentDrops {
     }
 }
 
-fn ensure_main_window(window: &str) -> Result<(), String> {
+fn ensure_main_window(window: &str) -> Result<(), AppError> {
     if window != "main" {
-        return Err("attachments can only be selected in the main window".into());
+        return Err(AppError::denied(
+            "attachments can only be selected in the main window",
+        ));
     }
     Ok(())
 }
 
-pub(crate) fn ensure_main_webview(webview: &str, window: &str) -> Result<(), String> {
+pub(crate) fn ensure_main_webview(webview: &str, window: &str) -> Result<(), AppError> {
     ensure_main_window(window)?;
     ensure_main_window(webview)
 }
@@ -203,11 +222,13 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
     // Never wait for a command or touch the filesystem on the GUI thread.
     let result = match state.attachment_drops.try_lock() {
         Ok(mut drops) => drops.capture(webview.window().label(), paths, Instant::now()),
-        Err(_) => Err("attachment drop selection is busy; drop the files again".into()),
+        Err(_) => Err(AppError::busy(
+            "attachment drop selection is busy; drop the files again",
+        )),
     };
     let (id, error) = match result {
         Ok(id) => (Some(id), None),
-        Err(error) => (None, Some(error)),
+        Err(error) => (None, Some(error.message)),
     };
     let _ = webview.emit_to(
         EventTarget::webview(webview.label()),
@@ -244,8 +265,9 @@ mod tests {
         let second = drops.capture("main", &paths(&["other.txt"]), now).unwrap();
         let claim = drops.claim("main", &first, now).unwrap();
         assert_eq!(claim.path(), selected[0]);
-        assert!(
-            drops.claim("main", &first, now).is_err(),
+        assert_eq!(
+            drops.claim("main", &first, now).unwrap_err().kind,
+            crate::error::ErrorKind::Busy,
             "one in-flight claim per batch"
         );
         drops.complete("main", &claim, now).unwrap();
@@ -271,9 +293,13 @@ mod tests {
         let now = Instant::now();
         let selected = paths(&["retained.txt"]);
         let id = drops.capture("main", &selected, now).unwrap();
-        assert!(drops
-            .claim("main", &Uuid::new_v4().to_string(), now)
-            .is_err());
+        assert_eq!(
+            drops
+                .claim("main", &Uuid::new_v4().to_string(), now)
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::NotFound
+        );
         assert!(drops
             .claim("main", "forged path is not a token", now)
             .is_err());
@@ -318,6 +344,7 @@ mod tests {
         assert!(drops
             .capture("main", &selected, now)
             .unwrap_err()
+            .message
             .contains("too many pending"));
         for id in ids {
             let claim = drops.claim("main", &id, now).unwrap();

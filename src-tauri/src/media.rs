@@ -1,6 +1,7 @@
 //! Immutable app-owned media. References survive history reload without base64 JSON.
 pub(crate) mod jobs;
 pub(crate) mod preprocessing;
+use crate::error::AppError;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use sha2::{Digest, Sha256};
 use std::{
@@ -27,39 +28,47 @@ pub fn mime(path: &Path) -> Option<(&'static str, &'static str)> {
         _ => None,
     }
 }
-fn root() -> Result<PathBuf, String> {
-    Ok(crate::home::resolve_aiolm_home()?.join("media"))
+fn root() -> Result<PathBuf, AppError> {
+    Ok(crate::home::resolve_aiolm_home()
+        .map_err(AppError::unavailable)?
+        .join("media"))
 }
-fn reference_path(root: &Path, reference: &str) -> Result<PathBuf, String> {
+fn reference_path(root: &Path, reference: &str) -> Result<PathBuf, AppError> {
     let Some((hash, extension)) = reference.split_once('.') else {
-        return Err("invalid media reference".into());
+        return Err(AppError::validation("invalid media reference"));
     };
     if hash.len() != 64
         || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
         || !EXTENSIONS.contains(&extension)
     {
-        return Err("invalid media reference".into());
+        return Err(AppError::validation("invalid media reference"));
     }
     Ok(root.join(reference))
 }
 
 /// Resolve only immutable references inside the application's media store.
 /// Preprocessors use this same ownership check as ordinary chat attachments.
-pub(crate) fn owned_path(reference: &str) -> Result<PathBuf, String> {
-    let directory = root()?
-        .canonicalize()
-        .map_err(|error| format!("attachment storage is unavailable: {error}"))?;
+pub(crate) fn owned_path(reference: &str) -> Result<PathBuf, AppError> {
+    let directory = root()?.canonicalize().map_err(|error| {
+        AppError::unavailable(format!("attachment storage is unavailable: {error}"))
+    })?;
     let path = reference_path(&directory, reference)?;
-    let metadata =
-        fs::symlink_metadata(&path).map_err(|error| format!("attachment is missing: {error}"))?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| AppError::io("attachment is missing", &error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("owned media was replaced by a link".into());
+        return Err(AppError::validation("owned media was replaced by a link"));
     }
     if metadata.len() == 0 || metadata.len() > MAX_MEDIA_BYTES {
-        return Err("stored media must be nonempty and at most 64 MiB".into());
+        return Err(AppError::validation(
+            "stored media must be nonempty and at most 64 MiB",
+        ));
     }
-    if path.canonicalize().map_err(|error| error.to_string())? != path {
-        return Err("owned media was replaced by a link".into());
+    if path
+        .canonicalize()
+        .map_err(|error| AppError::from_io(&error))?
+        != path
+    {
+        return Err(AppError::validation("owned media was replaced by a link"));
     }
     Ok(path)
 }
@@ -70,23 +79,30 @@ pub(crate) struct OwnedAudio {
     pub bytes: Vec<u8>,
 }
 
-pub(crate) fn read_owned_audio(reference: &str) -> Result<OwnedAudio, String> {
+pub(crate) fn read_owned_audio(reference: &str) -> Result<OwnedAudio, AppError> {
     let path = owned_path(reference)?;
-    let (kind, mime) = mime(&path).ok_or("unsupported stored media")?;
+    let (kind, mime) =
+        mime(&path).ok_or_else(|| AppError::validation("unsupported stored media"))?;
     if kind != "audio" {
-        return Err("select an audio attachment for transcription".into());
+        return Err(AppError::validation(
+            "select an audio attachment for transcription",
+        ));
     }
     let mut bytes = Vec::new();
     fs::File::open(path)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .take(MAX_MEDIA_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_MEDIA_BYTES {
-        return Err("stored media must be nonempty and at most 64 MiB".into());
+        return Err(AppError::validation(
+            "stored media must be nonempty and at most 64 MiB",
+        ));
     }
     if !reference.starts_with(&format!("{:x}.", Sha256::digest(&bytes))) {
-        return Err("stored audio no longer matches its immutable reference".into());
+        return Err(AppError::validation(
+            "stored audio no longer matches its immutable reference",
+        ));
     }
     Ok(OwnedAudio {
         filename: reference.to_owned(),
@@ -134,16 +150,16 @@ pub struct Attachment {
     pub data_url: String,
     pub size_bytes: u64,
 }
-pub fn import_selected(path: &Path, mut file: fs::File) -> Result<Attachment, String> {
+pub fn import_selected(path: &Path, mut file: fs::File) -> Result<Attachment, AppError> {
     import_to(&root()?, path, &mut file)
 }
 
 /// Store a sampled frame without constructing an unused attachment preview.
-fn import_selected_reference(path: &Path, mut file: fs::File) -> Result<String, String> {
+fn import_selected_reference(path: &Path, mut file: fs::File) -> Result<String, AppError> {
     import_reference_to(&root()?, path, &mut file)
 }
 
-fn import_reference_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<String, String> {
+fn import_reference_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<String, AppError> {
     store_to(root, path, file).map(|stored| stored.reference)
 }
 
@@ -155,7 +171,7 @@ struct StoredMedia {
     size: u64,
 }
 
-fn import_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<Attachment, String> {
+fn import_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<Attachment, AppError> {
     let StoredMedia {
         reference,
         kind,
@@ -181,18 +197,24 @@ fn import_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<Attachment
     })
 }
 
-fn store_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<StoredMedia, String> {
-    let (kind, mime) = mime(path).ok_or("unsupported media format")?;
-    let size = file.metadata().map_err(|error| error.to_string())?.len();
+fn store_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<StoredMedia, AppError> {
+    let (kind, mime) =
+        mime(path).ok_or_else(|| AppError::validation("unsupported media format"))?;
+    let size = file
+        .metadata()
+        .map_err(|error| AppError::from_io(&error))?
+        .len();
     if size == 0 || size > MAX_MEDIA_BYTES {
-        return Err("media must be nonempty and at most 64 MiB".into());
+        return Err(AppError::validation(
+            "media must be nonempty and at most 64 MiB",
+        ));
     }
     let mut bytes = Vec::new();
     file.take(MAX_MEDIA_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.len() as u64 > MAX_MEDIA_BYTES {
-        return Err("media exceeds 64 MiB".into());
+        return Err(AppError::validation("media exceeds 64 MiB"));
     }
     let extension = path
         .extension()
@@ -200,7 +222,7 @@ fn store_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<StoredMedia
         .unwrap_or_default()
         .to_ascii_lowercase();
     let reference = format!("{:x}.{extension}", Sha256::digest(&bytes));
-    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root).map_err(|error| AppError::unavailable(error.to_string()))?;
     let target = reference_path(root, &reference)?;
     if !target.exists() {
         crate::config::atomic_write(&target, &bytes)?;
@@ -217,42 +239,50 @@ fn store_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<StoredMedia
 pub fn resolve(
     reference: &str,
     provider: crate::providers::ProviderId,
-) -> Result<serde_json::Value, String> {
-    let directory = root()?
-        .canonicalize()
-        .map_err(|error| format!("attachment storage is unavailable: {error}"))?;
+) -> Result<serde_json::Value, AppError> {
+    let directory = root()?.canonicalize().map_err(|error| {
+        AppError::unavailable(format!("attachment storage is unavailable: {error}"))
+    })?;
     let path = reference_path(&directory, reference)?;
-    let metadata =
-        fs::symlink_metadata(&path).map_err(|error| format!("attachment is missing: {error}"))?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| AppError::io("attachment is missing", &error))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("owned media was replaced by a link".into());
+        return Err(AppError::validation("owned media was replaced by a link"));
     }
     if metadata.len() == 0 || metadata.len() > MAX_MEDIA_BYTES {
-        return Err("stored media must be nonempty and at most 64 MiB".into());
+        return Err(AppError::validation(
+            "stored media must be nonempty and at most 64 MiB",
+        ));
     }
     let canonical = path
         .canonicalize()
-        .map_err(|error| format!("attachment is missing: {error}"))?;
+        .map_err(|error| AppError::io("attachment is missing", &error))?;
     if canonical != path {
-        return Err("owned media was replaced by a link".into());
+        return Err(AppError::validation("owned media was replaced by a link"));
     }
-    let (kind, mime) = mime(&path).ok_or("unsupported stored media")?;
+    let (kind, mime) =
+        mime(&path).ok_or_else(|| AppError::validation("unsupported stored media"))?;
     if kind == "video" && provider == crate::providers::ProviderId::MlxVlm {
         return Ok(
             serde_json::json!({"type":"video_url", "video_url":{"url":path.to_string_lossy()}}),
         );
     }
-    let mut file = fs::File::open(&path).map_err(|error| error.to_string())?;
-    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_MEDIA_BYTES {
-        return Err("stored media exceeds 64 MiB".into());
+    let mut file = fs::File::open(&path).map_err(|error| AppError::from_io(&error))?;
+    if file
+        .metadata()
+        .map_err(|error| AppError::from_io(&error))?
+        .len()
+        > MAX_MEDIA_BYTES
+    {
+        return Err(AppError::validation("stored media exceeds 64 MiB"));
     }
     let mut bytes = Vec::new();
     (&mut file)
         .take(MAX_MEDIA_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.len() as u64 > MAX_MEDIA_BYTES {
-        return Err("stored media exceeds 64 MiB".into());
+        return Err(AppError::validation("stored media exceeds 64 MiB"));
     }
     let data = STANDARD.encode(bytes);
     Ok(match kind {
@@ -274,6 +304,7 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorKind;
     #[test]
     fn references_cannot_escape_owned_storage() {
         for value in [
@@ -282,7 +313,9 @@ mod tests {
             "x.png",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.exe",
         ] {
-            assert!(reference_path(Path::new("media"), value).is_err());
+            let error = reference_path(Path::new("media"), value).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Validation);
+            assert_eq!(error.message, "invalid media reference");
         }
     }
     #[test]
@@ -391,7 +424,8 @@ mod tests {
             let error = import_to(&rejected_root, path, &mut fs::File::open(path).unwrap())
                 .err()
                 .unwrap();
-            assert_eq!(error, expected);
+            assert_eq!(error.kind, ErrorKind::Validation);
+            assert_eq!(error.message, expected);
         }
         assert!(!rejected_root.exists());
         // Reference-only imports preserve image identity, bytes and import
@@ -451,7 +485,8 @@ mod tests {
             )
             .err()
             .unwrap();
-            assert_eq!(error, expected);
+            assert_eq!(error.kind, ErrorKind::Validation);
+            assert_eq!(error.message, expected);
         }
         assert!(!reference_rejected.exists());
         fs::remove_dir_all(root).unwrap();

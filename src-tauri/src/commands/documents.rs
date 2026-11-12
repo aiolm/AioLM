@@ -1,5 +1,7 @@
 //! Native document and image selection, extraction and bounded reads.
+mod grants;
 use super::files::open_verified_file;
+use crate::error::AppError;
 use crate::state::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::fs;
@@ -61,19 +63,21 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub(crate) fn pick_image(state: State<'_, AppState>) -> Option<String> {
-    if let Ok(mut selected) = state.selected_image.lock() {
-        *selected = None;
-    }
-    let path = rfd::FileDialog::new()
-        .set_title("Choose an image for vision chat")
-        .add_filter("Images", IMAGE_EXTENSIONS)
-        .pick_file()?;
-    let canonical = path.canonicalize().ok()?;
-    image_mime_type(&canonical)?;
-    let mut selected = state.selected_image.lock().ok()?;
-    *selected = Some(canonical.clone());
-    Some(canonical.to_string_lossy().into_owned())
+pub(crate) fn pick_image(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    Ok((|| {
+        if let Ok(mut selected) = state.selected_image.lock() {
+            *selected = None;
+        }
+        let path = rfd::FileDialog::new()
+            .set_title("Choose an image for vision chat")
+            .add_filter("Images", IMAGE_EXTENSIONS)
+            .pick_file()?;
+        let canonical = path.canonicalize().ok()?;
+        image_mime_type(&canonical)?;
+        let mut selected = state.selected_image.lock().ok()?;
+        *selected = Some(canonical.clone());
+        Some(canonical.to_string_lossy().into_owned())
+    })())
 }
 
 fn document_extension(path: &Path) -> bool {
@@ -87,16 +91,18 @@ enum AttachmentSelection {
     Document,
 }
 
-fn resolve_attachment_selection(path: &Path) -> Result<(PathBuf, AttachmentSelection), String> {
+fn resolve_attachment_selection(path: &Path) -> Result<(PathBuf, AttachmentSelection), AppError> {
     let canonical = path
         .canonicalize()
-        .map_err(|error| format!("cannot select attachment: {error}"))?;
+        .map_err(|error| AppError::io("cannot select attachment", &error))?;
     let selection = if crate::media::mime(&canonical).is_some() {
         AttachmentSelection::Media
     } else if document_extension(&canonical) {
         AttachmentSelection::Document
     } else {
-        return Err("unsupported attachment type; choose an image or document".into());
+        return Err(AppError::validation(
+            "unsupported attachment type; choose an image or document",
+        ));
     };
     Ok((canonical, selection))
 }
@@ -105,7 +111,7 @@ fn grant_canonical_attachment(
     state: &AppState,
     canonical: PathBuf,
     selection: AttachmentSelection,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let selection = match selection {
         AttachmentSelection::Media => &state.selected_image,
         AttachmentSelection::Document => &state.selected_document,
@@ -117,13 +123,15 @@ fn grant_canonical_attachment(
     Ok(canonical.to_string_lossy().into_owned())
 }
 
-fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, AppError> {
     let (canonical, selection) = resolve_attachment_selection(path)?;
     grant_canonical_attachment(state, canonical, selection)
 }
 
 #[tauri::command]
-pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option<String>, String> {
+pub(crate) async fn pick_attachment(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
     clear_attachment_selection(&state)?;
     let path = tokio::task::spawn_blocking(|| {
         let extensions: Vec<&str> = crate::media::EXTENSIONS
@@ -140,11 +148,24 @@ pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option
     })
     .await
     .map_err(|error| format!("attachment picker task failed: {error}"))?;
-    path.map(|path| grant_selected_attachment(&state, &path))
-        .transpose()
+    let selected = path
+        .map(|path| grant_selected_attachment(&state, &path))
+        .transpose()?;
+    persist_selected_document(selected)
 }
 
-fn clear_attachment_selection(state: &AppState) -> Result<(), String> {
+fn persist_selected_document(selected: Option<String>) -> Result<Option<String>, AppError> {
+    if let Some(path) = selected
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| document_extension(path))
+    {
+        grants::document_grants()?.grant(path)?;
+    }
+    Ok(selected)
+}
+
+fn clear_attachment_selection(state: &AppState) -> Result<(), AppError> {
     *state
         .selected_image
         .lock()
@@ -162,7 +183,7 @@ fn claim_dropped_attachment(
     window: &str,
     id: &str,
     now: std::time::Instant,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppError> {
     claim_dropped_attachment_with(state, window, id, || now, resolve_attachment_selection)
 }
 
@@ -171,8 +192,8 @@ fn claim_dropped_attachment_with(
     window: &str,
     id: &str,
     clock: impl Fn() -> std::time::Instant,
-    resolve: impl FnOnce(&Path) -> Result<(PathBuf, AttachmentSelection), String>,
-) -> Result<Option<String>, String> {
+    resolve: impl FnOnce(&Path) -> Result<(PathBuf, AttachmentSelection), AppError>,
+) -> Result<Option<String>, AppError> {
     let claim = state
         .attachment_drops
         .lock()
@@ -199,18 +220,19 @@ fn claim_dropped_attachment_with(
 pub(crate) async fn claim_attachment_drop(
     webview: tauri::Webview,
     id: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppError> {
     crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
     let app = webview.app_handle().clone();
     // Canonicalization belongs on a worker, never the GUI Drop callback.
     tokio::task::spawn_blocking(move || {
-        claim_dropped_attachment_with(
+        let selected = claim_dropped_attachment_with(
             &app.state::<AppState>(),
             "main",
             &id,
             std::time::Instant::now,
             resolve_attachment_selection,
-        )
+        )?;
+        persist_selected_document(selected)
     })
     .await
     .map_err(|error| format!("attachment drop selection task failed: {error}"))?
@@ -221,7 +243,7 @@ pub(crate) fn discard_attachment_drop(
     webview: tauri::Webview,
     state: State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     crate::attachment_drop::ensure_main_webview(webview.label(), webview.window().label())?;
     state
         .attachment_drops
@@ -265,33 +287,37 @@ fn xml_text(value: &str) -> String {
         .replace("&apos;", "'")
 }
 
-fn extract_docx_text(bytes: &[u8]) -> Result<String, String> {
+fn extract_docx_text(bytes: &[u8]) -> Result<String, AppError> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
-        .map_err(|error| format!("cannot read DOCX archive: {error}"))?;
+        .map_err(|error| AppError::validation(format!("cannot read DOCX archive: {error}")))?;
     let document = archive
         .by_name("word/document.xml")
-        .map_err(|error| format!("DOCX document.xml is missing: {error}"))?;
+        .map_err(|error| AppError::validation(format!("DOCX document.xml is missing: {error}")))?;
     if document.size() > MAX_DOCUMENT_BYTES {
-        return Err("DOCX document.xml exceeds the 8 MiB safety limit".into());
+        return Err(AppError::validation(
+            "DOCX document.xml exceeds the 8 MiB safety limit",
+        ));
     }
     let mut xml = String::new();
     document
         .take(MAX_DOCUMENT_BYTES + 1)
         .read_to_string(&mut xml)
-        .map_err(|error| format!("cannot read DOCX XML: {error}"))?;
+        .map_err(|error| AppError::validation(format!("cannot read DOCX XML: {error}")))?;
     if xml.len() as u64 > MAX_DOCUMENT_BYTES {
-        return Err("DOCX document.xml exceeds the 8 MiB safety limit".into());
+        return Err(AppError::validation(
+            "DOCX document.xml exceeds the 8 MiB safety limit",
+        ));
     }
     Ok(xml_text(&xml))
 }
 
-fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
+fn extract_pdf_text(bytes: &[u8]) -> Result<String, AppError> {
     let mut document = pdf_extract::Document::load_mem(bytes)
-        .map_err(|error| format!("cannot load PDF: {error}"))?;
+        .map_err(|error| AppError::validation(format!("cannot load PDF: {error}")))?;
     if document.is_encrypted() {
-        document
-            .decrypt("")
-            .map_err(|error| format!("cannot decrypt PDF without a password: {error}"))?;
+        document.decrypt("").map_err(|error| {
+            AppError::validation(format!("cannot decrypt PDF without a password: {error}"))
+        })?;
     }
     let mut writer = LimitedWriter::new(MAX_EXTRACTED_DOCUMENT_BYTES);
     let extraction = {
@@ -299,10 +325,14 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         pdf_extract::output_doc(&document, &mut output)
     };
     if writer.exceeded {
-        return Err("extracted PDF text exceeds the 16 MiB safety limit".into());
+        return Err(AppError::validation(
+            "extracted PDF text exceeds the 16 MiB safety limit",
+        ));
     }
     extraction.map_err(|error| {
-        format!("PDF text extraction failed; scanned/image-only PDFs need OCR: {error}")
+        AppError::validation(format!(
+            "PDF text extraction failed; scanned/image-only PDFs need OCR: {error}"
+        ))
     })?;
     Ok(match String::from_utf8(writer.bytes) {
         Ok(text) => text,
@@ -310,7 +340,7 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     })
 }
 
-fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> {
+fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, AppError> {
     match path
         .extension()
         .and_then(|value| value.to_str())
@@ -321,10 +351,9 @@ fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> 
         Some("pdf") => extract_pdf_text(&bytes),
         _ => {
             if bytes.contains(&0) {
-                return Err(
-                    "binary documents are not supported; choose a text, DOCX, or PDF document"
-                        .into(),
-                );
+                return Err(AppError::validation(
+                    "binary documents are not supported; choose a text, DOCX, or PDF document",
+                ));
             }
             Ok(match String::from_utf8(bytes) {
                 Ok(text) => text,
@@ -335,81 +364,96 @@ fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> 
 }
 
 #[tauri::command]
-pub(crate) fn pick_document(state: State<'_, AppState>) -> Option<String> {
-    if let Ok(mut selected) = state.selected_document.lock() {
-        *selected = None;
-    }
-    let path = rfd::FileDialog::new()
-        .set_title("Choose a document for offline chat")
-        .add_filter("Documents", DOCUMENT_EXTENSIONS)
-        .pick_file()?;
-    let canonical = path.canonicalize().ok()?;
-    if !document_extension(&canonical) {
-        return None;
-    }
-    let mut selected = state.selected_document.lock().ok()?;
-    *selected = Some(canonical.clone());
-    Some(canonical.to_string_lossy().into_owned())
+pub(crate) fn pick_document(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    Ok((|| {
+        if let Ok(mut selected) = state.selected_document.lock() {
+            *selected = None;
+        }
+        let path = rfd::FileDialog::new()
+            .set_title("Choose a document for offline chat")
+            .add_filter("Documents", DOCUMENT_EXTENSIONS)
+            .pick_file()?;
+        let canonical = path.canonicalize().ok()?;
+        if !document_extension(&canonical) {
+            return None;
+        }
+        grants::document_grants().ok()?.grant(&canonical).ok()?;
+        let mut selected = state.selected_document.lock().ok()?;
+        *selected = Some(canonical.clone());
+        Some(canonical.to_string_lossy().into_owned())
+    })())
 }
 
 fn ensure_selected_document_path(
     selected: Option<&Path>,
     requested: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     let canonical = requested
         .canonicalize()
-        .map_err(|error| format!("cannot read document: {error}"))?;
+        .map_err(|error| AppError::io("cannot read document", &error))?;
     if selected != Some(canonical.as_path()) {
-        return Err("document path was not selected by the native picker".into());
+        return Err(AppError::denied(
+            "document path was not selected by the native picker",
+        ));
     }
     if !document_extension(&canonical) {
-        return Err("unsupported document type; choose a text, DOCX, or PDF document".into());
+        return Err(AppError::validation(
+            "unsupported document type; choose a text, DOCX, or PDF document",
+        ));
     }
     Ok(canonical)
 }
 
-fn ensure_document_binding_path(requested: &Path) -> Result<PathBuf, String> {
+fn ensure_document_binding_path(requested: &Path) -> Result<PathBuf, AppError> {
     if !requested.is_absolute() {
-        return Err("persisted document bindings must use an absolute path".into());
+        return Err(AppError::validation(
+            "persisted document bindings must use an absolute path",
+        ));
     }
     let canonical = requested
         .canonicalize()
-        .map_err(|error| format!("cannot read document binding: {error}"))?;
+        .map_err(|error| AppError::io("cannot read document binding", &error))?;
     if !document_extension(&canonical) {
-        return Err("unsupported document type; choose a text, DOCX, or PDF document".into());
+        return Err(AppError::validation(
+            "unsupported document type; choose a text, DOCX, or PDF document",
+        ));
     }
     let metadata = fs::symlink_metadata(&canonical)
-        .map_err(|error| format!("cannot inspect document binding: {error}"))?;
+        .map_err(|error| AppError::io("cannot inspect document binding", &error))?;
     if !metadata.is_file() {
-        return Err("document binding is not a regular file".into());
+        return Err(AppError::validation(
+            "document binding is not a regular file",
+        ));
     }
     Ok(canonical)
 }
 
-async fn read_document_path(canonical: PathBuf) -> Result<String, String> {
+async fn read_document_path(canonical: PathBuf) -> Result<String, AppError> {
     tokio::task::spawn_blocking(move || {
         let file = open_verified_file(&canonical, &canonical, "document")?;
         let metadata = file
             .metadata()
-            .map_err(|error| format!("cannot inspect document: {error}"))?;
+            .map_err(|error| AppError::io("cannot inspect document", &error))?;
         if metadata.len() > MAX_DOCUMENT_BYTES {
-            return Err("document exceeds the 8 MiB limit".into());
+            return Err(AppError::validation("document exceeds the 8 MiB limit"));
         }
         let mut bytes = Vec::new();
         file.take(MAX_DOCUMENT_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map_err(|error| format!("cannot read document: {error}"))?;
+            .map_err(|error| AppError::io("cannot read document", &error))?;
         if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-            return Err("document exceeds the 8 MiB limit".into());
+            return Err(AppError::validation("document exceeds the 8 MiB limit"));
         }
         let text = extract_document_text(&canonical, bytes)?;
         if text.trim().is_empty() {
-            return Err(
-                "document has no extractable text; scanned/image-only PDFs need OCR".into(),
-            );
+            return Err(AppError::validation(
+                "document has no extractable text; scanned/image-only PDFs need OCR",
+            ));
         }
         if text.len() > MAX_EXTRACTED_DOCUMENT_BYTES {
-            return Err("extracted document text exceeds the 16 MiB safety limit".into());
+            return Err(AppError::validation(
+                "extracted document text exceeds the 16 MiB safety limit",
+            ));
         }
         Ok(text)
     })
@@ -421,7 +465,7 @@ async fn read_document_path(canonical: PathBuf) -> Result<String, String> {
 pub(crate) async fn read_document_text(
     state: State<'_, AppState>,
     path: String,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let canonical = {
         let mut selected = state
             .selected_document
@@ -435,20 +479,35 @@ pub(crate) async fn read_document_text(
 }
 
 #[tauri::command]
-pub(crate) async fn read_document_binding(path: String) -> Result<String, String> {
+pub(crate) async fn read_document_binding(path: String) -> Result<String, AppError> {
     let canonical = ensure_document_binding_path(Path::new(path.trim()))?;
+    grants::document_grants()?.authorize(&canonical, || {
+        let description = format!(
+            "Allow AioLM to read this document for project context?\n\n{}\n\nThis permission is remembered for this path.",
+            canonical.display()
+        );
+        async move { crate::native_confirm::confirm("Allow project document", &description).await }
+    }).await?;
+    // Approval can remain open while the filesystem changes.
+    if ensure_document_binding_path(&canonical)? != canonical {
+        return Err(AppError::validation(
+            "document binding changed while awaiting approval",
+        ));
+    }
     read_document_path(canonical).await
 }
 
 fn ensure_selected_image_path(
     selected: Option<&Path>,
     requested: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     let canonical = requested
         .canonicalize()
-        .map_err(|error| format!("cannot read image: {error}"))?;
+        .map_err(|error| AppError::io("cannot read image", &error))?;
     if selected != Some(canonical.as_path()) {
-        return Err("image path was not selected by the native picker".into());
+        return Err(AppError::denied(
+            "image path was not selected by the native picker",
+        ));
     }
     Ok(canonical)
 }
@@ -457,7 +516,7 @@ fn ensure_selected_image_path(
 pub(crate) async fn read_image_data(
     state: State<'_, AppState>,
     path: String,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let canonical = {
         let mut selected = state
             .selected_image
@@ -468,22 +527,23 @@ pub(crate) async fn read_image_data(
         canonical
     };
     tokio::task::spawn_blocking(move || {
-        let mime = image_mime_type(&canonical)
-            .ok_or_else(|| "unsupported image type; use PNG, JPEG, or WebP".to_string())?;
+        let mime = image_mime_type(&canonical).ok_or_else(|| {
+            AppError::validation("unsupported image type; use PNG, JPEG, or WebP")
+        })?;
         let file = open_verified_file(&canonical, &canonical, "image")?;
         let metadata = file
             .metadata()
-            .map_err(|error| format!("cannot inspect image: {error}"))?;
+            .map_err(|error| AppError::io("cannot inspect image", &error))?;
         const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
         if metadata.len() > MAX_IMAGE_BYTES {
-            return Err("image exceeds the 20 MiB limit".into());
+            return Err(AppError::validation("image exceeds the 20 MiB limit"));
         }
         let mut bytes = Vec::new();
         file.take(MAX_IMAGE_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map_err(|error| format!("cannot read image: {error}"))?;
+            .map_err(|error| AppError::io("cannot read image", &error))?;
         if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            return Err("image exceeds the 20 MiB limit".into());
+            return Err(AppError::validation("image exceeds the 20 MiB limit"));
         }
         Ok(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
     })
@@ -495,7 +555,7 @@ pub(crate) async fn read_image_data(
 pub(crate) async fn import_media(
     state: State<'_, AppState>,
     path: String,
-) -> Result<crate::media::Attachment, String> {
+) -> Result<crate::media::Attachment, AppError> {
     let canonical = {
         let mut selected = state
             .selected_image
@@ -517,9 +577,9 @@ pub(crate) async fn import_media(
 pub(crate) async fn resolve_media(
     reference: String,
     provider_id: String,
-) -> Result<serde_json::Value, String> {
-    let provider =
-        crate::providers::ProviderId::parse(&provider_id).ok_or("unknown media provider")?;
+) -> Result<serde_json::Value, AppError> {
+    let provider = crate::providers::ProviderId::parse(&provider_id)
+        .ok_or_else(|| AppError::validation("unknown media provider"))?;
     tokio::task::spawn_blocking(move || crate::media::resolve(&reference, provider))
         .await
         .map_err(|error| error.to_string())?
@@ -529,7 +589,7 @@ pub(crate) async fn resolve_media(
 pub(crate) fn cancel_media_operation(
     state: State<'_, AppState>,
     operation_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     state.media_jobs.cancel(&operation_id)
 }
 
@@ -539,13 +599,13 @@ pub(crate) async fn transcribe_media(
     reference: String,
     session_id: String,
     operation_id: String,
-) -> Result<crate::gateway::Transcription, String> {
+) -> Result<crate::gateway::Transcription, AppError> {
     if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("application is exiting".into());
+        return Err(AppError::cancelled("application is exiting"));
     }
     let job = state.media_jobs.begin(operation_id)?;
     if job.cancel.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("media preparation cancelled".into());
+        return Err(AppError::cancelled("media preparation cancelled"));
     }
     let audio = tokio::task::spawn_blocking(move || crate::media::read_owned_audio(&reference))
         .await
@@ -560,9 +620,9 @@ pub(crate) async fn extract_video_frames(
     reference: String,
     operation_id: String,
     max_frames: Option<usize>,
-) -> Result<crate::media::preprocessing::VideoFrames, String> {
+) -> Result<crate::media::preprocessing::VideoFrames, AppError> {
     if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("application is exiting".into());
+        return Err(AppError::cancelled("application is exiting"));
     }
     let job = state.media_jobs.begin(operation_id)?;
     crate::media::preprocessing::extract_video_frames(
@@ -734,6 +794,7 @@ mod tests {
             .unwrap();
         assert!(claim_dropped_attachment(&state, "main", &id, now)
             .unwrap_err()
+            .message
             .contains("unsupported attachment type"));
         assert!(state.selected_document.lock().unwrap().is_none());
         assert!(state.selected_image.lock().unwrap().is_none());
@@ -813,8 +874,11 @@ mod tests {
             new_grant_preserved,
             "new selection was overwritten: expired={expired}"
         );
-        assert!(
-            old_result.is_err(),
+        assert_eq!(
+            old_result
+                .expect_err("cancelled/expired claim must not publish")
+                .kind,
+            crate::error::ErrorKind::Cancelled,
             "cancelled/expired claim published: expired={expired}"
         );
     }
@@ -842,8 +906,18 @@ mod tests {
             .expect("canonicalize selected image");
 
         assert!(ensure_selected_image_path(Some(&canonical), &selected).is_ok());
-        assert!(ensure_selected_image_path(Some(&canonical), &other).is_err());
-        assert!(ensure_selected_image_path(None, &selected).is_err());
+        assert_eq!(
+            ensure_selected_image_path(Some(&canonical), &other)
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::Denied
+        );
+        assert_eq!(
+            ensure_selected_image_path(None, &selected)
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::Denied
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -907,6 +981,18 @@ mod tests {
         assert!(ensure_selected_document_path(Some(&canonical), &selected).is_ok());
         assert!(ensure_selected_document_path(Some(&canonical), &other).is_err());
         assert!(ensure_selected_document_path(None, &selected).is_err());
+        assert_eq!(
+            ensure_selected_document_path(None, &selected)
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::Denied
+        );
+        assert_eq!(
+            ensure_document_binding_path(&root.join("missing.txt"))
+                .unwrap_err()
+                .kind,
+            crate::error::ErrorKind::NotFound
+        );
         assert!(ensure_selected_document_path(Some(&canonical), &binary).is_err());
 
         for (bytes, expected) in [
@@ -918,7 +1004,7 @@ mod tests {
         ] {
             fs::write(&selected, bytes).expect("write text encoding fixture");
             assert_eq!(
-                read_document_binding(canonical.to_string_lossy().into_owned())
+                read_document_path(canonical.clone())
                     .await
                     .expect("read document text"),
                 expected
@@ -936,18 +1022,20 @@ mod tests {
         ] {
             fs::write(&selected, bytes).expect("write rejected text fixture");
             assert_eq!(
-                read_document_binding(canonical.to_string_lossy().into_owned())
+                read_document_path(canonical.clone())
                     .await
-                    .expect_err("reject unusable document"),
+                    .expect_err("reject unusable document")
+                    .message,
                 expected
             );
         }
         fs::write(&selected, vec![b'x'; MAX_DOCUMENT_BYTES as usize + 1])
             .expect("write oversized document");
         assert_eq!(
-            read_document_binding(canonical.to_string_lossy().into_owned())
+            read_document_path(canonical.clone())
                 .await
-                .expect_err("reject oversized document"),
+                .expect_err("reject oversized document")
+                .message,
             "document exceeds the 8 MiB limit"
         );
 
@@ -963,7 +1051,7 @@ mod tests {
             archive.write_all(xml.as_bytes()).expect("write DOCX XML");
             archive.finish().expect("finish DOCX fixture");
             assert_eq!(
-                read_document_binding(docx.to_string_lossy().into_owned())
+                read_document_path(docx.canonicalize().expect("canonicalize DOCX"))
                     .await
                     .expect("read DOCX document"),
                 expected
@@ -986,7 +1074,7 @@ mod tests {
         ] {
             fs::write(&pdf, synthetic_pdf(content)).expect("write PDF fixture");
             assert_eq!(
-                read_document_binding(pdf.to_string_lossy().into_owned())
+                read_document_path(pdf.canonicalize().expect("canonicalize PDF"))
                     .await
                     .expect("read PDF document"),
                 expected
@@ -994,16 +1082,17 @@ mod tests {
         }
         fs::write(&pdf, synthetic_pdf(b"q Q")).expect("write PDF fixture without text");
         assert_eq!(
-            read_document_binding(pdf.to_string_lossy().into_owned())
+            read_document_path(pdf.canonicalize().expect("canonicalize PDF"))
                 .await
-                .expect_err("reject PDF without text"),
+                .expect_err("reject PDF without text")
+                .message,
             "document has no extractable text; scanned/image-only PDFs need OCR"
         );
         fs::write(&pdf, b"%PDF-1.7\nnot a complete PDF document\n").expect("write malformed PDF");
-        let error = read_document_binding(pdf.to_string_lossy().into_owned())
+        let error = read_document_path(pdf.canonicalize().expect("canonicalize PDF"))
             .await
             .expect_err("reject malformed PDF");
-        assert!(error.starts_with("cannot load PDF: "), "{error}");
+        assert!(error.message.starts_with("cannot load PDF: "), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1038,7 +1127,7 @@ mod tests {
         archive.finish().expect("finish DOCX fixture");
         let bytes = fs::read(&path).expect("read DOCX fixture");
         let error = super::extract_docx_text(&bytes).expect_err("oversized XML must be rejected");
-        assert!(error.contains("8 MiB"));
+        assert!(error.message.contains("8 MiB"));
         let _ = fs::remove_file(path);
     }
 }

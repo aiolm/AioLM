@@ -15,7 +15,7 @@
 use crate::benchmark::sharing::{
     config,
     errors::{self, SharingError},
-    guard, permits,
+    guard, permits, public_body,
     recovery::{self, OWNER_SECRET_LEN},
     registry, transport,
     vault::{self, Vault},
@@ -210,13 +210,13 @@ struct Prepared {
 /// Bounded structural probe: the body must be a JSON object shaped either as
 /// the wrapper (`benchmark.submission_id`) or the legacy bare submission
 /// (`submission_id`), naming exactly the requested UUID. Full public-schema
-/// validation stays server-side; the exact original bytes still define the
-/// hash. Anything else cannot be bound.
+/// validation stays server-side; native privacy checks reject fields excluded
+/// from the public projection. The exact original bytes still define the hash.
 fn probe_body_submission(bytes: &[u8], submission_id: &str) -> Result<(), SharingError> {
     const NOT_A_REQUEST: &str = "The publication body is not a valid publication request.";
     const MISMATCH: &str = "The publication body does not match the requested submission.";
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|_| SharingError::binding_conflict_msg(NOT_A_REQUEST))?;
+    let value =
+        public_body::parse(bytes).map_err(|_| SharingError::binding_conflict_msg(NOT_A_REQUEST))?;
     let root = value
         .as_object()
         .ok_or_else(|| SharingError::binding_conflict_msg(NOT_A_REQUEST))?;
@@ -233,6 +233,7 @@ fn probe_body_submission(bytes: &[u8], submission_id: &str) -> Result<(), Sharin
     if bound != submission_id {
         return Err(SharingError::binding_conflict_msg(MISMATCH));
     }
+    public_body::validate(&value)?;
     Ok(())
 }
 
@@ -407,6 +408,7 @@ fn load_bound_secret(
     }
     if let Some(body) = body {
         let bytes = transport::submission_bytes(body)?;
+        probe_body_submission(bytes, submission_id)?;
         if binding.body_sha256 == registry::UNKNOWN_BODY {
             return Err(SharingError::binding_conflict_msg(
                 "This submission was restored from a backup.",
@@ -854,9 +856,36 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
         let mut clipboard = arboard::Clipboard::new().map_err(|_| {
             SharingError::vault_unavailable_msg("The system clipboard is unavailable.")
         })?;
-        clipboard.set_text(contents).map_err(|_| {
-            SharingError::vault_unavailable_msg("The system clipboard is unavailable.")
-        })?;
+        let (ready, copied) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("recovery-clipboard-expiry".into())
+            .spawn(move || {
+                let result = ensure_generation_live(&submission_id, &live).and_then(|_| {
+                    clipboard.set_text(contents.as_str()).map_err(|_| {
+                        SharingError::vault_unavailable_msg("The system clipboard is unavailable.")
+                    })
+                });
+                let succeeded = result.is_ok();
+                let _ = ready.send(result);
+                if !succeeded {
+                    return;
+                }
+                // Keep ownership alive on clipboard systems that require it.
+                // Expiry is independent of sharing cancellation/measurement.
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                if clipboard
+                    .get_text()
+                    .is_ok_and(|current| current == contents)
+                {
+                    let _ = clipboard.clear();
+                }
+            })
+            .map_err(|_| {
+                SharingError::vault_unavailable_msg("Clipboard expiry could not be scheduled.")
+            })?;
+        copied
+            .recv()
+            .map_err(|_| SharingError::vault_unavailable_msg("The clipboard task failed."))??;
         Ok::<_, SharingError>(true)
     })
     .await
@@ -1063,7 +1092,7 @@ mod tests {
     }
 
     fn legacy_body(id: &str) -> String {
-        format!(r#"{{"submission_id":"{id}","rows":[]}}"#)
+        format!(r#"{{"submission_id":"{id}","measurements":{{"rows":[]}}}}"#)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1373,6 +1402,41 @@ mod tests {
 
     fn prepare(vault: &dyn Vault, root: &std::path::Path, id: &str, body: &str) -> Prepared {
         prepare_inner(vault, root, ORIGIN, id, body).unwrap()
+    }
+
+    #[test]
+    fn private_publication_never_creates_ownership_or_loads_an_old_bound_secret() {
+        let root = benchmarks();
+        let id = submission(700);
+        let body = format!(
+            r#"{{"benchmark":{{"submission_id":"{id}","model":{{"local_fingerprint":"synthetic"}}}},"description_md":""}}"#
+        );
+        let vault = MockVault::open();
+        assert_eq!(
+            prepare_inner(&vault, &root, ORIGIN, &id, &body)
+                .unwrap_err()
+                .code,
+            code::BINDING_CONFLICT
+        );
+        assert!(registry::read_binding(&root, &id).unwrap().is_none());
+        assert!(vault.get_secret(&id).is_err());
+        // Ownership saved by an earlier version cannot bypass the upload gate.
+        registry::insert_binding(
+            &root,
+            &id,
+            &transport::body_sha256_hex(body.as_bytes()),
+            &config::submit_endpoint_for_origin(ORIGIN),
+            ORIGIN,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            load_bound_secret(&vault, &root, ORIGIN, &id, Some(&body))
+                .unwrap_err()
+                .code,
+            code::BINDING_CONFLICT
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

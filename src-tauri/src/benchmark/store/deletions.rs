@@ -3,6 +3,7 @@
 //! recovery can never re-import a deleted run. Upload receipts, recent-cache
 //! markers and sharing ownership records are never touched.
 use super::{files, sync_parent, RunLock, StoreLock, ACTIVE_RUNS};
+use crate::error::AppError;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -19,25 +20,33 @@ fn tombstone_path(root: &Path, run_id: &str) -> PathBuf {
         .join(format!("{}.deleted", digest(run_id)))
 }
 
-pub(super) fn has_tombstone(root: &Path, run_id: &str) -> Result<bool, String> {
+pub(super) fn has_tombstone(root: &Path, run_id: &str) -> Result<bool, AppError> {
     match fs::symlink_metadata(tombstone_path(root, run_id)) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("cannot check a deleted benchmark record: {error}")),
+        Err(error) => Err(AppError::io(
+            "cannot check a deleted benchmark record",
+            &error,
+        )),
     }
 }
 
 /// Digests of deleted runs, used to hide a journal whose removal was
 /// interrupted after its tombstone became durable.
-pub(super) fn deleted_digests(root: &Path) -> Result<HashSet<String>, String> {
+pub(super) fn deleted_digests(root: &Path) -> Result<HashSet<String>, AppError> {
     let entries = match fs::read_dir(root.join("deletions")) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(error) => return Err(format!("cannot read deleted benchmark records: {error}")),
+        Err(error) => {
+            return Err(AppError::io(
+                "cannot read deleted benchmark records",
+                &error,
+            ))
+        }
     };
     let mut digests = HashSet::new();
     for entry in entries {
-        let path = entry.map_err(|error| error.to_string())?.path();
+        let path = entry.map_err(|error| AppError::from_io(&error))?.path();
         if path
             .extension()
             .is_some_and(|extension| extension == "deleted")
@@ -50,29 +59,34 @@ pub(super) fn deleted_digests(root: &Path) -> Result<HashSet<String>, String> {
     Ok(digests)
 }
 
-fn write_tombstone(root: &Path, run_id: &str) -> Result<(), String> {
+fn write_tombstone(root: &Path, run_id: &str) -> Result<(), AppError> {
     let path = tombstone_path(root, run_id);
     crate::config::atomic_write(
         &path,
         &serde_json::to_vec(&json!({ "schema_version": 1, "run_id": run_id }))
             .map_err(|error| error.to_string())?,
     )
-    .map_err(|error| format!("cannot save the benchmark deletion: {error}"))?;
+    .map_err(|error| {
+        AppError::new(
+            error.kind,
+            format!("cannot save the benchmark deletion: {error}"),
+        )
+    })?;
     OpenOptions::new()
         .read(true)
         .write(true)
         .open(&path)
         .and_then(|file| file.sync_all())
-        .map_err(|error| format!("cannot durably save the benchmark deletion: {error}"))?;
+        .map_err(|error| AppError::io("cannot durably save the benchmark deletion", &error))?;
     sync_parent(&path)?;
     sync_parent(path.parent().ok_or("benchmark deletion has no directory")?)
 }
 
 /// Delete one local history record. Repeating the deletion, or deleting a run
 /// with no local journal, succeeds and still suppresses a later re-import.
-pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), String> {
+pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), AppError> {
     if run_id.is_empty() || run_id.len() > 128 {
-        return Err("invalid benchmark run id".into());
+        return Err(AppError::validation("invalid benchmark run id"));
     }
     let _lock = StoreLock::acquire(root)?;
     let suffix = format!("-{}.jsonl", digest(run_id));
@@ -89,14 +103,18 @@ pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), String> {
             .lock()
             .map_err(|_| "active benchmark store lock was poisoned")?;
         if journals.iter().any(|path| active.contains(path)) {
-            return Err("wait for the benchmark to finish before deleting it".into());
+            return Err(AppError::busy(
+                "wait for the benchmark to finish before deleting it",
+            ));
         }
     }
     // The store lock keeps a new run from starting; the run lock proves no
     // other application instance is still measuring or acknowledging it.
-    let _run_lock = RunLock::acquire(root, run_id)?.ok_or(
-        "wait for the benchmark in the other application instance to finish before deleting it",
-    )?;
+    let _run_lock = RunLock::acquire(root, run_id)?.ok_or_else(|| {
+        AppError::busy(
+            "wait for the benchmark in the other application instance to finish before deleting it",
+        )
+    })?;
     if !has_tombstone(root, run_id)? {
         write_tombstone(root, run_id)?;
     }
@@ -105,9 +123,10 @@ pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), String> {
             Ok(()) => sync_parent(&path)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!(
-                    "the benchmark was removed from history, but its local file could not be deleted; retry to finish: {error}"
-                ))
+                return Err(AppError::io(
+                    "the benchmark was removed from history, but its local file could not be deleted; retry to finish",
+                    &error,
+                ));
             }
         }
     }
@@ -185,14 +204,20 @@ mod tests {
     fn active_runs_cannot_be_deleted_in_this_or_another_instance() {
         let root = fixtures::root();
         let journal = RunJournal::begin(&root, fixtures::record("running", 1)).unwrap();
-        assert!(delete(&root, "running").is_err());
+        assert_eq!(
+            delete(&root, "running").unwrap_err().kind,
+            crate::error::ErrorKind::Busy
+        );
         assert!(journal.path.is_file());
         assert!(!has_tombstone(&root, "running").unwrap());
         let path = journal.path.clone();
         drop(journal);
         // A second handle on the OS run lock stands in for another instance.
         let other = RunLock::acquire(&root, "running").unwrap().unwrap();
-        assert!(delete(&root, "running").is_err());
+        assert_eq!(
+            delete(&root, "running").unwrap_err().kind,
+            crate::error::ErrorKind::Busy
+        );
         assert!(path.is_file());
         assert!(!has_tombstone(&root, "running").unwrap());
         drop(other);
@@ -217,8 +242,14 @@ mod tests {
             0
         );
         assert_eq!(list(&root, 0, 20).unwrap().total, 0);
-        assert!(delete(&root, "").is_err());
-        assert!(delete(&root, &"x".repeat(129)).is_err());
+        assert_eq!(
+            delete(&root, "").unwrap_err(),
+            AppError::validation("invalid benchmark run id")
+        );
+        assert_eq!(
+            delete(&root, &"x".repeat(129)).unwrap_err().kind,
+            crate::error::ErrorKind::Validation
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

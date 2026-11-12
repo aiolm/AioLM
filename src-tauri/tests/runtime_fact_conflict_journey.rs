@@ -215,7 +215,7 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     assert_eq!(found, vec![expected_arity_issue()]);
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
-    assert!(error.contains("--fresh-switch"), "{error}");
+    assert!(error.message.contains("--fresh-switch"), "{error}");
     aiolm_lib::config::save(&cfg).unwrap();
     assert_eq!(
         Value::Object(
@@ -251,7 +251,7 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     assert!(!refused.contains("exact"), "{refused}");
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
-    assert!(error.contains("--fresh-mode"), "{error}");
+    assert!(error.message.contains("--fresh-mode"), "{error}");
     assert_eq!(
         cfg.provider_options[engine.as_str()],
         *outside.as_object().unwrap()

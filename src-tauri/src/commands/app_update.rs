@@ -1,12 +1,15 @@
 //! Application update IPC: the check behind the startup notification and the
 //! settings panel, and the install the user confirms there.
-use crate::app_update;
+//! Update validation, missing release/assets, install contention, deadlines
+//! and platform/network failures retain their source kinds across IPC.
 use crate::state::AppState;
+use crate::{app_update, error::AppError};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 #[tauri::command]
-pub(crate) async fn check_app_update() -> Result<app_update::UpdateStatus, String> {
+pub(crate) async fn check_app_update() -> Result<app_update::UpdateStatus, AppError> {
     app_update::check(env!("CARGO_PKG_VERSION")).await
 }
 
@@ -37,7 +40,7 @@ fn release_update_gate(state: &AppState, was_exiting: bool) {
 pub(crate) async fn install_app_update(
     app: tauri::AppHandle,
     version: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let progress = app.clone();
     let shutdown = app.clone();
     // After the installer is verified and before it spawns, gate new starts
@@ -47,12 +50,14 @@ pub(crate) async fn install_app_update(
     // hash returns before this hook, leaving sessions untouched; a failed
     // spawn restores the gate (unless a genuine exit began) and leaves the
     // app open with an error.
-    let was_exiting = AtomicBool::new(false);
-    let hook_ran = AtomicBool::new(false);
-    let before_launch = || {
+    let was_exiting = Arc::new(AtomicBool::new(false));
+    let hook_ran = Arc::new(AtomicBool::new(false));
+    let shutdown_was_exiting = was_exiting.clone();
+    let shutdown_hook_ran = hook_ran.clone();
+    let before_launch = move || {
         if let Some(state) = shutdown.try_state::<AppState>() {
-            was_exiting.store(gate_update_exiting(&state), Ordering::Release);
-            hook_ran.store(true, Ordering::Release);
+            shutdown_was_exiting.store(gate_update_exiting(&state), Ordering::Release);
+            shutdown_hook_ran.store(true, Ordering::Release);
             crate::shutdown_managed_processes(&state);
         }
     };
@@ -69,7 +74,7 @@ pub(crate) async fn install_app_update(
         },
         &version,
         env!("CARGO_PKG_VERSION"),
-        Some(&before_launch),
+        Some(Box::new(before_launch)),
     )
     .await;
     if let Err(error) = result {
@@ -100,11 +105,13 @@ pub(crate) async fn install_app_update(
 /// registered Windows installation. It takes no argument, so the renderer
 /// cannot steer where the browser goes.
 #[tauri::command]
-pub(crate) async fn open_app_update_release() -> Result<(), String> {
+pub(crate) async fn open_app_update_release() -> Result<(), AppError> {
     tokio::task::spawn_blocking(|| open::that(app_update::RELEASE_PAGE_URL))
         .await
-        .map_err(|_| "the release page could not be opened".to_string())?
-        .map_err(|error| format!("the release page could not be opened: {error}"))
+        .map_err(|_| AppError::internal("the release page could not be opened"))?
+        .map_err(|error| {
+            AppError::unavailable(format!("the release page could not be opened: {error}"))
+        })
 }
 
 #[cfg(test)]

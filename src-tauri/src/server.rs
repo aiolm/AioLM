@@ -1,6 +1,7 @@
 // src-tauri/src/server.rs
 use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
-use crate::process_output::{OutputBuffer, Retain};
+use crate::error::AppError;
+use crate::process_output::{strip_ansi, OutputBuffer, Retain};
 use crate::providers::launch::Readiness;
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -11,22 +12,32 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A model process owns its temporary credential and output readers. Teardown
-/// also runs when a launch fails before attaching to a session.
+/// A model process is dropped before its readers and temporary launch files.
 pub struct Child {
-    process: Option<crate::procutil::OwnedChild>,
+    process: crate::procutil::OwnedChild,
+    cleanup: ChildCleanup,
+}
+
+#[derive(Default)]
+struct ChildCleanup {
     key_file: Option<ApiKeyFile>,
     output_readers: Vec<OutputReader>,
     launch_resources: Option<crate::providers::launch_resources::Directory>,
+    #[cfg(windows)]
+    tree: Option<crate::procutil::ProcessHandle>,
 }
 
 impl From<std::process::Child> for Child {
     fn from(child: std::process::Child) -> Self {
+        Self::from(crate::procutil::OwnedChild::from(child))
+    }
+}
+
+impl From<crate::procutil::OwnedChild> for Child {
+    fn from(process: crate::procutil::OwnedChild) -> Self {
         Self {
-            process: Some(child.into()),
-            key_file: None,
-            output_readers: Vec::new(),
-            launch_resources: None,
+            process,
+            cleanup: ChildCleanup::default(),
         }
     }
 }
@@ -34,45 +45,36 @@ impl From<std::process::Child> for Child {
 impl std::ops::Deref for Child {
     type Target = crate::procutil::OwnedChild;
     fn deref(&self) -> &Self::Target {
-        self.process.as_ref().expect("owned server process")
+        &self.process
     }
 }
 impl std::ops::DerefMut for Child {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.process.as_mut().expect("owned server process")
+        &mut self.process
     }
 }
 impl Child {
-    /// A headless start: detached from the CLI's console, but owned by a job
-    /// until `release`, so readiness accepts a listener in the launched tree
-    /// (e.g. the interpreter a venv `python.exe` starts) and nothing else.
     #[cfg(windows)]
     pub fn spawn_with_creation_flags(
         command: &mut std::process::Command,
         creation_flags: u32,
     ) -> std::io::Result<Self> {
-        let process =
-            crate::procutil::OwnedChild::spawn_with_creation_flags(command, creation_flags)?;
-        Ok(Self {
-            process: Some(process),
-            key_file: None,
-            output_readers: Vec::new(),
-            launch_resources: None,
-        })
+        crate::procutil::OwnedChild::spawn_with_creation_flags(command, creation_flags)
+            .map(Self::from)
     }
 
-    pub fn release(mut self) -> std::io::Result<std::process::Child> {
-        // Persistent CLI children do not use a temporary credential or this
-        // reader; their stdout/stderr are managed by the headless log pump.
-        // A failed release terminates the process, and dropping `self` then
-        // removes its launch resources.
-        let child = self
-            .process
-            .take()
-            .expect("owned server process")
-            .release()?;
-        if let Some(resources) = self.launch_resources.take() {
+    pub fn release(self) -> std::io::Result<std::process::Child> {
+        let Self {
+            process,
+            mut cleanup,
+        } = self;
+        let child = process.release()?;
+        if let Some(resources) = cleanup.launch_resources.take() {
             resources.release();
+        }
+        #[cfg(windows)]
+        {
+            cleanup.tree = None;
         }
         Ok(child)
     }
@@ -84,38 +86,99 @@ impl Child {
         if let Some(resources) = resources.as_mut() {
             resources.bind(self.id())?;
         }
-        self.launch_resources = resources;
+        #[cfg(windows)]
+        {
+            self.cleanup.tree = resources
+                .as_ref()
+                .and_then(|_| self.process.process_handle());
+        }
+        self.cleanup.launch_resources = resources;
         Ok(())
     }
 }
-impl Drop for Child {
+
+impl Drop for ChildCleanup {
     fn drop(&mut self) {
-        // Waiting for the tree and removing its launch directory share one bound.
         let deadline = Instant::now() + LAUNCH_TREE_EXIT_WAIT;
-        #[cfg(windows)]
-        let tree = self
-            .launch_resources
-            .as_ref()
-            .and(self.process.as_ref())
-            .and_then(|process| process.process_handle());
-        if let Some(process) = self.process.as_mut() {
-            process.terminate();
-        }
-        // Close the root's own handle too before waiting for the tree.
-        self.process.take();
         self.output_readers.clear();
         self.key_file.take();
-        // Descendants may still hold files in the launch directory (an engine
-        // log) while they exit, and a file can still be closing after the job
-        // reports no process. A tree or file still held after this bound
-        // leaves the directory, with its owner record, to the next launch's
-        // recovery.
         #[cfg(windows)]
-        if let Some(tree) = tree {
+        if let Some(tree) = self.tree.take() {
             tree.wait_exited(deadline.saturating_duration_since(Instant::now()));
         }
         if let Some(resources) = self.launch_resources.take() {
             let _ = resources.remove_stopped_until(deadline);
+        }
+    }
+}
+
+/// Taken from session state under its lock, then dropped after releasing it.
+/// Completion remains attached to the session so a cancelled caller cannot
+/// let a replacement reuse resources before the old process has gone.
+pub struct Teardown {
+    child: Option<Child>,
+    complete: Arc<tokio::sync::Semaphore>,
+    errors: Option<Arc<ErrBuf>>,
+}
+
+impl Teardown {
+    pub(crate) fn clearing(mut self, errors: Arc<ErrBuf>) -> Self {
+        self.errors = Some(errors);
+        self
+    }
+}
+impl Drop for Teardown {
+    fn drop(&mut self) {
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        let complete = self.complete.clone();
+        let errors = self.errors.take();
+        struct Completion(Arc<tokio::sync::Semaphore>);
+        impl Drop for Completion {
+            fn drop(&mut self) {
+                self.0.add_permits(1);
+            }
+        }
+        let completion = Completion(complete);
+        let finish = move || {
+            let _completion = completion;
+            drop(child);
+            if let Some(errors) = errors {
+                errors.clear();
+                errors.clear_secret();
+            }
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(finish);
+        } else {
+            std::thread::spawn(finish);
+        }
+    }
+}
+
+pub(crate) async fn wait_teardowns(shared: &Arc<Mutex<ServerState>>) {
+    let pending = {
+        let mut state = shared.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .teardown
+            .retain(|complete| complete.available_permits() == 0);
+        state.teardown.clone()
+    };
+    for complete in pending {
+        let _permit = complete.acquire().await;
+    }
+}
+
+/// Synchronous exit/installer cleanup must finish before releasing app files.
+pub(crate) fn wait_teardowns_blocking(shared: &Arc<Mutex<ServerState>>) {
+    let pending = {
+        let state = shared.lock().unwrap_or_else(|error| error.into_inner());
+        state.teardown.clone()
+    };
+    for complete in pending {
+        while complete.available_permits() == 0 {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -352,6 +415,7 @@ pub struct ServerState {
     launch_generation: u64,
     /// Ownership lasts exactly as long as this target's native generation.
     launch_operation: Option<(String, u64)>,
+    teardown: Vec<Arc<tokio::sync::Semaphore>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -438,6 +502,35 @@ pub fn estimate_status_memory(cfg: &AppConfig, state: &ServerState) -> MemoryEst
 }
 
 impl ServerState {
+    pub(crate) fn take_child(&mut self) -> Option<Teardown> {
+        let child = self.child.take()?;
+        Some(self.queue_child(child))
+    }
+
+    pub(crate) fn queue_child(&mut self, child: Child) -> Teardown {
+        let complete = Arc::new(tokio::sync::Semaphore::new(0));
+        self.teardown.push(complete.clone());
+        Teardown {
+            child: Some(child),
+            complete,
+            errors: None,
+        }
+    }
+
+    pub(crate) fn take_child_clearing(&mut self, errors: &Arc<ErrBuf>) -> Option<Teardown> {
+        let teardown = self.take_child();
+        if teardown.is_none()
+            && self
+                .teardown
+                .iter()
+                .all(|complete| complete.available_permits() > 0)
+        {
+            errors.clear();
+            errors.clear_secret();
+        }
+        teardown.map(|teardown| teardown.clearing(errors.clone()))
+    }
+
     pub fn new() -> Self {
         Self {
             child: None,
@@ -456,6 +549,7 @@ impl ServerState {
             retired: false,
             launch_generation: 0,
             launch_operation: None,
+            teardown: Vec::new(),
         }
     }
 }
@@ -642,54 +736,13 @@ pub fn redact_text(text: &str, secret: &str) -> String {
     }
 }
 
-/// Strip ANSI color/control sequences from native server logs so failure
-/// messages stay readable in the UI. Keeps the stored command arguments intact.
-pub fn strip_ansi(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(current) = chars.next() {
-        if current != '\u{1b}' {
-            result.push(current);
-            continue;
-        }
-        match chars.peek() {
-            Some('[') => {
-                chars.next();
-                for next in chars.by_ref() {
-                    if next.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                chars.next();
-                let mut terminated = false;
-                while let Some(next) = chars.next() {
-                    if next == '\u{7}' {
-                        terminated = true;
-                        break;
-                    }
-                    if next == '\u{1b}' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        terminated = true;
-                        break;
-                    }
-                }
-                if !terminated {
-                    continue;
-                }
-            }
-            _ => continue,
-        }
-    }
-    result
-}
-
 /// Resolve the managed runtime executable. Only runtimes installed in AioLM
 /// are used for built-in engines; external adapters use the explicitly
 /// registered executable. System PATH and WinGet copies are never substituted.
 pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
-    crate::providers::adapter::resolve(cfg).executable(cfg)
+    crate::providers::adapter::resolve(cfg)
+        .executable(cfg)
+        .map_err(Into::into)
 }
 
 /// Build the llama-server command line with no GPU placement resolved,
@@ -948,7 +1001,7 @@ fn has_flag(args: &[String], names: &[&str]) -> bool {
     })
 }
 
-fn create_api_key_file(api_key: &str) -> Result<Option<PathBuf>, String> {
+fn create_api_key_file(api_key: &str) -> Result<Option<PathBuf>, AppError> {
     if api_key.is_empty() {
         return Ok(None);
     }
@@ -962,11 +1015,14 @@ fn create_api_key_file(api_key: &str) -> Result<Option<PathBuf>, String> {
     }
     let mut file = options
         .open(&path)
-        .map_err(|error| format!("failed to create temporary API key file: {error}"))?;
+        .map_err(|error| AppError::io("failed to create temporary API key file", &error))?;
     if let Err(error) = writeln!(file, "{api_key}").and_then(|_| file.flush()) {
         drop(file);
         let _ = std::fs::remove_file(&path);
-        return Err(format!("failed to write temporary API key file: {error}"));
+        return Err(AppError::io(
+            "failed to write temporary API key file",
+            &error,
+        ));
     }
     Ok(Some(path))
 }
@@ -992,13 +1048,14 @@ pub type SpawnCapture<'a> = &'a mut dyn FnMut(&Path, &[String]);
 /// The optional observer receives the actual program and final, unredacted
 /// arguments only after the child, launch resources and both readers are owned.
 /// Callers must mask private values before recording or publishing a snapshot.
+/// Process and launch-file I/O retain their source kinds without changing diagnostics.
 pub fn spawn(
     cfg: &AppConfig,
     api_key: &str,
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
     capture: Option<SpawnCapture<'_>>,
-) -> Result<SpawnedServer, String> {
+) -> Result<SpawnedServer, AppError> {
     let adapter = crate::providers::adapter::resolve(cfg);
     let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
     let bin = plan.program.to_string_lossy().into_owned();
@@ -1031,34 +1088,35 @@ pub fn spawn(
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let process = crate::procutil::OwnedChild::spawn(&mut command).map_err(|e| {
         cleanup_api_key_file(api_key_file.as_deref());
-        crate::procutil::spawn_error(Path::new(&bin), &e)
+        AppError::new(
+            AppError::from_io(&e).kind,
+            crate::procutil::spawn_error(Path::new(&bin), &e),
+        )
     })?;
-    let mut child = Child {
-        process: Some(process),
-        key_file: key_guard,
-        output_readers: Vec::new(),
-        launch_resources: None,
-    };
+    let mut child = Child::from(process);
+    child.cleanup.key_file = key_guard;
     child.attach_launch_resources(resources)?;
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
             terminate(&mut child);
             cleanup_api_key_file(api_key_file.as_deref());
-            return Err("inference server stderr pipe was not available".to_string());
+            return Err(AppError::internal(
+                "inference server stderr pipe was not available",
+            ));
         }
     };
-    child.output_readers.push(
+    child.cleanup.output_readers.push(
         OutputReader::attach(stderr, ring.clone())
-            .map_err(|error| format!("failed to start server stderr reader: {error}"))?,
+            .map_err(|error| AppError::io("failed to start server stderr reader", &error))?,
     );
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "inference server stdout pipe was not available".to_string())?;
-    child.output_readers.push(
+        .ok_or_else(|| AppError::internal("inference server stdout pipe was not available"))?;
+    child.cleanup.output_readers.push(
         OutputReader::attach(stdout, ring.clone())
-            .map_err(|error| format!("failed to start server stdout reader: {error}"))?,
+            .map_err(|error| AppError::io("failed to start server stdout reader", &error))?,
     );
     if let Some(capture) = capture {
         capture(Path::new(&bin), &args);
@@ -1156,14 +1214,18 @@ fn process_has_socket_inode(pid: u32, inodes: &std::collections::HashSet<u64>) -
 
 #[cfg(unix)]
 fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
-    let pid = pid.to_string();
+    let pids = std::iter::once(pid)
+        .chain(crate::procutil::descendant_pids(pid))
+        .map(|pid| pid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let port_filter = format!("-iTCP:{port}");
     let mut command = crate::procutil::std_command("lsof");
     command.args([
         "-nP",
         "-a",
-        "-g",
-        &pid,
+        "-p",
+        &pids,
         &port_filter,
         "-sTCP:LISTEN",
         "-F",
@@ -1188,8 +1250,8 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     })
 }
 
-/// Unix accepts the child's process group; Windows accepts the child or any
-/// process in its job, e.g. the interpreter a venv `python.exe` launcher starts.
+/// Accept the launched process or its descendants, rather than unrelated
+/// siblings sharing its Unix group. Windows also authenticates job members.
 #[cfg_attr(not(windows), allow(unused_variables))]
 pub(crate) fn listener_owned_by_child(
     pid: u32,
@@ -1221,27 +1283,9 @@ pub(crate) fn listener_owned_by_child(
                 if process_has_socket_inode(pid, &inodes) {
                     return true;
                 }
-                std::fs::read_dir("/proc")
+                crate::procutil::descendant_pids(pid)
                     .into_iter()
-                    .flatten()
-                    .flatten()
-                    .any(|entry| {
-                        let Some(child_pid) = entry
-                            .file_name()
-                            .to_str()
-                            .and_then(|name| name.parse::<u32>().ok())
-                        else {
-                            return false;
-                        };
-                        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-                            return false;
-                        };
-                        let group = stat
-                            .rsplit_once(')')
-                            .and_then(|(_, rest)| rest.split_whitespace().nth(2))
-                            .and_then(|value| value.parse::<u32>().ok());
-                        group == Some(pid) && process_has_socket_inode(child_pid, &inodes)
-                    })
+                    .any(|child_pid| process_has_socket_inode(child_pid, &inodes))
             })
             .unwrap_or_else(|| lsof_listener_owned_by_child(pid, port))
     }
@@ -1258,7 +1302,21 @@ pub(crate) fn port_from_url(url: &str) -> Option<u16> {
         .or_else(|| (url == "http://127.0.0.1:80/v1").then_some(80))
 }
 
+async fn stop_readiness_child(shared: &Arc<Mutex<ServerState>>, pid: Option<u32>) {
+    let teardown = {
+        let mut state = shared.lock().unwrap_or_else(|error| error.into_inner());
+        if pid.is_none_or(|pid| state.child.as_ref().is_some_and(|child| child.id() == pid)) {
+            state.take_child()
+        } else {
+            None
+        }
+    };
+    drop(teardown);
+    wait_teardowns(shared).await;
+}
+
 /// Poll the launch plan's health endpoint and /v1/models until usable or timed out.
+/// Cancellation and startup deadlines retain their kinds for command callers.
 pub async fn wait_ready(
     shared: Arc<Mutex<ServerState>>,
     url: &str,
@@ -1266,34 +1324,35 @@ pub async fn wait_ready(
     timeout_s: u64,
     err: &Arc<ErrBuf>,
     readiness: Readiness,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(500))
         .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| {
-            if let Ok(mut state) = shared.lock() {
-                kill(&mut state.child, None);
-            }
-            format!("failed to create readiness client: {e}")
-        })?;
+        .build();
+    let client = match client {
+        Ok(client) => client,
+        Err(error) => {
+            stop_readiness_child(&shared, None).await;
+            return Err(AppError::internal(format!(
+                "failed to create readiness client: {error}"
+            )));
+        }
+    };
     let health = format!("{}{}", url.trim_end_matches("/v1"), readiness.health_path);
     let models = format!("{url}/models");
     let engine = shared
         .lock()
-        .map_err(|_| "server state lock was poisoned")?
+        .map_err(|_| AppError::internal("server state lock was poisoned"))?
         .engine
         .clone();
     let health_authenticated = readiness.health_authenticated;
     let port = match port_from_url(url) {
         Some(port) => port,
         None => {
-            if let Ok(mut state) = shared.lock() {
-                kill(&mut state.child, None);
-            }
-            return Err("server URL has no valid port".to_string());
+            stop_readiness_child(&shared, None).await;
+            return Err(AppError::validation("server URL has no valid port"));
         }
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_s);
@@ -1303,12 +1362,12 @@ pub async fn wait_ready(
         let process_status = {
             let mut state = shared
                 .lock()
-                .map_err(|_| "server state lock was poisoned".to_string())?;
+                .map_err(|_| AppError::internal("server state lock was poisoned"))?;
             let child = state
                 .child
                 .as_mut()
-                .ok_or_else(|| "server process tracking was lost".to_string())?;
-            child.try_wait()
+                .ok_or_else(|| AppError::cancelled("server process tracking was lost"))?;
+            child.poll_exit()
         };
         match process_status {
             Ok(Some(status)) => {
@@ -1316,9 +1375,7 @@ pub async fn wait_ready(
                     .code()
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "signal".into());
-                if let Ok(mut state) = shared.lock() {
-                    kill(&mut state.child, None);
-                }
+                stop_readiness_child(&shared, None).await;
                 let tail = err.tail();
                 let trimmed = tail.trim();
                 let hint = if trimmed.to_uppercase().contains("SPLIT_MODE_TENSOR")
@@ -1329,16 +1386,14 @@ pub async fn wait_ready(
                 } else {
                     ""
                 };
-                return Err(format!(
+                return Err(AppError::unavailable(format!(
                     "server exited before ready ({code}). {trimmed}{hint}"
-                ));
+                )));
             }
             Ok(None) => {}
             Err(error) => {
-                if let Ok(mut state) = shared.lock() {
-                    kill(&mut state.child, None);
-                }
-                return Err(format!("failed to inspect server process: {error}"));
+                stop_readiness_child(&shared, None).await;
+                return Err(AppError::io("failed to inspect server process", &error));
             }
         }
 
@@ -1424,11 +1479,13 @@ pub async fn wait_ready(
                     if let Some(model_id) = model_id {
                         let (pid, owner) = shared
                             .lock()
-                            .map_err(|_| "server state lock was poisoned".to_string())?
+                            .map_err(|_| AppError::internal("server state lock was poisoned"))?
                             .child
                             .as_ref()
                             .map(|child| (child.id(), child.process_handle()))
-                            .ok_or_else(|| "server process tracking was lost".to_string())?;
+                            .ok_or_else(|| {
+                                AppError::cancelled("server process tracking was lost")
+                            })?;
                         let owns_listener = tokio::task::spawn_blocking(move || {
                             listener_owned_by_child(pid, port, owner)
                         })
@@ -1452,22 +1509,15 @@ pub async fn wait_ready(
                                 )
                                 .await
                                 .map_err(|_| {
-                                    "runtime task verification exceeded the server startup deadline"
-                                        .to_string()
+                                    AppError::timeout(
+                                        "runtime task verification exceeded the server startup deadline",
+                                    )
                                 })
                                 .and_then(|result| result);
                                 match confirmation {
                                     Ok(info) => Some(info),
                                     Err(error) => {
-                                        if let Ok(mut state) = shared.lock() {
-                                            if state
-                                                .child
-                                                .as_ref()
-                                                .is_some_and(|child| child.id() == pid)
-                                            {
-                                                kill(&mut state.child, None);
-                                            }
-                                        }
+                                        stop_readiness_child(&shared, Some(pid)).await;
                                         return Err(error);
                                     }
                                 }
@@ -1476,7 +1526,7 @@ pub async fn wait_ready(
                             };
                             if let Ok(mut state) = shared.lock() {
                                 if !state.child.as_ref().is_some_and(|child| child.id() == pid) {
-                                    return Err("server start cancelled".into());
+                                    return Err(AppError::cancelled("server start cancelled"));
                                 }
                                 if let Some(info) = confirmed {
                                     state.engine = Some(info);
@@ -1493,28 +1543,22 @@ pub async fn wait_ready(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    if let Ok(mut state) = shared.lock() {
-        kill(&mut state.child, None);
-    }
+    stop_readiness_child(&shared, None).await;
     let tail = err.tail();
     let ownership = if listener_mismatch {
         "the configured port was not owned by the managed server process"
     } else {
         ""
     };
-    Err(format!(
+    Err(AppError::timeout(format!(
         "server start timed out after {timeout_s}s while waiting for model loading and warmup. {} {}",
         ownership,
         tail.trim()
-    ))
+    )))
 }
 
 fn terminate(child: &mut Child) {
-    child
-        .process
-        .as_mut()
-        .expect("owned server process")
-        .terminate();
+    child.process.terminate();
 }
 
 /// Kill and reap the child process. The caller controls whether the error ring is cleared.
@@ -1533,16 +1577,18 @@ pub fn kill(child: &mut Option<Child>, err: Option<Arc<ErrBuf>>) {
 /// `Crashed` with a diagnostic. Shared by the legacy single-session status
 /// command and the session registry (`session::build_status`) so both agree
 /// on what "the process died" means instead of drifting apart.
-pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
+/// Drop the returned cleanup owner only after releasing the session state lock.
+#[must_use]
+pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) -> Option<Teardown> {
     if state.lifecycle != Lifecycle::Ready {
-        return;
+        return None;
     }
     let exited = match state.child.as_mut() {
-        Some(child) => match child.try_wait() {
+        Some(child) => match child.poll_exit() {
             Ok(status) => status,
             Err(error) => {
                 let tail = err.tail();
-                kill(&mut state.child, Some(err.clone()));
+                let teardown = state.take_child_clearing(err);
                 state.api_key.clear();
                 state.redaction_secret.clear();
                 state.mmproj.clear();
@@ -1554,15 +1600,13 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
                 } else {
                     format!("failed to inspect server process: {error}. {}", tail.trim())
                 });
-                None
+                return teardown;
             }
         },
         None => Some(std::process::ExitStatus::default()),
     };
-    let Some(status) = exited else {
-        return;
-    };
-    state.child = None;
+    let status = exited?;
+    let teardown = state.take_child();
     state.api_key.clear();
     state.redaction_secret.clear();
     state.mmproj.clear();
@@ -1582,6 +1626,7 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
             tail.trim()
         )
     });
+    teardown
 }
 
 #[cfg(test)]
@@ -1960,8 +2005,11 @@ mod tests {
         };
         assert!(child_reaped);
         let error = result.expect_err("readiness must reject the unrelated HTTP server");
+        assert_eq!(error.kind, crate::error::ErrorKind::Timeout);
         assert!(
-            error.contains("not owned by the managed server process"),
+            error
+                .message
+                .contains("not owned by the managed server process"),
             "expected the listener ownership diagnostic, got: {error}"
         );
     }
@@ -2382,6 +2430,54 @@ mod tests {
     }
 
     #[test]
+    fn readiness_reports_lost_process_tracking_as_cancelled() {
+        let shared = Arc::new(Mutex::new(ServerState::default()));
+        let err = Arc::new(ErrBuf::default());
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(wait_ready(
+                shared,
+                "http://127.0.0.1:59999/v1",
+                "token",
+                1,
+                &err,
+                Readiness {
+                    health_path: "/health".into(),
+                    health_authenticated: true,
+                    expected_model: "model.gguf".into(),
+                    expected_model_aliases: Vec::new(),
+                },
+            ))
+            .expect_err("an untracked process must cancel readiness");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "server process tracking was lost");
+    }
+
+    #[test]
+    fn readiness_reports_an_invalid_server_url_as_validation() {
+        let shared = Arc::new(Mutex::new(ServerState::default()));
+        let err = Arc::new(ErrBuf::default());
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(wait_ready(
+                shared,
+                "not a server URL",
+                "token",
+                1,
+                &err,
+                Readiness {
+                    health_path: "/health".into(),
+                    health_authenticated: true,
+                    expected_model: "model.gguf".into(),
+                    expected_model_aliases: Vec::new(),
+                },
+            ))
+            .expect_err("an invalid URL must fail readiness");
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(error.message, "server URL has no valid port");
+    }
+
+    #[test]
     fn readiness_timeout_reaps_the_tracked_child() {
         let child = if cfg!(windows) {
             Command::new("cmd")
@@ -2416,8 +2512,9 @@ mod tests {
             },
         ));
         let error = result.expect_err("an unresponsive server must time out");
-        assert!(error.contains("server start timed out after 1s"));
-        assert!(error.contains("loading model tensors"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Timeout);
+        assert!(error.message.contains("server start timed out after 1s"));
+        assert!(error.message.contains("loading model tensors"));
         assert!(shared.lock().unwrap().child.is_none());
     }
 
@@ -2471,8 +2568,9 @@ mod tests {
         let error = result
             .expect("an exited server must fail promptly")
             .expect_err("a failed process must not become ready");
-        assert!(error.contains("server exited before ready (7)"));
-        assert!(error.contains("failed to allocate model buffer"));
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert!(error.message.contains("server exited before ready (7)"));
+        assert!(error.message.contains("failed to allocate model buffer"));
         assert!(child_reaped);
     }
     #[cfg(windows)]
@@ -2493,12 +2591,9 @@ mod tests {
             let reader =
                 OutputReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
                     .unwrap();
-            let owner = Child {
-                process: Some(process),
-                key_file: Some(ApiKeyFile(path.clone())),
-                output_readers: vec![reader],
-                launch_resources: None,
-            };
+            let mut owner = Child::from(process);
+            owner.cleanup.key_file = Some(ApiKeyFile(path.clone()));
+            owner.cleanup.output_readers = vec![reader];
             let started = Instant::now();
             drop(owner);
             assert!(

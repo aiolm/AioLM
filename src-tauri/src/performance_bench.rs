@@ -19,7 +19,10 @@ use crate::benchmark::provenance::{ServingBenchmarkProvenance, ServingInput, Ser
 use crate::providers::protocol::{
     EngineInfo, FixedOutputControl, RequestDefaultsPolicy, ServingMemoryScope,
 };
-use crate::{config::AppConfig, gpu::ResolvedGpu, performance_memory::PeakMemorySampler, server};
+use crate::{
+    config::AppConfig, error::AppError, gpu::ResolvedGpu, performance_memory::PeakMemorySampler,
+    server,
+};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -355,7 +358,7 @@ pub async fn admission(
         return unknown(error);
     }
     if let Err(error) = crate::launch_validation::validate_start_config(&mut cfg) {
-        return unknown(error);
+        return unknown(error.into());
     }
     let engine = match crate::providers::execution::probed_info(&cfg).await {
         Ok(engine) => engine,
@@ -599,7 +602,7 @@ async fn batch(
     concurrency: u32,
     cancel: &AtomicBool,
     budget: protocol::Budget,
-) -> Result<(Instant, Vec<protocol::Measurement>), String> {
+) -> Result<(Instant, Vec<protocol::Measurement>), AppError> {
     let started = Instant::now();
     let mut pending = FuturesUnordered::new();
     let mut measurements: Vec<Option<protocol::Measurement>> =
@@ -616,7 +619,7 @@ async fn batch(
         measurements[slot] = Some(result?);
     }
     if cancel.load(Ordering::Acquire) {
-        return Err("benchmark cancelled".into());
+        return Err(AppError::cancelled("benchmark cancelled"));
     }
     Ok((
         started,
@@ -695,16 +698,18 @@ impl RuntimeInfo {
     pub async fn prepare(
         cfg: &AppConfig,
         request: &PerformanceBenchRequest,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AppError> {
         let mut request = request.clone();
-        validate_execution_request(&mut request)?;
+        validate_execution_request(&mut request).map_err(AppError::validation)?;
         let engine = crate::providers::execution::probed_info(cfg).await?;
-        let control = fixed_output_control(&engine)?;
+        let control = fixed_output_control(&engine).map_err(AppError::unavailable)?;
         let admission = engine_admission(&engine, &request);
         if admission.status != "supported" {
-            return Err(admission
-                .detail
-                .unwrap_or_else(|| "benchmark admission failed".into()));
+            return Err(AppError::unavailable(
+                admission
+                    .detail
+                    .unwrap_or_else(|| "benchmark admission failed".into()),
+            ));
         }
         let (workload, input_texts) = prepare_inputs(&request);
         let model_path = PathBuf::from(&cfg.active_model);
@@ -719,7 +724,7 @@ impl RuntimeInfo {
             identity
         })
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(AppError::from)?;
         let gpu_profile = crate::hardware::detect();
         let provenance = crate::benchmark::provenance::capture_serving(
             cfg,
@@ -730,7 +735,9 @@ impl RuntimeInfo {
             label,
             control,
         );
-        provenance.validate(&request.context_profile)?;
+        provenance
+            .validate(&request.context_profile)
+            .map_err(AppError::validation)?;
         Ok(Self {
             engine,
             provenance,
@@ -771,7 +778,7 @@ pub(crate) fn prepare_inputs(request: &PerformanceBenchRequest) -> (ServingWorkl
 }
 
 pub(crate) type Checkpoint =
-    Arc<dyn Fn(&PerformanceBenchResult) -> Result<(), String> + Send + Sync>;
+    Arc<dyn Fn(&PerformanceBenchResult) -> Result<(), AppError> + Send + Sync>;
 
 #[allow(clippy::too_many_arguments)]
 async fn trial(
@@ -785,7 +792,7 @@ async fn trial(
     result: &mut PerformanceBenchResult,
     checkpoint: Option<&Checkpoint>,
     progress: &Progress,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let (input_bytes, concurrency, repetition) = point;
     let target = request.max_output_tokens;
     let phase = if concurrency == 1 { "single" } else { "batch" };
@@ -801,21 +808,26 @@ async fn trial(
     )
     .await;
     let peak = sampler.and_then(PeakMemorySampler::finish);
-    let failure = |e: String| {
-        format!("point b{input_bytes}/c{concurrency}/o{target}, repetition {repetition}: {e}")
+    let failure = |e: AppError| {
+        AppError::new(
+            e.kind,
+            format!("point b{input_bytes}/c{concurrency}/o{target}, repetition {repetition}: {e}"),
+        )
     };
     let (started, measurements) = measured.map_err(failure)?;
     if cancel.load(Ordering::Acquire) {
-        return Err(failure("benchmark cancelled".into()));
+        return Err(failure(AppError::cancelled("benchmark cancelled")));
     }
     // Per-request evidence is checked before any aggregate or checkpoint.
-    let counts = fixed_output_counts(target, &measurements).map_err(failure)?;
+    let counts = fixed_output_counts(target, &measurements)
+        .map_err(AppError::unavailable)
+        .map_err(failure)?;
     let mut row = aggregate(request, point, started, &measurements, peak);
     row.reported_completion_tokens_by_request = Some(counts);
     if !row.validate_fixed_output(target) {
-        return Err(failure(
-            "reported usage could not be recorded as fixed-output evidence".into(),
-        ));
+        return Err(failure(AppError::unavailable(
+            "reported usage could not be recorded as fixed-output evidence",
+        )));
     }
     result.rows.push(row.clone());
     if let Some(checkpoint) = checkpoint {
@@ -855,21 +867,21 @@ pub async fn run(
     let timeout = run_timeout(target);
     let timeout_minutes = timeout.as_secs() / 60;
     let request_budget = protocol::Budget::fixed_output(target);
-    let outcome: Result<(),String> = tokio::time::timeout(timeout, async {
-        if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
+    let outcome: Result<(),AppError> = tokio::time::timeout(timeout, async {
+        if cancel.load(Ordering::Acquire) { return Err(AppError::cancelled("benchmark cancelled")); }
         let provenance = result.provenance.as_ref().expect("frozen provenance");
-        provenance.validate(&request.context_profile)?;
+        provenance.validate(&request.context_profile).map_err(AppError::validation)?;
         let frozen_control = provenance.fixed_output_control()
             .filter(|_| provenance.method.version == request.method.version)
-            .ok_or("prepared serving provenance does not describe a fixed-output run")?;
+            .ok_or_else(|| AppError::validation("prepared serving provenance does not describe a fixed-output run"))?;
         if input_texts.len() != request.prompt_bytes.len() || provenance.workload.inputs.len() != input_texts.len()
             || input_texts.iter().zip(&request.prompt_bytes).any(|(text,bytes)| text.len() != *bytes as usize)
             || provenance.workload.inputs.iter().zip(&request.prompt_bytes).any(|(input,bytes)| input.bytes != *bytes)
             || provenance.workload.max_output_tokens != request.max_output_tokens || provenance.workload.concurrencies != request.concurrencies
             || provenance.workload.repetitions != request.repetitions || provenance.workload.warmup != request.warmup || provenance.workload.request_usage != request.request_usage {
-            return Err("prepared serving workload does not match the request".into());
+            return Err(AppError::validation("prepared serving workload does not match the request"));
         }
-        let reservation = TcpListener::bind(("127.0.0.1",0)).map_err(|e| format!("cannot reserve benchmark port: {e}"))?;
+        let reservation = TcpListener::bind(("127.0.0.1",0)).map_err(|e| AppError::unavailable(format!("cannot reserve benchmark port: {e}")))?;
         let port = reservation.local_addr().map_err(|e| e.to_string())?.port();
         let isolated = isolated_config(&cfg,port);
         let key = format!("bench-{}",uuid::Uuid::new_v4().simple());
@@ -885,7 +897,7 @@ pub async fn run(
                 );
             let request_slots = provenance.execution.settings.len();
             let captured = crate::providers::runtime_schema::effective(&crate::providers::registry::root(), &isolated, false)
-                .and_then(|effective| crate::providers::runtime_schema::capture_benchmark_settings(&effective, &argv, &result.args, request_slots));
+                .and_then(|effective| Ok(crate::providers::runtime_schema::capture_benchmark_settings(&effective, &argv, &result.args, request_slots)?));
             match captured {
                 Ok(captured) => {
                     provenance.execution.settings.extend(captured.settings);
@@ -913,13 +925,13 @@ pub async fn run(
             emit(&progress, &request, "loading", 0, None, Some(warning));
         }
         tokio::select! { biased;
-            _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
+            _ = protocol::cancelled(&cancel) => return Err(AppError::cancelled("benchmark cancelled")),
             ready = server::wait_ready(shared.clone(),&url,&key,server::SERVER_START_TIMEOUT_SECS,&ring,readiness) => ready?,
         }
         let ready_engine = shared.lock().map_err(|_| "benchmark process lock was poisoned")?.engine.clone().ok_or("ready server has no engine information")?;
         // The launched runtime must still declare the control frozen in provenance.
-        if fixed_output_control(&ready_engine)? != frozen_control {
-            return Err("the launched runtime changed its fixed-output control after preflight".into());
+        if fixed_output_control(&ready_engine).map_err(AppError::unavailable)? != frozen_control {
+            return Err(AppError::unavailable("the launched runtime changed its fixed-output control after preflight"));
         }
         let memory_scope = result.provenance.as_ref().unwrap().execution.memory_scope;
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5)).timeout(request_budget.timeout).build().map_err(|e| e.to_string())?;
@@ -934,9 +946,9 @@ pub async fn run(
                 if request.warmup {
                     active_point = Some((input_bytes,concurrency,0));
                     emit(&progress,&request,"warmup",result.rows.len(),None,Some(format!("{input_bytes} UTF-8 bytes, {concurrency} requests")));
-                    let warmup = |e: String| format!("warmup b{input_bytes}/c{concurrency}/o{target}: {e}");
+                    let warmup = |e: AppError| AppError::new(e.kind, format!("warmup b{input_bytes}/c{concurrency}/o{target}: {e}"));
                     let (_, measurements) = batch(&client,buffered,concurrency,&cancel,request_budget).await.map_err(warmup)?;
-                    fixed_output_counts(target,&measurements).map_err(warmup)?;
+                    fixed_output_counts(target,&measurements).map_err(AppError::unavailable).map_err(warmup)?;
                 }
                 for repetition in 1..=request.repetitions {
                     active_point = Some((input_bytes,concurrency,repetition));
@@ -946,11 +958,11 @@ pub async fn run(
             }
         }
         Ok(())
-    }).await.unwrap_or_else(|_| Err(match active_point {
+    }).await.unwrap_or_else(|_| Err(AppError::timeout(match active_point {
         Some((input,concurrency,0)) => format!("warmup b{input}/c{concurrency}/o{target}: benchmark exceeded its {timeout_minutes} minute timeout"),
         Some((input,concurrency,repetition)) => format!("point b{input}/c{concurrency}/o{target}, repetition {repetition}: benchmark exceeded its {timeout_minutes} minute timeout"),
         None => format!("benchmark exceeded its {timeout_minutes} minute timeout during launch"),
-    }));
+    })));
     emit(
         &progress,
         &request,
@@ -960,7 +972,11 @@ pub async fn run(
         None,
     );
     drop(managed);
-    result.status = if cancel.load(Ordering::Acquire) {
+    result.status = if cancel.load(Ordering::Acquire)
+        || outcome
+            .as_ref()
+            .is_err_and(|error| error.kind == crate::error::ErrorKind::Cancelled)
+    {
         "cancelled"
     } else if outcome.is_ok() {
         "complete"
@@ -969,7 +985,7 @@ pub async fn run(
     } else {
         "partial"
     };
-    result.message = outcome.err();
+    result.message = outcome.err().map(|error| error.message);
     result
 }
 

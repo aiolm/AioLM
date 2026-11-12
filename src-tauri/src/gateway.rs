@@ -13,6 +13,7 @@ mod routing;
 
 pub use routing::ModelSource;
 
+use crate::error::AppError;
 use futures_util::StreamExt;
 #[cfg(test)]
 use http::read_request;
@@ -31,11 +32,12 @@ use tokio::task::JoinHandle;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
-    sync::Notify,
+    sync::{Notify, Semaphore},
     task::JoinSet,
 };
 
 const MAX_UPSTREAM_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CONNECTIONS: usize = 64;
 const MAX_STREAM_PENDING_BYTES: usize = 4 * 1024 * 1024;
 /// A non-streaming generation sends nothing until it finishes, so this idle
 /// bound has to outlast the longest request a model process accepts (its own
@@ -61,24 +63,30 @@ fn build_upstream_client(read_timeout: Duration) -> reqwest::Client {
 async fn bounded_upstream_bytes(
     response: reqwest::Response,
     limit: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, AppError> {
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(format!(
+        return Err(AppError::unavailable(format!(
             "OpenAI upstream response exceeds the {limit} byte limit"
-        ));
+        )));
     }
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| format!("OpenAI upstream response read failed: {error}"))?;
+        let chunk = chunk.map_err(|error| {
+            let message = format!("OpenAI upstream response read failed: {error}");
+            if error.is_timeout() {
+                AppError::timeout(message)
+            } else {
+                AppError::unavailable(message)
+            }
+        })?;
         if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(format!(
+            return Err(AppError::unavailable(format!(
                 "OpenAI upstream response exceeds the {limit} byte limit"
-            ));
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -194,17 +202,19 @@ pub async fn start(
     models: ModelSource,
     api_key: Arc<str>,
     port: u16,
-) -> Result<GatewayHandle, String> {
+) -> Result<GatewayHandle, AppError> {
     let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| {
-            format!(
+            AppError::unavailable(format!(
                 "cannot listen on 127.0.0.1:{port}: {error}. Choose another API port in Settings or close the program using it."
-            )
+            ))
         })?;
     let port = listener
         .local_addr()
-        .map_err(|error| format!("cannot inspect the API listener address: {error}"))?
+        .map_err(|error| {
+            AppError::unavailable(format!("cannot inspect the API listener address: {error}"))
+        })?
         .port();
     let shutdown = Arc::new(Notify::new());
     let ctx = Arc::new(Ctx {
@@ -227,12 +237,19 @@ pub async fn stop(handle: GatewayHandle) {
 
 async fn run(listener: TcpListener, ctx: Arc<Ctx>, shutdown: Arc<Notify>) {
     let mut connections = JoinSet::new();
+    let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         tokio::select! {
             _ = shutdown.notified() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    connections.spawn(handle_connection(stream, Arc::clone(&ctx)));
+                    if let Ok(permit) = Arc::clone(&permits).try_acquire_owned() {
+                        let ctx = Arc::clone(&ctx);
+                        connections.spawn(async move {
+                            let _permit = permit;
+                            handle_connection(stream, ctx).await;
+                        });
+                    }
                 }
                 // Out of descriptors and the like: back off instead of spinning.
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
@@ -279,6 +296,20 @@ async fn handle_connection(mut stream: TcpStream, ctx: Arc<Ctx>) {
             return;
         }
     };
+    if !head
+        .headers
+        .get("host")
+        .is_some_and(|host| is_loopback_host(host))
+    {
+        let error = ApiError::new(
+            421,
+            "misdirected_request",
+            "Host must name a loopback address",
+        );
+        let _ = write_api_error(&mut stream, Api::OpenAi, &error).await;
+        discard_unread(&mut stream).await;
+        return;
+    }
     if head.method == "OPTIONS" && head.headers.contains_key("access-control-request-method") {
         let _ = write_preflight(&mut stream, &head.headers).await;
         return;
@@ -317,13 +348,25 @@ async fn serve(mut stream: TcpStream, ctx: Arc<Ctx>, head: Head) {
     }
 }
 
+fn is_loopback_host(value: &str) -> bool {
+    let allowed = |host: &str| {
+        host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost") || host == "[::1]"
+    };
+    allowed(value)
+        || value.rsplit_once(':').is_some_and(|(host, port)| {
+            allowed(host)
+                && !port.is_empty()
+                && port.bytes().all(|byte| byte.is_ascii_digit())
+                && port.parse::<u16>().is_ok()
+        })
+}
+
 fn constant_time_eq(left: &str, right: &str) -> bool {
-    left.len() == right.len()
-        && left
-            .bytes()
-            .zip(right.bytes())
-            .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
-            == 0
+    let mut difference = left.len() ^ right.len();
+    for (index, byte) in right.bytes().enumerate() {
+        difference |= usize::from(byte ^ left.as_bytes().get(index).copied().unwrap_or(0));
+    }
+    difference == 0
 }
 
 /// The app-lifetime key, presented as a Bearer token (OpenAI style) or as
@@ -590,18 +633,26 @@ pub(crate) async fn transcribe_audio(
     session_id: String,
     audio: crate::media::OwnedAudio,
     cancel: Arc<std::sync::atomic::AtomicBool>,
-) -> Result<Transcription, String> {
+) -> Result<Transcription, AppError> {
     let lease = models
         .acquire_session(&session_id)
-        .map_err(|error| error.message)?;
+        .map_err(|error| match error.code {
+            "transcription_session_unavailable" => AppError::not_found(error.message),
+            "model_changed" => AppError::busy(error.message),
+            _ => AppError::internal(error.message),
+        })?;
     let mut form = multipart::AudioForm::from_audio(audio);
     let mut fields = json!({"response_format":"json"});
     lease
         .adapt("audio/transcriptions", &mut fields)
-        .map_err(|error| error.message)?;
+        .map_err(|error| AppError::validation(error.message))?;
     let fields = match fields {
         Value::Object(fields) => fields,
-        _ => return Err("transcription fields must be an object".into()),
+        _ => {
+            return Err(AppError::validation(
+                "transcription fields must be an object",
+            ))
+        }
     };
     let model = fields
         .get("model")
@@ -616,22 +667,31 @@ pub(crate) async fn transcribe_audio(
             .body(body)
             .send()
             .await
-            .map_err(|error| upstream_failure(error).message)?;
+            .map_err(|error| {
+                let timed_out = error.is_timeout();
+                let message = upstream_failure(error).message;
+                if timed_out {
+                    AppError::timeout(message)
+                } else {
+                    AppError::unavailable(message)
+                }
+            })?;
         if !response.status().is_success() {
-            return Err(format!(
+            return Err(AppError::unavailable(format!(
                 "transcription failed (HTTP {}): {}",
                 response.status().as_u16(),
                 bounded_upstream_text(response).await
-            ));
+            )));
         }
         let bytes = bounded_upstream_bytes(response, 1024 * 1024).await?;
-        let response: Value = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("invalid transcription response: {error}"))?;
+        let response: Value = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::unavailable(format!("invalid transcription response: {error}"))
+        })?;
         let text = response
             .get("text")
             .and_then(Value::as_str)
             .filter(|text| !text.trim().is_empty() && text.len() <= 64 * 1024)
-            .ok_or("transcription returned empty or oversized text")?
+            .ok_or_else(|| AppError::unavailable("transcription returned empty or oversized text"))?
             .to_owned();
         Ok(Transcription {
             text,
@@ -648,12 +708,12 @@ pub(crate) async fn transcribe_audio(
         }
     };
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("media preparation cancelled".into());
+        return Err(AppError::cancelled("media preparation cancelled"));
     }
     tokio::select! {
         result = work => result,
-        _ = cancelled => Err("media preparation cancelled".into()),
-        _ = tokio::time::sleep(Duration::from_secs(600)) => Err("transcription did not finish within ten minutes".into()),
+        _ = cancelled => Err(AppError::cancelled("media preparation cancelled")),
+        _ = tokio::time::sleep(Duration::from_secs(600)) => Err(AppError::timeout("transcription did not finish within ten minutes")),
     }
 }
 

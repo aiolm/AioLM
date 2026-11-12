@@ -165,6 +165,7 @@ async fn a_real_interpreter_command_interleaves_mapped_positionals_in_slot_order
     let confirm = |entries: Value| -> Result<runtime_schema::EffectiveSchema, String> {
         let options: BTreeMap<String, ConfirmedSyntax> = serde_json::from_value(entries).unwrap();
         runtime_schema::save_supplement(&root, &cfg, &descriptor.fingerprint, options)
+            .map_err(Into::into)
     };
     // Incomplete, gapped, misbound and non-positional mappings are refused.
     assert!(confirm(json!({"input": {"positional": {"role": "user"}}}))
@@ -210,7 +211,7 @@ async fn a_real_interpreter_command_interleaves_mapped_positionals_in_slot_order
     fs::write(&script, format!("{SCRIPT}\n# changed\n")).unwrap();
     let stale = providers::registry::command(&cfg, cfg.port, "synthetic-key").unwrap_err();
     assert!(
-        stale.contains("artifact changed") || stale.contains("changed since"),
+        stale.message.contains("artifact changed") || stale.message.contains("changed since"),
         "{stale}"
     );
     fs::write(&script, SCRIPT).unwrap();
@@ -231,7 +232,7 @@ async fn a_real_interpreter_command_interleaves_mapped_positionals_in_slot_order
         .push(json!("--help"));
     fs::write(&accepted, serde_json::to_vec(&record).unwrap()).unwrap();
     let stale = providers::registry::command(&cfg, cfg.port, "synthetic-key").unwrap_err();
-    assert!(stale.contains("changed since"), "{stale}");
+    assert!(stale.message.contains("changed since"), "{stale}");
     fs::write(&accepted, &reviewed).unwrap();
 
     // A full pasted Windows-syntax command for this registered entry.
@@ -824,28 +825,29 @@ mod portable_inventory_cancel {
         assert_eq!(direct_result["synthetic-pkg"].version, "1.0");
         assert!(direct_result["synthetic-pkg"].direct_url.is_none());
         assert!(false_while_live);
-        assert!(
-            retry_error.as_deref().is_some_and(
-                |error| error.contains("not importable") && error.contains(FIXTURE_ERROR)
-            )
-        );
+        assert!(retry_error
+            .as_ref()
+            .is_some_and(|error| error.message.contains("not importable")
+                && error.message.contains(FIXTURE_ERROR)));
         assert!(!cancel.load(Ordering::Acquire));
         assert_eq!(progress.load(Ordering::Acquire), 0);
         assert!(!output.exists());
         assert!(registration_unchanged && existing_bytes_unchanged && no_new_installation);
         assert_eq!(stages, b"IPIPI");
         if !returned_while_held {
-            assert!(cancelled_error.as_deref().is_some_and(|error| error
-                .contains("not importable")
-                && error.contains(FIXTURE_ERROR)));
+            assert!(cancelled_error
+                .as_ref()
+                .is_some_and(|error| error.message.contains("not importable")
+                    && error.message.contains(FIXTURE_ERROR)));
         }
         assert!(
             returned_while_held,
             "live inventory did not observe public cancellation before fixture release"
         );
         assert!(cancelled_error
-            .as_deref()
-            .is_some_and(|error| error == "portable runtime operation cancelled"));
+            .as_ref()
+            .is_some_and(|error| error.kind == aiolm_lib::error::ErrorKind::Cancelled
+                && error.message == "portable runtime operation cancelled"));
     }
 
     #[test]

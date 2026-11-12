@@ -1,6 +1,7 @@
 //! Reuse the public website in an unprivileged app window. Import navigations
 //! carry only a public record id; the local frontend fetches and validates it.
 
+use crate::error::{AppError, ErrorKind};
 use futures_util::StreamExt;
 use reqwest::Url;
 use std::time::Duration;
@@ -42,12 +43,12 @@ fn import_id(url: &Url) -> Option<&str> {
 }
 
 #[tauri::command]
-pub(crate) async fn open_aiolm_website(locale: String) -> Result<(), String> {
+pub(crate) async fn open_aiolm_website(locale: String) -> Result<(), AppError> {
     let url = format!("{WEBSITE}/{}", language(&locale));
     tauri::async_runtime::spawn_blocking(move || open::that(url))
         .await
-        .map_err(|_| "Could not open the website.".to_string())?
-        .map_err(|_| "Could not open the website.".to_string())
+        .map_err(|_| AppError::internal("Could not open the website."))?
+        .map_err(|_| AppError::unavailable("Could not open the website."))
 }
 
 #[tauri::command]
@@ -56,13 +57,17 @@ pub(crate) async fn open_benchmark_explorer(
     locale: String,
     import_label: String,
     import_hint: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window(WINDOW) {
-        window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
+        window
+            .show()
+            .map_err(|e| AppError::unavailable(e.to_string()))?;
+        return window
+            .set_focus()
+            .map_err(|e| AppError::unavailable(e.to_string()));
     }
     if import_label.len() > 256 || import_hint.len() > 2048 {
-        return Err("Invalid explorer labels.".into());
+        return Err(AppError::validation("Invalid explorer labels."));
     }
     let script = format!(
         "window.__AIOLM_EXPLORER_COPY__ = {};\n{}",
@@ -71,7 +76,7 @@ pub(crate) async fn open_benchmark_explorer(
     );
     let handle = app.clone();
     let url = Url::parse(&format!("{WEBSITE}/{}/benchmarks", language(&locale)))
-        .map_err(|_| "Invalid website URL.".to_string())?;
+        .map_err(|_| AppError::validation("Invalid website URL."))?;
     WebviewWindowBuilder::new(&app, WINDOW, WebviewUrl::External(url))
         .title("AioLM — Benchmarks")
         .inner_size(1200.0, 820.0)
@@ -111,52 +116,98 @@ pub(crate) async fn open_benchmark_explorer(
             tauri::webview::NewWindowResponse::Deny
         })
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::unavailable(e.to_string()))?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn read_public_benchmark(id: String) -> Result<serde_json::Value, String> {
+pub(crate) async fn read_public_benchmark(id: String) -> Result<serde_json::Value, AppError> {
     if !public_id(&id) {
-        return Err("Invalid public benchmark id.".into());
+        return Err(AppError::validation("Invalid public benchmark id."));
     }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|_| "Could not read the public benchmark.".to_string())?;
+        .map_err(|_| AppError::unavailable("Could not read the public benchmark."))?;
     let response = client
         .get(format!("{WEBSITE}/v1/benchmark-runs/{id}"))
         .send()
         .await
-        .map_err(|_| "Could not read the public benchmark.".to_string())?;
+        .map_err(public_request_error)?;
     if !response.status().is_success() {
-        return Err(format!(
-            "Public benchmark request failed ({}).",
-            response.status().as_u16()
-        ));
+        return Err(public_status_error(response.status()));
     }
     if response
         .content_length()
         .is_some_and(|size| size > MAX_DETAIL_BYTES as u64)
     {
-        return Err("Public benchmark exceeds the size limit.".into());
+        return Err(AppError::validation(
+            "Public benchmark exceeds the size limit.",
+        ));
     }
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "Could not read the public benchmark.".to_string())?;
+        let chunk = chunk.map_err(public_request_error)?;
         if bytes.len() + chunk.len() > MAX_DETAIL_BYTES {
-            return Err("Public benchmark exceeds the size limit.".into());
+            return Err(AppError::validation(
+                "Public benchmark exceeds the size limit.",
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| "Invalid public benchmark response.".to_string())
+    serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::validation("Invalid public benchmark response."))
+}
+
+fn public_request_error(error: reqwest::Error) -> AppError {
+    AppError::new(
+        if error.is_timeout() {
+            ErrorKind::Timeout
+        } else {
+            ErrorKind::Unavailable
+        },
+        "Could not read the public benchmark.",
+    )
+}
+
+fn public_status_error(status: reqwest::StatusCode) -> AppError {
+    AppError::new(
+        if status == reqwest::StatusCode::NOT_FOUND {
+            ErrorKind::NotFound
+        } else {
+            ErrorKind::Unavailable
+        },
+        format!("Public benchmark request failed ({}).", status.as_u16()),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invalid_public_id_is_validation_before_network_access() {
+        let error = read_public_benchmark("../private".into())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert_eq!(error.message, "Invalid public benchmark id.");
+    }
+
+    #[test]
+    fn public_http_failures_keep_status_and_source_kind() {
+        let missing = public_status_error(reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(missing.kind, ErrorKind::NotFound);
+        assert_eq!(missing.message, "Public benchmark request failed (404).");
+        let unavailable = public_status_error(reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(unavailable.kind, ErrorKind::Unavailable);
+        assert_eq!(
+            unavailable.message,
+            "Public benchmark request failed (503)."
+        );
+    }
 
     #[test]
     fn import_navigations_cannot_escape_the_public_website() {

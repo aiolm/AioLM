@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::future::Future;
 use std::io::{Read, Seek, SeekFrom, Write};
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -18,7 +19,6 @@ const MAX_HEADLESS_LOG_BYTES: usize = 1024 * 1024;
 const MAX_HEADLESS_LOG_LINE_BYTES: usize = 64 * 1024;
 const INTERNAL_LOG_COLLECTOR: &str = "--internal-headless-log";
 const MAX_HEADLESS_STATE_BYTES: u64 = 64 * 1024;
-const STALE_LOCK_SECONDS: u64 = 15 * 60;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -106,24 +106,15 @@ struct LogCollectorIdentity {
 
 // Until startup succeeds, failure must also stop the log collector. Once the
 // server owns the pipe writers, EOF ends the collector even after this CLI exits.
-struct PendingLogCollector(Option<std::process::Child>);
-
-impl Drop for PendingLogCollector {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
+struct PendingLogCollector(Option<aiolm_lib::OwnedChild>);
 
 struct CommandLock {
-    path: PathBuf,
+    file: fs::File,
 }
 
 impl Drop for CommandLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = self.file.unlock();
     }
 }
 
@@ -274,50 +265,34 @@ fn log_path() -> PathBuf {
 }
 
 fn acquire_command_lock() -> Result<CommandLock, String> {
-    let path = state_path().with_extension("lock");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create lock directory: {error}"))?;
-    }
-    let create = || {
-        fs::OpenOptions::new()
+    CommandLock::acquire(&state_path().with_extension("lock"))
+}
+
+impl CommandLock {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create lock directory: {error}"))?;
+        }
+        // Keep a permanent name: unlinking a lock file lets another command
+        // lock a different inode while an existing owner still holds its lock.
+        let file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
-            .open(&path)
-    };
-    match create() {
-        Ok(mut file) => {
-            let _ = writeln!(file, "{}", std::process::id());
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let stale = fs::read_to_string(&path)
-                .ok()
-                .and_then(|value| value.trim().parse::<u32>().ok())
-                .map(|pid| !process_is_alive(pid))
-                .unwrap_or_else(|| {
-                    fs::metadata(&path)
-                        .ok()
-                        .and_then(|metadata| metadata.modified().ok())
-                        .and_then(|modified| modified.elapsed().ok())
-                        .map(|age| age.as_secs() > STALE_LOCK_SECONDS)
-                        .unwrap_or(false)
-                });
-            if !stale {
-                return Err(format!(
-                    "another headless command is already running: {error}"
-                ));
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|error| format!("cannot open headless lock: {error}"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { file }),
+            Err(fs::TryLockError::WouldBlock) => {
+                Err("another headless command is already running".into())
             }
-            fs::remove_file(&path).map_err(|remove_error| {
-                format!("cannot recover stale headless lock: {remove_error}")
-            })?;
-            let mut file = create().map_err(|retry_error| {
-                format!("another headless command is already running: {retry_error}")
-            })?;
-            let _ = writeln!(file, "{}", std::process::id());
+            Err(fs::TryLockError::Error(error)) => {
+                Err(format!("cannot lock headless command: {error}"))
+            }
         }
-        Err(error) => return Err(format!("cannot create headless lock: {error}")),
     }
-    Ok(CommandLock { path })
 }
 
 fn configured_server_url(port: u16) -> String {
@@ -428,17 +403,6 @@ fn redact_json(value: Value) -> Value {
     }
 }
 
-fn bounded_log_bytes(existing: &[u8], incoming: &[u8]) -> Vec<u8> {
-    let mut combined = Vec::with_capacity(existing.len().saturating_add(incoming.len()));
-    combined.extend_from_slice(existing);
-    combined.extend_from_slice(incoming);
-    if combined.len() > MAX_HEADLESS_LOG_BYTES {
-        combined.split_off(combined.len() - MAX_HEADLESS_LOG_BYTES)
-    } else {
-        combined
-    }
-}
-
 fn read_bounded_log(path: &Path) -> std::io::Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -492,19 +456,38 @@ fn redact_log_text(text: &str) -> String {
 }
 
 fn append_log_chunk(path: &Path, chunk: &[u8]) -> std::io::Result<()> {
-    let existing = match read_bounded_log(path) {
-        Ok(existing) => existing,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error),
-    };
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "headless log is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
     let redacted = redact_log_text(&String::from_utf8_lossy(chunk));
-    let retained = bounded_log_bytes(&existing, redacted.as_bytes());
-    fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .create(true)
-        .truncate(true)
-        .write(true)
-        .open(path)?
-        .write_all(&retained)
+        .read(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(redacted.as_bytes())?;
+    // Amortize compaction over at least one full retention window of appends.
+    // Readers still expose only the newest MAX_HEADLESS_LOG_BYTES.
+    if file.metadata()?.len() > (2 * MAX_HEADLESS_LOG_BYTES) as u64 {
+        file.seek(SeekFrom::End(-(MAX_HEADLESS_LOG_BYTES as i64)))?;
+        let mut retained = Vec::with_capacity(MAX_HEADLESS_LOG_BYTES);
+        (&mut file)
+            .take(MAX_HEADLESS_LOG_BYTES as u64)
+            .read_to_end(&mut retained)?;
+        // Windows append-only handles cannot truncate. A separate writable
+        // handle compacts this single-writer log after retaining its tail.
+        let mut compact = fs::OpenOptions::new().write(true).open(path)?;
+        compact.write_all(&retained)?;
+        compact.set_len(retained.len() as u64)?;
+    }
+    Ok(())
 }
 
 fn collect_headless_log(mut reader: impl Read, path: &Path) -> std::io::Result<()> {
@@ -571,10 +554,12 @@ fn spawn_log_collector() -> Result<(PendingLogCollector, LogCollectorIdentity, S
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(windows)]
-    command.creation_flags(HEADLESS_CREATION_FLAGS);
-    let child = command
-        .spawn()
-        .map_err(|error| format!("failed to start headless log collector: {error}"))?;
+    let child =
+        aiolm_lib::OwnedChild::spawn_with_creation_flags(&mut command, HEADLESS_CREATION_FLAGS);
+    #[cfg(not(windows))]
+    let child = aiolm_lib::OwnedChild::spawn(&mut command);
+    let child =
+        child.map_err(|error| format!("failed to start headless log collector: {error}"))?;
     let identity = LogCollectorIdentity {
         pid: child.id(),
         executable: executable.to_string_lossy().into_owned(),
@@ -741,13 +726,16 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
     {
         // taskkill writes success messages to stdout. Suppress them so stop and
         // restart retain the CLI's single JSON response contract.
-        let status = Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        command
             .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stderr(Stdio::null());
+        let mut child = aiolm_lib::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("taskkill failed: {error}"))?;
+        let status = child
+            .wait()
             .map_err(|error| format!("taskkill failed: {error}"))?;
         if !status.success() {
             return Err(format!("taskkill returned {status}"));
@@ -763,9 +751,12 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
         } else {
             pid.to_string()
         };
-        let status = Command::new("kill")
-            .args(["-TERM", "--", &target])
-            .status()
+        let mut command = Command::new("kill");
+        command.args(["-TERM", "--", &target]);
+        let mut child = aiolm_lib::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("kill failed: {error}"))?;
+        let status = child
+            .wait()
             .map_err(|error| format!("kill failed: {error}"))?;
         if !status.success() {
             return Err(format!("kill returned {status}"));
@@ -871,6 +862,7 @@ async fn server_status() -> Result<Value, String> {
                 status_health_path(state.engine.as_ref(), &cfg, |provider, runtime| {
                     aiolm_lib::providers::registry::manifest(provider, runtime)
                         .map(|manifest| manifest.health_path)
+                        .map_err(Into::into)
                 })?
             ))
             .timeout(std::time::Duration::from_secs(2))
@@ -969,24 +961,18 @@ async fn server_start_unlocked() -> Result<Value, String> {
         if let Some(cwd) = working_directory {
             command.current_dir(cwd);
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
         command
             .args(&args)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr);
-        // On Windows a job owns the server until its state is persisted, so
-        // readiness accepts a listener its launcher started (an interpreter
-        // behind a venv redirector or bridge) and only such a listener.
+        // Own the tree until its state is persisted. Readiness accepts only
+        // a listener started by this server or one of its descendants.
         #[cfg(windows)]
         let spawned =
             server::Child::spawn_with_creation_flags(&mut command, HEADLESS_CREATION_FLAGS);
         #[cfg(not(windows))]
-        let spawned = command.spawn().map(server::Child::from);
+        let spawned = aiolm_lib::OwnedChild::spawn(&mut command).map(server::Child::from);
         spawned.map_err(|error| format!("failed to spawn {}: {error}", provider.server()))?
         // Drop Command's copies of the pipe writers before waiting on the
         // server; only the server should keep the collector's input open.
@@ -1016,7 +1002,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         if let Ok(mut state) = shared.lock() {
             server::kill(&mut state.child, Some(Arc::clone(&err)));
         }
-        return Err(error);
+        return Err(error.into());
     }
     let engine_info = shared
         .lock()
@@ -1072,6 +1058,16 @@ async fn server_start_unlocked() -> Result<Value, String> {
         // PendingLogCollector still owns and kills/waits its exact child on return.
         return Err(error);
     }
+    // The persistent collector exits at pipe EOF. Release it before the server:
+    // if either handoff fails, the still-owned server closes its pipe writers.
+    if let Some(child) = collector.0.take() {
+        if let Err(error) = child.release() {
+            remove_state();
+            return Err(format!(
+                "cannot hand the headless log collector over: {error}"
+            ));
+        }
+    }
     // Headless mode deliberately transfers ownership to its persisted state;
     // desktop and benchmark children retain their automatic teardown owner.
     // If the job cannot hand the tree over, the failed release terminates it.
@@ -1088,7 +1084,6 @@ async fn server_start_unlocked() -> Result<Value, String> {
     }
     // The server now owns the log pipe. EOF terminates this independent
     // collector, and persisted identity lets stop/restart wait for its drain.
-    collector.0.take();
     Ok(json!({
         "state":"running",
         "pid":pid,
@@ -1509,7 +1504,7 @@ async fn doctor_value() -> Value {
         Some(cfg) => Some(
             match aiolm_lib::providers::adapter::refresh(cfg, None).await {
                 Ok(_) => server::server_bin(cfg),
-                Err(error) => Err(error),
+                Err(error) => Err(error.to_string()),
             },
         ),
         None => None,
@@ -1838,7 +1833,9 @@ async fn run(args: &[String]) -> Result<Value, String> {
                         "this program documents several commands that can serve a model; repeat with one of: {choices}"
                     ));
                 }
-                runtime_auto::connect(&prepared, &model, cancel.clone()).await
+                runtime_auto::connect(&prepared, &model, cancel.clone())
+                    .await
+                    .map_err(Into::into)
             };
             let connected = run_interruptible(work, tokio::signal::ctrl_c(), &cancel).await?;
             serde_json::to_value(connected).map_err(|error| error.to_string())
@@ -1979,14 +1976,14 @@ fn ensure_portable_server_stopped() -> Result<(), String> {
 /// Run `work` to completion. When `interrupt` (Ctrl-C) fires first, raise
 /// `cancel` and keep waiting, so the work can stop its child processes and
 /// remove what it staged before the CLI exits.
-async fn run_interruptible<T>(
-    work: impl std::future::Future<Output = Result<T, String>>,
-    interrupt: impl std::future::Future<Output = std::io::Result<()>>,
+async fn run_interruptible<T, E: Into<String> + std::fmt::Display>(
+    work: impl Future<Output = Result<T, E>>,
+    interrupt: impl Future<Output = std::io::Result<()>>,
     cancel: &AtomicBool,
 ) -> Result<T, String> {
     tokio::pin!(work);
     tokio::select! {
-        result = &mut work => result,
+        result = &mut work => result.map_err(Into::into),
         Ok(()) = interrupt => {
             cancel.store(true, Ordering::Release);
             eprintln!("cancelling; waiting for the runtime operation to stop and clean up");
@@ -2750,10 +2747,40 @@ mod tests {
     }
 
     #[test]
-    fn headless_log_retention_is_bounded_to_the_last_bytes() {
-        let retained = bounded_log_bytes(b"old", &[b'x'; MAX_HEADLESS_LOG_BYTES + 3]);
-        assert_eq!(retained.len(), MAX_HEADLESS_LOG_BYTES);
-        assert!(retained.iter().all(|byte| *byte == b'x'));
+    fn headless_log_retention_compacts_only_above_the_high_water_mark() {
+        let root = env::temp_dir().join(format!("aiolm-log-retention-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("headless-server.log");
+        append_log_chunk(&path, b"old").unwrap();
+        append_log_chunk(&path, &vec![b'x'; MAX_HEADLESS_LOG_BYTES]).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            (MAX_HEADLESS_LOG_BYTES + 3) as u64
+        );
+        assert!(fs::read(&path).unwrap().starts_with(b"old"));
+        assert_eq!(
+            read_bounded_log(&path).unwrap(),
+            vec![b'x'; MAX_HEADLESS_LOG_BYTES]
+        );
+        append_log_chunk(&path, &vec![b'y'; MAX_HEADLESS_LOG_BYTES]).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), vec![b'y'; MAX_HEADLESS_LOG_BYTES]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn command_lock_excludes_other_handles_and_releases_without_removing_the_file() {
+        let root = env::temp_dir().join(format!("aiolm-command-lock-{}", uuid::Uuid::new_v4()));
+        let path = root.join("headless-state.lock");
+        let first = CommandLock::acquire(&path).unwrap();
+        assert_eq!(
+            CommandLock::acquire(&path).err().unwrap(),
+            "another headless command is already running"
+        );
+        drop(first);
+        assert!(path.is_file());
+        let second = CommandLock::acquire(&path).unwrap();
+        drop(second);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

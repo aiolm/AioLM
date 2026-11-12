@@ -1,4 +1,5 @@
 // src-tauri/src/models.rs
+use crate::error::AppError;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -64,7 +65,7 @@ pub(crate) fn grouped_shard_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_model_shards(path: &Path) -> Result<(), AppError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
@@ -72,7 +73,9 @@ pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
         return Ok(());
     };
     if index != 1 {
-        return Err("select the first GGUF shard before starting the model".into());
+        return Err(AppError::validation(
+            "select the first GGUF shard before starting the model",
+        ));
     }
     let parent = path.parent().unwrap_or(Path::new(""));
     let extension = path
@@ -82,13 +85,16 @@ pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
     for index in 1..=total {
         let shard = parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}"));
         if !shard.is_file() {
-            return Err(format!("model shard is missing: {}", shard.display()));
+            return Err(AppError::not_found(format!(
+                "model shard is missing: {}",
+                shard.display()
+            )));
         }
     }
     Ok(())
 }
 
-fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufModel>, String> {
+fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufModel>, AppError> {
     check_cancelled(cancel)?;
     let mut models = Vec::new();
     let mut groups = BTreeMap::<(PathBuf, String, usize), Vec<(usize, GgufModel)>>::new();
@@ -142,11 +148,11 @@ pub struct ModelScan {
     pub truncated: bool,
 }
 
-pub fn scan(models_dir: &str) -> Result<ModelScan, String> {
+pub fn scan(models_dir: &str) -> Result<ModelScan, AppError> {
     scan_cancellable(models_dir, &AtomicBool::new(false))
 }
 
-pub fn scan_cancellable(models_dir: &str, cancel: &AtomicBool) -> Result<ModelScan, String> {
+pub fn scan_cancellable(models_dir: &str, cancel: &AtomicBool) -> Result<ModelScan, AppError> {
     scan_with_limits(models_dir, cancel, MAX_ENTRIES)
 }
 
@@ -159,14 +165,14 @@ struct ScanProgress<'a> {
 }
 
 impl ScanProgress<'_> {
-    fn check_cancelled(&self) -> Result<(), String> {
+    fn check_cancelled(&self) -> Result<(), AppError> {
         check_cancelled(self.cancel)
     }
 }
 
-fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), AppError> {
     if cancel.load(Ordering::Relaxed) {
-        Err("model scan cancelled".into())
+        Err(AppError::cancelled("model scan cancelled"))
     } else {
         Ok(())
     }
@@ -176,7 +182,7 @@ fn scan_with_limits(
     models_dir: &str,
     cancel: &AtomicBool,
     max_entries: usize,
-) -> Result<ModelScan, String> {
+) -> Result<ModelScan, AppError> {
     let mut progress = ScanProgress {
         cancel,
         entries: 0,
@@ -187,16 +193,19 @@ fn scan_with_limits(
     progress.check_cancelled()?;
     let root = Path::new(models_dir.trim());
     if models_dir.trim().is_empty() {
-        return Err("models directory is empty".into());
+        return Err(AppError::validation("models directory is empty"));
     }
-    let root = root
-        .canonicalize()
-        .map_err(|error| format!("cannot open models directory {}: {error}", root.display()))?;
+    let root = root.canonicalize().map_err(|error| {
+        AppError::io(
+            &format!("cannot open models directory {}", root.display()),
+            &error,
+        )
+    })?;
     if !root.is_dir() {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "models path is not a directory: {}",
             root.display()
-        ));
+        )));
     }
 
     let mut models = Vec::new();
@@ -224,7 +233,7 @@ fn walk(
     models: &mut Vec<GgufModel>,
     depth: u32,
     progress: &mut ScanProgress<'_>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     progress.check_cancelled()?;
     if depth > MAX_DEPTH {
         progress.truncated = true;
@@ -234,17 +243,20 @@ fn walk(
         progress.truncated = true;
         return Ok(());
     }
-    let canonical = dir
-        .canonicalize()
-        .map_err(|error| format!("cannot read models directory {}: {error}", dir.display()))?;
+    let canonical = dir.canonicalize().map_err(|error| {
+        AppError::io(
+            &format!("cannot read models directory {}", dir.display()),
+            &error,
+        )
+    })?;
     if !progress.visited.insert(canonical.clone()) {
         return Ok(());
     }
 
     let entries = fs::read_dir(&canonical).map_err(|error| {
-        format!(
-            "cannot enumerate models directory {}: {error}",
-            canonical.display()
+        AppError::io(
+            &format!("cannot enumerate models directory {}", canonical.display()),
+            &error,
         )
     })?;
     for entry in entries {
@@ -301,6 +313,26 @@ fn walk(
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn shard_validation_distinguishes_selection_from_missing_files() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-missing-shards-{}", uuid::Uuid::new_v4()));
+        let selection = validate_model_shards(&root.join("model-00002-of-00002.gguf")).unwrap_err();
+        assert_eq!(selection.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(
+            selection.message,
+            "select the first GGUF shard before starting the model"
+        );
+        let missing = validate_model_shards(&root.join("model-00001-of-00002.gguf")).unwrap_err();
+        assert_eq!(missing.kind, crate::error::ErrorKind::NotFound);
+        assert_eq!(
+            missing.message,
+            format!(
+                "model shard is missing: {}",
+                root.join("model-00001-of-00002.gguf").display()
+            )
+        );
+    }
 
     fn fixture(name: &str, dir: &str, size_mb: f64) -> GgufModel {
         GgufModel {
@@ -398,13 +430,22 @@ mod tests {
     fn scan_reports_missing_directory_instead_of_empty_success() {
         let missing = std::env::temp_dir().join(format!("aiolm-missing-{}", std::process::id()));
         let result = scan(&missing.to_string_lossy());
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind, crate::error::ErrorKind::NotFound);
     }
 
     #[test]
     fn cancelled_scan_stops_before_reading_the_directory() {
         let result = scan_cancellable("", &AtomicBool::new(true));
-        assert_eq!(result.unwrap_err(), "model scan cancelled");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "model scan cancelled");
+    }
+
+    #[test]
+    fn empty_model_directory_is_validation() {
+        let error = scan("").unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(error.message, "models directory is empty");
     }
 
     #[test]
@@ -555,7 +596,9 @@ mod grouping_cancellation_tests {
         let result = scan_cancellable(&fixture.root.to_string_lossy(), &job.cancel);
         let actual = events.borrow().clone();
         println!("MODEL_GROUP_CANCEL boundary={boundary:?} events={actual:?} result={result:?}");
-        assert_eq!(result.unwrap_err(), "model scan cancelled");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "model scan cancelled");
         assert!(job.cancel.load(Ordering::Relaxed));
         assert!(!other.cancel.load(Ordering::Relaxed));
         assert_eq!(fs::read(&fixture.file).unwrap(), CONTENT);

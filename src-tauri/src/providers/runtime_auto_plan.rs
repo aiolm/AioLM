@@ -42,26 +42,31 @@ pub struct ManagedPlan {
 impl ManagedPlan {
     /// Templates are consumed by the app-owned trial runner. This constructs a
     /// command; it does not certify that its program uses any binding.
-    pub fn launch(&self) -> Result<ProcessSpec, String> {
+    pub fn launch(&self) -> Result<ProcessSpec, crate::error::AppError> {
         let mut args = self.args.clone();
-        let mut append = |binding: &ArgBinding, value: &str| -> Result<(), String> {
-            let ArgBinding::Flag { flag, equals } = binding else {
-                return Err("Automatic launch requires documented single-value flags.".into());
+        let mut append =
+            |binding: &ArgBinding, value: &str| -> Result<(), crate::error::AppError> {
+                let ArgBinding::Flag { flag, equals } = binding else {
+                    return Err(crate::error::AppError::validation(
+                        "Automatic launch requires documented single-value flags.",
+                    ));
+                };
+                if !flag.starts_with("--")
+                    || flag.len() <= 2
+                    || flag.contains(['=', '\0'])
+                    || flag.chars().any(char::is_whitespace)
+                {
+                    return Err(crate::error::AppError::validation(
+                        "Invalid automatic launch binding.",
+                    ));
+                }
+                if *equals {
+                    args.push(format!("{flag}={value}"));
+                } else {
+                    args.extend([flag.clone(), value.into()]);
+                }
+                Ok(())
             };
-            if !flag.starts_with("--")
-                || flag.len() <= 2
-                || flag.contains(['=', '\0'])
-                || flag.chars().any(char::is_whitespace)
-            {
-                return Err("Invalid automatic launch binding.".into());
-            }
-            if *equals {
-                args.push(format!("{flag}={value}"));
-            } else {
-                args.extend([flag.clone(), value.into()]);
-            }
-            Ok(())
-        };
         append(&self.model, "{model}")?;
         append(&self.port, "{port}")?;
         if let Some(host) = &self.host {
@@ -107,21 +112,22 @@ pub fn plan_with_cancel(
     candidate: &RuntimeCandidate,
     cancel: &AtomicBool,
     selected: Option<&[String]>,
-) -> Result<PlanOutcome, String> {
+) -> Result<PlanOutcome, crate::error::AppError> {
     super::runtime_discovery::revalidate_with_cancel(candidate, cancel)?;
     let (command, artifacts) = selected_command(candidate)?;
     let environment = crate::runtime::child_environment()
         .into_iter()
         .map(|(name, value)| {
             Ok((
-                name.into_string()
-                    .map_err(|_| "Non-Unicode execution environment.")?,
-                value
-                    .into_string()
-                    .map_err(|_| "Non-Unicode execution environment.")?,
+                name.into_string().map_err(|_| {
+                    crate::error::AppError::validation("Non-Unicode execution environment.")
+                })?,
+                value.into_string().map_err(|_| {
+                    crate::error::AppError::validation("Non-Unicode execution environment.")
+                })?,
             ))
         })
-        .collect::<Result<BTreeMap<_, _>, String>>()?;
+        .collect::<Result<BTreeMap<_, _>, crate::error::AppError>>()?;
     let help = |path: &[String]| {
         let mut args = command.args.clone();
         args.extend(path.iter().cloned());
@@ -165,14 +171,14 @@ fn documented_children(path: &[String], report: &HelpReport) -> Vec<(Vec<String>
 fn resolve(
     selected: Option<&[String]>,
     cancel: &AtomicBool,
-    mut help: impl FnMut(&[String]) -> Result<HelpReport, String>,
-    mut plan: impl FnMut(&[String], &HelpReport) -> Result<ManagedPlan, String>,
-) -> Result<PlanOutcome, String> {
+    mut help: impl FnMut(&[String]) -> Result<HelpReport, crate::error::AppError>,
+    mut plan: impl FnMut(&[String], &HelpReport) -> Result<ManagedPlan, crate::error::AppError>,
+) -> Result<PlanOutcome, crate::error::AppError> {
     if let Some(path) = selected {
         if path.len() > MAX_COMMAND_DEPTH {
-            return Err(
-                "The selected command is nested deeper than automatic connection inspects.".into(),
-            );
+            return Err(crate::error::AppError::validation(
+                "The selected command is nested deeper than automatic connection inspects.",
+            ));
         }
         // Every word must still be documented by its parent's current help.
         let mut summary = String::new();
@@ -180,8 +186,7 @@ fn resolve(
             let report = help(&path[..depth])?;
             summary = documented_children(&path[..depth], &report)
                 .into_iter()
-                .find(|(child, _)| child[depth] == path[depth])
-                .ok_or("The selected command is no longer documented by the program; inspect it again.")?
+                .find(|(child, _)| child[depth] == path[depth]).ok_or_else(|| crate::error::AppError::validation("The selected command is no longer documented by the program; inspect it again."))?
                 .1
                 .summary;
         }
@@ -214,7 +219,9 @@ fn resolve(
     let mut runs = 1;
     while let Some((path, entry)) = pending.pop_front() {
         if cancel.load(Ordering::Acquire) {
-            return Err("help discovery cancelled".into());
+            return Err(crate::error::AppError::cancelled(
+                "help discovery cancelled",
+            ));
         }
         if runs == MAX_HELP_RUNS {
             break;
@@ -239,10 +246,12 @@ fn resolve(
         }
     }
     if cancel.load(Ordering::Acquire) {
-        return Err("help discovery cancelled".into());
+        return Err(crate::error::AppError::cancelled(
+            "help discovery cancelled",
+        ));
     }
     match found.len() {
-        0 if inspected_commands => Err("Neither the entry point nor a command it documents shows one model path, listening port and host option.".into()),
+        0 if inspected_commands => Err(crate::error::AppError::validation("Neither the entry point nor a command it documents shows one model path, listening port and host option.")),
         0 => Err(root_error),
         1 => {
             let (command, plan) = found.pop().unwrap();
@@ -259,46 +268,53 @@ fn resolve(
 
 fn selected_command(
     candidate: &RuntimeCandidate,
-) -> Result<(ObservedCommand, Vec<String>), String> {
+) -> Result<(ObservedCommand, Vec<String>), crate::error::AppError> {
     if candidate.source != DiscoverySource::SelectedFolder
         || !matches!(
             candidate.entrypoint_kind,
             EntrypointKind::Native | EntrypointKind::Interpreter
         )
     {
-        return Err("Automatic managed launch needs a selected local entry point. Existing listeners use the separate connection check.".into());
+        return Err(crate::error::AppError::validation("Automatic managed launch needs a selected local entry point. Existing listeners use the separate connection check."));
     }
-    let mut command = candidate
-        .command
-        .clone()
-        .ok_or("This entry point needs its executable or interpreter configured.")?;
+    let mut command = candidate.command.clone().ok_or_else(|| {
+        crate::error::AppError::validation(
+            "This entry point needs its executable or interpreter configured.",
+        )
+    })?;
     if !command.args.is_empty() {
-        return Err("The fixed interpreter/module/subcommand prefix is unverified; previous launch arguments will not be replayed.".into());
+        return Err(crate::error::AppError::validation("The fixed interpreter/module/subcommand prefix is unverified; previous launch arguments will not be replayed."));
     }
     let path = Path::new(&command.program);
     if !path.is_absolute() || !path.is_file() {
-        return Err("Select an existing absolute entry-point file.".into());
+        return Err(crate::error::AppError::validation(
+            "Select an existing absolute entry-point file.",
+        ));
     }
     if candidate.entrypoint_path.as_deref() != Some(command.program.as_str()) {
-        return Err("The selected entry point does not match its observed command.".into());
+        return Err(crate::error::AppError::validation(
+            "The selected entry point does not match its observed command.",
+        ));
     }
     let mut artifacts = Vec::new();
     if candidate.entrypoint_kind == EntrypointKind::Interpreter {
         let mut bytes = Vec::new();
         fs::File::open(path)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| crate::error::AppError::from_io(&e))?
             .take(4097)
             .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        let first = bytes
-            .split(|byte| *byte == b'\n')
-            .next()
-            .ok_or("The interpreter declaration is missing.")?;
-        let first =
-            std::str::from_utf8(first).map_err(|_| "The interpreter declaration is not UTF-8.")?;
+            .map_err(|e| crate::error::AppError::from_io(&e))?;
+        let first = bytes.split(|byte| *byte == b'\n').next().ok_or_else(|| {
+            crate::error::AppError::validation("The interpreter declaration is missing.")
+        })?;
+        let first = std::str::from_utf8(first).map_err(|_| {
+            crate::error::AppError::validation("The interpreter declaration is not UTF-8.")
+        })?;
         let interpreter = first
             .strip_prefix("#!")
-            .ok_or("The interpreter declaration is missing.")?
+            .ok_or_else(|| {
+                crate::error::AppError::validation("The interpreter declaration is missing.")
+            })?
             .trim();
         // Only a literal absolute interpreter can be reproduced generically.
         // env selectors, optional interpreter flags and launcher expressions
@@ -308,9 +324,9 @@ fn selected_command(
             || !Path::new(interpreter).is_absolute()
             || !Path::new(interpreter).is_file()
         {
-            return Err(
-                "The script needs an explicit verified interpreter and argument prefix.".into(),
-            );
+            return Err(crate::error::AppError::validation(
+                "The script needs an explicit verified interpreter and argument prefix.",
+            ));
         }
         artifacts.push(command.program.clone());
         command.args.push(command.program.clone());
@@ -337,7 +353,7 @@ fn binding(
     role: &str,
     required: bool,
     require_alias_description: bool,
-) -> Result<Option<ArgBinding>, String> {
+) -> Result<Option<ArgBinding>, crate::error::AppError> {
     let matching = schema
         .options
         .iter()
@@ -353,9 +369,9 @@ fn binding(
         return Ok(None);
     }
     if matching.len() != 1 {
-        return Err(format!(
+        return Err(crate::error::AppError::validation(format!(
             "The help does not establish one unambiguous {role} option."
-        ));
+        )));
     }
     let (option, spelling) = matching[0];
     if option.target != Target::Launch
@@ -368,9 +384,9 @@ fn binding(
         || spelling.polarity.is_some()
         || (require_alias_description && !alias_description(option))
     {
-        return Err(format!(
+        return Err(crate::error::AppError::validation(format!(
             "The documented {role} option needs further configuration."
-        ));
+        )));
     }
     Ok(Some(ArgBinding::Flag {
         flag: spelling.flag.clone(),
@@ -384,9 +400,10 @@ fn plan_from_help(
     artifacts: &[String],
     path: &[String],
     report: &HelpReport,
-) -> Result<ManagedPlan, String> {
+) -> Result<ManagedPlan, crate::error::AppError> {
     if !report.complete() {
-        return Err("Help discovery did not complete; no automatic plan was created.".into());
+        return Err(report
+            .incomplete_error("Help discovery did not complete; no automatic plan was created."));
     }
     let schema = super::runtime_help_parse::parse_help_report(
         report,
@@ -404,9 +421,11 @@ fn plan_from_help(
         true,
         false,
     )?
-    .ok_or("The model path option is missing.")?;
-    let port = binding(&schema, path, &["--port"], "listening port", true, false)?
-        .ok_or("The listening port option is missing.")?;
+    .ok_or_else(|| crate::error::AppError::validation("The model path option is missing."))?;
+    let port =
+        binding(&schema, path, &["--port"], "listening port", true, false)?.ok_or_else(|| {
+            crate::error::AppError::validation("The listening port option is missing.")
+        })?;
     let host = binding(&schema, path, &["--host"], "listening host", true, false)?;
     let served_model = binding(
         &schema,
@@ -489,7 +508,7 @@ mod tests {
             elapsed_ms: 1,
         }
     }
-    fn from_help(id: &str, help: &str) -> Result<ManagedPlan, String> {
+    fn from_help(id: &str, help: &str) -> Result<ManagedPlan, crate::error::AppError> {
         let candidate = candidate(id);
         plan_from_help(
             &candidate,
@@ -510,7 +529,7 @@ mod tests {
     fn resolve_with(
         pages: &[(&str, &str)],
         selected: Option<&[String]>,
-    ) -> (Result<PlanOutcome, String>, Vec<String>) {
+    ) -> (Result<PlanOutcome, crate::error::AppError>, Vec<String>) {
         let candidate = candidate("opaque-entry");
         let command = candidate.command.clone().unwrap();
         let mut asked = Vec::new();
@@ -523,7 +542,7 @@ mod tests {
                 let text = pages
                     .iter()
                     .find(|(page, _)| *page == key)
-                    .ok_or("no help")?
+                    .ok_or_else(|| crate::error::AppError::validation("no help"))?
                     .1;
                 let mut help = report(text);
                 help.scope = path.to_vec();
@@ -617,6 +636,7 @@ mod tests {
         let (outcome, _) = resolve_with(&[("", ROOT), ("serve", SERVE), ("bench", BENCH)], None);
         assert!(outcome
             .unwrap_err()
+            .message
             .contains("Neither the entry point nor a command"));
     }
 
@@ -722,6 +742,7 @@ mod tests {
         ];
         assert!(selected_command(&candidate)
             .unwrap_err()
+            .message
             .contains("will not be replayed"));
         let mut help = report("Options:\n  --model FILE  Model\n  --port PORT  Listening port\n");
         help.stdout.truncated = true;

@@ -1,21 +1,46 @@
 //! Resolve tasks from the owned, ready runtime, including config-file overrides.
 use super::{set_llama_mode, LlamaMode};
+use crate::error::{AppError, ErrorKind};
 use crate::providers::{protocol::EngineInfo, ProviderId};
 use serde_json::{json, Value};
 
 const PROBE_RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 
-async fn response_json(mut response: reqwest::Response) -> Result<(u16, Value), String> {
+fn probe_error(context: &str, error: reqwest::Error) -> AppError {
+    let kind = if error.is_timeout() {
+        ErrorKind::Timeout
+    } else if error.is_builder() {
+        ErrorKind::Validation
+    } else if error.is_connect() || error.is_request() || error.is_body() {
+        ErrorKind::Unavailable
+    } else {
+        ErrorKind::Internal
+    };
+    let message = if context.is_empty() {
+        error.to_string()
+    } else {
+        format!("{context}: {error}")
+    };
+    AppError::new(kind, message)
+}
+
+async fn response_json(mut response: reqwest::Response) -> Result<(u16, Value), AppError> {
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| probe_error("", error))?
+    {
         if bytes.len().saturating_add(chunk.len()) > PROBE_RESPONSE_LIMIT {
-            return Err("runtime task probe response exceeds 2 MiB".into());
+            return Err(AppError::internal(
+                "runtime task probe response exceeds 2 MiB",
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
-    let body =
-        serde_json::from_slice(&bytes).map_err(|_| "runtime task probe returned invalid JSON")?;
+    let body = serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::internal("runtime task probe returned invalid JSON"))?;
     Ok((status, body))
 }
 
@@ -29,13 +54,14 @@ fn not_supported(status: u16, body: &Value) -> bool {
 /// the API. b11460/b11617 reject rerank/embedding tasks before computing when
 /// they are disabled. Empty rerank documents are always rejected before work.
 /// Unknown responses are a verification error, never certified capabilities.
+/// Transport deadlines and invalid task configuration retain their error kinds.
 pub async fn confirm_ready(
     mut info: EngineInfo,
     client: &reqwest::Client,
     url: &str,
     key: &str,
     deadline: std::time::Instant,
-) -> Result<EngineInfo, String> {
+) -> Result<EngineInfo, AppError> {
     if info.provider != ProviderId::Llama {
         return Ok(info);
     }
@@ -57,7 +83,7 @@ pub async fn confirm_ready(
             .json(&json!({"query":"", "documents":[]}))
             .send()
             .await
-            .map_err(|e| format!("could not verify runtime rerank mode: {e}"))?,
+            .map_err(|error| probe_error("could not verify runtime rerank mode", error))?,
     )
     .await?;
     if !not_supported(status, &body) {
@@ -66,16 +92,18 @@ pub async fn confirm_ready(
             && body.pointer("/error/message").and_then(Value::as_str)
                 == Some("\"documents\" must be a non-empty string array")
         {
-            return set_llama_mode(&mut info, LlamaMode::Rerank, "").map(|()| info);
+            return set_llama_mode(&mut info, LlamaMode::Rerank, "")
+                .map(|()| info)
+                .map_err(AppError::validation);
         }
-        return Err(format!("could not verify this runtime's rerank mode (HTTP {status}); no task was certified. Review its API/adapter before retrying"));
+        return Err(AppError::internal(format!("could not verify this runtime's rerank mode (HTTP {status}); no task was certified. Review its API/adapter before retrying")));
     }
     let (status, body) = response_json(
         request("/v1/embeddings")
             .json(&json!({"input":"a"}))
             .send()
             .await
-            .map_err(|e| format!("could not verify runtime embedding mode: {e}"))?,
+            .map_err(|error| probe_error("could not verify runtime embedding mode", error))?,
     )
     .await?;
     let mode = if not_supported(status, &body) {
@@ -85,7 +113,7 @@ pub async fn confirm_ready(
         let (generation_status, generation) = response_json(
             request("/completion")
                 .json(&json!({"prompt":"a", "n_predict":1, "temperature":0, "cache_prompt":false, "stream":false}))
-                .send().await.map_err(|e| format!("could not verify runtime generation: {e}"))?,
+                .send().await.map_err(|error| probe_error("could not verify runtime generation", error))?,
         ).await?;
         if generation_status != 200
             || !generation.get("content").is_some_and(Value::is_string)
@@ -94,7 +122,7 @@ pub async fn confirm_ready(
                 .and_then(Value::as_u64)
                 .is_none_or(|n| n == 0)
         {
-            return Err(format!("the ready runtime did not verify generation (HTTP {generation_status}); review its task mode and selected model before retrying"));
+            return Err(AppError::internal(format!("the ready runtime did not verify generation (HTTP {generation_status}); review its task mode and selected model before retrying")));
         }
         LlamaMode::Generate
     } else if status == 200
@@ -110,9 +138,101 @@ pub async fn confirm_ready(
     {
         LlamaMode::Embed
     } else {
-        return Err(format!("could not verify usable OpenAI embeddings from this runtime (HTTP {status}); review its task mode and pooling settings before retrying"));
+        return Err(AppError::internal(format!("could not verify usable OpenAI embeddings from this runtime (HTTP {status}); review its task mode and pooling settings before retrying")));
     };
     let model = info.upstream_model.clone();
-    set_llama_mode(&mut info, mode, &model)?;
+    set_llama_mode(&mut info, mode, &model).map_err(AppError::validation)?;
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn readiness_probe_deadline_is_typed_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let info = EngineInfo::llama(
+            "model.gguf",
+            crate::providers::artifacts::Modalities::text_only(),
+        );
+        // The listener stays open without replying so the request deadline,
+        // rather than a refused connection, determines the failure.
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(confirm_ready(
+                info,
+                &client,
+                &url,
+                "",
+                Instant::now() + Duration::from_millis(100),
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Timeout);
+        assert!(
+            error
+                .message
+                .starts_with("could not verify runtime rerank mode:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn readiness_probe_invalid_url_is_typed_validation() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let info = EngineInfo::llama(
+            "model.gguf",
+            crate::providers::artifacts::Modalities::text_only(),
+        );
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(confirm_ready(
+                info,
+                &client,
+                "not a server URL",
+                "",
+                Instant::now() + Duration::from_secs(5),
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert!(
+            error
+                .message
+                .starts_with("could not verify runtime rerank mode:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn readiness_probe_connection_failure_is_typed_unavailable() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        drop(listener);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let info = EngineInfo::llama(
+            "model.gguf",
+            crate::providers::artifacts::Modalities::text_only(),
+        );
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(confirm_ready(
+                info,
+                &client,
+                &url,
+                "",
+                Instant::now() + Duration::from_secs(5),
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unavailable);
+        assert!(
+            error
+                .message
+                .starts_with("could not verify runtime rerank mode:"),
+            "{error}"
+        );
+    }
 }

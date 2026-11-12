@@ -11,6 +11,7 @@ pub(crate) mod config;
 pub(crate) mod errors;
 pub(crate) mod guard;
 pub(crate) mod permits;
+pub(crate) mod public_body;
 pub(crate) mod recovery;
 pub(crate) mod registry;
 pub(crate) mod transport;

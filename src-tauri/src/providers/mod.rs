@@ -310,7 +310,9 @@ pub fn provider_of(cfg: &crate::config::AppConfig) -> ProviderId {
 /// The command line the selected runtime would launch with, for display.
 /// The app key is never included, and values the runtime's schema marks
 /// secret are replaced; the launch itself uses them unchanged.
-pub fn command_preview(cfg: &crate::config::AppConfig) -> Result<Vec<String>, String> {
+pub fn command_preview(
+    cfg: &crate::config::AppConfig,
+) -> Result<Vec<String>, crate::error::AppError> {
     let plan =
         adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
     let argv = launch::preview(&plan);
@@ -421,29 +423,31 @@ pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
 /// once before using compatibility, option schemas or verification keys.
 pub fn resolve_python_runtime(
     cfg: &crate::config::AppConfig,
-) -> Result<python_env::PythonRuntimeManifest, String> {
+) -> Result<python_env::PythonRuntimeManifest, crate::error::AppError> {
     let provider = provider_of(cfg);
     if !provider.is_python() {
-        return Err("the selected provider does not use a Python runtime".into());
+        return Err(crate::error::AppError::validation(
+            "the selected provider does not use a Python runtime",
+        ));
     }
     let availability = provider.availability();
     if !availability.supported {
-        return Err(availability.detail);
+        return Err(crate::error::AppError::unavailable(availability.detail));
     }
     if cfg.active_runtime.trim().is_empty() {
-        return Err(format!(
+        return Err(crate::error::AppError::validation(format!(
             "select a {} runtime before starting the server",
             provider.server()
-        ));
+        )));
     }
     let manifest = python_env::read(provider, &cfg.active_runtime)?;
     let problems = manifest.problems();
     if !problems.is_empty() {
-        return Err(format!(
+        return Err(crate::error::AppError::unavailable(format!(
             "the selected {} runtime is not ready: {}",
             provider.server(),
             problems.join("; ")
-        ));
+        )));
     }
     Ok(manifest)
 }
@@ -454,20 +458,22 @@ pub fn resolve_python_runtime(
 pub async fn refresh_selected_python_runtime(
     cfg: &crate::config::AppConfig,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Result<python_env::PythonRuntimeManifest, String> {
+) -> Result<python_env::PythonRuntimeManifest, crate::error::AppError> {
     let provider = provider_of(cfg);
     if !provider.is_python() {
-        return Err("the selected provider does not use a Python runtime".into());
+        return Err(crate::error::AppError::validation(
+            "the selected provider does not use a Python runtime",
+        ));
     }
     let availability = provider.availability();
     if !availability.supported {
-        return Err(availability.detail);
+        return Err(crate::error::AppError::unavailable(availability.detail));
     }
     if cfg.active_runtime.trim().is_empty() {
-        return Err(format!(
+        return Err(crate::error::AppError::validation(format!(
             "select a {} runtime before starting the server",
             provider.server()
-        ));
+        )));
     }
     python_env::reprobe_cancellable(provider, &cfg.active_runtime, cancel).await?;
     resolve_python_runtime(cfg)

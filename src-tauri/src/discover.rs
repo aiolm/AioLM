@@ -4,6 +4,7 @@ mod pending;
 mod resume;
 mod snapshots;
 mod updates;
+use crate::error::{AppError, ErrorKind};
 use futures_util::StreamExt;
 pub use pending::{
     discard as discard_pending_download, list as pending_downloads, PendingDownload,
@@ -174,24 +175,69 @@ struct ApiTreeEntry {
     entry_type: String,
 }
 
-fn client() -> Result<reqwest::Client, String> {
+fn io_error(error: &std::io::Error, message: String) -> AppError {
+    let kind = match error.kind() {
+        std::io::ErrorKind::NotFound => ErrorKind::NotFound,
+        std::io::ErrorKind::TimedOut => ErrorKind::Timeout,
+        std::io::ErrorKind::ResourceBusy | std::io::ErrorKind::AlreadyExists => ErrorKind::Busy,
+        _ => ErrorKind::Internal,
+    };
+    AppError::new(kind, message)
+}
+
+fn network_error(error: &reqwest::Error, message: String) -> AppError {
+    let kind = if error.is_timeout() {
+        ErrorKind::Timeout
+    } else {
+        ErrorKind::Unavailable
+    };
+    AppError::new(kind, message)
+}
+
+fn http_error(status: reqwest::StatusCode, message: String) -> AppError {
+    let kind = match status {
+        reqwest::StatusCode::NOT_FOUND => ErrorKind::NotFound,
+        reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::GATEWAY_TIMEOUT => {
+            ErrorKind::Timeout
+        }
+        reqwest::StatusCode::TOO_MANY_REQUESTS => ErrorKind::Busy,
+        _ if status.is_client_error()
+            && !matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            ) =>
+        {
+            ErrorKind::Validation
+        }
+        _ => ErrorKind::Unavailable,
+    };
+    AppError::new(kind, message)
+}
+
+fn client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent("aiolm/0.1")
         .timeout(Duration::from_secs(45))
+        .redirect(crate::http_policy::https_redirect_policy(trusted_hf_host))
         .build()
-        .map_err(|error| format!("Hugging Face client setup failed: {error}"))
+        .map_err(|error| {
+            network_error(&error, format!("Hugging Face client setup failed: {error}"))
+        })
 }
 
 /// `reqwest`'s `timeout` covers the response body too, so the API client's 45s
 /// budget would abort every multi-gigabyte model transfer mid-stream. Downloads
 /// get no overall deadline and rely on the per-read timeout to catch a stall.
-fn download_client() -> Result<reqwest::Client, String> {
+fn download_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent("aiolm/0.1")
         .connect_timeout(Duration::from_secs(30))
         .read_timeout(Duration::from_secs(60))
+        .redirect(crate::http_policy::https_redirect_policy(trusted_hf_host))
         .build()
-        .map_err(|error| format!("Hugging Face client setup failed: {error}"))
+        .map_err(|error| {
+            network_error(&error, format!("Hugging Face client setup failed: {error}"))
+        })
 }
 
 fn trusted_hf_host(host: &str) -> bool {
@@ -201,64 +247,73 @@ fn trusted_hf_host(host: &str) -> bool {
         || host.ends_with(".hf.co")
 }
 
-fn validate_response_url(response: &reqwest::Response) -> Result<(), String> {
+fn validate_response_url(response: &reqwest::Response) -> Result<(), AppError> {
     if response.url().scheme() != "https" {
-        return Err("Hugging Face response must use HTTPS".into());
+        return Err(AppError::validation("Hugging Face response must use HTTPS"));
     }
     let host = response.url().host_str().unwrap_or_default();
     if trusted_hf_host(host) {
         Ok(())
     } else {
-        Err(format!(
+        Err(AppError::validation(format!(
             "Hugging Face redirected to an untrusted host: {host}"
-        ))
+        )))
     }
 }
 
 async fn bounded_response_bytes(
     response: reqwest::Response,
     limit: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, AppError> {
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "Hugging Face response exceeds the {limit} byte limit"
-        ));
+        )));
     }
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| format!("Hugging Face response could not be read: {error}"))?;
+        let chunk = chunk.map_err(|error| {
+            network_error(
+                &error,
+                format!("Hugging Face response could not be read: {error}"),
+            )
+        })?;
         if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "Hugging Face response exceeds the {limit} byte limit"
-            ));
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
 }
 
-async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
+async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, AppError> {
     let status = response.status();
     let bytes = bounded_response_bytes(response, MAX_API_RESPONSE_BYTES).await?;
-    let body = String::from_utf8(bytes)
-        .map_err(|error| format!("Hugging Face response was not UTF-8: {error}"))?;
+    let body = String::from_utf8(bytes).map_err(|error| {
+        AppError::validation(format!("Hugging Face response was not UTF-8: {error}"))
+    })?;
     if !status.is_success() {
         let detail = body.lines().next().unwrap_or("request failed");
-        return Err(format!(
-            "Hugging Face API {status}: {}",
-            detail.chars().take(300).collect::<String>()
+        return Err(http_error(
+            status,
+            format!(
+                "Hugging Face API {status}: {}",
+                detail.chars().take(300).collect::<String>()
+            ),
         ));
     }
-    serde_json::from_str(&body)
-        .map_err(|error| format!("Hugging Face response was invalid JSON: {error}"))
+    serde_json::from_str(&body).map_err(|error| {
+        AppError::validation(format!("Hugging Face response was invalid JSON: {error}"))
+    })
 }
 
-pub fn validate_repo_id(repo_id: &str) -> Result<(), String> {
+pub fn validate_repo_id(repo_id: &str) -> Result<(), AppError> {
     let value = repo_id.trim();
     let parts: Vec<&str> = value.split('/').collect();
     if parts.len() != 2
@@ -271,15 +326,19 @@ pub fn validate_repo_id(repo_id: &str) -> Result<(), String> {
                 || part.starts_with('.')
         })
     {
-        return Err("Hugging Face repo must use the form author/model with safe names".into());
+        return Err(AppError::validation(
+            "Hugging Face repo must use the form author/model with safe names",
+        ));
     }
     Ok(())
 }
 
-pub fn validate_repo_path(file_path: &str) -> Result<(), String> {
+pub fn validate_repo_path(file_path: &str) -> Result<(), AppError> {
     let value = file_path.trim();
     if value.is_empty() || value.starts_with('/') || value.contains('\\') {
-        return Err("model file path is not a safe relative path".into());
+        return Err(AppError::validation(
+            "model file path is not a safe relative path",
+        ));
     }
     for part in value.split('/') {
         if part.is_empty()
@@ -292,11 +351,13 @@ pub fn validate_repo_path(file_path: &str) -> Result<(), String> {
                 character.is_control() || ['<', '>', ':', '"', '|', '?', '*'].contains(&character)
             })
         {
-            return Err("model file path contains an unsafe component".into());
+            return Err(AppError::validation(
+                "model file path contains an unsafe component",
+            ));
         }
     }
     if !value.to_ascii_lowercase().ends_with(".gguf") {
-        return Err("Discover only downloads GGUF files".into());
+        return Err(AppError::validation("Discover only downloads GGUF files"));
     }
     Ok(())
 }
@@ -335,23 +396,23 @@ fn relative_path(file_path: &str) -> PathBuf {
     })
 }
 
-fn models_root(models_dir: &str) -> Result<PathBuf, String> {
+fn models_root(models_dir: &str) -> Result<PathBuf, AppError> {
     let input = models_dir.trim();
     if input.is_empty() {
-        return Err("models directory is empty".into());
+        return Err(AppError::validation("models directory is empty"));
     }
     fs::create_dir_all(input)
-        .map_err(|error| format!("cannot create models directory: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot create models directory: {error}")))?;
     let root = Path::new(input)
         .canonicalize()
-        .map_err(|error| format!("cannot open models directory: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot open models directory: {error}")))?;
     if !root.is_dir() {
-        return Err("models path is not a directory".into());
+        return Err(AppError::validation("models path is not a directory"));
     }
     Ok(root)
 }
 
-fn target_path(models_dir: &str, repo_id: &str, file_path: &str) -> Result<PathBuf, String> {
+fn target_path(models_dir: &str, repo_id: &str, file_path: &str) -> Result<PathBuf, AppError> {
     validate_repo_id(repo_id)?;
     validate_repo_path(file_path)?;
     let root = models_root(models_dir)?;
@@ -361,19 +422,24 @@ fn target_path(models_dir: &str, repo_id: &str, file_path: &str) -> Result<PathB
         .join(relative_path(file_path));
     let parent = target
         .parent()
-        .ok_or_else(|| "download destination has no parent".to_string())?;
+        .ok_or_else(|| AppError::validation("download destination has no parent"))?;
     fs::create_dir_all(parent)
-        .map_err(|error| format!("cannot create download directory: {error}"))?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve download directory: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot create download directory: {error}")))?;
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot resolve download directory: {error}"),
+        )
+    })?;
     if !canonical_parent.starts_with(&root) {
-        return Err("download destination escapes the models directory".into());
+        return Err(AppError::validation(
+            "download destination escapes the models directory",
+        ));
     }
     Ok(canonical_parent.join(
         target
             .file_name()
-            .ok_or_else(|| "download filename is empty".to_string())?,
+            .ok_or_else(|| AppError::validation("download filename is empty"))?,
     ))
 }
 
@@ -393,57 +459,83 @@ fn same_path_identity(left: &Path, right: &Path) -> bool {
     }
 }
 
-async fn ensure_download_parent(path: &Path) -> Result<(), String> {
+async fn ensure_download_parent(path: &Path) -> Result<(), AppError> {
     let parent = path
         .parent()
-        .ok_or_else(|| "download destination has no parent".to_string())?;
-    let metadata = tokio::fs::symlink_metadata(parent)
-        .await
-        .map_err(|error| format!("cannot inspect download directory: {error}"))?;
+        .ok_or_else(|| AppError::validation("download destination has no parent"))?;
+    let metadata = tokio::fs::symlink_metadata(parent).await.map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot inspect download directory: {error}"),
+        )
+    })?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("download directory must be a real directory".into());
+        return Err(AppError::validation(
+            "download directory must be a real directory",
+        ));
     }
-    let resolved = tokio::fs::canonicalize(parent)
-        .await
-        .map_err(|error| format!("cannot resolve download directory: {error}"))?;
+    let resolved = tokio::fs::canonicalize(parent).await.map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot resolve download directory: {error}"),
+        )
+    })?;
     if !same_path_identity(&resolved, parent) {
-        return Err("download directory must not be a reparse point".into());
+        return Err(AppError::validation(
+            "download directory must not be a reparse point",
+        ));
     }
     Ok(())
 }
 
-async fn create_staging_file(path: &Path) -> Result<tokio::fs::File, String> {
+async fn create_staging_file(path: &Path) -> Result<tokio::fs::File, AppError> {
     ensure_download_parent(path).await?;
     match tokio::fs::symlink_metadata(path).await {
-        Ok(_) => return Err("download staging path already exists".into()),
+        Ok(_) => return Err(AppError::busy("download staging path already exists")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot inspect download staging path: {error}")),
+        Err(error) => {
+            return Err(io_error(
+                &error,
+                format!("cannot inspect download staging path: {error}"),
+            ))
+        }
     }
     tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .await
-        .map_err(|error| format!("cannot stage model download: {error}"))
+        .map_err(|error| io_error(&error, format!("cannot stage model download: {error}")))
 }
 
-async fn activate_download(part: &Path, target: &Path) -> Result<(), String> {
+async fn activate_download(part: &Path, target: &Path) -> Result<(), AppError> {
     ensure_download_parent(target).await?;
     match tokio::fs::symlink_metadata(target).await {
-        Ok(_) => return Err("a different model appeared at the download destination".into()),
+        Ok(_) => {
+            return Err(AppError::busy(
+                "a different model appeared at the download destination",
+            ))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(format!(
-                "cannot inspect model destination before activation: {error}"
+            return Err(io_error(
+                &error,
+                format!("cannot inspect model destination before activation: {error}"),
             ));
         }
     }
-    tokio::fs::hard_link(part, target)
-        .await
-        .map_err(|error| format!("cannot activate downloaded model without overwrite: {error}"))?;
-    tokio::fs::remove_file(part)
-        .await
-        .map_err(|error| format!("cannot clean up staged model download: {error}"))
+    tokio::fs::hard_link(part, target).await.map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot activate downloaded model without overwrite: {error}"),
+        )
+    })?;
+    tokio::fs::remove_file(part).await.map_err(|error| {
+        io_error(
+            &error,
+            format!("cannot clean up staged model download: {error}"),
+        )
+    })
 }
 
 /// Search format used when a caller names none: every model repository.
@@ -452,29 +544,32 @@ pub const DEFAULT_SEARCH_FORMAT: &str = "all";
 /// Hub tag filters for each search format. `all` sends none, so the listing
 /// covers every model repository whatever its files; MLX repositories carry
 /// both the `safetensors` and `mlx` tags.
-fn search_filters(format: &str) -> Result<&'static [&'static str], String> {
+fn search_filters(format: &str) -> Result<&'static [&'static str], AppError> {
     match format {
         "all" => Ok(&[]),
         "gguf" => Ok(&["gguf"]),
         "safetensors" => Ok(&["safetensors"]),
         "mlx" => Ok(&["safetensors", "mlx"]),
-        _ => Err("unsupported model format".into()),
+        _ => Err(AppError::validation("unsupported model format")),
     }
 }
 
 /// The exact model-listing request URL, validated before anything is sent.
-fn search_url(query: &str, limit: u32, sort: &str, format: &str) -> Result<reqwest::Url, String> {
+fn search_url(query: &str, limit: u32, sort: &str, format: &str) -> Result<reqwest::Url, AppError> {
     let filters = search_filters(format)?;
     let query = query.trim();
     if query.len() > MAX_QUERY_LENGTH || query.chars().any(char::is_control) {
-        return Err("model search query is invalid or too long".into());
+        return Err(AppError::validation(
+            "model search query is invalid or too long",
+        ));
     }
     if !SORT_KEYS.contains(&sort) {
-        return Err("model sort order is not supported".into());
+        return Err(AppError::validation("model sort order is not supported"));
     }
     let limit = limit.clamp(1, 50).to_string();
-    let mut url = reqwest::Url::parse(&format!("{HF_API}/models"))
-        .map_err(|error| format!("model search request is invalid: {error}"))?;
+    let mut url = reqwest::Url::parse(&format!("{HF_API}/models")).map_err(|error| {
+        AppError::validation(format!("model search request is invalid: {error}"))
+    })?;
     {
         let mut pairs = url.query_pairs_mut();
         for tag in filters {
@@ -505,13 +600,11 @@ pub async fn search_format(
     limit: u32,
     sort: &str,
     format: &str,
-) -> Result<Vec<HfModel>, String> {
+) -> Result<Vec<HfModel>, AppError> {
     let url = search_url(query, limit, sort, format)?;
-    let response = client()?
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("Hugging Face model search failed: {error}"))?;
+    let response = client()?.get(url).send().await.map_err(|error| {
+        network_error(&error, format!("Hugging Face model search failed: {error}"))
+    })?;
     validate_response_url(&response)?;
     let items: Vec<ApiModel> = decode_json(response).await?;
     Ok(items
@@ -531,7 +624,7 @@ pub async fn search_format(
 
 /// Read the selected repository's file tree once and report its downloadable
 /// GGUF and Safetensors files, plus the separate whole-snapshot root-weight flag.
-pub async fn files(repo_id: &str) -> Result<HfRepositoryInspection, String> {
+pub async fn files(repo_id: &str) -> Result<HfRepositoryInspection, AppError> {
     validate_repo_id(repo_id)?;
     let entries = repository_tree(repo_id, "main", &AtomicBool::new(false)).await?;
     inspect_repository(repo_id, "main", &entries)
@@ -541,7 +634,7 @@ fn inspect_repository(
     repo_id: &str,
     revision: &str,
     entries: &[ApiTreeEntry],
-) -> Result<HfRepositoryInspection, String> {
+) -> Result<HfRepositoryInspection, AppError> {
     Ok(HfRepositoryInspection {
         gguf_files: listed_gguf_files(repo_id, revision, entries)?,
         safetensors_files: entries
@@ -574,34 +667,34 @@ fn has_root_safetensors(entries: &[ApiTreeEntry]) -> bool {
     })
 }
 
-async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, String> {
+async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, AppError> {
     let response = tokio::select! {
-        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-        response = client()?.get(format!("{HF_API}/models/{repo}/revision/main")).send() => response.map_err(|error| error.to_string())?
+        _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+        response = client()?.get(format!("{HF_API}/models/{repo}/revision/main")).send() => response.map_err(|error| network_error(&error, error.to_string()))?
     };
     validate_response_url(&response)?;
     let metadata: serde_json::Value = tokio::select! {
-        _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         metadata = decode_json(response) => metadata?
     };
     let revision = metadata
         .get("sha")
         .and_then(serde_json::Value::as_str)
-        .ok_or("repository did not return an immutable revision")?;
+        .ok_or_else(|| AppError::validation("repository did not return an immutable revision"))?;
     if revision.len() != 40 || !revision.bytes().all(|value| value.is_ascii_hexdigit()) {
-        return Err("invalid repository revision".into());
+        return Err(AppError::validation("invalid repository revision"));
     }
     Ok(revision.into())
 }
 
-async fn download_revision<F>(revision: Option<&str>, latest: F) -> Result<String, String>
+async fn download_revision<F>(revision: Option<&str>, latest: F) -> Result<String, AppError>
 where
-    F: Future<Output = Result<String, String>>,
+    F: Future<Output = Result<String, AppError>>,
 {
     match revision {
         Some(revision) => {
             if revision.len() != 40 || !revision.bytes().all(|value| value.is_ascii_hexdigit()) {
-                return Err("interrupted download has no valid immutable revision; staged bytes were retained".into());
+                return Err(AppError::validation("interrupted download has no valid immutable revision; staged bytes were retained"));
             }
             Ok(revision.to_owned())
         }
@@ -613,7 +706,7 @@ fn tree_next_page(
     headers: &reqwest::header::HeaderMap,
     repo: &str,
     revision: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppError> {
     let next = headers
         .get("link")
         .and_then(|value| value.to_str().ok())
@@ -621,14 +714,15 @@ fn tree_next_page(
         .and_then(|link| link.trim().strip_prefix('<')?.split('>').next())
         .map(str::to_owned);
     if let Some(url) = &next {
-        let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
+        let parsed =
+            reqwest::Url::parse(url).map_err(|error| AppError::validation(error.to_string()))?;
         if parsed.scheme() != "https"
             || parsed.host_str() != Some("huggingface.co")
             || parsed.path() != format!("/api/models/{repo}/tree/{revision}")
             || !parsed.username().is_empty()
             || parsed.password().is_some()
         {
-            return Err("unsafe repository pagination link".into());
+            return Err(AppError::validation("unsafe repository pagination link"));
         }
     }
     Ok(next)
@@ -638,7 +732,7 @@ async fn repository_tree(
     repo: &str,
     revision: &str,
     cancel: &AtomicBool,
-) -> Result<Vec<ApiTreeEntry>, String> {
+) -> Result<Vec<ApiTreeEntry>, AppError> {
     let mut entries = Vec::new();
     let mut next = Some(format!(
         "{HF_API}/models/{repo}/tree/{revision}?recursive=true&expand=false"
@@ -646,21 +740,23 @@ async fn repository_tree(
     let mut visited = std::collections::HashSet::new();
     while let Some(url) = next.take() {
         if !visited.insert(url.clone()) || visited.len() > 100 {
-            return Err("repository pagination exceeded its limit".into());
+            return Err(AppError::validation(
+                "repository pagination exceeded its limit",
+            ));
         }
         let response = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-            response = client()?.get(&url).send() => response.map_err(|error| error.to_string())?
+            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            response = client()?.get(&url).send() => response.map_err(|error| network_error(&error, error.to_string()))?
         };
         validate_response_url(&response)?;
         next = tree_next_page(response.headers(), repo, revision)?;
         let page: Vec<ApiTreeEntry> = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             page = decode_json(response) => page?
         };
         entries.extend(page);
         if entries.len() > MAX_TREE_ENTRIES {
-            return Err("repository contains too many files".into());
+            return Err(AppError::validation("repository contains too many files"));
         }
     }
     Ok(entries)
@@ -670,7 +766,7 @@ fn listed_gguf_files(
     repo_id: &str,
     revision: &str,
     entries: &[ApiTreeEntry],
-) -> Result<Vec<HfFile>, String> {
+) -> Result<Vec<HfFile>, AppError> {
     // Index companion names once. A repository may list thousands of GGUF
     // variants; searching its whole tree again per row would be quadratic.
     let mut loading: std::collections::HashMap<String, std::collections::HashSet<String>> =
@@ -804,14 +900,16 @@ pub fn installed_files(
     models_dir: &str,
     repo_id: &str,
     files: &[String],
-) -> Result<Vec<InstalledHfFile>, String> {
+) -> Result<Vec<InstalledHfFile>, AppError> {
     validate_repo_id(repo_id)?;
     let root = models_dir.trim();
     if root.is_empty() {
-        return Err("models directory is empty".into());
+        return Err(AppError::validation("models directory is empty"));
     }
     if files.len() > MAX_TREE_ENTRIES {
-        return Err("too many repository files to inspect safely".into());
+        return Err(AppError::validation(
+            "too many repository files to inspect safely",
+        ));
     }
     // Resolve the selected library without creating it. Root aliases remain
     // valid, but a repository link must not claim files outside that library
@@ -857,21 +955,23 @@ async fn hash_existing_file<F>(
     size: u64,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<String, String>
+) -> Result<String, AppError>
 where
     F: FnMut(u64),
 {
     use tokio::io::AsyncReadExt;
     let mut file = tokio::fs::File::open(path)
         .await
-        .map_err(|error| format!("cannot verify downloaded file: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot verify downloaded file: {error}")))?;
     let length = file
         .metadata()
         .await
-        .map_err(|error| format!("cannot verify downloaded file: {error}"))?
+        .map_err(|error| io_error(&error, format!("cannot verify downloaded file: {error}")))?
         .len();
     if length != size {
-        return Err(format!("existing file is {length} bytes; expected {size}"));
+        return Err(AppError::validation(format!(
+            "existing file is {length} bytes; expected {size}"
+        )));
     }
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; DOWNLOAD_BUFFER_BYTES];
@@ -879,18 +979,20 @@ where
     let mut last_progress = std::time::Instant::now();
     loop {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         let count = file
             .read(&mut buffer)
             .await
-            .map_err(|error| format!("cannot hash downloaded file: {error}"))?;
+            .map_err(|error| io_error(&error, format!("cannot hash downloaded file: {error}")))?;
         if count == 0 {
             break;
         }
         read = read.saturating_add(count as u64);
         if read > size {
-            return Err("existing file grew while it was verified".into());
+            return Err(AppError::validation(
+                "existing file grew while it was verified",
+            ));
         }
         hasher.update(&buffer[..count]);
         if last_progress.elapsed() >= DOWNLOAD_UPDATE_INTERVAL {
@@ -899,7 +1001,9 @@ where
         }
     }
     if read != size {
-        return Err("existing file shrank while it was verified".into());
+        return Err(AppError::validation(
+            "existing file shrank while it was verified",
+        ));
     }
     progress(read);
     Ok(format!("{:x}", hasher.finalize()))
@@ -960,7 +1064,7 @@ async fn receive_download<F>(
     expected: Option<&str>,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<u64, String>
+) -> Result<u64, AppError>
 where
     F: FnMut(&'static str, u64, u64),
 {
@@ -978,7 +1082,7 @@ where
         let mut reported = 0_u64;
         loop {
             if cancel.load(Ordering::Acquire) {
-                return Err(DOWNLOAD_CANCELLED.to_string());
+                return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
             }
             let chunk = tokio::select! {
                 biased;
@@ -990,37 +1094,33 @@ where
                     continue;
                 }
                 chunk = response.chunk() => chunk
-                    .map_err(|error| format!("model download stream failed: {error}"))?,
+                    .map_err(|error| network_error(&error, format!("model download stream failed: {error}")))?,
             };
             let Some(chunk) = chunk else {
                 break;
             };
             received = received.saturating_add(chunk.len() as u64);
             if received > MAX_MODEL_BYTES || received > total {
-                return Err("model download reported an unsafe size".into());
+                return Err(AppError::validation("model download reported an unsafe size"));
             }
             output
                 .write_all(&chunk)
-                .await
-                .map_err(|error| format!("cannot write model download: {error}"))?;
+                .await.map_err(|error| io_error(&error, format!("cannot write model download: {error}")))?;
             if let Some(hasher) = &mut hasher {
                 hasher.update(&chunk);
             }
         }
         output
             .flush()
-            .await
-            .map_err(|error| format!("cannot flush model download: {error}"))?;
+            .await.map_err(|error| io_error(&error, format!("cannot flush model download: {error}")))?;
         if received != total {
-            return Err(format!(
-                "model download ended at {received} bytes; expected {total}"
-            ));
+            return Err(AppError::unavailable(format!("model download ended at {received} bytes; expected {total}")));
         }
         if hasher.is_some_and(|hasher| !hasher.matches()) {
-            return Err("downloaded model checksum does not match Hugging Face metadata".into());
+            return Err(AppError::validation("downloaded model checksum does not match Hugging Face metadata"));
         }
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.to_string());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         if received != reported {
             progress("downloading", received, total);
@@ -1030,7 +1130,7 @@ where
     .await;
     if let Err(error) = &result {
         let _ = tokio::fs::remove_file(part).await;
-        if error == DOWNLOAD_CANCELLED {
+        if error.kind == ErrorKind::Cancelled {
             progress("cancelled", received, total);
         }
     }
@@ -1039,7 +1139,7 @@ where
 
 /// Resolve every shard from one immutable tree before downloading any bytes.
 /// A request for any part selects the same complete model and first entrypoint.
-fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>, String> {
+fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>, AppError> {
     let (directory, name) = file_path.rsplit_once('/').unwrap_or(("", file_path));
     let paths: Vec<_> = shard_group(name)
         .map(Iterator::collect)
@@ -1060,7 +1160,9 @@ fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>,
                 .get(path.as_str())
                 .map(|file| (*file).clone())
                 .ok_or_else(|| {
-                    format!("GGUF model file was not found in the repository tree: {path}")
+                    AppError::not_found(format!(
+                        "GGUF model file was not found in the repository tree: {path}"
+                    ))
                 })
         })
         .collect()
@@ -1074,7 +1176,7 @@ pub async fn download(
     cancel: Arc<AtomicBool>,
     include_companions: bool,
     revision: Option<&str>,
-) -> Result<DownloadedModel, String> {
+) -> Result<DownloadedModel, AppError> {
     validate_repo_id(repo_id)?;
     validate_repo_path(file_path)?;
     let revision = download_revision(revision, immutable_revision(repo_id, &cancel)).await?;
@@ -1083,31 +1185,40 @@ pub async fn download(
     let plan = model_download_plan(&files, file_path)?;
     drop(files);
     if plan.iter().any(|file| file.size_bytes > MAX_MODEL_BYTES) {
-        return Err("model file exceeds the 512 GiB safety limit".into());
+        return Err(AppError::validation(
+            "model file exceeds the 512 GiB safety limit",
+        ));
     }
     let total = plan.iter().try_fold(0_u64, |total, file| {
         total
             .checked_add(file.size_bytes)
-            .ok_or("model download size overflow")
+            .ok_or_else(|| AppError::validation("model download size overflow"))
     })?;
     let entrypoint = plan
         .first()
-        .ok_or("model download has no files")?
+        .ok_or_else(|| AppError::validation("model download has no files"))?
         .path
         .clone();
     let label = if plan.len() > 1 {
-        let (stem, extension) = entrypoint.rsplit_once('.').ok_or("invalid GGUF path")?;
-        let (prefix, _) = stem.rsplit_once("-of-").ok_or("invalid GGUF shard")?;
+        let (stem, extension) = entrypoint
+            .rsplit_once('.')
+            .ok_or_else(|| AppError::validation("invalid GGUF path"))?;
+        let (prefix, _) = stem
+            .rsplit_once("-of-")
+            .ok_or_else(|| AppError::validation("invalid GGUF shard"))?;
         format!(
             "{}.{extension}",
-            prefix.rsplit_once('-').ok_or("invalid GGUF shard")?.0
+            prefix
+                .rsplit_once('-')
+                .ok_or_else(|| AppError::validation("invalid GGUF shard"))?
+                .0
         )
     } else {
         entrypoint.clone()
     };
     let companions = if include_companions {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         Some(snapshots::gguf_companion_plan(&entries, file_path)?)
     } else {
@@ -1116,7 +1227,7 @@ pub async fn download(
     let target = target_path(models_dir, repo_id, file_path)?;
     let directory = target
         .parent()
-        .ok_or("model has no destination directory")?;
+        .ok_or_else(|| AppError::validation("model has no destination directory"))?;
     let mut pending_files = plan
         .iter()
         .map(|file| {
@@ -1152,7 +1263,7 @@ pub async fn download(
             &revision,
             target
                 .parent()
-                .ok_or("model has no destination directory")?,
+                .ok_or_else(|| AppError::validation("model has no destination directory"))?,
             plan,
             &cancel,
         )
@@ -1177,7 +1288,8 @@ pub async fn download(
             downloaded = Some(part);
         }
     }
-    let mut downloaded = downloaded.ok_or("model download has no files")?;
+    let mut downloaded =
+        downloaded.ok_or_else(|| AppError::validation("model download has no files"))?;
     downloaded.size_bytes = completed;
     if include_companions {
         snapshots::validate_gguf_companions(Path::new(&downloaded.path))?;
@@ -1221,18 +1333,20 @@ async fn download_file<F>(
     models_dir: &str,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<DownloadedModel, String>
+) -> Result<DownloadedModel, AppError>
 where
     F: FnMut(&'static str, u64, u64),
 {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let file_path = file.path.as_str();
     let target = target_path(models_dir, repo_id, file_path)?;
     let total = file.size_bytes;
     if total > MAX_MODEL_BYTES {
-        return Err("model file exceeds the 512 GiB safety limit".into());
+        return Err(AppError::validation(
+            "model file exceeds the 512 GiB safety limit",
+        ));
     }
     let oid = file
         .oid
@@ -1240,10 +1354,14 @@ where
         .filter(|oid| digests::valid_oid(Some(oid)));
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err("model destination must not be a symbolic link".into());
+            return Err(AppError::validation(
+                "model destination must not be a symbolic link",
+            ));
         }
         Ok(metadata) if !metadata.is_file() => {
-            return Err("model destination is not a regular file".into());
+            return Err(AppError::validation(
+                "model destination is not a regular file",
+            ));
         }
         Ok(metadata) => {
             if let Some(oid) = oid {
@@ -1281,12 +1399,15 @@ where
                     size_bytes: total,
                 });
             }
-            return Err("a different model already exists at the download destination".into());
+            return Err(AppError::busy(
+                "a different model already exists at the download destination",
+            ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(format!(
-                "cannot inspect existing model destination: {error}"
+            return Err(io_error(
+                &error,
+                format!("cannot inspect existing model destination: {error}"),
             ));
         }
     }
@@ -1303,7 +1424,7 @@ where
         // The complete, verified bytes stay staged; the next attempt only
         // re-reads them before activating.
         progress("cancelled", total, total);
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     if let Err(error) = activate_download(&part, &target).await {
         let _ = tokio::fs::remove_file(&part).await;
@@ -1321,6 +1442,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hub_redirect_hosts_include_cdn_and_xet_but_not_lookalike_domains() {
+        for host in [
+            "huggingface.co",
+            "hf.co",
+            "cdn-lfs.huggingface.co",
+            "cas-bridge.xethub.hf.co",
+        ] {
+            assert!(trusted_hf_host(host), "{host}");
+        }
+        for host in [
+            "huggingface.co.example.com",
+            "evilhf.co",
+            "localhost",
+            "127.0.0.1",
+        ] {
+            assert!(!trusted_hf_host(host), "{host}");
+        }
+    }
 
     fn model_file(path: &str, size_bytes: u64) -> HfFile {
         HfFile {
@@ -1354,9 +1495,9 @@ mod tests {
             model_file("Q8/model-00002-of-00002.gguf", 10),
             model_file("mmproj.gguf", 20),
         ];
-        assert!(model_download_plan(&files, "Q4/model-00001-of-00002.gguf")
-            .unwrap_err()
-            .contains("Q4/model-00002-of-00002.gguf"));
+        let error = model_download_plan(&files, "Q4/model-00001-of-00002.gguf").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NotFound);
+        assert!(error.message.contains("Q4/model-00002-of-00002.gguf"));
         assert_eq!(model_download_plan(&files, "mmproj.gguf").unwrap().len(), 1);
     }
 
@@ -1388,7 +1529,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error, DOWNLOAD_CANCELLED);
+        assert_eq!(error, AppError::cancelled(DOWNLOAD_CANCELLED));
         assert!(cancel.load(Ordering::Acquire));
         assert_eq!(fs::read(done.path).unwrap(), b"one");
         assert!(
@@ -1537,7 +1678,7 @@ mod tests {
         )
         .await
         .expect_err("reject a checksum mismatch");
-        assert!(error.contains("checksum does not match"), "{error}");
+        assert!(error.message.contains("checksum does not match"), "{error}");
         assert!(!part.exists(), "corrupt staging file must be removed");
         server.await.expect("download server finished");
         fs::remove_dir_all(root).expect("remove download fixture");
@@ -1557,7 +1698,10 @@ mod tests {
         )
         .await
         .expect_err("reject an interrupted response");
-        assert!(error.contains("model download stream failed"), "{error}");
+        assert!(
+            error.message.contains("model download stream failed"),
+            "{error}"
+        );
         assert!(!part.exists(), "partial staging file must be removed");
         server.await.expect("download server finished");
         fs::remove_dir_all(root).expect("remove download fixture");
@@ -1588,7 +1732,7 @@ mod tests {
         .await
         .expect("cancellation must not wait for another response chunk")
         .expect_err("cancel stalled transfer");
-        assert_eq!(error, DOWNLOAD_CANCELLED);
+        assert_eq!(error, AppError::cancelled(DOWNLOAD_CANCELLED));
         assert_eq!(updates.last(), Some(&("cancelled", 7, 100)));
         assert!(!part.exists(), "cancelled staging file must be removed");
         cancel_task.await.expect("cancel task finished");
@@ -1962,7 +2106,7 @@ mod tests {
             .block_on(search_format("qwen", 5, "popularity", "gguf"));
         assert_eq!(
             rejected.err(),
-            Some("model sort order is not supported".to_string())
+            Some(AppError::validation("model sort order is not supported"))
         );
     }
 
@@ -2010,7 +2154,7 @@ mod tests {
         for format in ["", "ALL", "onnx", "bin"] {
             assert_eq!(
                 search_url("", 30, "downloads", format).unwrap_err(),
-                "unsupported model format"
+                AppError::validation("unsupported model format")
             );
         }
         let long = "q".repeat(MAX_QUERY_LENGTH + 1);

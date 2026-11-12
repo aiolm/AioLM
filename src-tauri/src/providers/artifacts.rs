@@ -1257,7 +1257,7 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
         }
         Err(error) => {
             incomplete = true;
-            notes.push(error);
+            notes.push(error.message);
         }
         Ok(None) => {}
     }

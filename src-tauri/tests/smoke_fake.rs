@@ -27,6 +27,16 @@ fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
         "llama-server"
     };
     fs::copy(fixture, runtime_dir.join(staged_name)).expect("stage fake llama-server fixture");
+    #[cfg(windows)]
+    {
+        // The fixture uses shared provider helpers, so a dynamically linked
+        // WebView loader must travel with it into the cleared runtime environment.
+        let loader = std::path::Path::new(fixture).with_file_name("WebView2Loader.dll");
+        if loader.is_file() {
+            fs::copy(loader, runtime_dir.join("WebView2Loader.dll"))
+                .expect("stage the fixture's WebView loader");
+        }
+    }
 
     // `runtimes_root()` derives from the data folder; point it at the
     // throwaway root. This test binary is single-threaded at the point this
@@ -345,7 +355,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
             readiness,
         ));
         if let Some(message) = expected_error {
-            assert!(outcome.unwrap_err().contains(message), "{flag}");
+            assert!(outcome.unwrap_err().message.contains(message), "{flag}");
             assert!(
                 state.lock().unwrap().child.is_none(),
                 "failed verification must reap its owned child"
@@ -416,21 +426,25 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         .expect("a failed engine must report promptly")
         .expect_err("the engine must not become ready");
     assert!(
-        failure.contains("server exited before ready (7)"),
+        failure.message.contains("server exited before ready (7)"),
         "{failure}"
     );
     assert!(
-        failure.contains("engine core: synthetic allocation failed 🙂"),
+        failure
+            .message
+            .contains("engine core: synthetic allocation failed 🙂"),
         "missing core error: {failure}"
     );
     assert!(
-        failure.contains("API wrapper: engine initialization failed"),
+        failure
+            .message
+            .contains("API wrapper: engine initialization failed"),
         "missing wrapper error: {failure}"
     );
-    assert!(failure.contains("[REDACTED]"));
-    assert!(!failure.contains(api_key));
+    assert!(failure.message.contains("[REDACTED]"));
+    assert!(!failure.message.contains(api_key));
     assert!(
-        failure.len() < 16384,
+        failure.message.len() < 16384,
         "large process output must stay bounded"
     );
     assert!(shared.lock().unwrap().child.is_none());
@@ -624,24 +638,24 @@ fn observe_loaded_binding(root: &std::path::Path) -> Result<BindingObservation, 
     });
     // wait_ready itself does not set Ready/execution. Reproduce the existing
     // successful caller's publication only after the actual readiness Result.
-    let (after_model, status, memory, stopped_memory) = {
+    let (after_model, status, memory, stopped_memory, teardown) = {
         let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
         let after_model = state.model.clone();
         if ready.is_ok() {
             state.lifecycle = server::Lifecycle::Ready;
             state.execution = Some(loaded.clone());
         }
-        let status = serde_json::to_value(aiolm_lib::session::build_status(
-            "named-A", "loaded A", &mut state, &ring,
-        ))
-        .map_err(|e| e.to_string())?;
+        let (status, teardown) =
+            aiolm_lib::session::build_status("named-A", "loaded A", &mut state, &ring);
         let memory = server::estimate_status_memory(&saved, &state);
         let live = state.lifecycle;
         state.lifecycle = server::Lifecycle::Stopped;
         let stopped_memory = server::estimate_status_memory(&saved, &state);
         state.lifecycle = live;
-        (after_model, status, memory, stopped_memory)
+        (after_model, status, memory, stopped_memory, teardown)
     };
+    drop(teardown);
+    let status = serde_json::to_value(status).map_err(|e| e.to_string())?;
     let saved_after =
         serde_json::to_value(aiolm_lib::config::load_result()?).map_err(|e| e.to_string())?;
     // Own all cleanup before any regression assertion, including dropped-future failure.
@@ -670,7 +684,7 @@ fn observe_loaded_binding(root: &std::path::Path) -> Result<BindingObservation, 
         child_removed,
         key_removed,
         port_released,
-        ready,
+        ready: ready.map_err(Into::into),
         readers_released,
         #[cfg(windows)]
         tree_exited,
@@ -1166,7 +1180,8 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         if provider == providers::ProviderId::MlxVlm {
             // mlx-vlm declares no force control: explicit refusal, no cap fallback.
             let error = prepared.err().expect("mlx-vlm cannot run fixed output");
-            assert!(error.contains("fixed-output control"), "{error}");
+            assert_eq!(error.kind, aiolm_lib::error::ErrorKind::Unavailable);
+            assert!(error.message.contains("fixed-output control"), "{error}");
             return;
         }
         let result = bench::run(

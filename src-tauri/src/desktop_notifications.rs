@@ -3,6 +3,7 @@
 //! GNOME can remove an application's notifications when its sender disconnects.
 //! Retaining one connection keeps a completed Notify call from immediately
 //! dismissing its own alert. The desktop still decides whether to display it.
+use crate::error::AppError;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -18,11 +19,11 @@ pub(crate) struct NotificationService {
     connection: Mutex<Option<Connection>>,
 }
 
-async fn bounded<T>(operation: impl Future<Output = zbus::Result<T>>) -> Result<T, String> {
+async fn bounded<T>(operation: impl Future<Output = zbus::Result<T>>) -> Result<T, AppError> {
     tokio::time::timeout(OPERATION_TIMEOUT, operation)
         .await
-        .map_err(|_| "Desktop notification service timed out".to_string())?
-        .map_err(|_| "Desktop notification service is unavailable".to_string())
+        .map_err(|_| AppError::timeout("Desktop notification service timed out"))?
+        .map_err(|_| AppError::unavailable("Desktop notification service is unavailable"))
 }
 
 async fn connection(
@@ -38,28 +39,33 @@ async fn connection(
     Ok(cached.as_ref().expect("connected above"))
 }
 
-fn accepted_id(reply: zbus::Message) -> Result<(), String> {
+fn accepted_id(reply: zbus::Message) -> Result<(), AppError> {
     match reply.body().deserialize::<u32>() {
         Ok(id) if id != 0 => Ok(()),
-        _ => Err("Desktop notification service returned an invalid reply".to_string()),
+        _ => Err(AppError::unavailable(
+            "Desktop notification service returned an invalid reply",
+        )),
     }
 }
 
 impl NotificationService {
-    pub(crate) async fn submit(&self, title: &str, body: &str) -> Result<(), String> {
+    pub(crate) async fn submit(&self, title: &str, body: &str) -> Result<(), AppError> {
         // Do not queue an unbounded number of alerts while the service is slow.
         let mut cached = self
             .connection
             .try_lock()
-            .map_err(|_| "A desktop notification is already being submitted".to_string())?;
+            .map_err(|_| AppError::busy("A desktop notification is already being submitted"))?;
         // Match the plugin's Linux app-name/auto-icon convention without
         // exposing the executable's directory to the notification service.
-        let executable = std::env::current_exe()
-            .map_err(|_| "Could not identify the notification application".to_string())?;
+        let executable = std::env::current_exe().map_err(|_| {
+            AppError::unavailable("Could not identify the notification application")
+        })?;
         let name = executable
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| "Could not identify the notification application".to_string())?;
+            .ok_or_else(|| {
+                AppError::unavailable("Could not identify the notification application")
+            })?;
         // One deadline covers acquisition, sending and waiting for the reply.
         // Dropping a timed-out wait does not undo remote acceptance.
         let reply = bounded(async {

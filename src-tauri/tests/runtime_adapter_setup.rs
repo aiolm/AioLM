@@ -87,6 +87,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     assert!(
         adapter_setup::prepare(&service, "partial", &partial, &inputs)
             .unwrap_err()
+            .message
             .contains("complete argv token")
     );
     let mut partial_resource = recipe.clone();
@@ -94,6 +95,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
     assert!(
         adapter_setup::prepare(&service, "partial-resource", &partial_resource, &inputs)
             .unwrap_err()
+            .message
             .contains("complete argv token")
     );
     let mut literal_json = recipe.clone();
@@ -123,6 +125,7 @@ fn imported_recipe_prepares_a_common_entry_and_cannot_publish_after_cancel() {
         .join()
         .unwrap()
         .unwrap_err()
+        .message
         .contains("did not complete"));
     assert!(
         start.elapsed() < Duration::from_secs(5),

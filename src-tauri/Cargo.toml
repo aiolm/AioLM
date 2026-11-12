@@ -141,7 +141,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["process", "fs", "time", "macros", "rt-multi-thread", "io-util", "net", "sync", "signal"] }
 futures-util = "0.3"
 which = "6"
-zip = "2"
+zip = "9"
 flate2 = "1"
 tar = "0.4"
 pdf-extract = "0.12"

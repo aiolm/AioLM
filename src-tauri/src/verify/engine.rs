@@ -29,6 +29,7 @@ use super::{
     MAX_MEDIAN_KLD, MAX_PERPLEXITY_RATIO, PROBE_CHUNKS, PROBE_TEXT, SUITE_VERSION,
 };
 use crate::config::AppConfig;
+use crate::error::AppError;
 use crate::providers::{
     artifacts::{self, ArtifactFormat, ModelArtifact},
     launch,
@@ -740,10 +741,13 @@ fn device_environment_identity(
 
 /// The refusal for a Python launch whose exact combination has a stored deep
 /// failure the user has not overridden.
-pub(crate) fn launch_refusal(cfg: &AppConfig) -> Option<String> {
+pub(crate) fn launch_refusal(cfg: &AppConfig) -> Option<AppError> {
     let runtime = crate::providers::selected_python_runtime(cfg).ok()?;
     let key = engine_key(cfg, &runtime, &crate::hardware::detect().fingerprint);
-    let cache = load_cache();
+    let cache = match load_cache() {
+        Ok(cache) => cache,
+        Err(error) => return Some(error),
+    };
     if cache.overrides.iter().any(|item| item == &key) {
         return None;
     }
@@ -786,7 +790,7 @@ pub(crate) async fn run_engine_script(
     job: Value,
     timeout: Duration,
     cancel: Arc<AtomicBool>,
-) -> Result<Value, String> {
+) -> Result<Value, AppError> {
     let python = runtime.python.clone();
     let managed = runtime.kind == InstallationKind::Managed;
     tokio::task::spawn_blocking(move || {
@@ -801,14 +805,14 @@ pub(crate) async fn run_engine_script(
         };
         builder
             .create(&directory)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         let _cleanup = JobDirectory(directory.clone());
         let input = directory.join("job.json");
         std::fs::write(
             &input,
             serde_json::to_vec(&job).map_err(|error| error.to_string())?,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
         let mut command = crate::procutil::std_command(&python);
         command
             .env_clear()
@@ -828,32 +832,36 @@ pub(crate) async fn run_engine_script(
             Some(&cancel),
         )
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::Interrupted => "cancelled".to_string(),
+            std::io::ErrorKind::Interrupted => AppError::cancelled("cancelled"),
             std::io::ErrorKind::TimedOut => {
-                format!("timed out after {} seconds", timeout.as_secs())
+                AppError::timeout(format!("timed out after {} seconds", timeout.as_secs()))
             }
-            _ => error.to_string(),
+            _ => AppError::from_io(&error),
         })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         match parse_script_output(&stdout) {
             Ok(value) if output.status.success() => Ok(value),
-            Ok(_) => Err(format!("the engine script exited with {}", output.status)),
-            Err(error) => Err(error),
+            Ok(_) => Err(AppError::internal(format!(
+                "the engine script exited with {}",
+                output.status
+            ))),
+            Err(error) => Err(error.into()),
         }
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(AppError::from)?
 }
 
 /// Score the selected Python engine's device path against a host reference
 /// over the user's own weights, store the verdict and return it.
-pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result<Record, String> {
+pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result<Record, AppError> {
+    let _verification = super::VERIFY_OPERATION.lock().await;
     if crate::providers::provider_of(cfg).is_custom() {
-        return Err("unsupported: this runtime adapter provides no reference comparison for deep verification".into());
+        return Err(AppError::validation("unsupported: this runtime adapter provides no reference comparison for deep verification"));
     }
     let runtime =
         crate::providers::refresh_selected_python_runtime(cfg, Some(cancel.clone())).await?;
-    crate::providers::execution::validate(cfg)?;
+    crate::providers::execution::validate(cfg).map_err(AppError::validation)?;
     let provider = runtime.provider;
     let accelerator = runtime
         .probe
@@ -862,20 +870,23 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
         .unwrap_or_default();
     let probe = runtime.probe.clone().unwrap_or_default();
     if !uses_device(provider, &probe.variant, &accelerator) {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "deep verification compares a device path against the host, but this {} runtime reports accelerator '{accelerator}', so there is nothing to compare",
             provider.server()
-        ));
+        )));
     }
     let model = cfg.active_model.trim();
     if model.is_empty() {
-        return Err("select a model before running deep verification".into());
+        return Err(AppError::validation(
+            "select a model before running deep verification",
+        ));
     }
     let options = launch::provider_options(cfg, provider);
-    let adapters = launch::lora_adapters(&options)?;
+    let adapters = launch::lora_adapters(&options).map_err(AppError::validation)?;
     let trust_remote_code = options.get("trust_remote_code").and_then(Value::as_bool) == Some(true);
     let key = engine_key(cfg, &runtime, &crate::hardware::detect().fingerprint);
-    if !crate::providers::execution::info(cfg)?
+    if !crate::providers::execution::info(cfg)
+        .map_err(AppError::validation)?
         .tasks
         .iter()
         .any(|task| task == "generate")
@@ -885,7 +896,7 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
             "none", Verdict::Unsupported, None,
             "deep verification compares next-token distributions of a generation model; transcription and embedding sessions need task-specific verification".into(),
         );
-        store_deep(&key, outcome.clone());
+        store_deep(&key, outcome.clone())?;
         return Ok(outcome);
     }
     let (ctx, chunks) = (deep_ctx(), deep_chunks());
@@ -907,7 +918,8 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
             run_engine_script(&runtime, MLX_SCRIPT, job, DEEP_PASS_TIMEOUT, cancel.clone())
                 .await
                 .and_then(|value| {
-                    serde_json::from_value::<MlxOutput>(value).map_err(|error| error.to_string())
+                    serde_json::from_value::<MlxOutput>(value)
+                        .map_err(|error| AppError::internal(error.to_string()))
                 })
                 .map(|output| mlx_verdict(&output, ctx))
                 .map_err(|error| format!("the MLX comparison did not complete: {error}."))
@@ -957,7 +969,7 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
                     .await
                     .and_then(|value| {
                         serde_json::from_value::<DeviceOutput>(value)
-                            .map_err(|error| error.to_string())
+                            .map_err(|error| AppError::internal(error.to_string()))
                     }) {
                         Err(error) => {
                             Err(format!("the vLLM device pass did not complete: {error}."))
@@ -978,7 +990,7 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
                             .await
                             .and_then(|value| {
                                 serde_json::from_value::<ReferenceOutput>(value)
-                                    .map_err(|error| error.to_string())
+                                    .map_err(|error| AppError::internal(error.to_string()))
                             })
                             .map(|reference| vllm_verdict(&device, &reference))
                             .map_err(|error| {
@@ -989,13 +1001,19 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
                 }
             }
         }
-        ProviderId::Custom(_) => return Err("unsupported external reference comparison".into()),
+        ProviderId::Custom(_) => {
+            return Err(AppError::validation(
+                "unsupported external reference comparison",
+            ))
+        }
         ProviderId::Llama => {
-            return Err("llama.cpp runtimes use llama-perplexity verification".into())
+            return Err(AppError::validation(
+                "llama.cpp runtimes use llama-perplexity verification",
+            ))
         }
     };
     if cancel.load(Ordering::Acquire) {
-        return Err("deep verification cancelled".into());
+        return Err(AppError::cancelled("deep verification cancelled"));
     }
     let method = if provider == ProviderId::Vllm {
         VLLM_METHOD
@@ -1010,7 +1028,7 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
     let outcome = outcome.unwrap_or_else(|detail| {
         engine_record(method, coverage, Verdict::Unsupported, None, detail)
     });
-    store_deep(&key, outcome.clone());
+    store_deep(&key, outcome.clone())?;
     Ok(outcome)
 }
 
@@ -1473,6 +1491,7 @@ mod tests {
         let error = run_engine_script(&runtime, "", json!({}), Duration::from_secs(30), cancel)
             .await
             .unwrap_err();
-        assert_eq!(error, "cancelled");
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "cancelled");
     }
 }

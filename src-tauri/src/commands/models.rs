@@ -1,8 +1,10 @@
 //! Local model selection, scanning and verified deletion IPC.
+//! Error kinds preserve scan cancellation, missing files, invalid selections,
+//! busy model/session bindings and internal task or filesystem failures.
 #[cfg(not(windows))]
 use super::files::open_verified_file;
 use crate::providers::artifacts::SnapshotDisplayName;
-use crate::{config, gguf, models, server, state::AppState};
+use crate::{config, error::AppError, gguf, models, server, state::AppState};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -12,7 +14,7 @@ use tauri::State;
 /// Read on demand for selected or visible models, separately from folder scans,
 /// so opening a large library does not require reading every file's header.
 #[tauri::command]
-pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, String> {
+pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, AppError> {
     let receipt_root = crate::benchmark::data_root().ok();
     tokio::task::spawn_blocking(move || {
         let models_root = config::load_result()
@@ -25,19 +27,19 @@ pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, 
         )
     })
     .await
-    .map_err(|error| format!("model metadata task failed: {error}"))?
+    .map_err(|error| AppError::internal(format!("model metadata task failed: {error}")))?
 }
 
 /// Resolve selected snapshot labels without inspecting weight contents.
 #[tauri::command]
 pub(crate) async fn snapshot_model_name(
     path: String,
-) -> Result<Option<SnapshotDisplayName>, String> {
+) -> Result<Option<SnapshotDisplayName>, AppError> {
     tokio::task::spawn_blocking(move || {
         crate::providers::artifacts::snapshot_display_name(Path::new(&path))
     })
     .await
-    .map_err(|error| format!("snapshot name task failed: {error}"))
+    .map_err(|error| AppError::internal(format!("snapshot name task failed: {error}")))
 }
 
 /// Pre-load VRAM and RAM/SSD offload plan for the configuration being edited.
@@ -48,22 +50,28 @@ pub(crate) async fn snapshot_model_name(
 pub(crate) async fn estimate_model_resources(
     config: config::AppConfig,
     runtime_devices: Option<Vec<String>>,
-) -> Result<crate::resource_estimate::ResourceEstimate, String> {
+) -> Result<crate::resource_estimate::ResourceEstimate, AppError> {
     tokio::task::spawn_blocking(move || {
         let devices = runtime_devices.unwrap_or_default();
         let environment = crate::resource_estimate::Environment::detect(&config, &devices);
         crate::resource_estimate::estimate(&config, &environment)
     })
     .await
-    .map_err(|error| format!("resource estimate task failed: {error}"))
+    .map_err(|error| AppError::internal(format!("resource estimate task failed: {error}")))
 }
 
 fn read_model_metadata(
     path: &Path,
     receipt_root: Option<&Path>,
     models_root: Option<&Path>,
-) -> Result<gguf::ModelMetadata, String> {
-    let mut metadata = gguf::read_metadata(path)?;
+) -> Result<gguf::ModelMetadata, AppError> {
+    let mut metadata = gguf::read_metadata(path).map_err(|message| {
+        if matches!(path.try_exists(), Ok(false)) {
+            AppError::not_found(message)
+        } else {
+            AppError::validation(message)
+        }
+    })?;
     metadata.download_repository = receipt_root
         .and_then(|root| crate::benchmark::download_receipt::read(root, path))
         .map(|receipt| receipt.repository);
@@ -95,7 +103,7 @@ pub(crate) async fn list_models(
     state: State<'_, AppState>,
     models_dir: String,
     scan_id: Option<String>,
-) -> Result<models::ModelScan, String> {
+) -> Result<models::ModelScan, AppError> {
     let job = scan_id.map(|id| state.model_scans.begin(id)).transpose()?;
     tokio::task::spawn_blocking(move || {
         let dir = if models_dir.trim().is_empty() {
@@ -115,16 +123,19 @@ pub(crate) async fn list_models(
         }
     })
     .await
-    .map_err(|error| format!("model scan task failed: {error}"))?
+    .map_err(|error| AppError::internal(format!("model scan task failed: {error}")))?
 }
 
 #[tauri::command]
-pub(crate) fn cancel_model_scan(state: State<'_, AppState>, scan_id: String) -> Result<(), String> {
+pub(crate) fn cancel_model_scan(
+    state: State<'_, AppState>,
+    scan_id: String,
+) -> Result<(), AppError> {
     state.model_scans.cancel(&scan_id)
 }
 
 #[cfg(windows)]
-fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
+fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), AppError> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::{null, null_mut};
@@ -138,9 +149,9 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
 
     let resolved_before = path
         .canonicalize()
-        .map_err(|error| format!("cannot resolve model before deletion: {error}"))?;
+        .map_err(|error| AppError::io("cannot resolve model before deletion", &error))?;
     if resolved_before != expected {
-        return Err("model path changed before deletion".into());
+        return Err(AppError::validation("model path changed before deletion"));
     }
     let wide_path: Vec<u16> = OsStr::new(path)
         .encode_wide()
@@ -158,27 +169,31 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
-        return Err(format!(
-            "cannot open model for deletion: {}",
-            std::io::Error::last_os_error()
+        return Err(AppError::io(
+            "cannot open model for deletion",
+            &std::io::Error::last_os_error(),
         ));
     }
     let result = (|| {
         let mut file_info = BY_HANDLE_FILE_INFORMATION::default();
         if unsafe { GetFileInformationByHandle(handle, &mut file_info) } == 0 {
-            return Err(format!(
-                "cannot inspect model before deletion: {}",
-                std::io::Error::last_os_error()
+            return Err(AppError::io(
+                "cannot inspect model before deletion",
+                &std::io::Error::last_os_error(),
             ));
         }
         if file_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err("model path must not be a reparse point".into());
+            return Err(AppError::validation(
+                "model path must not be a reparse point",
+            ));
         }
         let resolved_after = path
             .canonicalize()
-            .map_err(|error| format!("cannot resolve model before deletion: {error}"))?;
+            .map_err(|error| AppError::io("cannot resolve model before deletion", &error))?;
         if resolved_after != expected {
-            return Err("model path changed while it was being opened".into());
+            return Err(AppError::validation(
+                "model path changed while it was being opened",
+            ));
         }
         let mut disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
         if unsafe {
@@ -190,9 +205,9 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
             )
         } == 0
         {
-            return Err(format!(
-                "cannot delete model file: {}",
-                std::io::Error::last_os_error()
+            return Err(AppError::io(
+                "cannot delete model file",
+                &std::io::Error::last_os_error(),
             ));
         }
         Ok(())
@@ -202,9 +217,9 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
+fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), AppError> {
     let _file = open_verified_file(path, expected, "model")?;
-    fs::remove_file(path).map_err(|error| format!("cannot delete model file: {error}"))
+    fs::remove_file(path).map_err(|error| AppError::io("cannot delete model file", &error))
 }
 
 #[tauri::command]
@@ -212,7 +227,7 @@ pub(crate) async fn delete_model(
     state: State<'_, AppState>,
     path: String,
     paths: Option<Vec<String>>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let _operation = state.operation.lock().await;
     if state
         .server
@@ -221,7 +236,7 @@ pub(crate) async fn delete_model(
         .lifecycle
         .blocks_resource_change()
     {
-        return Err("stop the server before deleting a model".into());
+        return Err(AppError::busy("stop the server before deleting a model"));
     }
     let cfg = config::load_result()?;
     if Path::new(&path).is_dir() {
@@ -232,17 +247,17 @@ pub(crate) async fn delete_model(
                 .lock()
                 .map_err(|_| "server state lock was poisoned")?;
             if session_uses_snapshot(&live, &candidate) {
-                return Err(format!(
+                return Err(AppError::busy(format!(
                     "stop session '{}' before deleting a snapshot it is using",
                     entry.display_name()
-                ));
+                )));
             }
         }
         return delete_snapshot(&candidate);
     }
     let requested = paths.unwrap_or_else(|| vec![path.clone()]);
     if requested.is_empty() || requested.len() > 10_000 || !requested.contains(&path) {
-        return Err("invalid model file selection".into());
+        return Err(AppError::validation("invalid model file selection"));
     }
     let mut candidates = Vec::new();
     // Validate the entire selection before removing any shard. This preserves
@@ -261,10 +276,10 @@ pub(crate) async fn delete_model(
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
             if session_uses_model_file(&server, &candidate) {
-                return Err(format!(
+                return Err(AppError::busy(format!(
                     "stop session '{}' before deleting a model it is using",
                     entry.display_name()
-                ));
+                )));
             }
         }
         if cfg.lora_adapters.iter().any(|adapter| {
@@ -273,9 +288,9 @@ pub(crate) async fn delete_model(
                     .ok()
                     .is_some_and(|adapter_path| adapter_path == candidate)
         }) {
-            return Err(
-                "select another configuration before deleting an enabled LoRA adapter".into(),
-            );
+            return Err(AppError::busy(
+                "select another configuration before deleting an enabled LoRA adapter",
+            ));
         }
         if !candidates.contains(&candidate) {
             candidates.push(candidate);
@@ -343,16 +358,18 @@ fn config_binding_problem(cfg: &config::AppConfig, candidate: &Path) -> Option<&
 }
 
 /// Resolve a snapshot folder inside the library that no saved selection uses.
-fn ensure_deletable_snapshot(cfg: &config::AppConfig, path: &Path) -> Result<PathBuf, String> {
+fn ensure_deletable_snapshot(cfg: &config::AppConfig, path: &Path) -> Result<PathBuf, AppError> {
     let root = fs::canonicalize(&cfg.models_dir)
-        .map_err(|error| format!("cannot resolve models root: {error}"))?;
-    let candidate =
-        fs::canonicalize(path).map_err(|error| format!("cannot resolve snapshot path: {error}"))?;
+        .map_err(|error| AppError::io("cannot resolve models root", &error))?;
+    let candidate = fs::canonicalize(path)
+        .map_err(|error| AppError::io("cannot resolve snapshot path", &error))?;
     if !candidate.starts_with(&root) || candidate == root || !candidate.is_dir() {
-        return Err("snapshot must be a folder inside the configured models directory".into());
+        return Err(AppError::validation(
+            "snapshot must be a folder inside the configured models directory",
+        ));
     }
     if let Some(problem) = config_binding_problem(cfg, &candidate) {
-        return Err(problem.into());
+        return Err(AppError::busy(problem));
     }
     Ok(candidate)
 }
@@ -372,11 +389,11 @@ fn staged_name(file_name: &str) -> Option<&str> {
 /// removal: regular files its manifest lists, staging files this app left for
 /// them, then the manifest. Unlisted user files are never included. Folders
 /// are returned deepest first and are only ever removed when empty.
-fn snapshot_deletion_plan(directory: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+fn snapshot_deletion_plan(directory: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), AppError> {
     use crate::providers::artifacts::SNAPSHOT_MANIFEST;
     let manifest_path = directory.join(SNAPSHOT_MANIFEST);
     let manifest = crate::discover::read_snapshot_manifest(&manifest_path)?
-        .ok_or("only app-owned snapshots can be deleted; external folders and shared Hugging Face caches must be managed by their owner")?;
+        .ok_or_else(|| AppError::validation("only app-owned snapshots can be deleted; external folders and shared Hugging Face caches must be managed by their owner"))?;
     let mut listed: std::collections::BTreeMap<PathBuf, std::collections::HashSet<String>> =
         Default::default();
     listed
@@ -390,7 +407,7 @@ fn snapshot_deletion_plan(directory: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf
             candidate.parent(),
             candidate.file_name().and_then(|name| name.to_str()),
         ) else {
-            return Err("invalid snapshot ownership manifest".into());
+            return Err(AppError::validation("invalid snapshot ownership manifest"));
         };
         listed
             .entry(parent.to_path_buf())
@@ -404,16 +421,16 @@ fn snapshot_deletion_plan(directory: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf
                 files.push(candidate)
             }
             Ok(_) => {
-                return Err(format!(
+                return Err(AppError::validation(format!(
                     "snapshot entry is a link or not a regular file: {}",
                     file.path
-                ))
+                )))
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!(
-                    "cannot inspect snapshot file {}: {error}",
-                    file.path
+                return Err(AppError::io(
+                    &format!("cannot inspect snapshot file {}", file.path),
+                    &error,
                 ))
             }
         }
@@ -456,7 +473,7 @@ fn snapshot_deletion_plan(directory: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf
     Ok((files, folders))
 }
 
-fn delete_snapshot(directory: &Path) -> Result<(), String> {
+fn delete_snapshot(directory: &Path) -> Result<(), AppError> {
     let (files, folders) = snapshot_deletion_plan(directory)?;
     // The manifest is removed last, so an interrupted deletion can be retried.
     for file in &files {
@@ -471,7 +488,7 @@ fn delete_snapshot(directory: &Path) -> Result<(), String> {
 /// Delete an app-owned snapshot for non-GUI clients after the same saved
 /// binding checks as the desktop. Callers check their own running servers.
 /// The folder remains when it still holds files the manifest does not list.
-pub fn delete_owned_snapshot(cfg: &config::AppConfig, path: &Path) -> Result<PathBuf, String> {
+pub fn delete_owned_snapshot(cfg: &config::AppConfig, path: &Path) -> Result<PathBuf, AppError> {
     let candidate = ensure_deletable_snapshot(cfg, path)?;
     delete_snapshot(&candidate)?;
     Ok(candidate)
@@ -520,16 +537,16 @@ fn model_binding_uses_file(path: &Path, candidate: &Path) -> bool {
 }
 
 #[tauri::command]
-pub(crate) fn pick_models_dir() -> Option<String> {
-    rfd::FileDialog::new()
+pub(crate) fn pick_models_dir() -> Result<Option<String>, AppError> {
+    Ok(rfd::FileDialog::new()
         .set_title("Choose a GGUF models directory")
         .pick_folder()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
-pub(crate) fn pick_lora_adapter() -> Option<String> {
-    rfd::FileDialog::new()
+pub(crate) fn pick_lora_adapter() -> Result<Option<String>, AppError> {
+    Ok(rfd::FileDialog::new()
         .set_title("Choose a LoRA adapter GGUF")
         .add_filter("GGUF adapter", &["gguf"])
         .pick_file()
@@ -538,7 +555,7 @@ pub(crate) fn pick_lora_adapter() -> Option<String> {
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.eq_ignore_ascii_case("gguf"))
         })
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 fn ensure_deletable_model_path(
@@ -547,16 +564,18 @@ fn ensure_deletable_model_path(
     active_model: &str,
     active_mmproj: &str,
     active_draft: &str,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     let root = fs::canonicalize(models_root)
-        .map_err(|error| format!("cannot resolve models root: {error}"))?;
-    let candidate =
-        fs::canonicalize(path).map_err(|error| format!("cannot resolve model path: {error}"))?;
+        .map_err(|error| AppError::io("cannot resolve models root", &error))?;
+    let candidate = fs::canonicalize(path)
+        .map_err(|error| AppError::io("cannot resolve model path", &error))?;
     if !candidate.starts_with(&root) {
-        return Err("model path must stay inside the configured models directory".into());
+        return Err(AppError::validation(
+            "model path must stay inside the configured models directory",
+        ));
     }
     if !candidate.is_file() {
-        return Err("model path is not a regular file".into());
+        return Err(AppError::validation("model path is not a regular file"));
     }
     if !matches!(
         candidate
@@ -566,16 +585,18 @@ fn ensure_deletable_model_path(
             .as_deref(),
         Some("gguf") | Some("mmproj")
     ) {
-        return Err("only GGUF and mmproj files can be deleted".into());
+        return Err(AppError::validation(
+            "only GGUF and mmproj files can be deleted",
+        ));
     }
     for active in [active_model, active_mmproj, active_draft] {
         if active.is_empty() {
             continue;
         }
         if model_binding_uses_file(Path::new(active), &candidate) {
-            return Err(
-                "select another model/projector/draft before deleting the active file".into(),
-            );
+            return Err(AppError::busy(
+                "select another model/projector/draft before deleting the active file",
+            ));
         }
     }
     Ok(candidate)
@@ -588,7 +609,7 @@ pub fn deletable_model_path(
     active_model: &str,
     active_mmproj: &str,
     active_draft: &str,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     ensure_deletable_model_path(models_root, path, active_model, active_mmproj, active_draft)
 }
 
@@ -674,6 +695,50 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn model_metadata_distinguishes_missing_files_and_invalid_headers() {
+        let path = std::env::temp_dir().join(format!(
+            "aiolm-metadata-errors-{}.gguf",
+            uuid::Uuid::new_v4()
+        ));
+        let missing = model_metadata(path.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        assert_eq!(missing.kind, crate::error::ErrorKind::NotFound);
+        assert!(missing.message.starts_with("cannot open the model: "));
+        fs::write(&path, b"NOPE").unwrap();
+        let invalid = model_metadata(path.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        fs::remove_file(path).unwrap();
+        assert_eq!(invalid.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(invalid.message, "not a GGUF file");
+    }
+
+    #[test]
+    fn model_delete_errors_preserve_missing_validation_and_busy_kinds() {
+        use crate::error::ErrorKind;
+        let root =
+            std::env::temp_dir().join(format!("aiolm-delete-kinds-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let model = root.join("model.gguf");
+        fs::write(&model, b"model").unwrap();
+        let active = ensure_deletable_model_path(&root, &model, &model.to_string_lossy(), "", "")
+            .unwrap_err();
+        assert_eq!(active.kind, ErrorKind::Busy);
+        assert_eq!(
+            active.message,
+            "select another model/projector/draft before deleting the active file"
+        );
+        let missing =
+            ensure_deletable_model_path(&root, &root.join("missing.gguf"), "", "", "").unwrap_err();
+        assert_eq!(missing.kind, ErrorKind::NotFound);
+        let invalid = ensure_deletable_model_path(&root, &root, "", "", "").unwrap_err();
+        assert_eq!(invalid.kind, ErrorKind::Validation);
+        assert_eq!(invalid.message, "model path is not a regular file");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn model_delete_requires_root_containment_and_inactive_path() {
@@ -1033,6 +1098,7 @@ mod tests {
         fs::remove_file(snapshot.join(crate::providers::artifacts::SNAPSHOT_MANIFEST)).unwrap();
         assert!(delete_snapshot(&snapshot)
             .unwrap_err()
+            .message
             .contains("app-owned"));
         assert!(snapshot.join("config.json").exists());
         let _ = fs::remove_dir_all(root);

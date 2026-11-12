@@ -1,5 +1,5 @@
 //! Managed runtime installation, selection, diagnostics and transfer IPC.
-use crate::{backends, config, gpu, hardware, runtime, state::AppState};
+use crate::{backends, config, error::AppError, gpu, hardware, runtime, state::AppState};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -55,10 +55,10 @@ pub(super) async fn runtime_change_gate(
 }
 
 impl RuntimeBusyGuard {
-    pub(super) fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
+    pub(super) fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, AppError> {
         busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| Self { busy: busy.clone() })
-            .map_err(|_| "another runtime operation is already in progress".to_string())
+            .map_err(|_| AppError::busy("another runtime operation is already in progress"))
     }
 }
 
@@ -90,17 +90,17 @@ pub(crate) fn device_profile() -> DeviceReport {
 }
 
 #[tauri::command]
-pub(crate) async fn rt_list() -> Result<Vec<runtime::InstalledRuntime>, String> {
+pub(crate) async fn rt_list() -> Result<Vec<runtime::InstalledRuntime>, AppError> {
     tokio::task::spawn_blocking(runtime::list_installed)
         .await
-        .map_err(|error| format!("runtime list task failed: {error}"))
+        .map_err(|error| AppError::internal(format!("runtime list task failed: {error}")))
 }
 
 #[tauri::command]
 pub(crate) async fn rt_latest(
     backend: String,
     refresh: bool,
-) -> Result<runtime::LatestInfo, String> {
+) -> Result<runtime::LatestInfo, AppError> {
     if refresh {
         runtime::clear_api_cache();
     }
@@ -113,12 +113,12 @@ pub(crate) async fn rt_install(
     app: tauri::AppHandle,
     backend: String,
     build: String,
-) -> Result<runtime::InstalledRuntime, String> {
+) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = runtime_change_gate(&state).await;
         if runtime_resources_in_use(&state)? {
-            return Err("stop the server before changing runtimes".into());
+            return Err(AppError::busy("stop the server before changing runtimes"));
         }
     }
     runtime::validate_runtime_identifiers(&backend, &build)?;
@@ -132,7 +132,7 @@ pub(crate) async fn rt_install(
 pub(crate) async fn rt_pr_preview(
     backend: String,
     source: String,
-) -> Result<runtime::PullRequestPreview, String> {
+) -> Result<runtime::PullRequestPreview, AppError> {
     runtime::validate_source_build_backend(&backend)?;
     let preview = runtime::pull_request_preview(&backend, &source).await?;
     // A published artifact is already compiled and can be installed on a
@@ -141,7 +141,7 @@ pub(crate) async fn rt_pr_preview(
     // promises an install that cannot start.
     if preview.artifact.is_none() {
         runtime::source_build_preflight(&backend).await.map_err(|error| {
-            if let Some(artifact_error) = preview.artifact_error.as_deref() {
+            let message = if let Some(artifact_error) = preview.artifact_error.as_deref() {
                 format!(
                     "prebuilt PR artifact lookup failed: {artifact_error}; local source build is unavailable: {error}"
                 )
@@ -149,7 +149,8 @@ pub(crate) async fn rt_pr_preview(
                 format!(
                     "no compatible prebuilt PR artifact is published for this PC, and local source build is unavailable: {error}"
                 )
-            }
+            };
+            AppError::new(error.kind, message)
         })?;
     }
     Ok(preview)
@@ -162,12 +163,12 @@ pub(crate) async fn rt_install_pr(
     backend: String,
     source: String,
     confirmed_commit: String,
-) -> Result<runtime::InstalledRuntime, String> {
+) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = runtime_change_gate(&state).await;
         if runtime_resources_in_use(&state)? {
-            return Err("stop the server before changing runtimes".into());
+            return Err(AppError::busy("stop the server before changing runtimes"));
         }
     }
     // Re-validated here rather than trusted from the caller: the frontend's
@@ -191,12 +192,12 @@ pub(crate) async fn rt_export(
     app: tauri::AppHandle,
     backend: String,
     build: String,
-) -> Result<runtime::RuntimeBundleInfo, String> {
+) -> Result<runtime::RuntimeBundleInfo, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = runtime_change_gate(&state).await;
         if runtime_resources_in_use(&state)? {
-            return Err("stop the server before exporting a runtime".into());
+            return Err(AppError::busy("stop the server before exporting a runtime"));
         }
     }
     runtime::validate_runtime_identifiers(&backend, &build)?;
@@ -210,7 +211,7 @@ pub(crate) async fn rt_export(
     })
     .await
     .map_err(|error| format!("runtime export picker failed: {error}"))?
-    .ok_or_else(|| "runtime export cancelled".to_string())?;
+    .ok_or_else(|| AppError::cancelled("runtime export cancelled"))?;
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
     let progress_build = build.clone();
@@ -242,12 +243,12 @@ pub(crate) async fn rt_export(
 pub(crate) async fn rt_import(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<runtime::InstalledRuntime, String> {
+) -> Result<runtime::InstalledRuntime, AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = runtime_change_gate(&state).await;
         if runtime_resources_in_use(&state)? {
-            return Err("stop the server before importing a runtime".into());
+            return Err(AppError::busy("stop the server before importing a runtime"));
         }
     }
     let path = tokio::task::spawn_blocking(|| {
@@ -258,7 +259,7 @@ pub(crate) async fn rt_import(
     })
     .await
     .map_err(|error| format!("runtime import picker failed: {error}"))?
-    .ok_or_else(|| "runtime import cancelled".to_string())?;
+    .ok_or_else(|| AppError::cancelled("runtime import cancelled"))?;
     state.runtime_cancel.store(false, Ordering::Release);
     let cancel = state.runtime_cancel.clone();
     let progress_app = app.clone();
@@ -291,12 +292,12 @@ pub(crate) async fn rt_uninstall(
     state: State<'_, AppState>,
     backend: String,
     build: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = runtime_change_gate(&state).await;
         if runtime_resources_in_use(&state)? {
-            return Err("stop the server before changing runtimes".into());
+            return Err(AppError::busy("stop the server before changing runtimes"));
         }
     }
     let (removed_backend, removed_build) = (backend.clone(), build.clone());
@@ -307,10 +308,15 @@ pub(crate) async fn rt_uninstall(
     // build has to reach every profile naming it. Done after the files are gone:
     // a failed uninstall must leave the settings describing what is still there.
     let _config_write = state.config_write.lock().await;
-    let mut cfg = config::load_result()?;
-    if config::profiles::forget_runtime(&mut cfg, &removed_backend, &removed_build) {
-        config::save(&cfg)?;
-    }
+    tokio::task::spawn_blocking(move || {
+        let mut cfg = config::load_result()?;
+        if config::profiles::forget_runtime(&mut cfg, &removed_backend, &removed_build) {
+            config::save(&cfg)?;
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|error| format!("runtime profile cleanup task failed: {error}"))??;
     Ok(())
 }
 
@@ -382,7 +388,7 @@ fn needs_saved_gpu_realignment(previous: &config::AppConfig, cfg: &config::AppCo
 pub(crate) async fn rt_probe(
     backend: String,
     build: String,
-) -> Result<runtime::RuntimeCapabilities, String> {
+) -> Result<runtime::RuntimeCapabilities, AppError> {
     runtime::probe(&backend, &build).await
 }
 
@@ -430,7 +436,14 @@ mod tests {
         for _ in 0..3 {
             {
                 let guard = super::RuntimeBusyGuard::acquire(&busy).expect("acquire runtime");
-                assert!(super::RuntimeBusyGuard::acquire(&busy).is_err());
+                let error = super::RuntimeBusyGuard::acquire(&busy)
+                    .err()
+                    .expect("busy guard");
+                assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+                assert_eq!(
+                    error.message,
+                    "another runtime operation is already in progress"
+                );
                 // Dropping this guard models success, an error, and a
                 // cancellation unwinding the async install future.
                 drop(guard);

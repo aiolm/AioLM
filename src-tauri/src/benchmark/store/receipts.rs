@@ -5,6 +5,7 @@ use super::{
     files, replay_run, sync_parent, JournalOrigin, RunLock, StoreLock, ACTIVE_RUNS,
     MAX_JOURNAL_BYTES,
 };
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -109,43 +110,50 @@ fn candidate_path(root: &Path, run_id: &str) -> PathBuf {
     root.join("recent-cache").join(receipt_name(run_id))
 }
 
-pub(super) fn has_tombstone(root: &Path, run_id: &str) -> Result<bool, String> {
+pub(super) fn has_tombstone(root: &Path, run_id: &str) -> Result<bool, AppError> {
     match fs::symlink_metadata(receipt_path(root, run_id)) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!(
-            "cannot check an accepted benchmark receipt: {error}"
+        Err(error) => Err(AppError::io(
+            "cannot check an accepted benchmark receipt",
+            &error,
         )),
     }
 }
 
-fn read_accepted(path: &Path) -> Result<Option<AcceptedUpload>, String> {
+fn read_accepted(path: &Path) -> Result<Option<AcceptedUpload>, AppError> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(format!(
-                "cannot read an accepted benchmark receipt: {error}"
+            return Err(AppError::io(
+                "cannot read an accepted benchmark receipt",
+                &error,
             ))
         }
     };
     let mut bytes = Vec::new();
     file.take(MAX_RECEIPT_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AppError::from_io(&error))?;
     if bytes.len() as u64 > MAX_RECEIPT_BYTES {
-        return Err("accepted benchmark receipt exceeds the size limit".into());
+        return Err(AppError::validation(
+            "accepted benchmark receipt exceeds the size limit",
+        ));
     }
-    let accepted: AcceptedUpload = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid accepted benchmark receipt: {error}"))?;
-    accepted.receipt.validate()?;
+    let accepted: AcceptedUpload = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::validation(format!("invalid accepted benchmark receipt: {error}"))
+    })?;
+    accepted.receipt.validate().map_err(AppError::validation)?;
     if accepted.schema_version != 1
         || accepted.run_id.is_empty()
         || accepted.run_id.len() > 128
         || accepted.acknowledged_at > 8_640_000_000_000_000
         || path.file_name().and_then(|name| name.to_str()) != Some(&receipt_name(&accepted.run_id))
     {
-        return Err("accepted benchmark receipt identity does not match its file".into());
+        return Err(AppError::validation(
+            "accepted benchmark receipt identity does not match its file",
+        ));
     }
     if let Some(candidate) = &accepted.candidate {
         let suffix = format!("{:x}.jsonl", Sha256::digest(accepted.run_id.as_bytes()));
@@ -157,7 +165,9 @@ fn read_accepted(path: &Path) -> Result<Option<AcceptedUpload>, String> {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err("accepted benchmark cache metadata is invalid".into());
+            return Err(AppError::validation(
+                "accepted benchmark cache metadata is invalid",
+            ));
         }
     }
     Ok(Some(accepted))
@@ -182,16 +192,18 @@ pub(super) fn attach_state(root: &Path, record: &mut Value) -> Result<(), String
     Ok(())
 }
 
-fn journal_fingerprint(path: &Path) -> Result<(u64, String), String> {
+fn journal_fingerprint(path: &Path) -> Result<(u64, String), AppError> {
     if !fs::symlink_metadata(path)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .file_type()
         .is_file()
     {
-        return Err("benchmark cache journal must remain a regular file".into());
+        return Err(AppError::validation(
+            "benchmark cache journal must remain a regular file",
+        ));
     }
     let mut reader = File::open(path)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .take(MAX_JOURNAL_BYTES + 1);
     let mut hash = Sha256::new();
     let mut size = 0;
@@ -199,20 +211,22 @@ fn journal_fingerprint(path: &Path) -> Result<(u64, String), String> {
     loop {
         let count = reader
             .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AppError::from_io(&error))?;
         if count == 0 {
             break;
         }
         size += count as u64;
         if size > MAX_JOURNAL_BYTES {
-            return Err("benchmark journal exceeds the size limit".into());
+            return Err(AppError::validation(
+                "benchmark journal exceeds the size limit",
+            ));
         }
         hash.update(&buffer[..count]);
     }
     Ok((size, format!("{:x}", hash.finalize())))
 }
 
-fn ensure_durable_receipt(path: &Path) -> Result<(), String> {
+fn ensure_durable_receipt(path: &Path) -> Result<(), AppError> {
     // A previous rename may have become visible even though directory syncing
     // failed. Revalidate durability without rewriting immutable receipt bytes.
     std::fs::OpenOptions::new()
@@ -220,7 +234,7 @@ fn ensure_durable_receipt(path: &Path) -> Result<(), String> {
         .write(true)
         .open(path)
         .and_then(|file| file.sync_all())
-        .map_err(|error| format!("cannot durably save accepted benchmark receipt: {error}"))?;
+        .map_err(|error| AppError::io("cannot durably save accepted benchmark receipt", &error))?;
     // Persist directory entries through the existing filesystem root, including
     // a newly created application data directory on the first acknowledgement.
     let mut entry = path;
@@ -237,8 +251,8 @@ fn ensure_durable_receipt(path: &Path) -> Result<(), String> {
 fn durable_receipt(
     path: &Path,
     bytes: &[u8],
-    ensure_durable: &dyn Fn(&Path) -> Result<(), String>,
-) -> Result<(), String> {
+    ensure_durable: &dyn Fn(&Path) -> Result<(), AppError>,
+) -> Result<(), AppError> {
     crate::config::atomic_write(path, bytes)?;
     ensure_durable(path)
 }
@@ -247,7 +261,7 @@ pub(crate) fn acknowledge(
     root: &Path,
     run_id: &str,
     receipt: UploadReceipt,
-) -> Result<Acknowledgement, String> {
+) -> Result<Acknowledgement, AppError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -260,7 +274,7 @@ fn acknowledge_at(
     run_id: &str,
     receipt: UploadReceipt,
     now: u64,
-) -> Result<Acknowledgement, String> {
+) -> Result<Acknowledgement, AppError> {
     acknowledge_at_with_durability(root, run_id, receipt, now, &ensure_durable_receipt)
 }
 
@@ -269,17 +283,19 @@ fn acknowledge_at_with_durability(
     run_id: &str,
     receipt: UploadReceipt,
     now: u64,
-    ensure_durable: &dyn Fn(&Path) -> Result<(), String>,
-) -> Result<Acknowledgement, String> {
-    receipt.validate()?;
+    ensure_durable: &dyn Fn(&Path) -> Result<(), AppError>,
+) -> Result<Acknowledgement, AppError> {
+    receipt.validate().map_err(AppError::validation)?;
     if run_id.is_empty() || run_id.len() > 128 {
-        return Err("invalid benchmark run id".into());
+        return Err(AppError::validation("invalid benchmark run id"));
     }
     let _lock = StoreLock::acquire(root)?;
     let accepted_path = receipt_path(root, run_id);
     if let Some(existing) = read_accepted(&accepted_path)? {
         if existing.receipt != receipt {
-            return Err("this benchmark already has a different accepted upload receipt".into());
+            return Err(AppError::validation(
+                "this benchmark already has a different accepted upload receipt",
+            ));
         }
         // Existing mappings and acceptance timestamps are immutable. Retrying
         // a successful acknowledgement needs no receipt rewrite or network call.
@@ -298,7 +314,9 @@ fn acknowledge_at_with_durability(
             .is_some_and(|name| name.ends_with(&digest))
     }) else {
         if !super::deletions::has_tombstone(root, run_id)? {
-            return Err("the local benchmark recovery record was not found".into());
+            return Err(AppError::not_found(
+                "the local benchmark recovery record was not found",
+            ));
         }
         // The user deleted the local copy while its upload was in flight.
         // Server acceptance is still recorded; there is no journal to cache.
@@ -324,12 +342,16 @@ fn acknowledge_at_with_durability(
         .map_err(|_| "active benchmark store lock was poisoned")?
         .contains(&path)
     {
-        return Err("wait for the benchmark to finish before acknowledging its upload".into());
+        return Err(AppError::busy(
+            "wait for the benchmark to finish before acknowledging its upload",
+        ));
     }
-    let run_lock = RunLock::acquire(root, run_id)?.ok_or("wait for the benchmark in the other application instance to finish before acknowledging its upload")?;
+    let run_lock = RunLock::acquire(root, run_id)?.ok_or_else(|| AppError::busy("wait for the benchmark in the other application instance to finish before acknowledging its upload"))?;
     let run = replay_run(&path)?;
     if run.record["id"] != run_id {
-        return Err("benchmark recovery record identity does not match".into());
+        return Err(AppError::validation(
+            "benchmark recovery record identity does not match",
+        ));
     }
     let candidate = if run.origin == Some(JournalOrigin::Native)
         && run.finalized
@@ -391,7 +413,7 @@ fn prune_cache_with_durability(
     root: &Path,
     limit: usize,
     mut remove_journal: impl FnMut(&Path) -> std::io::Result<()>,
-    ensure_durable: &dyn Fn(&Path) -> Result<(), String>,
+    ensure_durable: &dyn Fn(&Path) -> Result<(), AppError>,
 ) -> Acknowledgement {
     let mut result = Acknowledgement {
         acknowledged: true,
@@ -513,7 +535,7 @@ fn prune_cache_with_durability(
             fs::remove_file(&marker).map_err(|error| {
                 format!("accepted benchmark cache marker cleanup failed: {error}")
             })?;
-            sync_parent(&marker)
+            sync_parent(&marker).map_err(Into::into)
         })();
         if let Err(error) = prune {
             result.warnings.push(error);
@@ -592,7 +614,7 @@ mod tests {
             if stage == "candidate-write" {
                 fs::write(root.join("recent-cache"), b"synthetic parent obstruction").unwrap();
             }
-            let ensure = |path: &Path| -> Result<(), String> {
+            let ensure = |path: &Path| -> Result<(), AppError> {
                 calls.borrow_mut().push(path.to_owned());
                 // Each callback must follow its own complete atomic write.
                 assert_eq!(fs::read(path).unwrap(), expected_bytes);
@@ -623,7 +645,7 @@ mod tests {
                 assert!(acknowledged.warnings.is_empty());
             } else if stage.ends_with("sync") {
                 assert_eq!(
-                    result.err().as_deref(),
+                    result.err().map(|error| error.message).as_deref(),
                     Some("synthetic receipt durability failure")
                 );
             } else {
@@ -763,16 +785,40 @@ mod tests {
     #[test]
     fn active_runs_and_invalid_receipts_cannot_be_acknowledged() {
         let root = fixtures::root();
+        assert_eq!(
+            acknowledge_at(&root, "missing", receipt(1), 10)
+                .err()
+                .unwrap(),
+            AppError::not_found("the local benchmark recovery record was not found")
+        );
         let journal = RunJournal::begin(&root, fixtures::record("active", 1)).unwrap();
-        assert!(acknowledge_at(&root, "active", receipt(1), 10).is_err());
+        assert_eq!(
+            acknowledge_at(&root, "active", receipt(1), 10)
+                .err()
+                .unwrap()
+                .kind,
+            crate::error::ErrorKind::Busy
+        );
         assert!(!has_tombstone(&root, "active").unwrap());
         drop(journal);
         let mut invalid = receipt(1);
         invalid.destination = "http://external.example.test/v1/benchmark-runs".into();
-        assert!(acknowledge_at(&root, "active", invalid, 10).is_err());
+        assert_eq!(
+            acknowledge_at(&root, "active", invalid, 10)
+                .err()
+                .unwrap()
+                .kind,
+            crate::error::ErrorKind::Validation
+        );
         let mut invalid = receipt(1);
         invalid.url = Some("https://other.example.test/runs/1".into());
-        assert!(acknowledge_at(&root, "active", invalid, 10).is_err());
+        assert_eq!(
+            acknowledge_at(&root, "active", invalid, 10)
+                .err()
+                .unwrap()
+                .kind,
+            crate::error::ErrorKind::Validation
+        );
         assert_eq!(
             list(&root, 0, 20).unwrap().records[0]["localState"],
             "recovery"
@@ -925,7 +971,7 @@ mod tests {
                     Ok(_) => "accepted",
                     Err(error) => {
                         assert!(
-                            error.contains("different accepted upload receipt"),
+                            error.message.contains("different accepted upload receipt"),
                             "{error}"
                         );
                         "conflict"

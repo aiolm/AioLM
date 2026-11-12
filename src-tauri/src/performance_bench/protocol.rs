@@ -1,4 +1,5 @@
 //! Client-observed OpenAI chat streaming measurements, independent of engine identity.
+use crate::error::{AppError, ErrorKind};
 use crate::providers::sse::Framer;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -304,7 +305,7 @@ pub(super) async fn request(
     request: &reqwest::Request,
     cancel: &AtomicBool,
     budget: Budget,
-) -> Result<Measurement, String> {
+) -> Result<Measurement, AppError> {
     let started = Instant::now();
     let work = async {
         let request = request
@@ -313,9 +314,12 @@ pub(super) async fn request(
         let mut response = client
             .execute(request)
             .await
-            .map_err(|error| format!("benchmark request failed: {error}"))?;
+            .map_err(|error| request_error("benchmark request failed", error))?;
         if !response.status().is_success() {
-            return Err(format!("benchmark HTTP {}", response.status()));
+            return Err(AppError::unavailable(format!(
+                "benchmark HTTP {}",
+                response.status()
+            )));
         }
         if !response
             .headers()
@@ -328,25 +332,41 @@ pub(super) async fn request(
                     .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("text/event-stream"))
             })
         {
-            return Err("benchmark response is not an event stream".into());
+            return Err(AppError::unavailable(
+                "benchmark response is not an event stream",
+            ));
         }
         let mut stream = CompletionStream::new(budget.response_bytes);
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|error| format!("benchmark stream failed: {error}"))?
+            .map_err(|error| request_error("benchmark stream failed", error))?
         {
-            if stream.push(&chunk, Instant::now())? {
+            if stream
+                .push(&chunk, Instant::now())
+                .map_err(AppError::unavailable)?
+            {
                 break;
             }
         }
-        stream.complete(started)
+        stream.complete(started).map_err(AppError::unavailable)
     };
     tokio::select! {
         biased;
-        _ = cancelled(cancel) => Err("benchmark cancelled".into()),
-        result = tokio::time::timeout(budget.timeout, work) => result.unwrap_or_else(|_| Err("benchmark request timed out".into())),
+        _ = cancelled(cancel) => Err(AppError::cancelled("benchmark cancelled")),
+        result = tokio::time::timeout(budget.timeout, work) => result.unwrap_or_else(|_| Err(AppError::timeout("benchmark request timed out"))),
     }
+}
+
+fn request_error(context: &str, error: reqwest::Error) -> AppError {
+    AppError::new(
+        if error.is_timeout() {
+            ErrorKind::Timeout
+        } else {
+            ErrorKind::Unavailable
+        },
+        format!("{context}: {error}"),
+    )
 }
 
 #[cfg(test)]
@@ -835,14 +855,15 @@ mod tests {
             (401, b"data: [DONE]\n\n".to_vec()),
         ] {
             let (client, prepared, fixture) = http_fixture(status, body, false).await;
-            assert!(request(
+            let error = request(
                 &client,
                 &prepared,
                 &AtomicBool::new(false),
-                Budget::default()
+                Budget::default(),
             )
             .await
-            .is_err());
+            .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Unavailable);
             fixture.await.unwrap();
         }
     }
@@ -851,18 +872,18 @@ mod tests {
     async fn request_deadline_and_cancellation_discard_unfinished_output() {
         let partial = event(json!({"choices":[{"delta":{"content":"partial"}}]})).into_bytes();
         let (client, prepared, fixture) = http_fixture(200, partial.clone(), true).await;
-        assert!(request(
+        let timeout = request(
             &client,
             &prepared,
             &AtomicBool::new(false),
             Budget {
                 timeout: Duration::from_millis(100),
                 ..Budget::default()
-            }
+            },
         )
         .await
-        .unwrap_err()
-        .contains("timed out"));
+        .unwrap_err();
+        assert_eq!(timeout, AppError::timeout("benchmark request timed out"));
         fixture.abort();
         let (client, prepared, fixture) = http_fixture(200, partial, true).await;
         let cancel = AtomicBool::new(false);
@@ -872,7 +893,10 @@ mod tests {
             cancel.store(true, Ordering::Release);
         };
         let (result, ()) = tokio::join!(operation, stop);
-        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(
+            result.unwrap_err(),
+            AppError::cancelled("benchmark cancelled")
+        );
         fixture.abort();
     }
 }

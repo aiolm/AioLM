@@ -3,6 +3,42 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+/// Remove terminal CSI and OSC controls while retaining ordinary log text.
+pub(crate) fn strip_ansi(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(current) = chars.next() {
+        if current != '\u{1b}' {
+            result.push(current);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                    if next == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Retain {
     /// Version banners and help text are parsed from the beginning.
@@ -107,6 +143,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_controls_do_not_hide_following_diagnostics() {
+        assert_eq!(strip_ansi("前🙂 \x1b[31merror\x1b[0m"), "前🙂 error");
+        assert_eq!(
+            strip_ansi("before\x1b[1~after\x1b[2@tail"),
+            "beforeaftertail"
+        );
+        assert_eq!(strip_ansi("a\x1b]0;title\x07b\x1b]8;;url\x1b\\c"), "abc");
+        assert_eq!(strip_ansi("visible\x1b]unfinished"), "visible");
+        assert_eq!(strip_ansi("visible\x1b[31"), "visible");
+        assert_eq!(strip_ansi("\x1b\x1b[31merror\x1b[0m"), "error");
+    }
 
     #[test]
     fn diagnostics_are_independent_of_pipe_chunk_boundaries() {

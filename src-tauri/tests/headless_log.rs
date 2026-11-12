@@ -180,8 +180,28 @@ fn logs_survive_the_launcher_and_drain_redacted_bounded_output_at_eof() {
     );
 
     let retained = fs::read(&log).unwrap();
-    assert_eq!(retained.len(), MAX_LOG_BYTES);
-    let retained = String::from_utf8(retained).unwrap();
+    // The writer compacts above a two-window high-water mark; the public
+    // reader still exposes exactly the newest one-window tail.
+    assert!((MAX_LOG_BYTES..=2 * MAX_LOG_BYTES).contains(&retained.len()));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aiolm-cli"));
+    isolate_home(&mut command, &home);
+    let output = command.args(["server", "logs", "1000"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "cannot read collector log: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let retained = String::from_utf8(retained[retained.len() - MAX_LOG_BYTES..].to_vec()).unwrap();
+    let lines = response["lines"].as_array().unwrap();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        retained
+    );
     assert!(!retained.contains("after-launcher-exit"));
     assert!(retained.contains("bounded-0269"));
     assert!(retained.ends_with("final-tail token=[REDACTED]"));

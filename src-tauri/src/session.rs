@@ -177,11 +177,13 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(id)?;
-        let mut state = entry.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.retired = true;
-        state.cancel_launch();
-        server::kill(&mut state.child, Some(entry.err.clone()));
-        drop(state);
+        let teardown = {
+            let mut state = entry.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.retired = true;
+            state.cancel_launch();
+            state.take_child_clearing(&entry.err)
+        };
+        drop(teardown);
         self.cancel_pending_start(id);
         Some(entry)
     }
@@ -227,20 +229,29 @@ pub fn ids_to_stop_for_policy(all_ids: &[String], starting_id: &str) -> Vec<Stri
 /// ordinary, retryable "failed to start" error rather than corrupting any
 /// state, which is why this loops a bounded number of times against the
 /// caller's excluded-port list rather than trying to close the race window.
-pub fn pick_port(excluded: &[u16]) -> Result<u16, String> {
+pub fn pick_port(excluded: &[u16]) -> Result<u16, crate::error::AppError> {
     for _ in 0..16 {
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .map_err(|error| format!("failed to reserve a session port: {error}"))?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+            crate::error::AppError::unavailable(format!(
+                "failed to reserve a session port: {error}"
+            ))
+        })?;
         let port = listener
             .local_addr()
-            .map_err(|error| format!("failed to read reserved session port: {error}"))?
+            .map_err(|error| {
+                crate::error::AppError::unavailable(format!(
+                    "failed to read reserved session port: {error}"
+                ))
+            })?
             .port();
         drop(listener);
         if !excluded.contains(&port) {
             return Ok(port);
         }
     }
-    Err("could not find a free port for this session after multiple attempts".into())
+    Err(crate::error::AppError::unavailable(
+        "could not find a free port for this session after multiple attempts",
+    ))
 }
 
 /// Resolve the port a session should launch on: the caller's explicit choice
@@ -249,7 +260,7 @@ pub fn pick_port(excluded: &[u16]) -> Result<u16, String> {
 /// pick, so a config saved before multi-session support existed — whose
 /// `port` may collide with whatever else happens to be running — still gets
 /// its own port instead of failing to bind.
-pub fn effective_port(requested: u16, excluded: &[u16]) -> Result<u16, String> {
+pub fn effective_port(requested: u16, excluded: &[u16]) -> Result<u16, crate::error::AppError> {
     if requested != 0 && !excluded.contains(&requested) {
         return Ok(requested);
     }
@@ -291,62 +302,72 @@ pub struct SessionSummary {
     pub idle_seconds: u64,
 }
 
+/// Return a snapshot and cleanup to drop after releasing the session state lock.
+#[must_use]
 pub fn build_summary(
     id: &str,
     name: &str,
     state: &mut ServerState,
     err: &Arc<ErrBuf>,
-) -> SessionSummary {
-    server::reap_if_exited(state, err);
-    SessionSummary {
-        id: id.to_string(),
-        name: name.to_string(),
-        state: state.lifecycle.as_str().to_string(),
-        url: (!state.url.is_empty()).then(|| state.url.clone()),
-        model: (!state.model.is_empty()).then(|| state.model.clone()),
-        mmproj: (!state.mmproj.is_empty()).then(|| state.mmproj.clone()),
-        draft_model: (!state.draft_model.is_empty()).then(|| state.draft_model.clone()),
-        pid: state.child.as_ref().map(|child| child.id()),
-        active_requests: state.active_requests,
-        idle_seconds: state.idle_seconds(),
-    }
+) -> (SessionSummary, Option<server::Teardown>) {
+    let teardown = server::reap_if_exited(state, err);
+    (
+        SessionSummary {
+            id: id.to_string(),
+            name: name.to_string(),
+            state: state.lifecycle.as_str().to_string(),
+            url: (!state.url.is_empty()).then(|| state.url.clone()),
+            model: (!state.model.is_empty()).then(|| state.model.clone()),
+            mmproj: (!state.mmproj.is_empty()).then(|| state.mmproj.clone()),
+            draft_model: (!state.draft_model.is_empty()).then(|| state.draft_model.clone()),
+            pid: state.child.as_ref().map(|child| child.id()),
+            active_requests: state.active_requests,
+            idle_seconds: state.idle_seconds(),
+        },
+        teardown,
+    )
 }
 
 /// Reap a crashed child (see `server::reap_if_exited`) and snapshot the
 /// resulting state. Shared by the default session's status view and every
 /// entry in the registry so both report crashes identically.
+/// Drop the returned cleanup owner after releasing the session state lock.
+#[must_use]
 pub fn build_status(
     id: &str,
     name: &str,
     state: &mut ServerState,
     err: &Arc<ErrBuf>,
-) -> SessionStatus {
-    let summary = build_summary(id, name, state, err);
+) -> (SessionStatus, Option<server::Teardown>) {
+    let (summary, teardown) = build_summary(id, name, state, err);
     let log_tail = err.tail();
-    SessionStatus {
-        engine: state.engine.clone(),
-        id: summary.id,
-        name: summary.name,
-        state: summary.state,
-        url: summary.url,
-        model: summary.model,
-        mmproj: summary.mmproj,
-        draft_model: summary.draft_model,
-        api_key: (state.lifecycle == Lifecycle::Ready && !state.api_key.is_empty())
-            .then(|| state.api_key.clone()),
-        pid: summary.pid,
-        active_requests: summary.active_requests,
-        idle_seconds: summary.idle_seconds,
-        log_tail: (!log_tail.trim().is_empty()).then_some(log_tail),
-        error: state
-            .last_error
-            .as_ref()
-            .map(|error| server::redact_text(error, &state.redaction_secret)),
-        execution: state
-            .execution
-            .as_ref()
-            .map(crate::config::execution::snapshot),
-    }
+    (
+        SessionStatus {
+            engine: state.engine.clone(),
+            id: summary.id,
+            name: summary.name,
+            state: summary.state,
+            url: summary.url,
+            model: summary.model,
+            mmproj: summary.mmproj,
+            draft_model: summary.draft_model,
+            api_key: (state.lifecycle == Lifecycle::Ready && !state.api_key.is_empty())
+                .then(|| state.api_key.clone()),
+            pid: summary.pid,
+            active_requests: summary.active_requests,
+            idle_seconds: summary.idle_seconds,
+            log_tail: (!log_tail.trim().is_empty()).then_some(log_tail),
+            error: state
+                .last_error
+                .as_ref()
+                .map(|error| server::redact_text(error, &state.redaction_secret)),
+            execution: state
+                .execution
+                .as_ref()
+                .map(crate::config::execution::snapshot),
+        },
+        teardown,
+    )
 }
 
 #[cfg(test)]
@@ -361,13 +382,15 @@ mod tests {
         state.api_key = "synthetic-test-key".into();
         state.last_error = Some("synthetic diagnostic".into());
         let err = Arc::new(ErrBuf::default());
-        let summary =
-            serde_json::to_value(build_summary("test", "Test", &mut state, &err)).unwrap();
+        let (summary, teardown) = build_summary("test", "Test", &mut state, &err);
+        drop(teardown);
+        let summary = serde_json::to_value(summary).unwrap();
         assert_eq!(summary["model"], "models/synthetic.gguf");
         for field in ["api_key", "log_tail", "error", "execution"] {
             assert!(summary.get(field).is_none(), "summary must omit {field}");
         }
-        let detail = build_status("test", "Test", &mut state, &err);
+        let (detail, teardown) = build_status("test", "Test", &mut state, &err);
+        drop(teardown);
         assert_eq!(summary["state"], detail.state);
         assert_eq!(summary["active_requests"], detail.active_requests);
     }
@@ -495,8 +518,11 @@ mod tests {
         // running on a slow CI runner.
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        let mut state = entry.state.lock().unwrap();
-        let status = build_status(&entry.id, &entry.display_name(), &mut state, &entry.err);
+        let (status, teardown) = {
+            let mut state = entry.state.lock().unwrap();
+            build_status(&entry.id, &entry.display_name(), &mut state, &entry.err)
+        };
+        drop(teardown);
         assert_eq!(status.state, "crashed");
         assert!(
             status.api_key.is_none(),

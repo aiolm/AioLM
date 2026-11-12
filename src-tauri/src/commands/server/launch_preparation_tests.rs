@@ -260,30 +260,34 @@ async fn isolated_preparation_worker() {
             Err(error) => {
                 if case == "artifact-change" {
                     assert_eq!(
-                        error,
+                        error.message,
                         "adapter artifact changed; register the updated build explicitly"
                     );
                 } else if case.ends_with("failure") {
-                    assert!(error.contains("invalid weights in"), "{error}");
-                    assert!(error.contains(&cfg.active_model), "{error}");
+                    assert!(error.message.contains("invalid weights in"), "{error}");
+                    assert!(error.message.contains(&cfg.active_model), "{error}");
                     assert!(
-                        error.contains("request cancelled by upstream fixture"),
+                        error
+                            .message
+                            .contains("request cancelled by upstream fixture"),
                         "{error}"
                     );
                 } else if case.contains("cancel") {
-                    assert_eq!(error, "server start cancelled");
+                    assert_eq!(error.message, "server start cancelled");
+                    assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
                 } else if case.starts_with("busy-") {
                     assert!(
-                        error.contains("a runtime operation is in progress"),
+                        error.message.contains("a runtime operation is in progress"),
                         "{error}"
                     );
                 } else if case.starts_with("exit-") {
-                    assert_eq!(error, "application is exiting");
+                    assert_eq!(error.message, "application is exiting");
+                    assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
                 } else {
                     panic!("unexpected preparation failure in {case}: {error}");
                 }
                 assert_eq!(fs::read(config::config_path()).unwrap(), saved_bytes);
-                error
+                error.message
             }
         };
         assert!(!unrelated.cancel_flag().load(Ordering::Acquire));
@@ -321,7 +325,15 @@ async fn isolated_preparation_worker() {
         .await
         .err()
         .unwrap();
-        assert_eq!(error, expected);
+        assert_eq!(error.message, expected);
+        assert_eq!(
+            error.kind,
+            if busy {
+                crate::error::ErrorKind::Busy
+            } else {
+                crate::error::ErrorKind::Cancelled
+            }
+        );
     }
     fs::write(
         root.join("observations.json"),

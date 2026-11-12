@@ -9,12 +9,12 @@ use super::{
     },
     ProviderId,
 };
-use crate::config::AppConfig;
+use crate::{config::AppConfig, error::AppError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -282,10 +282,53 @@ struct Registration {
 struct CachedModelProbe {
     registration: PathBuf,
     fingerprint: String,
-    result: Result<ProbeResult, String>,
+    result: Result<ProbeResult, AppError>,
 }
-static MODEL_PROBES: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, CachedModelProbe>>> =
-    std::sync::OnceLock::new();
+#[derive(Default)]
+struct ModelProbeCache {
+    entries: BTreeMap<String, CachedModelProbe>,
+    order: VecDeque<String>,
+}
+
+impl ModelProbeCache {
+    fn touch(&mut self, key: &str) {
+        if self.order.back().is_some_and(|last| last == key) {
+            return;
+        }
+        let existing = self
+            .order
+            .iter()
+            .position(|entry| entry == key)
+            .and_then(|index| self.order.remove(index));
+        self.order
+            .push_back(existing.unwrap_or_else(|| key.to_owned()));
+    }
+
+    fn get(&mut self, key: &str) -> Option<CachedModelProbe> {
+        let entry = self.entries.get(key).cloned()?;
+        self.touch(key);
+        Some(entry)
+    }
+
+    fn insert(&mut self, key: String, entry: CachedModelProbe) {
+        if self.entries.len() >= 128 && !self.entries.contains_key(&key) {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.touch(&key);
+        self.entries.insert(key, entry);
+    }
+
+    fn remove_registration(&mut self, registration: &Path) {
+        self.entries
+            .retain(|_, entry| entry.registration != registration);
+        self.order.retain(|key| self.entries.contains_key(key));
+    }
+}
+
+static MODEL_PROBES: std::sync::LazyLock<std::sync::Mutex<ModelProbeCache>> =
+    std::sync::LazyLock::new(Default::default);
 fn model_key(registration: &Registration, cfg: &AppConfig) -> String {
     let identity = serde_json::json!({"root":root(),"manifest":registration.manifest,"program":registration.executable_sha256,"probe":registration.probe_sha256,"artifacts":registration.artifacts_sha256,"model":cfg.active_model,"launch":launch_fingerprint(&registration.manifest,cfg)});
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
@@ -294,26 +337,19 @@ fn cached_probe(
     registration: &Registration,
     cfg: &AppConfig,
 ) -> Result<Option<CachedModelProbe>, String> {
-    let map = MODEL_PROBES
-        .get_or_init(Default::default)
+    let mut map = MODEL_PROBES
         .lock()
         .map_err(|_| "adapter model probe cache lock was poisoned")?;
-    Ok(map.get(&model_key(registration, cfg)).cloned())
+    Ok(map.get(&model_key(registration, cfg)))
 }
 fn store_model_probe(
     registration: &Registration,
     cfg: &AppConfig,
-    result: Result<ProbeResult, String>,
+    result: Result<ProbeResult, AppError>,
 ) -> Result<(), String> {
     let mut map = MODEL_PROBES
-        .get_or_init(Default::default)
         .lock()
         .map_err(|_| "adapter model probe cache lock was poisoned")?;
-    if map.len() >= 128 {
-        if let Some(key) = map.keys().next().cloned() {
-            map.remove(&key);
-        }
-    }
     map.insert(
         model_key(registration, cfg),
         CachedModelProbe {
@@ -331,9 +367,11 @@ fn store_model_probe(
 pub fn root() -> PathBuf {
     crate::runtime::runtimes_root().join("adapters")
 }
-fn path(engine: ProviderId, runtime: &str) -> Result<PathBuf, String> {
+fn path(engine: ProviderId, runtime: &str) -> Result<PathBuf, AppError> {
     if !engine.is_custom() {
-        return Err("external registrations require a custom.* engine ID".into());
+        return Err(AppError::validation(
+            "external registrations require a custom.* engine ID",
+        ));
     }
     super::python_env::validate_id(runtime)?;
     let target = root()
@@ -347,36 +385,47 @@ fn path(engine: ProviderId, runtime: &str) -> Result<PathBuf, String> {
         target.clone(),
     ] {
         if fs::symlink_metadata(&component).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            return Err("runtime registration paths must not be symbolic links".into());
+            return Err(AppError::validation(
+                "runtime registration paths must not be symbolic links",
+            ));
         }
     }
     Ok(target)
 }
-fn bounded_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let file =
-        fs::File::open(path).map_err(|e| format!("cannot read runtime registration: {e}"))?;
+fn bounded_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, AppError> {
+    let file = fs::File::open(path).map_err(|e| {
+        AppError::new(
+            AppError::from_io(&e).kind,
+            format!("cannot read runtime registration: {e}"),
+        )
+    })?;
     let mut bytes = Vec::new();
     file.take(LIMIT + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::from_io(&e))?;
     if bytes.len() as u64 > LIMIT {
-        return Err("runtime registration exceeds 256 KiB".into());
+        return Err(AppError::validation("runtime registration exceeds 256 KiB"));
     }
-    serde_json::from_slice(&bytes).map_err(|e| format!("invalid runtime registration: {e}"))
+    serde_json::from_slice(&bytes)
+        .map_err(|e| AppError::validation(format!("invalid runtime registration: {e}")))
 }
-fn digest(path: &Path) -> Result<String, String> {
+fn digest(path: &Path) -> Result<String, AppError> {
     digest_cancellable(path, None)
 }
-fn digest_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> Result<String, String> {
-    let mut file =
-        fs::File::open(path).map_err(|e| format!("runtime executable is unreadable: {e}"))?;
+fn digest_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> Result<String, AppError> {
+    let mut file = fs::File::open(path).map_err(|e| {
+        AppError::new(
+            AppError::from_io(&e).kind,
+            format!("runtime executable is unreadable: {e}"),
+        )
+    })?;
     let mut sha = Sha256::new();
     let mut buffer = [0; 32768];
     loop {
         if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
-            return Err("runtime probe cancelled".into());
+            return Err(AppError::cancelled("runtime probe cancelled"));
         }
-        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        let n = file.read(&mut buffer).map_err(|e| AppError::from_io(&e))?;
         if n == 0 {
             break;
         }
@@ -384,36 +433,38 @@ fn digest_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> Result<String
     }
     Ok(format!("{:x}", sha.finalize()))
 }
-fn read_registration_record(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
+fn read_registration_record(engine: ProviderId, runtime: &str) -> Result<Registration, AppError> {
     let registered: Registration = bounded_json(&path(engine, runtime)?)?;
     #[cfg(test)]
     observe_registry_inventory(true);
     if registered.manifest.engine_id != engine || registered.manifest.runtime_id != runtime {
-        return Err("runtime registration identity mismatch".into());
+        return Err(AppError::validation(
+            "runtime registration identity mismatch",
+        ));
     }
     Ok(registered)
 }
-fn read_registration(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
+fn read_registration(engine: ProviderId, runtime: &str) -> Result<Registration, AppError> {
     let registered = read_registration_record(engine, runtime)?;
-    validate_manifest(&registered.manifest)?;
+    validate_manifest(&registered.manifest).map_err(AppError::validation)?;
     Ok(registered)
 }
 
 /// An older option contract can become invalid without making its stored
 /// registration disappear. Expose a non-runnable inventory entry for review
 /// or removal; executable/probe/launch reads still require the strict check.
-fn registration_for_inventory(mut registered: Registration) -> Result<Registration, String> {
+fn registration_for_inventory(mut registered: Registration) -> Result<Registration, AppError> {
     if let Err(error) = validate_manifest(&registered.manifest) {
         let mut base = registered.manifest.clone();
         base.options.clear();
         base.option_metadata = None;
-        validate_manifest(&base)?;
+        validate_manifest(&base).map_err(AppError::validation)?;
         registered.manifest = base;
         registered.error = Some(format!("runtime options need review: {error}"));
     }
     Ok(registered)
 }
-pub fn manifest(engine: ProviderId, runtime: &str) -> Result<RuntimeManifest, String> {
+pub fn manifest(engine: ProviderId, runtime: &str) -> Result<RuntimeManifest, AppError> {
     Ok(read_registration(engine, runtime)?.manifest)
 }
 
@@ -422,10 +473,12 @@ pub fn manifest(engine: ProviderId, runtime: &str) -> Result<RuntimeManifest, St
 /// original model-independent result, while the manifest and files stay fixed.
 pub(crate) fn manifest_for_help_resume(
     expected: &RuntimeManifest,
-) -> Result<RuntimeManifest, String> {
+) -> Result<RuntimeManifest, AppError> {
     let registered = read_registration(expected.engine_id, &expected.runtime_id)?;
     if registered.manifest != *expected {
-        return Err("the registered runtime changed; review its entry point again".into());
+        return Err(AppError::validation(
+            "the registered runtime changed; review its entry point again",
+        ));
     }
     if expected
         .artifacts
@@ -436,14 +489,16 @@ pub(crate) fn manifest_for_help_resume(
             .keys()
             .any(|path| !expected.artifacts.contains(path))
     {
-        return Err("the registered runtime's artifact hashes are incomplete".into());
+        return Err(AppError::validation(
+            "the registered runtime's artifact hashes are incomplete",
+        ));
     }
     check_files(&registered)?;
     let probe = registered
         .probe
         .as_ref()
-        .ok_or("the registered runtime has no completed probe")?;
-    validate_probe_result(probe, &registered.manifest, None)?;
+        .ok_or_else(|| AppError::not_found("the registered runtime has no completed probe"))?;
+    validate_probe_result(probe, &registered.manifest, None).map_err(AppError::validation)?;
     Ok(registered.manifest)
 }
 /// The exact bytes a registration is stored as, refused when the reader
@@ -459,13 +514,13 @@ fn record_bytes(registered: &Registration) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn save(registered: &Registration) -> Result<(), String> {
+fn save(registered: &Registration) -> Result<(), AppError> {
     let target = path(
         registered.manifest.engine_id,
         &registered.manifest.runtime_id,
     )?;
-    let bytes = record_bytes(registered)?;
-    fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+    let bytes = record_bytes(registered).map_err(AppError::validation)?;
+    fs::create_dir_all(target.parent().unwrap()).map_err(|e| AppError::from_io(&e))?;
     crate::config::atomic_write(&target, &bytes)
 }
 fn valid_text(value: &str, max: usize) -> bool {
@@ -747,7 +802,7 @@ pub(super) fn numeric_range(kind: &Value) -> Option<super::runtime_options::Nume
     Some(range)
 }
 
-fn validate_kind(kind: &Value) -> Result<(), String> {
+pub(super) fn validate_kind(kind: &Value) -> Result<(), String> {
     let t = kind.get("type").and_then(Value::as_str).unwrap_or("");
     match t {
         "integer" | "number"
@@ -788,35 +843,15 @@ pub fn option_issues(
     m: &RuntimeManifest,
     values: &Map<String, Value>,
 ) -> Vec<super::options::OptionIssue> {
+    let source = super::runtime_schema::adapter_source(m.engine_id.as_str(), "manifest-v1");
     values
         .iter()
         .filter_map(|(key, value)| {
             let spec = m.options.iter().find(|s| s.key == *key);
-            let valid = spec.is_some_and(|s| match s.kind["type"].as_str().unwrap_or("") {
-                "integer" => value.as_i64().is_some_and(|n| {
-                    numeric_range(&s.kind).is_some_and(|range| range.contains(n as f64))
-                        && s.kind.get("choices").is_none_or(|choices| {
-                            choices
-                                .as_array()
-                                .is_some_and(|choices| choices.contains(value))
-                        })
-                }),
-                "number" => value.as_f64().is_some_and(|n| {
-                    numeric_range(&s.kind).is_some_and(|range| range.contains(n))
-                        && s.kind.get("choices").is_none_or(|choices| {
-                            choices
-                                .as_array()
-                                .is_some_and(|choices| choices.contains(value))
-                        })
-                }),
-                "flag" | "toggle" => value.is_boolean(),
-                "choice" => s.kind["choices"].as_array().unwrap().contains(value),
-                "text" => value.as_str().is_some_and(|s2| {
-                    s2.len() <= s.kind["max_len"].as_u64().unwrap() as usize && !s2.contains('\0')
-                }),
-                "path" => value.as_str().is_some_and(|s| valid_text(s, 32768)),
-                "json" => value.is_object() && value.to_string().len() <= 65536,
-                _ => false,
+            let valid = spec.is_some_and(|spec| {
+                super::runtime_schema::from_external(spec, &source).is_some_and(|definition| {
+                    super::options::valid_manifest_value(&definition, &spec.kind, value)
+                })
             });
             (!valid).then(|| super::options::OptionIssue {
                 key: key.clone(),
@@ -944,18 +979,22 @@ fn expand(
     out.push_str(rest);
     Ok(out)
 }
-fn check_files(r: &Registration) -> Result<(), String> {
+fn check_files(r: &Registration) -> Result<(), AppError> {
     if digest(Path::new(&r.manifest.launch.program))? != r.executable_sha256
         || digest(Path::new(&r.manifest.probe.program))? != r.probe_sha256
     {
-        return Err("adapter executable changed; register the updated build explicitly".into());
+        return Err(AppError::validation(
+            "adapter executable changed; register the updated build explicitly",
+        ));
     }
     check_artifacts(r)
 }
-fn check_artifacts(r: &Registration) -> Result<(), String> {
+fn check_artifacts(r: &Registration) -> Result<(), AppError> {
     for (path, expected) in &r.artifacts_sha256 {
         if digest(Path::new(path))? != *expected {
-            return Err("adapter artifact changed; register the updated build explicitly".into());
+            return Err(AppError::validation(
+                "adapter artifact changed; register the updated build explicitly",
+            ));
         }
     }
     Ok(())
@@ -978,7 +1017,7 @@ pub(crate) fn check_automatic_help_files(manifest: &RuntimeManifest) -> Result<(
                 .into(),
         );
     }
-    check_artifacts(&registration)
+    check_artifacts(&registration).map_err(Into::into)
 }
 /// What the inventory reports. An automatic connection's helper is AioLM
 /// itself, so an app update replaces it; the next probe or launch adopts the
@@ -986,9 +1025,9 @@ pub(crate) fn check_automatic_help_files(manifest: &RuntimeManifest) -> Result<(
 /// (`refresh`). Only those engine-side files can make it unusable here.
 fn check_inventory_files(r: &Registration) -> Result<(), String> {
     if super::runtime_auto::is_owned_manifest(&r.manifest) {
-        check_artifacts(r)
+        check_artifacts(r).map_err(Into::into)
     } else {
-        check_files(r)
+        check_files(r).map_err(Into::into)
     }
 }
 fn fingerprint(model: &str) -> String {
@@ -1025,7 +1064,7 @@ fn run_probe(
     r: &Registration,
     cfg: &AppConfig,
     cancel: Option<&AtomicBool>,
-) -> Result<ProbeResult, String> {
+) -> Result<ProbeResult, AppError> {
     check_files(r)?;
     let m = &r.manifest;
     if !m
@@ -1033,7 +1072,9 @@ fn run_probe(
         .iter()
         .any(|p| p.os == std::env::consts::OS && p.arch == std::env::consts::ARCH)
     {
-        return Err("adapter does not support this OS/architecture".into());
+        return Err(AppError::unavailable(
+            "adapter does not support this OS/architecture",
+        ));
     }
     let mut command = crate::procutil::std_command(&m.probe.program);
     command
@@ -1076,7 +1117,7 @@ fn run_probe(
         }
     }
     if !cfg.active_model.is_empty() && !Path::new(&cfg.active_model).exists() {
-        return Err("selected model path is missing".into());
+        return Err(AppError::not_found("selected model path is missing"));
     }
     let before = fingerprint(&cfg.active_model);
     let output = crate::procutil::capture_output_cancellable(
@@ -1092,9 +1133,12 @@ fn run_probe(
     )
     .map_err(|e| {
         if e.kind() == std::io::ErrorKind::Interrupted {
-            "runtime probe cancelled".into()
+            AppError::cancelled("runtime probe cancelled")
         } else {
-            format!("adapter probe failed: {e}")
+            AppError::new(
+                AppError::from_io(&e).kind,
+                format!("adapter probe failed: {e}"),
+            )
         }
     })?;
     if !output.status.success() {
@@ -1106,20 +1150,20 @@ fn run_probe(
             .rev()
             .nth(2047)
             .map_or(stderr, |(start, _)| &stderr[start..]);
-        return Err(format!(
+        return Err(AppError::internal(format!(
             "adapter probe exited unsuccessfully ({}): {tail}",
             output.status
-        ));
+        )));
     }
     let probe: ProbeResult = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("invalid adapter probe JSON: {e}"))?;
-    validate_probe_result(&probe, m, Some(&cfg.active_model))?;
+        .map_err(|e| AppError::validation(format!("invalid adapter probe JSON: {e}")))?;
+    validate_probe_result(&probe, m, Some(&cfg.active_model)).map_err(AppError::validation)?;
     if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
-        return Err("runtime probe cancelled".into());
+        return Err(AppError::cancelled("runtime probe cancelled"));
     }
     check_files(r)?;
     if before != fingerprint(&cfg.active_model) {
-        return Err("model changed during adapter probe".into());
+        return Err(AppError::validation("model changed during adapter probe"));
     }
     Ok(probe)
 }
@@ -1154,11 +1198,56 @@ fn validate_probe_result(
     }
     validate_fixed_output(&probe.capabilities, manifest)
 }
+pub(crate) fn load_manifest(source: &Path) -> Result<RuntimeManifest, AppError> {
+    let manifest = bounded_json(source)?;
+    validate_manifest(&manifest).map_err(AppError::validation)?;
+    Ok(manifest)
+}
+
+fn registration_config(manifest: &RuntimeManifest) -> AppConfig {
+    AppConfig {
+        active_provider: manifest.engine_id.as_str().into(),
+        active_runtime: manifest.runtime_id.clone(),
+        ..Default::default()
+    }
+}
+
+/// Command arrays are JSON, not shell snippets; argument boundaries and
+/// control characters remain visible in the native approval.
+pub(crate) fn registration_confirmation(
+    source: &Path,
+    manifest: &RuntimeManifest,
+) -> Result<String, String> {
+    let cfg = registration_config(manifest);
+    let alias = super::launch::served_model_name(&cfg.active_model);
+    let probe = std::iter::once(Ok(manifest.probe.program.clone()))
+        .chain(
+            manifest
+                .probe
+                .args
+                .iter()
+                .map(|arg| expand(arg, &cfg, cfg.port, "", &alias)),
+        )
+        .collect::<Result<Vec<_>, String>>()?;
+    let launch = std::iter::once(manifest.launch.program.as_str())
+        .chain(manifest.launch.args.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    Ok(format!(
+        "Register runtime manifest:\n{}\n\nRegistration will execute this probe command (JSON array):\n{}\n\nFuture launches use this command template (bindings are supplied at launch):\n{}\n\nOnly approve manifests and programs you trust.",
+        source.display(),
+        serde_json::to_string(&probe).map_err(|e| e.to_string())?,
+        serde_json::to_string(&launch).map_err(|e| e.to_string())?,
+    ))
+}
+
 pub async fn register(
     source: &Path,
     cancel: Option<Arc<AtomicBool>>,
-) -> Result<RuntimeManifest, String> {
-    let manifest: RuntimeManifest = bounded_json(source)?;
+) -> Result<RuntimeManifest, AppError> {
+    let source = source.to_path_buf();
+    let manifest = tokio::task::spawn_blocking(move || load_manifest(&source))
+        .await
+        .map_err(AppError::from)??;
     register_manifest(manifest, cancel).await
 }
 
@@ -1167,32 +1256,32 @@ pub async fn register(
 pub async fn register_manifest(
     manifest: RuntimeManifest,
     cancel: Option<Arc<AtomicBool>>,
-) -> Result<RuntimeManifest, String> {
-    validate_manifest(&manifest)?;
+) -> Result<RuntimeManifest, AppError> {
+    tokio::task::spawn_blocking(move || register_manifest_blocking(manifest, cancel.as_deref()))
+        .await
+        .map_err(AppError::from)?
+}
+
+fn register_manifest_blocking(
+    manifest: RuntimeManifest,
+    cancel: Option<&AtomicBool>,
+) -> Result<RuntimeManifest, AppError> {
+    validate_manifest(&manifest).map_err(AppError::validation)?;
     let target = path(manifest.engine_id, &manifest.runtime_id)?;
     if target.exists() {
-        return Err(
-            "runtime ID is already registered; remove its registration before replacing the build"
-                .into(),
-        );
+        return Err(AppError::busy(
+            "runtime ID is already registered; remove its registration before replacing the build",
+        ));
     }
     let artifacts_sha256 = manifest
         .artifacts
         .iter()
-        .map(|path| {
-            Ok((
-                path.clone(),
-                digest_cancellable(Path::new(path), cancel.as_deref())?,
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>, String>>()?;
+        .map(|path| Ok((path.clone(), digest_cancellable(Path::new(path), cancel)?)))
+        .collect::<Result<BTreeMap<_, _>, AppError>>()?;
     let mut r = Registration {
         artifacts_sha256,
-        executable_sha256: digest_cancellable(
-            Path::new(&manifest.launch.program),
-            cancel.as_deref(),
-        )?,
-        probe_sha256: digest_cancellable(Path::new(&manifest.probe.program), cancel.as_deref())?,
+        executable_sha256: digest_cancellable(Path::new(&manifest.launch.program), cancel)?,
+        probe_sha256: digest_cancellable(Path::new(&manifest.probe.program), cancel)?,
         manifest,
         probe: None,
         model_fingerprint: String::new(),
@@ -1201,41 +1290,40 @@ pub async fn register_manifest(
     };
     // A record that cannot be read back is refused before the probe runs;
     // `save` checks the final record again with the probe result.
-    record_bytes(&r)?;
-    let cfg = AppConfig {
-        active_provider: r.manifest.engine_id.as_str().into(),
-        active_runtime: r.manifest.runtime_id.clone(),
-        ..Default::default()
-    };
-    let copy = r.clone();
-    let worker_cancel = cancel.clone();
-    let probe =
-        tokio::task::spawn_blocking(move || run_probe(&copy, &cfg, worker_cancel.as_deref()))
-            .await
-            .map_err(|e| e.to_string())??;
-    if cancel
-        .as_ref()
-        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
-    {
-        return Err("runtime probe cancelled".into());
+    record_bytes(&r).map_err(AppError::validation)?;
+    let cfg = registration_config(&r.manifest);
+    let probe = run_probe(&r, &cfg, cancel)?;
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err(AppError::cancelled("runtime probe cancelled"));
     }
     // Claim publication atomically after probe, so concurrent registrars cannot
     // replace an already registered build. The runtime directory may already
     // hold this runtime's reviewed help from an earlier registration, which a
     // re-registration keeps (and re-validates against the new build).
-    let directory = target.parent().unwrap().to_path_buf();
-    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let directory = target
+        .parent()
+        .ok_or_else(|| AppError::validation("invalid runtime registration path"))?
+        .to_path_buf();
+    fs::create_dir_all(&directory).map_err(|e| AppError::from_io(&e))?;
     let claim = directory.join(".registering");
     fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&claim)
-        .map_err(|e| format!("runtime registration collision: {e}"))?;
+        .map_err(|e| {
+            AppError::new(
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    crate::error::ErrorKind::Busy
+                } else {
+                    AppError::from_io(&e).kind
+                },
+                format!("runtime registration collision: {e}"),
+            )
+        })?;
     let published = if target.exists() {
-        Err(
-            "runtime ID is already registered; remove its registration before replacing the build"
-                .into(),
-        )
+        Err(AppError::busy(
+            "runtime ID is already registered; remove its registration before replacing the build",
+        ))
     } else {
         r.probe = Some(probe);
         save(&r)
@@ -1252,20 +1340,19 @@ fn prepare_owned_helper(
     r: &mut Registration,
     cfg: &AppConfig,
     cancel: Option<&AtomicBool>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if r.manifest.artifacts.len() != r.artifacts_sha256.len()
         || r.manifest
             .artifacts
             .iter()
             .any(|path| !r.artifacts_sha256.contains_key(path))
     {
-        return Err(
-            "automatic connection artifact identity is incomplete; find the installation again"
-                .into(),
-        );
+        return Err(AppError::validation(
+            "automatic connection artifact identity is incomplete; find the installation again",
+        ));
     }
     check_artifacts(r)?;
-    let helper = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = std::env::current_exe().map_err(|e| AppError::from_io(&e))?;
     let hash = digest(&helper)?;
     if r.manifest.launch.program != helper.to_string_lossy()
         || r.executable_sha256 != hash
@@ -1284,7 +1371,7 @@ fn prepare_owned_helper(
         cancel.unwrap_or(&AtomicBool::new(false)),
     )?;
     if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
-        return Err("server start cancelled".into());
+        return Err(AppError::cancelled("server start cancelled"));
     }
     Ok(())
 }
@@ -1295,7 +1382,7 @@ fn prepare_owned_helper(
 pub(crate) fn prepare_automatic_launch(
     cfg: &AppConfig,
     cancel: Option<&AtomicBool>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     if !super::provider_of(cfg).is_custom() {
         return Ok(false);
     }
@@ -1314,10 +1401,17 @@ pub(crate) fn prepare_automatic_launch(
     Ok(true)
 }
 
-pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result<(), String> {
+pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result<(), AppError> {
+    let cfg = cfg.clone();
+    tokio::task::spawn_blocking(move || refresh_blocking(&cfg, cancel.as_deref()))
+        .await
+        .map_err(AppError::from)?
+}
+
+fn refresh_blocking(cfg: &AppConfig, cancel: Option<&AtomicBool>) -> Result<(), AppError> {
     let mut r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
     if super::runtime_auto::is_owned_manifest(&r.manifest) {
-        prepare_owned_helper(&mut r, cfg, cancel.as_deref())?;
+        prepare_owned_helper(&mut r, cfg, cancel)?;
         // This probe starts the engine and loads the whole model only to
         // check chat and streaming, which the launch helper repeats every time
         // it serves. A successful probe of this exact model file through this
@@ -1330,15 +1424,10 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
                 && r.model_fingerprint == fingerprint(&cfg.active_model)
                 && r.launch_fingerprint == launch_fingerprint(&r.manifest, cfg)
         }) {
-            return store_model_probe(&r, cfg, Ok(probe));
+            return store_model_probe(&r, cfg, Ok(probe)).map_err(AppError::from);
         }
     }
-    let copy = r.clone();
-    let cfg_copy = cfg.clone();
-    let result =
-        tokio::task::spawn_blocking(move || run_probe(&copy, &cfg_copy, cancel.as_deref()))
-            .await
-            .map_err(|e| e.to_string())?;
+    let result = run_probe(&r, cfg, cancel);
     store_model_probe(&r, cfg, result.clone())?;
     match result {
         Ok(probe) => {
@@ -1351,7 +1440,7 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
         Err(error) => {
             if cfg.active_model.is_empty() {
                 r.probe = None;
-                r.error = Some(error.clone());
+                r.error = Some(error.to_string());
             }
             r.model_fingerprint.clear();
             save(&r)?;
@@ -1359,19 +1448,18 @@ pub async fn refresh(cfg: &AppConfig, cancel: Option<Arc<AtomicBool>>) -> Result
         }
     }
 }
-pub fn remove(engine: ProviderId, runtime: &str) -> Result<(), String> {
+pub fn remove(engine: ProviderId, runtime: &str) -> Result<(), AppError> {
     let target = path(engine, runtime)?;
-    fs::remove_file(&target).map_err(|e| e.to_string())?;
+    fs::remove_file(&target).map_err(|e| AppError::from_io(&e))?;
     MODEL_PROBES
-        .get_or_init(Default::default)
         .lock()
         .map_err(|_| "adapter model probe cache lock was poisoned")?
-        .retain(|_, entry| entry.registration != target);
+        .remove_registration(&target);
     // Never recursively remove anything in an external engine's directory.
     match fs::remove_dir(target.parent().unwrap()) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(AppError::from_io(&error)),
     }
 }
 #[cfg(test)]
@@ -1540,14 +1628,14 @@ pub fn serving_metadata(manifest: &RuntimeManifest, probe: &ProbeResult) -> Serv
     )
 }
 
-pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
+pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
     let r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
     check_files(&r)?;
     let (p, model_fingerprint) = match cached_probe(&r, cfg)? {
         Some(cached) => (cached.result?, cached.fingerprint),
         None => {
             if let Some(error) = &r.error {
-                return Err(error.clone());
+                return Err(AppError::internal(error.clone()));
             }
             // Automatic helpers verify these settings on the actual serving
             // process before readiness. This metadata is prior model evidence,
@@ -1555,21 +1643,27 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             if !super::runtime_auto::is_owned_manifest(&r.manifest)
                 && r.launch_fingerprint != launch_fingerprint(&r.manifest, cfg)
             {
-                return Err("selected model requires a fresh adapter probe".into());
+                return Err(AppError::validation(
+                    "selected model requires a fresh adapter probe",
+                ));
             }
             (
                 r.probe
                     .clone()
-                    .ok_or("probe this runtime before running it")?,
+                    .ok_or_else(|| AppError::unavailable("probe this runtime before running it"))?,
                 r.model_fingerprint.clone(),
             )
         }
     };
     if !p.model_supported {
-        return Err("The selected model is unsupported by this registered runtime.".into());
+        return Err(AppError::validation(
+            "The selected model is unsupported by this registered runtime.",
+        ));
     }
     if p.model != cfg.active_model || model_fingerprint != fingerprint(&cfg.active_model) {
-        return Err("selected model requires a successful adapter probe".into());
+        return Err(AppError::validation(
+            "selected model requires a successful adapter probe",
+        ));
     }
     // Validate every saved option without copying launch values that the
     // returned engine metadata does not own.
@@ -1580,11 +1674,13 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         .unwrap_or(&empty);
     let issues = saved_option_issues(cfg, &r.manifest, values);
     if !issues.is_empty() {
-        return Err(issues
-            .iter()
-            .map(|i| i.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; "));
+        return Err(AppError::validation(
+            issues
+                .iter()
+                .map(|i| i.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
     }
     let embedding = p.capabilities.tasks.iter().any(|t| t == "embed");
     let upstream = p.served_model.clone();
@@ -1637,14 +1733,14 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         tool_parser: p.capabilities.tools,
     })
 }
-pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, String> {
+pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, AppError> {
     let m = manifest(super::provider_of(cfg), &cfg.active_runtime)?;
     let info = info(cfg)?;
     let mut args = m
         .launch
         .args
         .iter()
-        .map(|a| expand(a, cfg, port, key, &info.upstream_model))
+        .map(|a| expand(a, cfg, port, key, &info.upstream_model).map_err(AppError::validation))
         .collect::<Result<Vec<_>, _>>()?;
     // Manifest options and options only the runtime's accepted help
     // describes resolve together through the common schema; unknown keys block
@@ -1670,8 +1766,9 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
                 expand(v, cfg, port, key, &info.upstream_model)?.into(),
             ))
         })
-        .collect::<Result<Vec<_>, String>>()?;
-    if let Some((name, value)) = bridge_environment(&m)? {
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(AppError::validation)?;
+    if let Some((name, value)) = bridge_environment(&m).map_err(AppError::validation)? {
         env.push((name.into(), value.into()));
     }
     Ok(EngineCommand {
@@ -1692,7 +1789,7 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
     })
 }
 
-pub fn compatibility(cfg: &AppConfig) -> Result<super::compat::ModelCompatibility, String> {
+pub fn compatibility(cfg: &AppConfig) -> Result<super::compat::ModelCompatibility, AppError> {
     let registration = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
     let probe = cached_probe(&registration, cfg)?
         .map(|cached| cached.result)
@@ -2447,1092 +2544,5 @@ pub fn check_draft_against_help(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn discovery_scopes_bindings_to_the_selected_installation_without_format_claims() {
-        let area =
-            std::env::temp_dir().join(format!("aiolm-model-selection-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&area).unwrap();
-        let deployment = area.join("deployment.json");
-        fs::write(&deployment, b"{}").unwrap();
-        let mut selected = example();
-        selected.model_formats = vec!["gguf".into()];
-        selected.models = vec![ModelBinding {
-            path: deployment.to_string_lossy().into_owned(),
-            name: "Selected deployment".into(),
-        }];
-        let mut other_build = selected.clone();
-        other_build.runtime_id = "build-2".into();
-        other_build.models[0].name = "Other build's label".into();
-        let mut other_engine = selected.clone();
-        other_engine.engine_id = ProviderId::parse("custom.other").unwrap();
-        other_engine.models[0].name = "Other engine's label".into();
-        let models = model_bindings(
-            [other_build, other_engine, selected.clone()],
-            Some((selected.engine_id, "build-1")),
-        );
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].name, "Selected deployment");
-        assert!(models[0].missing.is_empty());
-        let mut gguf = models[0].clone();
-        gguf.format = super::super::artifacts::ArtifactFormat::Gguf;
-        let result = assess(&gguf, selected.engine_id);
-        assert_eq!(result.status, super::super::compat::CompatStatus::Unknown);
-        assert!(!result.loadable());
-        assert!(result.tasks.is_empty());
-        assert!(!result.modalities.text);
-        assert!(model_bindings(
-            [selected.clone()],
-            Some((selected.engine_id, "not-installed"))
-        )
-        .is_empty());
-        fs::remove_file(&deployment).unwrap();
-        let missing = model_bindings([selected.clone()], Some((selected.engine_id, "build-1")));
-        assert_eq!(missing[0].missing, ["registered model binding is missing"]);
-        assert_eq!(
-            assess(&missing[0], selected.engine_id).readiness,
-            missing[0].missing
-        );
-        fs::remove_dir(&area).unwrap();
-    }
-    fn example() -> RuntimeManifest {
-        let root = std::env::temp_dir().join("aiolm-synthetic-adapter");
-        let probe = root.join("probe");
-        let server = root.join("server");
-        serde_json::from_value(serde_json::json!({"schema_version":1,"adapter_version":1,"engine_id":"custom.example","runtime_id":"build-1","display_name":"Example engine","protocol":"openai-v1","platforms":[{"os":"linux","arch":"x86_64"}],"probe":{"program":probe,"args":["{model}","{options_json}"]},"launch":{"program":server,"args":["--model","{model}","--port","{port}","--alias","{model_alias}"],"env":{"ENGINE_KEY":"{api_key}"}},"model_formats":["unknown"],"health_path":"/health","options":[{"key":"workers","flag":"--workers","target":"launch","kind":{"type":"integer","min":1,"max":8}},{"key":"temperature","target":"request","kind":{"type":"number","min":0,"max":2}}]})).unwrap()
-    }
-
-    fn metadata_probe() -> ProbeResult {
-        serde_json::from_value(serde_json::json!({
-            "schema_version":1,"engine_id":"custom.example","runtime_id":"build-1",
-            "version":"machine-local display version","accelerator":"unverified",
-            "model":"selected","model_supported":true,"served_model":"private-model",
-            "capabilities":{"tasks":["generate"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true}
-        })).unwrap()
-    }
-
-    #[test]
-    fn serving_observations_preserve_authoritative_nulls_unknowns_and_selected_format() {
-        use super::super::{
-            artifacts::ArtifactFormat,
-            protocol::{ServingMemoryScope, ServingTopology},
-        };
-        let mut manifest = example();
-        manifest.public_engine = Some(PublicEngine {
-            name: Some("sglang".into()),
-            version: Some("1.2".into()),
-            ..PublicEngine::default()
-        });
-        manifest.compute_ownership = Some(ComputeOwnership::Direct);
-        manifest.model_formats = vec!["gguf".into(), "mlx".into()];
-        let mut probe = metadata_probe();
-        let inherited = serving_metadata(&manifest, &probe);
-        assert_eq!(inherited.runtime, manifest.public_engine.clone().unwrap());
-        assert_eq!(inherited.topology, ServingTopology::Owned);
-        // A supported-format inventory never establishes selected-model format.
-        assert_eq!(
-            serving_metadata(&manifest, &probe).model_format,
-            ArtifactFormat::Unknown
-        );
-
-        probe.public_engine = Some(PublicEngine::default());
-        probe.compute_ownership = Some(ComputeOwnership::Unknown);
-        probe.model_format = Some(ArtifactFormat::Unknown);
-        let unknown = serving_metadata(&manifest, &probe);
-        assert_eq!(unknown.runtime, PublicEngine::default());
-        assert_eq!(unknown.topology, ServingTopology::Unknown);
-        assert_eq!(unknown.memory_scope, ServingMemoryScope::Unavailable);
-        assert_eq!(unknown.model_format, ArtifactFormat::Unknown);
-        probe.model_format = Some(ArtifactFormat::Mlx);
-        assert_eq!(
-            serving_metadata(&manifest, &probe).model_format,
-            ArtifactFormat::Mlx
-        );
-
-        probe.public_engine = None;
-        manifest.public_engine = None;
-        let private = serving_metadata(&manifest, &probe);
-        assert_eq!(private.runtime, PublicEngine::default());
-        let json = serde_json::to_string(&private).unwrap();
-        for secret in [
-            "custom.example",
-            "build-1",
-            "private-model",
-            "machine-local",
-            "unverified",
-        ] {
-            assert!(!json.contains(secret));
-        }
-    }
-
-    #[test]
-    fn manifests_and_probes_reject_unsafe_or_non_strict_public_observations() {
-        let identity = serde_json::to_value(PublicEngine::default()).unwrap();
-        for malformed in [
-            serde_json::json!({"name":null}),
-            serde_json::json!({"name":null,"version":null,"backend":null,"build":null,"variant":null,"plugin_version":null,"extra":null}),
-        ] {
-            let mut manifest = serde_json::to_value(example()).unwrap();
-            manifest["public_engine"] = malformed.clone();
-            assert!(serde_json::from_value::<RuntimeManifest>(manifest).is_err());
-            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-            probe["public_engine"] = malformed;
-            assert!(serde_json::from_value::<ProbeResult>(probe).is_err());
-        }
-        for invalid in [
-            "",
-            "/private/engine",
-            "host:port",
-            "user@host",
-            "back\\slash",
-            "line\nbreak",
-            "\u{7f}",
-        ] {
-            let mut malformed = identity.clone();
-            malformed["version"] = Value::String(invalid.into());
-            assert!(serde_json::from_value::<PublicEngine>(malformed).is_err());
-            let mut manifest = example();
-            manifest.public_engine = Some(PublicEngine {
-                version: Some(invalid.into()),
-                ..PublicEngine::default()
-            });
-            assert!(validate_manifest(&manifest).is_err());
-            let mut probe = metadata_probe();
-            probe.public_engine = manifest.public_engine.clone();
-            assert!(validate_probe_result(&probe, &example(), Some("selected")).is_err());
-        }
-        for (key, value) in [("compute_ownership", "proxy"), ("model_format", "weights")] {
-            let mut manifest = serde_json::to_value(example()).unwrap();
-            manifest[key] = value.into();
-            assert!(serde_json::from_value::<RuntimeManifest>(manifest).is_err());
-            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-            probe[key] = value.into();
-            assert!(serde_json::from_value::<ProbeResult>(probe).is_err());
-        }
-    }
-    #[test]
-    fn fixed_output_declarations_need_a_matching_request_option_and_usage() {
-        let declared = |control: &str, kind: Value, usage: Value| {
-            let mut manifest = example();
-            manifest.options.push(ExternalOption {
-                scope: None,
-                key: control.into(),
-                flag: None,
-                kind,
-                target: "request".into(),
-                group: options_group(),
-                runtime_default: None,
-            });
-            validate_manifest(&manifest).unwrap();
-            let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-            probe["capabilities"]["fixed_output"] = control.into();
-            probe["capabilities"]["stream_usage_supported"] = usage;
-            let probe: ProbeResult = serde_json::from_value(probe).unwrap();
-            validate_probe_result(&probe, &manifest, Some("selected"))
-        };
-        let toggle = serde_json::json!({"type":"toggle"});
-        let range = serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS});
-        declared("ignore_eos", toggle.clone(), true.into()).unwrap();
-        declared(
-            "ignore_eos",
-            serde_json::json!({"type":"flag"}),
-            true.into(),
-        )
-        .unwrap();
-        declared("min_tokens", range.clone(), true.into()).unwrap();
-        declared(
-            "min_tokens",
-            serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[-1]}),
-            true.into(),
-        )
-        .unwrap();
-        for usage in [Value::Null, false.into()] {
-            let error = declared("ignore_eos", toggle.clone(), usage).unwrap_err();
-            assert!(error.contains("stream_usage_supported"), "{error}");
-        }
-        for (control, kind) in [
-            ("ignore_eos", range.clone()),
-            ("min_tokens", toggle.clone()),
-            (
-                "min_tokens",
-                serde_json::json!({"type":"integer","min":1,"max":32768}),
-            ),
-            (
-                "min_tokens",
-                serde_json::json!({"type":"integer","min":1,"max":32768,"sentinel_values":[MAX_FIXED_OUTPUT_TOKENS]}),
-            ),
-            (
-                "min_tokens",
-                serde_json::json!({"type":"integer","min":1024,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[1]}),
-            ),
-            (
-                "min_tokens",
-                serde_json::json!({"type":"integer","min":1,"max":MAX_FIXED_OUTPUT_TOKENS,"choices":[1024]}),
-            ),
-            (
-                "min_tokens",
-                serde_json::json!({"type":"number","min":0,"max":MAX_FIXED_OUTPUT_TOKENS}),
-            ),
-        ] {
-            assert!(declared(control, kind, true.into()).is_err(), "{control}");
-        }
-        // Without the request option the declaration cannot be honored.
-        let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-        probe["capabilities"]["fixed_output"] = "min_tokens".into();
-        probe["capabilities"]["stream_usage_supported"] = true.into();
-        let probe: ProbeResult = serde_json::from_value(probe).unwrap();
-        let error = validate_probe_result(&probe, &example(), Some("selected")).unwrap_err();
-        assert!(error.contains("request option"), "{error}");
-        // Unknown controls are not accepted, and absent stays unsupported.
-        let mut unknown = serde_json::to_value(metadata_probe()).unwrap();
-        unknown["capabilities"]["fixed_output"] = "max_tokens".into();
-        assert!(serde_json::from_value::<ProbeResult>(unknown).is_err());
-        let absent = metadata_probe();
-        assert_eq!(absent.capabilities.fixed_output, None);
-        validate_probe_result(&absent, &example(), Some("selected")).unwrap();
-        assert!(!serde_json::to_string(&absent)
-            .unwrap()
-            .contains("fixed_output"));
-    }
-    #[test]
-    fn manifest_artifacts_allow_256_paths_within_both_serialized_budgets() {
-        // A pinned Strata build on a system ROCm declares 189 library paths
-        // (every alias of its library folder plus the loader-resolved nested
-        // dependencies), past the earlier 64-path cap.
-        let root = std::env::temp_dir()
-            .join("aiolm-synthetic-adapter")
-            .join("lib");
-        let paths = |count: usize, width: usize| -> Vec<String> {
-            (0..count)
-                .map(|i| {
-                    root.join(format!("{}{i:03}.so", "l".repeat(width)))
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect()
-        };
-        let record = |manifest: RuntimeManifest| Registration {
-            artifacts_sha256: manifest
-                .artifacts
-                .iter()
-                .map(|path| (path.clone(), "c".repeat(64)))
-                .collect(),
-            manifest,
-            executable_sha256: "a".repeat(64),
-            probe_sha256: "b".repeat(64),
-            probe: None,
-            model_fingerprint: String::new(),
-            launch_fingerprint: String::new(),
-            error: None,
-        };
-        let mut manifest = example();
-        manifest.artifacts = paths(256, 16);
-        validate_manifest(&manifest).unwrap();
-        record_bytes(&record(manifest.clone())).unwrap();
-        manifest.artifacts = paths(257, 16);
-        assert!(validate_manifest(&manifest)
-            .unwrap_err()
-            .contains("bounded absolute paths"));
-        // The count never widens the manifest's serialized 256 KiB ...
-        manifest.artifacts = paths(256, 1100);
-        assert!(validate_manifest(&manifest)
-            .unwrap_err()
-            .contains("limited to 256 KiB"));
-        // ... or the stored record, which repeats every path beside its hash.
-        manifest.artifacts = paths(256, 700);
-        validate_manifest(&manifest).unwrap();
-        assert!(record_bytes(&record(manifest))
-            .unwrap_err()
-            .contains("limited to 256 KiB"));
-    }
-    #[test]
-    fn manifest_rejects_unsupported_versions_bindings_and_managed_overrides() {
-        let good = example();
-        validate_manifest(&good).unwrap();
-        assert!(serde_json::to_value(&good)
-            .unwrap()
-            .get("launch_bindings")
-            .is_none());
-        let mut bad = good.clone();
-        bad.adapter_version = 2;
-        assert!(validate_manifest(&bad).unwrap_err().contains("version"));
-        let mut bad = good.clone();
-        bad.launch.args.push("{future_binding}".into());
-        assert!(validate_manifest(&bad).unwrap_err().contains("binding"));
-        let mut bad = good.clone();
-        bad.options[0].flag = Some("--port".into());
-        assert!(validate_manifest(&bad).unwrap_err().contains("app-owned"));
-        let mut bad = good.clone();
-        bad.launch.args.push("{api_key}".into());
-        assert!(validate_manifest(&bad).unwrap_err().contains("credentials"));
-        let mut bad = good.clone();
-        bad.probe.args.clear();
-        assert!(validate_manifest(&bad).unwrap_err().contains("selected"));
-        let mut bad = good;
-        bad.health_path = "//external.example/health".into();
-        assert!(validate_manifest(&bad).is_err());
-    }
-    #[test]
-    fn manifest_options_cannot_replace_arbitrarily_named_template_bindings() {
-        for args in [
-            vec!["--weights", "{model}", "--listen", "{port}"],
-            vec!["--weights={model}", "--listen={port}"],
-        ] {
-            for flag in ["--weights", "--listen"] {
-                let mut manifest = example();
-                manifest.launch.args = args.iter().map(|arg| (*arg).into()).collect();
-                manifest.options[0].flag = Some(flag.into());
-                let error = validate_manifest(&manifest)
-                    .expect_err("generic options must not replace the selected model or app port");
-                assert!(error.contains("app-owned"), "{error}");
-            }
-        }
-        // The binding names do not prevent unrelated options in the same engine.
-        let mut manifest = example();
-        manifest.launch.args = vec!["--weights={model}".into(), "--listen={port}".into()];
-        validate_manifest(&manifest).unwrap();
-    }
-    #[test]
-    fn invalid_old_option_contracts_remain_visible_for_inventory_recovery() {
-        let mut manifest = example();
-        manifest.launch.args = vec!["--weights={model}".into(), "--listen={port}".into()];
-        manifest.options[0].flag = Some("--weights".into());
-        assert!(validate_manifest(&manifest).is_err());
-        let record: Registration = serde_json::from_value(serde_json::json!({
-            "manifest":manifest,"executable_sha256":"a".repeat(64),"probe_sha256":"b".repeat(64)
-        }))
-        .unwrap();
-        let view = registration_for_inventory(record).unwrap();
-        assert_eq!(view.manifest.engine_id, manifest.engine_id);
-        assert_eq!(view.manifest.runtime_id, manifest.runtime_id);
-        assert!(view.manifest.options.is_empty());
-        assert!(view.error.as_ref().unwrap().contains("app-owned"));
-        // A malformed launch contract is still rejected, not downgraded to
-        // a runnable or supported registration by the inventory fallback.
-        let mut invalid = view;
-        invalid.manifest.launch.args.clear();
-        assert!(registration_for_inventory(invalid).is_err());
-    }
-    fn positional_draft() -> EntrypointDraft {
-        let base = example();
-        serde_json::from_value(serde_json::json!({
-            "engine_id":base.engine_id,"runtime_id":"positional-1","display_name":"Positional engine",
-            "program":base.launch.program,"prefix":["--server"],
-            "model":{"kind":"positional"},"port":{"kind":"flag","flag":"--listen"},
-            "auth":{"kind":"none"},"protocol":{"kind":"openai_http"},
-            "probe":base.probe,"health_path":"/health","model_formats":["unknown"]
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn explicit_positional_model_keeps_the_static_boolean_entry_prefix() {
-        let draft = positional_draft();
-        let manifest = manifest_from_draft(&draft).unwrap();
-        for manifest in [
-            manifest.clone(),
-            serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap(),
-        ] {
-            assert_eq!(launch_prefix(&manifest), ["--server"]);
-            let (flags, positional) = bound_launch_flags(&manifest);
-            assert!(positional);
-            assert_eq!(flags, [("--listen".into(), "port".into())]);
-        }
-    }
-
-    #[test]
-    fn bridge_keeps_engine_argv_literal_and_requires_an_explicit_link() {
-        let mut draft = positional_draft();
-        let engine = draft.program.clone();
-        draft.prefix = vec![
-            "-m".into(),
-            "synthetic.engine".into(),
-            "한글 path ; &".into(),
-            "".into(),
-        ];
-        let bridge = example().probe.program;
-        draft.protocol = ServingProtocol::Bridge {
-            program: bridge.clone(),
-            prefix: vec!["--http".into()],
-            engine_argv_env: None,
-        };
-        assert!(manifest_from_draft(&draft)
-            .unwrap_err()
-            .contains("explicitly receive"));
-        draft.protocol = ServingProtocol::Bridge {
-            program: bridge.clone(),
-            prefix: vec!["--http".into()],
-            engine_argv_env: Some("BRIDGE_ENGINE_ARGV".into()),
-        };
-        let manifest = manifest_from_draft(&draft).unwrap();
-        assert_eq!(manifest.launch.program, bridge);
-        assert_eq!(launch_prefix(&manifest), ["--http"]);
-        let (name, json) = bridge_environment(&manifest).unwrap().unwrap();
-        assert_eq!(name, "BRIDGE_ENGINE_ARGV");
-        let expected = std::iter::once(engine)
-            .chain(draft.prefix.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&json).unwrap(),
-            expected
-        );
-        let request = super::super::runtime_schema::HelpRequest {
-            encoding: None,
-            locale: None,
-            working_directory: None,
-            program: None,
-            args: vec!["--http".into(), "--help".into()],
-            scope: vec![],
-        };
-        let help =
-            super::super::runtime_schema::manifest_help_command(&manifest, &request).unwrap();
-        assert_eq!(help.environment.get(&name), Some(&json));
-        assert_eq!(help.args, request.args);
-        assert!(manifest.artifacts.contains(&draft.program));
-
-        let mut changed = manifest.clone();
-        changed
-            .bridge_command
-            .as_mut()
-            .unwrap()
-            .argv
-            .push("changed".into());
-        assert_ne!(
-            launch_fingerprint(&manifest, &AppConfig::default()),
-            launch_fingerprint(&changed, &AppConfig::default())
-        );
-        for invalid in [
-            "AIOLM_HOME",
-            "aiolm_home",
-            "LLAMA_BOARD_HOME",
-            "llama_board_home",
-            "bad-name",
-            "",
-        ] {
-            let mut changed = manifest.clone();
-            changed
-                .bridge_command
-                .as_mut()
-                .unwrap()
-                .environment_variable = invalid.into();
-            assert!(validate_manifest(&changed).is_err());
-        }
-        for probe in [true, false] {
-            let mut changed = manifest.clone();
-            let env = if probe {
-                &mut changed.probe.env
-            } else {
-                &mut changed.launch.env
-            };
-            env.insert("bridge_engine_argv".into(), "collision".into());
-            assert!(validate_manifest(&changed).is_err());
-        }
-        let mut changed = manifest.clone();
-        changed.bridge_command.as_mut().unwrap().version = 2;
-        assert!(validate_manifest(&changed).is_err());
-        let mut changed = manifest.clone();
-        changed.bridge_command.as_mut().unwrap().argv[0] = "undeclared".into();
-        assert!(validate_manifest(&changed).is_err());
-        let mut changed = manifest;
-        changed.bridge_command.as_mut().unwrap().argv[1] = "\0".into();
-        assert!(validate_manifest(&changed).is_err());
-        // Legacy direct manifests keep their old JSON contract.
-        assert!(serde_json::to_value(example())
-            .unwrap()
-            .get("bridge_command")
-            .is_none());
-    }
-
-    #[test]
-    fn explicit_binding_metadata_must_match_the_template_and_reprobes_on_changed_choices() {
-        let manifest = manifest_from_draft(&positional_draft()).unwrap();
-        let mut changed = manifest.clone();
-        changed.launch_bindings.as_mut().unwrap().prefix_len = 0;
-        assert!(validate_manifest(&changed)
-            .unwrap_err()
-            .contains("launch template"));
-        let mut future = manifest.clone();
-        future.launch_bindings.as_mut().unwrap().version = 2;
-        assert!(validate_manifest(&future)
-            .unwrap_err()
-            .contains("metadata version"));
-        let mut renamed = manifest.clone();
-        renamed.launch_bindings.as_mut().unwrap().bindings[0].name = "guessed_model".into();
-        assert!(validate_manifest(&renamed)
-            .unwrap_err()
-            .contains("binding name"));
-        // The same argv can have two explicitly different meanings: static
-        // boolean + positional, or a flag binding. Changing the choice must
-        // invalidate readiness even though the executable/argv bytes match.
-        let mut other_choice = manifest.clone();
-        let bindings = other_choice.launch_bindings.as_mut().unwrap();
-        bindings.prefix_len = 0;
-        bindings.bindings[0].argument = ArgBinding::Flag {
-            flag: "--server".into(),
-            equals: false,
-        };
-        validate_manifest(&other_choice).unwrap();
-        assert_eq!(manifest.launch.args, other_choice.launch.args);
-        let mut duplicate = other_choice.clone();
-        duplicate.launch_bindings.as_mut().unwrap().bindings[1].argument = ArgBinding::Flag {
-            flag: "--server".into(),
-            equals: false,
-        };
-        duplicate.launch.args[2] = "--server".into();
-        assert!(validate_manifest(&duplicate)
-            .unwrap_err()
-            .contains("share a flag"));
-        let mut oversized = manifest.clone();
-        oversized.launch_bindings.as_mut().unwrap().prefix_len = 129;
-        assert!(validate_manifest(&oversized)
-            .unwrap_err()
-            .contains("bounds"));
-        let mut duplicate_name = manifest.clone();
-        duplicate_name.launch_bindings.as_mut().unwrap().bindings[1].name = "model".into();
-        assert!(validate_manifest(&duplicate_name)
-            .unwrap_err()
-            .contains("duplicate"));
-        let cfg = AppConfig {
-            active_provider: manifest.engine_id.as_str().into(),
-            active_runtime: manifest.runtime_id.clone(),
-            ..Default::default()
-        };
-        assert_ne!(
-            launch_fingerprint(&manifest, &cfg),
-            launch_fingerprint(&other_choice, &cfg)
-        );
-    }
-    #[test]
-    fn external_ids_round_trip_without_promoting_unknown_engines_to_llama() {
-        for name in ["custom.strata", "custom.my-engine", "custom.x"] {
-            let id = ProviderId::parse(name).unwrap();
-            assert!(id.is_custom());
-            assert!(!id.is_python());
-            assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{name}\""));
-            assert_eq!(
-                serde_json::from_str::<ProviderId>(&format!("\"{name}\"")).unwrap(),
-                id
-            );
-            let cfg = AppConfig {
-                active_provider: name.into(),
-                active_runtime: "build-1".into(),
-                ..Default::default()
-            };
-            assert_eq!(super::super::provider_of(&cfg), id);
-        }
-        for name in [
-            "custom.",
-            "custom...",
-            "custom.X",
-            "custom.a/../../",
-            "unknown",
-            "custom.한국어",
-        ] {
-            assert!(ProviderId::parse(name).is_none());
-        }
-    }
-    #[test]
-    fn manifest_numeric_constraints_reach_validation_and_argument_resolution() {
-        let mut manifest = example();
-        manifest.options[0].kind = serde_json::json!({
-            "type": "number", "min": 0, "max": 1, "min_exclusive": true, "max_exclusive": true,
-        });
-        validate_manifest(&manifest).unwrap();
-        let source = super::super::runtime_schema::adapter_source("custom.example", "test");
-        let definition =
-            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
-        for value in [0.00000001, 0.5] {
-            let values = serde_json::json!({"workers": value})
-                .as_object()
-                .unwrap()
-                .clone();
-            assert!(option_issues(&manifest, &values).is_empty());
-            assert!(definition
-                .resolve_one(&None, &[serde_json::json!(value)])
-                .is_ok());
-        }
-        for value in [0.0, 1.0] {
-            let values = serde_json::json!({"workers": value})
-                .as_object()
-                .unwrap()
-                .clone();
-            assert_eq!(option_issues(&manifest, &values).len(), 1);
-            assert!(definition
-                .resolve_one(&None, &[serde_json::json!(value)])
-                .is_err());
-        }
-        manifest.options[0].kind =
-            serde_json::json!({"type": "integer", "min": 1, "max": 8, "choices": [1, 8]});
-        validate_manifest(&manifest).unwrap();
-        let definition =
-            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
-        assert!(definition
-            .resolve_one(&None, &[serde_json::json!(8)])
-            .is_ok());
-        assert!(definition
-            .resolve_one(&None, &[serde_json::json!(2)])
-            .is_err());
-        assert_eq!(
-            option_issues(
-                &manifest,
-                serde_json::json!({"workers":2}).as_object().unwrap()
-            )
-            .len(),
-            1
-        );
-        manifest.options[0].kind["min_exclusive"] = serde_json::json!("true");
-        assert!(validate_manifest(&manifest).is_err());
-        manifest.options[0].kind =
-            serde_json::json!({"type": "integer", "min": 1, "max": 8, "sentinel_values": [-1]});
-        validate_manifest(&manifest).unwrap();
-        let definition =
-            super::super::runtime_schema::from_external(&manifest.options[0], &source).unwrap();
-        for value in [-1, 1] {
-            let values = serde_json::json!({"workers":value})
-                .as_object()
-                .unwrap()
-                .clone();
-            assert!(option_issues(&manifest, &values).is_empty());
-            assert!(definition
-                .resolve_one(&None, &[serde_json::json!(value)])
-                .is_ok());
-        }
-        assert_eq!(
-            option_issues(
-                &manifest,
-                serde_json::json!({"workers":0}).as_object().unwrap()
-            )
-            .len(),
-            1
-        );
-        assert!(definition
-            .resolve_one(&None, &[serde_json::json!(0)])
-            .is_err());
-        manifest.options[0].kind["sentinel_values"] = serde_json::json!([-1.5]);
-        assert!(validate_manifest(&manifest).is_err());
-    }
-
-    #[test]
-    fn options_validate_types_ranges_and_request_changes_keep_launch_identity() {
-        let manifest = example();
-        for value in [
-            serde_json::json!(true),
-            serde_json::json!(0),
-            serde_json::json!(9),
-            serde_json::json!("2"),
-        ] {
-            assert_eq!(
-                option_issues(
-                    &manifest,
-                    &serde_json::json!({"workers":value})
-                        .as_object()
-                        .unwrap()
-                        .clone()
-                )
-                .len(),
-                1
-            );
-        }
-        let cfg = AppConfig {
-            active_provider: "custom.example".into(),
-            provider_options: BTreeMap::from([(
-                "custom.example".into(),
-                serde_json::json!({"workers":2,"temperature":0.5})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            )]),
-            ..Default::default()
-        };
-        let mut request_changed = cfg.clone();
-        request_changed
-            .provider_options
-            .get_mut("custom.example")
-            .unwrap()
-            .insert("temperature".into(), serde_json::json!(1.0));
-        assert_eq!(
-            launch_fingerprint(&manifest, &cfg),
-            launch_fingerprint(&manifest, &request_changed)
-        );
-        let mut raw_changed = cfg.clone();
-        raw_changed
-            .provider_options
-            .get_mut("custom.example")
-            .unwrap()
-            .insert(
-                "extra_args".into(),
-                serde_json::json!(["--undocumented-cache", "small"]),
-            );
-        assert_ne!(
-            launch_fingerprint(&manifest, &cfg),
-            launch_fingerprint(&manifest, &raw_changed)
-        );
-        request_changed
-            .provider_options
-            .get_mut("custom.example")
-            .unwrap()
-            .insert("workers".into(), serde_json::json!(3));
-        assert_ne!(
-            launch_fingerprint(&manifest, &cfg),
-            launch_fingerprint(&manifest, &request_changed)
-        );
-        assert_eq!(
-            expand(
-                "--model={model}",
-                &AppConfig {
-                    active_model: "/synthetic/model with spaces".into(),
-                    ..Default::default()
-                },
-                123,
-                "private",
-                "served"
-            )
-            .unwrap(),
-            "--model=/synthetic/model with spaces"
-        );
-
-        // Literal output includes every saved value; provider lookup stays raw.
-        const ENCODED: &str = r#"{"array":[null,true,false,-7,1.25,-0.0],"nested":{"escaped":"\"\\\n","unicode":"한글🙂"},"scalar":7}"#;
-        let raw_provider = " custom.example ";
-        let mut cfg = AppConfig {
-            active_provider: raw_provider.into(),
-            provider_options: BTreeMap::from([(
-                "custom.example".into(),
-                serde_json::from_value(serde_json::json!({"wrong":true})).unwrap(),
-            )]),
-            ..Default::default()
-        };
-        for (saved, encoded) in [
-            (None, "{}"),
-            (Some(Map::new()), "{}"),
-            (Some(serde_json::from_str(ENCODED).unwrap()), ENCODED),
-        ] {
-            cfg.provider_options.remove(raw_provider);
-            if let Some(saved) = saved {
-                cfg.provider_options.insert(raw_provider.into(), saved);
-            }
-            let before = serde_json::to_value(&cfg).unwrap();
-            let output = expand(
-                "before={options_json};again={options_json}",
-                &cfg,
-                123,
-                "private",
-                "served",
-            )
-            .unwrap();
-            let expected = format!("before={encoded};again={encoded}");
-            assert_eq!(output, expected);
-            assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
-            cfg.provider_options.remove(raw_provider);
-            assert_eq!(
-                expand("{options_json}", &cfg, 123, "private", "served").unwrap(),
-                "{}"
-            );
-            assert_eq!(output, expected);
-        }
-    }
-    #[test]
-    fn launch_template_defines_entry_prefix_and_app_owned_bindings() {
-        let mut manifest = example();
-        manifest.launch.args = vec![
-            "C:/synthetic/server script.py".into(),
-            "serve".into(),
-            "--model".into(),
-            "{model}".into(),
-            "--listen={host}".into(),
-            "-p".into(),
-            "{port}".into(),
-            "{model_alias}".into(),
-        ];
-        assert_eq!(
-            launch_prefix(&manifest),
-            vec!["C:/synthetic/server script.py".to_string(), "serve".into()]
-        );
-        let (flags, positional) = bound_launch_flags(&manifest);
-        assert_eq!(
-            flags,
-            vec![
-                ("--model".to_string(), "model".to_string()),
-                ("--listen".into(), "host".into()),
-                ("-p".into(), "port".into())
-            ]
-        );
-        assert!(positional);
-        // Interpreter flags, a module or script and static options before the
-        // first binding stay part of the exact entry prefix.
-        manifest.launch.args = vec![
-            "-I".into(),
-            "-u".into(),
-            "C:/synthetic/한글 dir/serve.py".into(),
-            "--static".into(),
-            "--model".into(),
-            "{model}".into(),
-        ];
-        assert_eq!(
-            launch_prefix(&manifest),
-            ["-I", "-u", "C:/synthetic/한글 dir/serve.py", "--static"]
-        );
-        manifest.launch.args = vec!["-m".into(), "synthetic.server".into(), "{model}".into()];
-        assert_eq!(launch_prefix(&manifest), ["-m", "synthetic.server"]);
-        manifest.launch.args = vec!["--model={model}".into()];
-        assert!(launch_prefix(&manifest).is_empty());
-    }
-
-    #[test]
-    fn catalog_reuses_one_inventory_without_changing_host_recovery_order_or_freshness() {
-        const CHILD: &str = "AIOLM_REGISTRY_CATALOG_FIXTURE";
-        const FILTER: &str = "providers::registry::tests::catalog_reuses_one_inventory_without_changing_host_recovery_order_or_freshness";
-        const OWNER: &str = ".catalog-fixture-owner";
-        if std::env::var_os(CHILD).is_none() {
-            let original_home = std::env::var_os("AIOLM_HOME");
-            let base = fs::canonicalize(std::env::temp_dir()).unwrap();
-            let area = base.join(format!("aiolm-registry-catalog-{}", uuid::Uuid::new_v4()));
-            fs::create_dir(&area).unwrap();
-            let area = fs::canonicalize(area).unwrap();
-            assert_eq!(area.parent(), Some(base.as_path()));
-            struct Cleanup {
-                area: PathBuf,
-                base: PathBuf,
-            }
-            impl Drop for Cleanup {
-                fn drop(&mut self) {
-                    let Ok(area) = fs::canonicalize(&self.area) else {
-                        return;
-                    };
-                    let Ok(base) = fs::canonicalize(&self.base) else {
-                        return;
-                    };
-                    if area == self.area
-                        && base == self.base
-                        && area.parent() == Some(base.as_path())
-                        && fs::read(area.join(OWNER))
-                            .is_ok_and(|bytes| bytes == b"synthetic catalog fixture")
-                    {
-                        let _ = fs::remove_dir_all(area);
-                    }
-                }
-            }
-            fs::write(area.join(OWNER), b"synthetic catalog fixture").unwrap();
-            let _cleanup = Cleanup {
-                area: area.clone(),
-                base,
-            };
-            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
-            command
-                .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
-                .env(CHILD, &area)
-                .env("AIOLM_HOME", &area);
-            let output = crate::procutil::capture_output_cancellable(
-                &mut command,
-                Duration::from_secs(30),
-                256 * 1024,
-                None,
-            )
-            .unwrap();
-            assert_eq!(std::env::var_os("AIOLM_HOME"), original_home);
-            print!("{}", String::from_utf8_lossy(&output.stdout));
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
-            assert!(output.status.success(), "isolated catalog fixture failed");
-            assert!(String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
-            return;
-        }
-
-        let area = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
-        assert!(area.is_absolute());
-        assert!(area
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("aiolm-registry-catalog-"));
-        assert_eq!(PathBuf::from(std::env::var_os(CHILD).unwrap()), area);
-        assert_eq!(
-            fs::read(area.join(OWNER)).unwrap(),
-            b"synthetic catalog fixture"
-        );
-
-        fn record(
-            area: &Path,
-            engine: &str,
-            runtime: usize,
-            os: &str,
-            recovered: bool,
-        ) -> Registration {
-            let mut manifest = example();
-            manifest.engine_id = ProviderId::parse(engine).unwrap();
-            manifest.runtime_id = format!("build-{runtime}");
-            manifest.display_name = format!("Synthetic {engine} {runtime}");
-            manifest.probe.program = area.join("unused-probe").to_string_lossy().into_owned();
-            manifest.launch.program = area.join("unused-server").to_string_lossy().into_owned();
-            manifest.platforms = vec![Platform {
-                os: os.into(),
-                arch: std::env::consts::ARCH.into(),
-            }];
-            if recovered {
-                manifest.options[0].flag = Some("--port".into());
-                assert!(validate_manifest(&manifest)
-                    .unwrap_err()
-                    .contains("app-owned"));
-            } else {
-                validate_manifest(&manifest).unwrap();
-            }
-            Registration {
-                manifest,
-                executable_sha256: "a".repeat(64),
-                probe_sha256: "b".repeat(64),
-                artifacts_sha256: BTreeMap::new(),
-                probe: None,
-                model_fingerprint: String::new(),
-                launch_fingerprint: String::new(),
-                error: None,
-            }
-        }
-
-        fn expected_row(record: &Registration, supported: bool, recovered: bool) -> Value {
-            let availability = if supported {
-                serde_json::json!({"supported":true,"detail":""})
-            } else {
-                serde_json::json!({"supported":false,"reason":"external-runtime-unavailable",
-                    "detail":"Register this external engine for the current OS/architecture before running it. Saved selections remain preserved."})
-            };
-            let options = if recovered {
-                vec![]
-            } else {
-                record.manifest.options.clone()
-            };
-            serde_json::json!({"id":record.manifest.engine_id,
-                "engine":record.manifest.display_name,"server":"openai-v1",
-                "availability":availability,"options":options,"managed_version":null,
-                "kind":"external-process","capabilities":{"benchmark":"unsupported",
-                    "deep_verification":"unsupported","portable":"unsupported"}})
-        }
-
-        fn stored_bytes(records: &[Registration]) -> Vec<(PathBuf, Vec<u8>)> {
-            records
-                .iter()
-                .map(|record| {
-                    let path =
-                        path(record.manifest.engine_id, &record.manifest.runtime_id).unwrap();
-                    let bytes = fs::read(&path).unwrap();
-                    (path, bytes)
-                })
-                .collect()
-        }
-
-        fn measure(expected: &[Value], label: &str) -> (usize, usize) {
-            REGISTRY_INVENTORY_COUNTS.with(|counts| {
-                assert!(counts.replace(Some((0, 0))).is_none());
-            });
-            let started = std::time::Instant::now();
-            let actual = catalog();
-            let elapsed = started.elapsed();
-            let counts = REGISTRY_INVENTORY_COUNTS.with(|counts| counts.replace(None).unwrap());
-            let output = serde_json::to_string(&actual).unwrap();
-            eprintln!(
-                "CATALOG_FIXTURE {label} scans={} records={} elapsed_us={} rows={} sha256={:x} output={output}",
-                counts.0,
-                counts.1,
-                elapsed.as_micros(),
-                actual.len(),
-                Sha256::digest(output.as_bytes())
-            );
-            assert_eq!(actual.as_slice(), expected);
-            counts
-        }
-
-        let foreign_os = if std::env::consts::OS == "linux" {
-            "windows"
-        } else {
-            "linux"
-        };
-        let cases = [
-            ("custom.a-mixed", true, false),
-            ("custom.b-unavailable", false, false),
-            ("custom.c-recovery", true, true),
-            ("custom.d", true, false),
-            ("custom.e", true, false),
-            ("custom.f", true, false),
-            ("custom.g", true, false),
-            ("custom.h-last", true, false),
-        ];
-        let mut records = Vec::new();
-        // Opposite creation order makes the public sorted first-runtime choice observable.
-        for &(engine, supported, recovered) in cases.iter().rev() {
-            for runtime in (0..4).rev() {
-                let os = if !supported || (engine == "custom.a-mixed" && runtime == 0) {
-                    foreign_os
-                } else {
-                    std::env::consts::OS
-                };
-                let record = record(&area, engine, runtime, os, recovered && runtime == 0);
-                save(&record).unwrap();
-                records.push(record);
-            }
-        }
-        let before = stored_bytes(&records);
-        let mut expected = cases
-            .iter()
-            .map(|&(engine, supported, recovered)| {
-                let record = records
-                    .iter()
-                    .find(|record| {
-                        record.manifest.engine_id.as_str() == engine
-                            && record.manifest.runtime_id == "build-0"
-                    })
-                    .unwrap();
-                expected_row(record, supported, recovered)
-            })
-            .collect::<Vec<_>>();
-        let mut samples = Vec::new();
-        for label in ["initial-1", "initial-2", "initial-3"] {
-            samples.push(measure(&expected, label));
-        }
-        for (path, bytes) in before {
-            assert_eq!(fs::read(path).unwrap(), bytes);
-        }
-
-        for record in records
-            .iter()
-            .filter(|record| record.manifest.engine_id.as_str() == "custom.h-last")
-        {
-            remove(record.manifest.engine_id, &record.manifest.runtime_id).unwrap();
-        }
-        records.retain(|record| record.manifest.engine_id.as_str() != "custom.h-last");
-        expected.retain(|row| row["id"] != "custom.h-last");
-        let changed = records
-            .iter_mut()
-            .find(|record| {
-                record.manifest.engine_id.as_str() == "custom.b-unavailable"
-                    && record.manifest.runtime_id == "build-3"
-            })
-            .unwrap();
-        changed.manifest.platforms[0].os = std::env::consts::OS.into();
-        save(changed).unwrap();
-        expected[1]["availability"] = serde_json::json!({"supported":true,"detail":""});
-        for runtime in (0..4).rev() {
-            let added = record(
-                &area,
-                "custom.z-fresh",
-                runtime,
-                std::env::consts::OS,
-                false,
-            );
-            if runtime == 0 {
-                expected.push(expected_row(&added, true, false));
-            }
-            save(&added).unwrap();
-            records.push(added);
-        }
-        let before_fresh = stored_bytes(&records);
-        samples.push(measure(&expected, "after-add-remove-platform-change"));
-        for (path, bytes) in before_fresh {
-            assert_eq!(fs::read(path).unwrap(), bytes);
-        }
-        for (scans, records) in samples {
-            assert_eq!(scans, 1, "one catalog request must reuse its inventory");
-            assert_eq!(records, 32, "each captured registration is read once");
-        }
-    }
-}
+#[path = "registry_tests.rs"]
+mod tests;

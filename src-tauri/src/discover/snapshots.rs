@@ -23,15 +23,15 @@ fn reserved_device_name(part: &str) -> bool {
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.as_bytes()[3].is_ascii_digit())
 }
-pub(super) fn safe_file(path: &str) -> Result<(), String> {
+pub(super) fn safe_file(path: &str) -> Result<(), AppError> {
     if path.ends_with(['/', '.', ' ']) || path.split('/').any(reserved_device_name) {
-        return Err("unsafe snapshot path".into());
+        return Err(AppError::validation("unsafe snapshot path"));
     }
     validate_repo_path(&format!("{path}.gguf"))
 }
 
 /// Upstream data must never overlap the app's ownership and update metadata.
-pub(super) fn safe_data_file(path: &str) -> Result<(), String> {
+pub(super) fn safe_data_file(path: &str) -> Result<(), AppError> {
     safe_file(path)?;
     if path.split('/').any(|part| {
         part.eq_ignore_ascii_case(SNAPSHOT_MANIFEST)
@@ -42,7 +42,9 @@ pub(super) fn safe_data_file(path: &str) -> Result<(), String> {
                 .get(part.len().saturating_sub(".aiolm-update.json".len())..)
                 .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".aiolm-update.json"))
     }) {
-        return Err("repository file conflicts with AioLM metadata".into());
+        return Err(AppError::validation(
+            "repository file conflicts with AioLM metadata",
+        ));
     }
     Ok(())
 }
@@ -69,10 +71,12 @@ fn accepted(path: &str) -> bool {
 pub(super) fn gguf_companion_plan(
     entries: &[ApiTreeEntry],
     gguf: &str,
-) -> Result<Vec<SnapshotFile>, String> {
+) -> Result<Vec<SnapshotFile>, AppError> {
     validate_repo_path(gguf)?;
     if is_mmproj(gguf) {
-        return Err("GGUF companions require model weights, not a projector".into());
+        return Err(AppError::validation(
+            "GGUF companions require model weights, not a projector",
+        ));
     }
     let parent = gguf
         .rsplit_once('/')
@@ -104,10 +108,14 @@ pub(super) fn gguf_companion_plan(
         if entry.size > 512 * 1024 * 1024
             || (name == "config.json" && entry.size > MAX_API_RESPONSE_BYTES as u64)
         {
-            return Err("GGUF loading asset exceeds its size limit".into());
+            return Err(AppError::validation(
+                "GGUF loading asset exceeds its size limit",
+            ));
         }
         if !unique.insert(name.to_ascii_lowercase()) {
-            return Err("GGUF loading assets have colliding paths".into());
+            return Err(AppError::validation(
+                "GGUF loading assets have colliding paths",
+            ));
         }
         files.push(SnapshotFile {
             remote_path: None,
@@ -131,7 +139,9 @@ pub(super) fn gguf_companion_plan(
             .any(|name| has(name))
             && !(has("vocab.json") && has("merges.txt")))
     {
-        return Err("repository has no complete local GGUF config and tokenizer companions".into());
+        return Err(AppError::not_found(
+            "repository has no complete local GGUF config and tokenizer companions",
+        ));
     }
     Ok(files)
 }
@@ -139,11 +149,15 @@ pub(super) fn gguf_companion_plan(
 pub(super) fn pending_gguf_companions(
     directory: &Path,
     files: &[SnapshotFile],
-) -> Result<Vec<pending::PendingFile>, String> {
+) -> Result<Vec<pending::PendingFile>, AppError> {
     files
         .iter()
         .map(|file| {
-            let name = file.path.rsplit('/').next().ok_or("empty companion path")?;
+            let name = file
+                .path
+                .rsplit('/')
+                .next()
+                .ok_or_else(|| AppError::validation("empty companion path"))?;
             let target = checked_destination(directory, name, false)?;
             Ok(pending::PendingFile {
                 path: target.to_string_lossy().into_owned(),
@@ -160,15 +174,19 @@ pub(super) async fn download_gguf_companions(
     directory: &Path,
     files: &[SnapshotFile],
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let total: u64 = files.iter().map(|file| file.size).sum();
     let receipts = crate::benchmark::data_root().ok();
     let mut completed = 0;
     for file in files {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
-        let name = file.path.rsplit('/').next().ok_or("empty companion path")?;
+        let name = file
+            .path
+            .rsplit('/')
+            .next()
+            .ok_or_else(|| AppError::validation("empty companion path"))?;
         let target = destination(directory, name)?;
         let oid = file
             .oid
@@ -206,29 +224,33 @@ pub(super) async fn download_gguf_companions(
     Ok(())
 }
 
-pub(super) fn validate_gguf_companions(path: &Path) -> Result<(), String> {
-    let directory = path.parent().ok_or("GGUF has no companion directory")?;
+pub(super) fn validate_gguf_companions(path: &Path) -> Result<(), AppError> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| AppError::validation("GGUF has no companion directory"))?;
     let metadata =
-        fs::metadata(directory.join("config.json")).map_err(|error| error.to_string())?;
+        fs::metadata(directory.join("config.json")).map_err(|error| AppError::from_io(&error))?;
     if metadata.len() > MAX_API_RESPONSE_BYTES as u64 {
-        return Err("GGUF config exceeds its size limit".into());
+        return Err(AppError::validation("GGUF config exceeds its size limit"));
     }
     let config: serde_json::Value = serde_json::from_slice(
-        &fs::read(directory.join("config.json")).map_err(|error| error.to_string())?,
+        &fs::read(directory.join("config.json")).map_err(|error| AppError::from_io(&error))?,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| AppError::validation(error.to_string()))?;
     let model_type = config
         .get("model_type")
         .and_then(serde_json::Value::as_str)
-        .ok_or("GGUF companion config has no model_type")?;
+        .ok_or_else(|| AppError::validation("GGUF companion config has no model_type"))?;
     let expected_arch = if model_type == "mistral" {
         "llama"
     } else {
         model_type
     };
-    let weights = crate::gguf::read_metadata(path)?;
+    let weights = crate::gguf::read_metadata(path).map_err(AppError::validation)?;
     if weights.architecture.as_deref() != Some(expected_arch) {
-        return Err("GGUF companion config does not match the weights architecture".into());
+        return Err(AppError::validation(
+            "GGUF companion config does not match the weights architecture",
+        ));
     }
     // Architecture agreement is a loading prerequisite. Engine-specific
     // tensor types, dense-model support and platform checks remain in compat.
@@ -237,7 +259,7 @@ pub(super) fn validate_gguf_companions(path: &Path) -> Result<(), String> {
 
 /// The production download plan rejects snapshots that cannot become a local
 /// root model, before creating an ownership manifest or downloading weights.
-pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFile>, String> {
+pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFile>, AppError> {
     let mut paths = std::collections::HashSet::new();
     let files: Vec<SnapshotFile> = entries
         .into_iter()
@@ -245,10 +267,12 @@ pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFi
         .map(|entry| {
             safe_data_file(&entry.path)?;
             if !paths.insert(entry.path.to_ascii_lowercase()) {
-                return Err("snapshot has colliding file paths".into());
+                return Err(AppError::validation("snapshot has colliding file paths"));
             }
             if entry.size > MAX_MODEL_BYTES {
-                return Err("snapshot file exceeds the model size limit".into());
+                return Err(AppError::validation(
+                    "snapshot file exceeds the model size limit",
+                ));
             }
             Ok(SnapshotFile {
                 remote_path: None,
@@ -257,12 +281,12 @@ pub(super) fn plan_snapshot(entries: Vec<ApiTreeEntry>) -> Result<Vec<SnapshotFi
                 oid: entry.lfs.and_then(|value| value.oid).or(entry.oid),
             })
         })
-        .collect::<Result<_, String>>()?;
+        .collect::<Result<_, AppError>>()?;
     validate_loading_files(&files)?;
     Ok(files)
 }
 
-fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
+fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), AppError> {
     let names: std::collections::HashSet<&str> =
         files.iter().map(|file| file.path.as_str()).collect();
     let has = |name: &str| names.contains(name);
@@ -271,7 +295,9 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
             .iter()
             .any(|file| !file.path.contains('/') && file.path.ends_with(".safetensors"))
     {
-        return Err("repository has no supported root safetensors snapshot".into());
+        return Err(AppError::not_found(
+            "repository has no supported root safetensors snapshot",
+        ));
     }
     if ![
         "tokenizer.json",
@@ -285,7 +311,9 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
     .any(|name| has(name))
         && !(has("vocab.json") && has("merges.txt"))
     {
-        return Err("snapshot is missing local tokenizer assets".into());
+        return Err(AppError::not_found(
+            "snapshot is missing local tokenizer assets",
+        ));
     }
     let mut checked_groups = std::collections::HashSet::new();
     for file in files {
@@ -299,11 +327,14 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
                             .chain(count.bytes())
                             .all(|byte| byte.is_ascii_digit())
                     {
-                        let index: usize = index.parse().map_err(|_| "invalid weight shard")?;
-                        let count: usize =
-                            count.parse().map_err(|_| "invalid weight shard count")?;
+                        let index: usize = index
+                            .parse()
+                            .map_err(|_| AppError::validation("invalid weight shard"))?;
+                        let count: usize = count
+                            .parse()
+                            .map_err(|_| AppError::validation("invalid weight shard count"))?;
                         if index == 0 || index > count || count > MAX_TREE_ENTRIES {
-                            return Err("invalid weight shard count".into());
+                            return Err(AppError::validation("invalid weight shard count"));
                         }
                         if !checked_groups.insert(format!("{base}-of-{count:05}")) {
                             continue;
@@ -311,7 +342,9 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
                         for part in 1..=count {
                             let path = format!("{base}-{part:05}-of-{count:05}.safetensors");
                             if !has(&path) {
-                                return Err(format!("snapshot is missing weight shard: {path}"));
+                                return Err(AppError::not_found(format!(
+                                    "snapshot is missing weight shard: {path}"
+                                )));
                             }
                         }
                     }
@@ -327,10 +360,10 @@ fn validate_loading_files(files: &[SnapshotFile]) -> Result<(), String> {
 pub fn installed_snapshots(
     models_dir: &str,
     repo: &str,
-) -> Result<Vec<crate::providers::artifacts::ModelArtifact>, String> {
+) -> Result<Vec<crate::providers::artifacts::ModelArtifact>, AppError> {
     validate_repo_id(repo)?;
     if models_dir.trim().is_empty() {
-        return Err("models directory is empty".into());
+        return Err(AppError::validation("models directory is empty"));
     }
     let Ok(library) = Path::new(models_dir).canonicalize() else {
         return Ok(Vec::new());
@@ -343,14 +376,14 @@ pub fn installed_snapshots(
         return Ok(Vec::new());
     };
     if !same_path_identity(&canonical, &directory) {
-        return Err("snapshot directory contains a link".into());
+        return Err(AppError::validation("snapshot directory contains a link"));
     }
     let mut artifacts = Vec::new();
     for entry in fs::read_dir(directory)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| AppError::from_io(&error))?
         .take(1000)
     {
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = entry.map_err(|error| AppError::from_io(&error))?;
         let revision = entry.file_name().to_string_lossy().into_owned();
         if revision.len() != 40
             || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -370,7 +403,7 @@ pub fn installed_snapshots(
     artifacts.sort_by(|left, right| right.revision.cmp(&left.revision));
     Ok(artifacts)
 }
-fn destination(root: &Path, relative: &str) -> Result<PathBuf, String> {
+fn destination(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
     checked_destination(root, relative, true)
 }
 
@@ -380,7 +413,7 @@ pub(super) fn checked_destination(
     root: &Path,
     relative: &str,
     create_missing: bool,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     safe_file(relative)?;
     let parts: Vec<_> = relative.split('/').collect();
     let mut parent = root.to_path_buf();
@@ -390,14 +423,20 @@ pub(super) fn checked_destination(
             if !create_missing {
                 continue;
             }
-            fs::create_dir(&parent).map_err(|error| error.to_string())?;
+            fs::create_dir(&parent).map_err(|error| AppError::from_io(&error))?;
         }
-        let canonical = parent.canonicalize().map_err(|error| error.to_string())?;
+        let canonical = parent
+            .canonicalize()
+            .map_err(|error| AppError::from_io(&error))?;
         if !same_path_identity(&canonical, &parent) {
-            return Err("snapshot destination contains a link".into());
+            return Err(AppError::validation("snapshot destination contains a link"));
         }
     }
-    Ok(parent.join(parts.last().ok_or("empty snapshot path")?))
+    Ok(parent.join(
+        parts
+            .last()
+            .ok_or_else(|| AppError::validation("empty snapshot path"))?,
+    ))
 }
 
 /// Join a manifest path with platform separators, so canonical comparisons of
@@ -410,7 +449,7 @@ pub(crate) fn snapshot_path(directory: &Path, relative: &str) -> PathBuf {
 
 /// Read a snapshot ownership manifest without following a link or reading an
 /// unbounded file. `None` means there is no manifest at `path`.
-pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
+pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, AppError> {
     read_snapshot_manifest_with_policy(path, false)
 }
 
@@ -418,22 +457,29 @@ pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManif
 /// repository lookup keeps its forward-compatible typed metadata behavior.
 pub(crate) fn read_snapshot_manifest_for_inspection(
     path: &Path,
-) -> Result<Option<SnapshotManifest>, String> {
+) -> Result<Option<SnapshotManifest>, AppError> {
     read_snapshot_manifest_with_policy(path, true)
 }
 
 fn read_snapshot_manifest_with_policy(
     path: &Path,
     strict_json: bool,
-) -> Result<Option<SnapshotManifest>, String> {
+) -> Result<Option<SnapshotManifest>, AppError> {
     use std::io::Read;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot inspect snapshot manifest: {error}")),
+        Err(error) => {
+            return Err(io_error(
+                &error,
+                format!("cannot inspect snapshot manifest: {error}"),
+            ))
+        }
     };
     if !metadata.is_file() || metadata.len() > MAX_SNAPSHOT_MANIFEST_BYTES {
-        return Err("snapshot manifest is not a bounded regular file".into());
+        return Err(AppError::validation(
+            "snapshot manifest is not a bounded regular file",
+        ));
     }
     let mut bytes = Vec::new();
     fs::File::open(path)
@@ -441,9 +487,11 @@ fn read_snapshot_manifest_with_policy(
             file.take(MAX_SNAPSHOT_MANIFEST_BYTES + 1)
                 .read_to_end(&mut bytes)
         })
-        .map_err(|error| format!("cannot read snapshot manifest: {error}"))?;
+        .map_err(|error| io_error(&error, format!("cannot read snapshot manifest: {error}")))?;
     if bytes.len() as u64 > MAX_SNAPSHOT_MANIFEST_BYTES {
-        return Err("snapshot manifest is not a bounded regular file".into());
+        return Err(AppError::validation(
+            "snapshot manifest is not a bounded regular file",
+        ));
     }
     let manifest: SnapshotManifest = if strict_json {
         serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -451,17 +499,17 @@ fn read_snapshot_manifest_with_policy(
     } else {
         serde_json::from_slice(&bytes)
     }
-    .map_err(|error| format!("snapshot manifest is invalid: {error}"))?;
+    .map_err(|error| AppError::validation(format!("snapshot manifest is invalid: {error}")))?;
     if !matches!(manifest.format, 1 | 2) || manifest.files.len() > MAX_TREE_ENTRIES {
-        return Err("unsupported snapshot manifest".into());
+        return Err(AppError::validation("unsupported snapshot manifest"));
     }
     match (manifest.format, manifest.selected_file.is_some()) {
         (1, false) if manifest.files.iter().all(|file| file.remote_path.is_none()) => {}
         (2, true) => {}
         _ => {
-            return Err(
-                "snapshot manifest format does not support its selection or path mappings".into(),
-            )
+            return Err(AppError::validation(
+                "snapshot manifest format does not support its selection or path mappings",
+            ))
         }
     }
     validate_repo_id(&manifest.repository)?;
@@ -471,7 +519,9 @@ fn read_snapshot_manifest_with_policy(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err("snapshot manifest has an invalid revision".into());
+        return Err(AppError::validation(
+            "snapshot manifest has an invalid revision",
+        ));
     }
     let mut unique = std::collections::HashSet::new();
     if manifest
@@ -479,14 +529,18 @@ fn read_snapshot_manifest_with_policy(
         .iter()
         .any(|file| file.size > MAX_MODEL_BYTES || !unique.insert(file.path.to_ascii_lowercase()))
     {
-        return Err("snapshot manifest lists duplicate paths or excessive file sizes".into());
+        return Err(AppError::validation(
+            "snapshot manifest lists duplicate paths or excessive file sizes",
+        ));
     }
     if manifest
         .files
         .iter()
         .any(|file| safe_file(&file.path).is_err() || file.path == SNAPSHOT_MANIFEST)
     {
-        return Err("snapshot manifest lists an unsafe path".into());
+        return Err(AppError::validation(
+            "snapshot manifest lists an unsafe path",
+        ));
     }
     selected::validate_selection(&manifest)?;
     Ok(Some(manifest))
@@ -501,22 +555,22 @@ async fn verify_existing<F: FnMut(u64)>(
     receipts: Option<&Path>,
     cancel: &AtomicBool,
     progress: F,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     let metadata = match tokio::fs::symlink_metadata(target).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
-            return Err(format!(
-                "cannot inspect snapshot file {}: {error}",
-                file.path
+            return Err(io_error(
+                &error,
+                format!("cannot inspect snapshot file {}: {error}", file.path),
             ))
         }
     };
     if !metadata.is_file() || metadata.len() != file.size {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "existing snapshot file failed verification: {}",
             file.path
-        ));
+        )));
     }
     // A file this application already proved against the same digest, and
     // that has not changed since, is not hashed again.
@@ -528,12 +582,15 @@ async fn verify_existing<F: FnMut(u64)>(
         verify_file_digest_with_progress(target, file, cancel, progress)
             .await
             .map_err(|error| {
-                if error == DOWNLOAD_CANCELLED {
+                if error.kind == ErrorKind::Cancelled {
                     error
                 } else {
-                    format!(
-                        "existing snapshot file failed verification: {}: {error}",
-                        file.path
+                    AppError::new(
+                        error.kind,
+                        format!(
+                            "existing snapshot file failed verification: {}: {error}",
+                            file.path
+                        ),
                     )
                 }
             })?;
@@ -568,7 +625,7 @@ fn snapshot_directory(
     repo: &str,
     revision: &str,
     selected: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     let mut incomplete_selection = None;
     for artifact in installed_snapshots(&library.to_string_lossy(), repo)? {
         if artifact.ownership == "app"
@@ -609,7 +666,7 @@ fn snapshot_directory(
         &format!("hf/{repo}/snapshots/{identity}/{SNAPSHOT_MANIFEST}"),
     )?
     .parent()
-    .ok_or("invalid snapshot directory")?
+    .ok_or_else(|| AppError::validation("invalid snapshot directory"))?
     .to_path_buf())
 }
 
@@ -620,7 +677,7 @@ pub async fn download_snapshot(
     file_path: Option<&str>,
     revision: Option<&str>,
     cancel: &AtomicBool,
-) -> Result<crate::providers::artifacts::ModelArtifact, String> {
+) -> Result<crate::providers::artifacts::ModelArtifact, AppError> {
     validate_repo_id(repo)?;
     let revision = download_revision(revision, immutable_revision(repo, cancel)).await?;
     let entries = repository_tree(repo, &revision, cancel).await?;
@@ -685,7 +742,7 @@ async fn download_snapshot_files<F>(
     receipts: Option<&Path>,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<crate::providers::artifacts::ModelArtifact, String>
+) -> Result<crate::providers::artifacts::ModelArtifact, AppError>
 where
     F: FnMut(&str, &str, u64, u64),
 {
@@ -693,7 +750,7 @@ where
         .files
         .iter()
         .try_fold(0u64, |size, file| size.checked_add(file.size))
-        .ok_or("snapshot size overflow")?;
+        .ok_or_else(|| AppError::validation("snapshot size overflow"))?;
     let mut completed = 0u64;
     progress(SNAPSHOT_MANIFEST, "downloading", 0, total);
     let manifest_path = snapshot.join(SNAPSHOT_MANIFEST);
@@ -704,21 +761,25 @@ where
             || previous.selected_entrypoint() != manifest.selected_entrypoint()
             || previous.files != manifest.files
         {
-            return Err("existing snapshot manifest differs from the repository".into());
+            return Err(AppError::validation(
+                "existing snapshot manifest differs from the repository",
+            ));
         }
         previously_complete = previous.complete;
     }
     if !previously_complete {
         crate::config::atomic_write(
             &manifest_path,
-            &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+            &serde_json::to_vec_pretty(&manifest)
+                .map_err(|error| AppError::internal(error.to_string()))?,
         )?;
     }
-    let mut invalidate = || -> Result<(), String> {
+    let mut invalidate = || -> Result<(), AppError> {
         if previously_complete {
             crate::config::atomic_write(
                 &manifest_path,
-                &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+                &serde_json::to_vec_pretty(&manifest)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
             )?;
             previously_complete = false;
         }
@@ -726,7 +787,7 @@ where
     };
     for file in &manifest.files {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         let target = match checked_destination(snapshot, &file.path, false) {
             Ok(target) => target,
@@ -752,7 +813,7 @@ where
             Ok(false) => invalidate()?,
             Err(error) => {
                 // Cancellation is not evidence that existing data is bad.
-                if error != DOWNLOAD_CANCELLED {
+                if error.kind != ErrorKind::Cancelled {
                     invalidate()?;
                 }
                 return Err(error);
@@ -760,10 +821,10 @@ where
         }
         // Persist incomplete state before creating parents or staging data.
         let target = destination(snapshot, &file.path)?;
-        let mut url =
-            reqwest::Url::parse("https://huggingface.co").map_err(|error| error.to_string())?;
+        let mut url = reqwest::Url::parse("https://huggingface.co")
+            .map_err(|error| AppError::validation(error.to_string()))?;
         url.path_segments_mut()
-            .map_err(|_| "invalid hub URL")?
+            .map_err(|_| AppError::validation("invalid hub URL"))?
             .extend(manifest.repository.split('/'))
             .extend(["resolve", manifest.revision.as_str()])
             .extend(file.remote_path.as_deref().unwrap_or(&file.path).split('/'));
@@ -802,17 +863,18 @@ where
             }
             details.push_str(note);
         }
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "snapshot loading files are incomplete or invalid: {details}"
-        ));
+        )));
     }
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     manifest.complete = true;
     crate::config::atomic_write(
         &manifest_path,
-        &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        &serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| AppError::internal(error.to_string()))?,
     )?;
     progress(SNAPSHOT_MANIFEST, "complete", completed, total);
     Ok(crate::providers::artifacts::inspect_snapshot(snapshot))
@@ -1133,7 +1195,7 @@ mod tests {
                 )
                 .await
                 .unwrap_err(),
-                DOWNLOAD_CANCELLED
+                AppError::cancelled(DOWNLOAD_CANCELLED)
             );
             assert_eq!(fs::read(&manifest_path).unwrap(), original);
             let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
@@ -1162,7 +1224,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(cancel.load(Ordering::Acquire));
-        assert!(error.contains("failed verification"), "{error}");
+        assert!(error.message.contains("failed verification"), "{error}");
         assert!(
             !read_snapshot_manifest(&snapshot.join(SNAPSHOT_MANIFEST))
                 .unwrap()
@@ -1198,7 +1260,7 @@ mod tests {
                 )
                 .await
                 .unwrap_err(),
-                DOWNLOAD_CANCELLED
+                AppError::cancelled(DOWNLOAD_CANCELLED)
             );
             let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
             assert_eq!(installed.len(), 1);
@@ -1330,6 +1392,7 @@ mod tests {
         fs::write(root.join("config.json"), br#"{"model_type":"qwen2"}"#).unwrap();
         assert!(validate_gguf_companions(&model)
             .unwrap_err()
+            .message
             .contains("does not match"));
         fs::write(root.join("config.json"), br#"{"model_type":"llama"}"#).unwrap();
         assert!(validate_gguf_companions(&model).is_ok());
@@ -1739,9 +1802,9 @@ mod tests {
             assert!(read_snapshot_manifest(&path).is_err());
         }
         fs::write(&path, b"{broken").unwrap();
-        assert!(read_snapshot_manifest(&path)
-            .unwrap_err()
-            .contains("invalid"));
+        let error = read_snapshot_manifest(&path).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Validation);
+        assert!(error.message.contains("invalid"));
         fs::write(
             &path,
             serde_json::to_vec(&SnapshotManifest {
@@ -1757,6 +1820,7 @@ mod tests {
         drop(oversized);
         assert!(read_snapshot_manifest(&path)
             .unwrap_err()
+            .message
             .contains("bounded"));
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
@@ -1799,7 +1863,7 @@ mod tests {
             verify_existing(&target, &file, None, &AtomicBool::new(true), |_| {})
                 .await
                 .unwrap_err(),
-            DOWNLOAD_CANCELLED
+            AppError::cancelled(DOWNLOAD_CANCELLED)
         );
         let different = b"synthetic weightz".to_vec();
         fs::write(&target, &different).unwrap();

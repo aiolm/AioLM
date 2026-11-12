@@ -188,6 +188,7 @@ async fn register(area: &Path, runtime: &str, streams: &str) -> Result<(), Strin
     runtime_schema::register_entrypoint(&root, &draft, None)
         .await
         .map(|_| ())
+        .map_err(Into::into)
 }
 
 fn issues(cfg: &AppConfig) -> Vec<String> {

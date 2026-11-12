@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,30 +24,30 @@ pub struct ScanGuard {
     pub cancel: Arc<AtomicBool>,
 }
 
-fn validate_id(id: &str) -> Result<(), String> {
+fn validate_id(id: &str) -> Result<(), AppError> {
     if id.is_empty()
         || id.len() > 128
         || !id
             .bytes()
             .all(|value| value.is_ascii_alphanumeric() || b"-_".contains(&value))
     {
-        return Err("invalid model scan identifier".into());
+        return Err(AppError::validation("invalid model scan identifier"));
     }
     Ok(())
 }
 
 impl ScanRegistry {
-    pub fn begin(self: &Arc<Self>, id: String) -> Result<ScanGuard, String> {
+    pub fn begin(self: &Arc<Self>, id: String) -> Result<ScanGuard, AppError> {
         validate_id(&id)?;
         let mut jobs = self
             .0
             .lock()
             .map_err(|_| "model scan registry lock was poisoned")?;
         if jobs.active.contains_key(&id) {
-            return Err("model scan identifier is already active".into());
+            return Err(AppError::busy("model scan identifier is already active"));
         }
         if jobs.active.len() >= MAX_ACTIVE_SCANS {
-            return Err("too many active model scans".into());
+            return Err(AppError::busy("too many active model scans"));
         }
         let cancelled = jobs.cancelled.remove(&id);
         jobs.cancellation_order.retain(|entry| entry != &id);
@@ -59,7 +60,7 @@ impl ScanRegistry {
         })
     }
 
-    pub fn cancel(&self, id: &str) -> Result<(), String> {
+    pub fn cancel(&self, id: &str) -> Result<(), AppError> {
         validate_id(id)?;
         let mut jobs = self
             .0
@@ -94,6 +95,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invalid_scan_identifiers_are_validation_errors() {
+        let registry = Arc::new(ScanRegistry::default());
+        let begin = registry.begin("invalid id".into()).err().unwrap();
+        let cancel = registry.cancel("invalid id").unwrap_err();
+        for error in [begin, cancel] {
+            assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+            assert_eq!(error.message, "invalid model scan identifier");
+        }
+    }
+
+    #[test]
     fn cancellation_is_scoped_to_one_request_and_survives_queued_start() {
         let registry = Arc::new(ScanRegistry::default());
         let first = registry.begin("first".into()).unwrap();
@@ -106,7 +118,9 @@ mod tests {
         assert!(queued.cancel.load(Ordering::Relaxed));
         drop(first);
         assert!(!registry.0.lock().unwrap().active.contains_key("first"));
-        assert!(registry.begin("second".into()).is_err());
+        let duplicate = registry.begin("second".into()).err().unwrap();
+        assert_eq!(duplicate.kind, crate::error::ErrorKind::Busy);
+        assert_eq!(duplicate.message, "model scan identifier is already active");
     }
 
     #[test]

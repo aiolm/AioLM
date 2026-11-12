@@ -15,6 +15,7 @@ use super::{
     download_client, ensure_download_parent, validate_response_url, AtomicBool, Ordering, Path,
     PathBuf, DOWNLOAD_BUFFER_BYTES, DOWNLOAD_CANCELLED, DOWNLOAD_UPDATE_INTERVAL, MAX_MODEL_BYTES,
 };
+use super::{http_error, io_error, network_error, AppError, ErrorKind};
 use reqwest::{header, StatusCode};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
@@ -28,14 +29,14 @@ const LEGACY_KEY_DIGITS: usize = 32;
 /// Where `target` is staged while it downloads. The key covers the declared
 /// size and digest, so a file republished under the same name never appends
 /// to bytes staged for its previous contents.
-pub(super) fn part_path(target: &Path, size: u64, oid: Option<&str>) -> Result<PathBuf, String> {
+pub(super) fn part_path(target: &Path, size: u64, oid: Option<&str>) -> Result<PathBuf, AppError> {
     let parent = target
         .parent()
-        .ok_or_else(|| "download destination has no parent".to_string())?;
+        .ok_or_else(|| AppError::validation("download destination has no parent"))?;
     let name = target
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| "download filename is invalid".to_string())?;
+        .ok_or_else(|| AppError::validation("download filename is invalid"))?;
     let mut hash = Sha256::new();
     hash.update(b"aiolm-resume\0");
     hash.update(size.to_le_bytes());
@@ -82,11 +83,14 @@ pub(super) fn staged_parts(target: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-async fn remove_part(part: &Path) -> Result<(), String> {
+async fn remove_part(part: &Path) -> Result<(), AppError> {
     match tokio::fs::remove_file(part).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot discard staged download: {error}")),
+        Err(error) => Err(io_error(
+            &error,
+            format!("cannot discard staged download: {error}"),
+        )),
     }
 }
 
@@ -98,7 +102,7 @@ async fn staged_prefix<'a, F>(
     oid: Option<&'a str>,
     cancel: &AtomicBool,
     progress: &mut F,
-) -> Result<(u64, Option<FileDigest<'a>>), String>
+) -> Result<(u64, Option<FileDigest<'a>>), AppError>
 where
     F: FnMut(&'static str, u64, u64),
 {
@@ -106,10 +110,17 @@ where
     let metadata = match tokio::fs::symlink_metadata(part).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, digest)),
-        Err(error) => return Err(format!("cannot inspect staged download: {error}")),
+        Err(error) => {
+            return Err(io_error(
+                &error,
+                format!("cannot inspect staged download: {error}"),
+            ))
+        }
     };
     if !metadata.is_file() {
-        return Err("download staging path is not a regular file".into());
+        return Err(AppError::validation(
+            "download staging path is not a regular file",
+        ));
     }
     let length = metadata.len();
     // Without a published digest nothing would ever check bytes staged
@@ -121,7 +132,7 @@ where
     if let Some(digest) = &mut digest {
         let mut input = tokio::fs::File::open(part)
             .await
-            .map_err(|error| format!("cannot read staged download: {error}"))?;
+            .map_err(|error| io_error(&error, format!("cannot read staged download: {error}")))?;
         let mut buffer = vec![0_u8; DOWNLOAD_BUFFER_BYTES];
         let mut read = 0_u64;
         let mut last_progress = std::time::Instant::now();
@@ -129,17 +140,18 @@ where
         // Only the length measured above is continued, even if the file grows.
         while read < length {
             if cancel.load(Ordering::Acquire) {
-                return Err(DOWNLOAD_CANCELLED.into());
+                return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
             }
             let want = usize::try_from(length - read)
                 .unwrap_or(usize::MAX)
                 .min(buffer.len());
-            let count = input
-                .read(&mut buffer[..want])
-                .await
-                .map_err(|error| format!("cannot read staged download: {error}"))?;
+            let count = input.read(&mut buffer[..want]).await.map_err(|error| {
+                io_error(&error, format!("cannot read staged download: {error}"))
+            })?;
             if count == 0 {
-                return Err("staged download shrank while it was read".into());
+                return Err(AppError::validation(
+                    "staged download shrank while it was read",
+                ));
             }
             digest.update(&buffer[..count]);
             read += count as u64;
@@ -179,12 +191,14 @@ pub(super) async fn fetch<F>(
     oid: Option<&str>,
     cancel: &AtomicBool,
     mut progress: F,
-) -> Result<PathBuf, String>
+) -> Result<PathBuf, AppError>
 where
     F: FnMut(&'static str, u64, u64),
 {
     if total > MAX_MODEL_BYTES {
-        return Err("model file exceeds the 512 GiB safety limit".into());
+        return Err(AppError::validation(
+            "model file exceeds the 512 GiB safety limit",
+        ));
     }
     let oid = oid.filter(|oid| digests::valid_oid(Some(oid)));
     let part = part_path(target, total, oid)?;
@@ -198,7 +212,7 @@ where
         // No response body is needed, but activation still needs a real file
         // and an empty asset must satisfy the same published digest as any other.
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         if oid
             .map(|oid| FileDigest::new(oid, 0))
@@ -206,32 +220,41 @@ where
             .is_some_and(|digest| !digest.matches())
         {
             remove_part(&part).await?;
-            return Err("downloaded model checksum does not match Hugging Face metadata".into());
+            return Err(AppError::validation(
+                "downloaded model checksum does not match Hugging Face metadata",
+            ));
         }
         match tokio::fs::symlink_metadata(&part).await {
             Ok(metadata) if !metadata.is_file() => {
-                return Err("download staging path is not a regular file".into());
+                return Err(AppError::validation(
+                    "download staging path is not a regular file",
+                ));
             }
             Ok(_) => remove_part(&part).await?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("cannot inspect staged download: {error}")),
+            Err(error) => {
+                return Err(io_error(
+                    &error,
+                    format!("cannot inspect staged download: {error}"),
+                ))
+            }
         }
         tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&part)
             .await
-            .map_err(|error| format!("cannot stage model download: {error}"))?
+            .map_err(|error| io_error(&error, format!("cannot stage model download: {error}")))?
             .sync_all()
             .await
-            .map_err(|error| format!("cannot flush model download: {error}"))?;
+            .map_err(|error| io_error(&error, format!("cannot flush model download: {error}")))?;
         progress("downloading", 0, 0);
         return Ok(part);
     }
     let mut restarted = false;
     loop {
         if cancel.load(Ordering::Acquire) {
-            return Err(DOWNLOAD_CANCELLED.into());
+            return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
         }
         let (offset, digest) = staged_prefix(&part, total, oid, cancel, &mut progress).await?;
         if offset == total {
@@ -250,8 +273,8 @@ where
             request = request.header(header::RANGE, format!("bytes={offset}-"));
         }
         let response = tokio::select! {
-            _ = super::snapshots::wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-            response = request.send() => response.map_err(|error| format!("model download failed: {error}"))?
+            _ = super::snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            response = request.send() => response.map_err(|error| network_error(&error, format!("model download failed: {error}")))?
         };
         validate_response_url(&response)?;
         let status = response.status();
@@ -277,21 +300,26 @@ where
             // A full reply: the server ignored the range or none was sent.
             StatusCode::OK => 0,
             _ if status.is_success() => {
-                return Err(format!(
+                return Err(AppError::validation(format!(
                     "model download could not continue from byte {offset}: HTTP {status}"
-                ));
+                )));
             }
-            _ => return Err(format!("model download HTTP status: {status}")),
+            _ => {
+                return Err(http_error(
+                    status,
+                    format!("model download HTTP status: {status}"),
+                ))
+            }
         };
         let expected = total - start;
         if response
             .content_length()
             .is_some_and(|length| length != expected)
         {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "model download length {} does not match repository metadata {expected}",
                 response.content_length().unwrap_or_default()
-            ));
+            )));
         }
         let digest = if start == 0 {
             oid.map(|oid| FileDigest::new(oid, total)).transpose()?
@@ -305,23 +333,17 @@ where
 
 /// A failure, and whether the staged bytes can still be continued.
 struct Failure {
-    message: String,
+    error: AppError,
     keep: bool,
 }
 
 impl Failure {
-    fn keep(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            keep: true,
-        }
+    fn keep(error: AppError) -> Self {
+        Self { error, keep: true }
     }
 
-    fn discard(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            keep: false,
-        }
+    fn discard(error: AppError) -> Self {
+        Self { error, keep: false }
     }
 }
 
@@ -334,7 +356,7 @@ async fn receive<F>(
     mut digest: Option<FileDigest<'_>>,
     cancel: &AtomicBool,
     progress: &mut F,
-) -> Result<(), String>
+) -> Result<(), AppError>
 where
     F: FnMut(&'static str, u64, u64),
 {
@@ -348,7 +370,7 @@ where
     } else {
         tokio::fs::OpenOptions::new().append(true).open(part).await
     }
-    .map_err(|error| format!("cannot stage model download: {error}"))?;
+    .map_err(|error| io_error(&error, format!("cannot stage model download: {error}")))?;
     let mut received = start;
     let result = async {
         // Keep the writer inside this scope so every path closes it before
@@ -360,7 +382,7 @@ where
         let streamed = async {
             loop {
                 if cancel.load(Ordering::Acquire) {
-                    return Err(Failure::keep(DOWNLOAD_CANCELLED));
+                    return Err(Failure::keep(AppError::cancelled(DOWNLOAD_CANCELLED)));
                 }
                 let chunk = tokio::select! {
                     biased;
@@ -372,7 +394,7 @@ where
                         continue;
                     }
                     chunk = response.chunk() => chunk.map_err(|error| {
-                        Failure::keep(format!("model download stream failed: {error}"))
+                        Failure::keep(network_error(&error, format!("model download stream failed: {error}")))
                     })?,
                 };
                 let Some(chunk) = chunk else {
@@ -380,10 +402,10 @@ where
                 };
                 received = received.saturating_add(chunk.len() as u64);
                 if received > total {
-                    return Err(Failure::discard("model download reported an unsafe size"));
+                    return Err(Failure::discard(AppError::validation("model download reported an unsafe size")));
                 }
                 output.write_all(&chunk).await.map_err(|error| {
-                    Failure::keep(format!("cannot write model download: {error}"))
+                    Failure::keep(io_error(&error, format!("cannot write model download: {error}")))
                 })?;
                 if let Some(digest) = &mut digest {
                     digest.update(&chunk);
@@ -394,21 +416,21 @@ where
         // Whatever arrived is flushed, so a stopped transfer keeps it.
         let flushed = output.flush().await;
         streamed?;
-        flushed.map_err(|error| Failure::keep(format!("cannot flush model download: {error}")))?;
+        flushed.map_err(|error| Failure::keep(io_error(&error, format!("cannot flush model download: {error}"))))?;
         output
             .into_inner()
             .sync_all()
             .await
-            .map_err(|error| Failure::keep(format!("cannot flush model download: {error}")))?;
+            .map_err(|error| Failure::keep(io_error(&error, format!("cannot flush model download: {error}"))))?;
         if received != total {
-            return Err(Failure::keep(format!(
+            return Err(Failure::keep(AppError::unavailable(format!(
                 "model download ended at {received} bytes; expected {total}"
-            )));
+            ))));
         }
         if digest.is_some_and(|digest| !digest.matches()) {
-            return Err(Failure::discard(
+            return Err(Failure::discard(AppError::validation(
                 "downloaded model checksum does not match Hugging Face metadata",
-            ));
+            )));
         }
         progress("downloading", received, total);
         Ok(())
@@ -420,10 +442,10 @@ where
             if !failure.keep {
                 let _ = remove_part(part).await;
             }
-            if failure.message == DOWNLOAD_CANCELLED {
+            if failure.error.kind == ErrorKind::Cancelled {
                 progress("cancelled", received, total);
             }
-            Err(failure.message)
+            Err(failure.error)
         }
     }
 }
@@ -467,6 +489,7 @@ mod tests {
         )
         .await
         .unwrap_err()
+        .message
         .contains("checksum"));
         assert!(!wrong.exists());
         assert!(staged_parts(&wrong).is_empty());
@@ -553,9 +576,8 @@ mod tests {
         assert_eq!(
             staged_prefix(&part, 6, Some(oid), &AtomicBool::new(true), &mut progress)
                 .await
-                .err()
-                .as_deref(),
-            Some(DOWNLOAD_CANCELLED)
+                .err(),
+            Some(AppError::cancelled(DOWNLOAD_CANCELLED))
         );
         // Cancelling while reading keeps the staged bytes.
         assert_eq!(std::fs::read(&part).unwrap(), b"hel");

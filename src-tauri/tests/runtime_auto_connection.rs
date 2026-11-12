@@ -351,7 +351,11 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
             .await
             .err()
             .expect("an attached service cannot run a fixed-output benchmark");
-        assert!(refused.contains("fixed-output control"), "{refused}");
+        assert_eq!(refused.kind, aiolm_lib::error::ErrorKind::Unavailable);
+        assert!(
+            refused.message.contains("fixed-output control"),
+            "{refused}"
+        );
         assert_eq!(benchmark_calls.load(Ordering::Acquire), 0);
         assert!(client
             .get(format!("http://127.0.0.1:{upstream_port}/health"))

@@ -1,4 +1,5 @@
 //! Project JSON transfer through the desktop's native file dialogs.
+use crate::error::{AppError, ErrorKind};
 use std::{io::Read, path::PathBuf};
 
 const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
@@ -7,12 +8,15 @@ fn save_project_json(
     contents: &str,
     file_name: Option<&str>,
     choose_path: impl FnOnce(&str) -> Option<PathBuf>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     if contents.len() > MAX_PROJECT_BYTES {
-        return Err("project export exceeds the 4 MiB limit".into());
+        return Err(AppError::validation(
+            "project export exceeds the 4 MiB limit",
+        ));
     }
-    serde_json::from_str::<serde_json::Value>(contents)
-        .map_err(|error| format!("project export is not valid JSON: {error}"))?;
+    serde_json::from_str::<serde_json::Value>(contents).map_err(|error| {
+        AppError::validation(format!("project export is not valid JSON: {error}"))
+    })?;
     let name = file_name
         .filter(|name| {
             !name.is_empty()
@@ -26,40 +30,46 @@ fn save_project_json(
         return Ok(false);
     };
     crate::config::atomic_write(&path, contents.as_bytes())
-        .map_err(|error| format!("cannot save project JSON: {error}"))?;
+        .map_err(|error| AppError::new(error.kind, format!("cannot save project JSON: {error}")))?;
     Ok(true)
 }
 
 fn read_project_json(
     choose_path: impl FnOnce() -> Option<PathBuf>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppError> {
     let Some(path) = choose_path() else {
         return Ok(None);
     };
-    let path = path.canonicalize().map_err(|error| error.to_string())?;
+    let path = path
+        .canonicalize()
+        .map_err(|error| AppError::from_io(&error))?;
     if !path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
     {
-        return Err("choose a project JSON file".into());
+        return Err(AppError::validation("choose a project JSON file"));
     }
     let file = super::files::open_verified_file(&path, &path, "project")?;
     let mut bytes = Vec::new();
     file.take(MAX_PROJECT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read project JSON: {error}"))?;
+        .map_err(|error| AppError::io("cannot read project JSON", &error))?;
     if bytes.len() > MAX_PROJECT_BYTES {
-        return Err("project import exceeds the 4 MiB limit".into());
+        return Err(AppError::validation(
+            "project import exceeds the 4 MiB limit",
+        ));
     }
-    let contents = String::from_utf8(bytes).map_err(|_| "project JSON is not UTF-8".to_string())?;
+    let contents =
+        String::from_utf8(bytes).map_err(|_| AppError::validation("project JSON is not UTF-8"))?;
     let contents = contents.trim_start_matches('\u{feff}').to_owned();
-    serde_json::from_str::<serde_json::Value>(&contents)
-        .map_err(|error| format!("project import is not valid JSON: {error}"))?;
+    serde_json::from_str::<serde_json::Value>(&contents).map_err(|error| {
+        AppError::validation(format!("project import is not valid JSON: {error}"))
+    })?;
     Ok(Some(contents))
 }
 
 #[tauri::command]
-pub(crate) async fn project_import_json() -> Result<Option<String>, String> {
+pub(crate) async fn project_import_json() -> Result<Option<String>, AppError> {
     tokio::task::spawn_blocking(|| {
         read_project_json(|| {
             rfd::FileDialog::new()
@@ -68,14 +78,23 @@ pub(crate) async fn project_import_json() -> Result<Option<String>, String> {
         })
     })
     .await
-    .map_err(|error| format!("project import task failed: {error}"))?
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("project import task failed: {error}"),
+        )
+    })?
 }
 
 #[tauri::command]
 pub(crate) async fn project_export_json(
     contents: String,
     file_name: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tokio::task::spawn_blocking(move || {
         save_project_json(&contents, file_name.as_deref(), |name| {
             rfd::FileDialog::new()
@@ -85,26 +104,40 @@ pub(crate) async fn project_export_json(
         })
     })
     .await
-    .map_err(|error| format!("project export task failed: {error}"))?
+    .map_err(|error| {
+        AppError::new(
+            if error.is_cancelled() {
+                ErrorKind::Cancelled
+            } else {
+                ErrorKind::Internal
+            },
+            format!("project export task failed: {error}"),
+        )
+    })?
 }
 
 #[cfg(test)]
 mod tests {
     use super::{read_project_json, save_project_json, MAX_PROJECT_BYTES};
+    use crate::error::ErrorKind;
 
     #[test]
     fn cancellation_and_invalid_json_never_write_a_project() {
         assert!(!save_project_json("{}", Some("project.json"), |_| None).unwrap());
-        assert!(save_project_json("invalid", None, |_| panic!(
-            "invalid JSON opened the picker"
-        ))
-        .is_err());
-        assert!(
-            save_project_json(&" ".repeat(4 * 1024 * 1024 + 1), None, |_| {
-                panic!("oversized export opened the picker")
-            })
-            .is_err()
-        );
+        let invalid = save_project_json("invalid", None, |_| {
+            panic!("invalid JSON opened the picker")
+        })
+        .unwrap_err();
+        assert_eq!(invalid.kind, ErrorKind::Validation);
+        assert!(invalid
+            .message
+            .starts_with("project export is not valid JSON:"));
+        let oversized = save_project_json(&" ".repeat(4 * 1024 * 1024 + 1), None, |_| {
+            panic!("oversized export opened the picker")
+        })
+        .unwrap_err();
+        assert_eq!(oversized.kind, ErrorKind::Validation);
+        assert_eq!(oversized.message, "project export exceeds the 4 MiB limit");
         for name in [
             "../project.json",
             "C:\\project.json",
@@ -154,9 +187,17 @@ mod tests {
             &vec![b' '; MAX_PROJECT_BYTES + 1],
         ] {
             std::fs::write(&path, invalid).unwrap();
-            assert!(read_project_json(|| Some(path.clone())).is_err());
+            assert_eq!(
+                read_project_json(|| Some(path.clone())).unwrap_err().kind,
+                ErrorKind::Validation,
+            );
         }
         assert!(read_project_json(|| Some(root.clone())).is_err());
+        let missing = root.join("missing.json");
+        assert_eq!(
+            read_project_json(|| Some(missing)).unwrap_err().kind,
+            ErrorKind::NotFound,
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

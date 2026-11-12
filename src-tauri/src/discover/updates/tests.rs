@@ -746,10 +746,10 @@ async fn selected_nested_cancellation_and_digest_failure_do_not_publish_or_chang
         .await
         .unwrap_err();
         if cancellation {
-            assert_eq!(error, DOWNLOAD_CANCELLED);
+            assert_eq!(error, AppError::cancelled(DOWNLOAD_CANCELLED));
         } else {
             assert!(
-                error.contains("digest") || error.contains("checksum"),
+                error.message.contains("digest") || error.message.contains("checksum"),
                 "{error}"
             );
         }
@@ -862,7 +862,7 @@ async fn cancellation_after_transfer_preserves_all_installed_bytes_and_manifest(
     )
     .await
     .unwrap_err();
-    assert_eq!(error, DOWNLOAD_CANCELLED);
+    assert_eq!(error, AppError::cancelled(DOWNLOAD_CANCELLED));
     assert!(
         !server.requests().is_empty(),
         "cancellation must exercise a real transfer"
@@ -892,7 +892,7 @@ async fn pre_cancelled_apply_makes_no_requests_and_preserves_installed_files() {
         apply_plan(plan, &cancel, |_, _, _| {}, &server.source)
             .await
             .unwrap_err(),
-        DOWNLOAD_CANCELLED
+        AppError::cancelled(DOWNLOAD_CANCELLED)
     );
     assert!(server.requests().is_empty());
     assert_unchanged(&before);
@@ -1415,7 +1415,7 @@ fn activation_failure_after_backup_rolls_back_replacements_and_removals() {
         &mut journal,
     )
     .unwrap_err();
-    assert!(error.contains("cannot activate"));
+    assert!(error.message.contains("cannot activate"));
     assert_eq!(journal.len(), 3);
     assert!(!fixture.root().join("generation_config.json").exists());
     assert_eq!(
@@ -1461,7 +1461,7 @@ fn failed_rollback_keeps_original_backup_and_never_overwrites_an_unexpected_file
     let unexpected = FileState::read(&target);
 
     let error = rollback(&mut journal).unwrap_err();
-    assert!(error.contains("restore destination exists"));
+    assert!(error.message.contains("restore destination exists"));
     assert_eq!(FileState::read(&target), unexpected);
     assert_eq!(
         FileState::read(&backup),

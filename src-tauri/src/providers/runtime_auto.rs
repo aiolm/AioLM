@@ -92,7 +92,7 @@ impl ConnectionSpec {
 #[derive(Default)]
 struct Inventory {
     candidates: BTreeMap<String, discovery::RuntimeCandidate>,
-    preparations: BTreeMap<String, (PreparedConnection, Target)>,
+    preparations: BTreeMap<String, (Instant, PreparedConnection, Target)>,
 }
 static INVENTORY: OnceLock<Mutex<Inventory>> = OnceLock::new();
 static CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
@@ -107,22 +107,26 @@ pub fn cancellation() -> Arc<AtomicBool> {
 pub fn cancel() {
     cancellation().store(true, Ordering::Release);
 }
-fn check_cancel() -> Result<(), String> {
+fn check_cancel() -> Result<(), crate::error::AppError> {
     if cancellation().load(Ordering::Acquire) {
-        Err("automatic connection cancelled".into())
+        Err(crate::error::AppError::cancelled(
+            "automatic connection cancelled",
+        ))
     } else {
         Ok(())
     }
 }
 
-pub async fn discover(folder: Option<&Path>) -> Result<discovery::DiscoveryReport, String> {
+pub async fn discover(
+    folder: Option<&Path>,
+) -> Result<discovery::DiscoveryReport, crate::error::AppError> {
     let cancel = cancellation();
     let folder = folder.map(Path::to_path_buf);
     let worker_cancel = cancel.clone();
     let mut report =
         tokio::task::spawn_blocking(move || discovery::discover(folder.as_deref(), &worker_cancel))
             .await
-            .map_err(|e| e.to_string())??;
+            .map_err(crate::error::AppError::from)??;
     // A general TCP listener is not a model server. Only an actual standard
     // model-list response is offered as a running connection candidate.
     use futures_util::{stream, StreamExt};
@@ -174,7 +178,7 @@ pub async fn discover(folder: Option<&Path>) -> Result<discovery::DiscoveryRepor
     check_cancel()?;
     let mut state = inventory()
         .lock()
-        .map_err(|_| "automatic discovery lock poisoned")?;
+        .map_err(|_| crate::error::AppError::internal("automatic discovery lock poisoned"))?;
     state.candidates = report
         .candidates
         .iter()
@@ -187,17 +191,18 @@ pub async fn discover(folder: Option<&Path>) -> Result<discovery::DiscoveryRepor
 
 fn known_candidate(
     candidate: &discovery::RuntimeCandidate,
-) -> Result<discovery::RuntimeCandidate, String> {
+) -> Result<discovery::RuntimeCandidate, crate::error::AppError> {
     let state = inventory()
         .lock()
-        .map_err(|_| "automatic discovery lock poisoned")?;
-    let known = state
-        .candidates
-        .get(&candidate.id)
-        .ok_or("find the installation again before connecting")?;
+        .map_err(|_| crate::error::AppError::internal("automatic discovery lock poisoned"))?;
+    let known = state.candidates.get(&candidate.id).ok_or_else(|| {
+        crate::error::AppError::not_found("find the installation again before connecting")
+    })?;
     // The renderer cannot replace captured argv, PID, endpoint or file evidence.
     if known != candidate {
-        return Err("discovered installation changed; find it again".into());
+        return Err(crate::error::AppError::validation(
+            "discovered installation changed; find it again",
+        ));
     }
     Ok(known.clone())
 }
@@ -206,7 +211,7 @@ pub async fn inspect(
     candidate: &discovery::RuntimeCandidate,
     local_models: Vec<ModelChoice>,
     command: Option<Vec<String>>,
-) -> Result<PreparedConnection, String> {
+) -> Result<PreparedConnection, crate::error::AppError> {
     let candidate = known_candidate(candidate)?;
     discovery::revalidate_with_cancel(&candidate, &cancellation())?;
     let mut found = Vec::new();
@@ -247,10 +252,9 @@ pub async fn inspect(
         seen.insert((port, models))
     });
     if found.len() > 1 {
-        return Err(
-            "more than one model API belongs to this process; select a single server installation"
-                .into(),
-        );
+        return Err(crate::error::AppError::validation(
+            "more than one model API belongs to this process; select a single server installation",
+        ));
     }
     let (kind, models, detail, base_url, target, command) = if let Some(endpoint) = found.pop() {
         let models = endpoint
@@ -307,53 +311,75 @@ pub async fn inspect(
     };
     let mut state = inventory()
         .lock()
-        .map_err(|_| "automatic discovery lock poisoned")?;
+        .map_err(|_| crate::error::AppError::internal("automatic discovery lock poisoned"))?;
     if state.preparations.len() >= 128 {
-        state.preparations.clear();
+        if let Some(oldest) = state
+            .preparations
+            .iter()
+            .min_by_key(|(_, (inserted, _, _))| *inserted)
+            .map(|(token, _)| token.clone())
+        {
+            state.preparations.remove(&oldest);
+        }
     }
-    state
-        .preparations
-        .insert(prepared.plan.clone(), (prepared.clone(), target));
+    state.preparations.insert(
+        prepared.plan.clone(),
+        (Instant::now(), prepared.clone(), target),
+    );
     Ok(prepared)
 }
 
-fn read_spec(path: &Path) -> Result<ConnectionSpec, String> {
-    let file =
-        fs::File::open(path).map_err(|e| format!("cannot read automatic connection: {e}"))?;
+fn read_spec(path: &Path) -> Result<ConnectionSpec, crate::error::AppError> {
+    let file = fs::File::open(path).map_err(|e| {
+        crate::error::AppError::new(
+            crate::error::AppError::io_kind(&e),
+            format!("cannot read automatic connection: {e}"),
+        )
+    })?;
     let mut bytes = Vec::new();
     file.take(SPEC_LIMIT + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::from_io(&e))?;
     if bytes.len() as u64 > SPEC_LIMIT {
-        return Err("automatic connection exceeds its limit".into());
+        return Err(crate::error::AppError::validation(
+            "automatic connection exceeds its limit",
+        ));
     }
-    let spec: ConnectionSpec = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let spec: ConnectionSpec = serde_json::from_slice(&bytes)
+        .map_err(|e| crate::error::AppError::validation(e.to_string()))?;
     if spec.version != 1 || !spec.engine_id.is_custom() || spec.model_path.is_empty() {
-        return Err("invalid automatic connection".into());
+        return Err(crate::error::AppError::validation(
+            "invalid automatic connection",
+        ));
     }
     Ok(spec)
 }
 
-fn encoded_spec_path(path: &Path) -> Result<String, String> {
-    let text = path
-        .to_str()
-        .ok_or("automatic connection path must be Unicode")?;
+fn encoded_spec_path(path: &Path) -> Result<String, crate::error::AppError> {
+    let text = path.to_str().ok_or_else(|| {
+        crate::error::AppError::validation("automatic connection path must be Unicode")
+    })?;
     if !path.is_absolute() || text.is_empty() || text.len() > 32768 || text.contains('\0') {
-        return Err("invalid automatic connection path".into());
+        return Err(crate::error::AppError::validation(
+            "invalid automatic connection path",
+        ));
     }
     // Registry argv templates reserve braces. Encode the literal metadata path
     // so Unicode, braces and equals signs are never interpreted as bindings.
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(text.as_bytes()))
 }
 
-fn decoded_spec_path(encoded: &str) -> Result<PathBuf, String> {
+fn decoded_spec_path(encoded: &str) -> Result<PathBuf, crate::error::AppError> {
     if encoded.len() > 43_691 {
-        return Err("automatic connection address exceeds its limit".into());
+        return Err(crate::error::AppError::validation(
+            "automatic connection address exceeds its limit",
+        ));
     }
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(encoded)
-        .map_err(|_| "invalid automatic connection address")?;
-    let text = String::from_utf8(bytes).map_err(|_| "invalid automatic connection path")?;
+        .map_err(|_| crate::error::AppError::validation("invalid automatic connection address"))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| crate::error::AppError::validation("invalid automatic connection path"))?;
     let path = PathBuf::from(text);
     encoded_spec_path(&path)?;
     Ok(path)
@@ -486,7 +512,7 @@ pub(crate) fn is_owned_manifest(manifest: &registry::RuntimeManifest) -> bool {
 /// been checked. This derived view never replaces the stored helper manifest.
 pub(crate) fn option_manifest(
     manifest: &registry::RuntimeManifest,
-) -> Result<Option<registry::RuntimeManifest>, String> {
+) -> Result<Option<registry::RuntimeManifest>, crate::error::AppError> {
     let Some(spec) = owned_spec(manifest) else {
         return Ok(None);
     };
@@ -500,7 +526,9 @@ pub(crate) fn option_manifest(
         .args
         .iter()
         .position(|token| binding_token(token))
-        .ok_or("automatic launch has no registered bindings")?;
+        .ok_or_else(|| {
+            crate::error::AppError::validation("automatic launch has no registered bindings")
+        })?;
     let prefix_len = if engine.launch.args[first].starts_with('-') {
         first
     } else if first > 0 && engine.launch.args[first - 1].starts_with('-') {
@@ -552,7 +580,9 @@ pub(crate) fn option_manifest(
         subcommands,
         options: vec![],
     };
-    layout.validate(&prefix)?;
+    layout
+        .validate(&prefix)
+        .map_err(crate::error::AppError::validation)?;
     engine.command_layout = Some(layout);
     Ok(Some(engine))
 }
@@ -600,7 +630,7 @@ pub(crate) fn resolved_option_transport(
     root: &Path,
     cfg: &crate::config::AppConfig,
     manifest: &registry::RuntimeManifest,
-) -> Result<Option<Vec<String>>, String> {
+) -> Result<Option<Vec<String>>, crate::error::AppError> {
     if cfg.active_model.is_empty() {
         return Ok(None);
     }
@@ -608,7 +638,9 @@ pub(crate) fn resolved_option_transport(
         if !supports_launch_args(manifest)
             && !super::launch::provider_options(cfg, manifest.engine_id).is_empty()
         {
-            return Err("attached services do not accept launch arguments".into());
+            return Err(crate::error::AppError::validation(
+                "attached services do not accept launch arguments",
+            ));
         }
         return Ok(None);
     };
@@ -619,8 +651,10 @@ pub(crate) fn resolved_option_transport(
         &effective.schema,
         &effective.additional_arg_flags,
         &values,
-    )?;
-    let saved = serde_json::to_string(&values).map_err(|error| error.to_string())?;
+    )
+    .map_err(crate::error::AppError::validation)?;
+    let saved = serde_json::to_string(&values)
+        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let nonce = loop {
         let candidate = format!("aiolm-binding-{}", uuid::Uuid::new_v4());
         if !saved.contains(&candidate)
@@ -643,7 +677,8 @@ pub(crate) fn resolved_option_transport(
         }
     }
     let mut argv =
-        super::runtime_schema::assemble_registered_arguments(root, cfg, &engine, &template)?;
+        super::runtime_schema::assemble_registered_arguments(root, cfg, &engine, &template)
+            .map_err(crate::error::AppError::validation)?;
     argv.extend(raw);
     let mut bindings = BTreeMap::new();
     for (index, token) in argv.iter_mut().enumerate() {
@@ -670,7 +705,7 @@ fn transported_arguments(
     model: &str,
     port: u16,
     alias: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, crate::error::AppError> {
     let Some(transport) = transport else {
         return launch
             .args
@@ -691,7 +726,9 @@ fn transported_arguments(
             .any(|(index, token)| transport.argv.get(*index) != Some(token))
         || transport.argv.iter().any(|arg| arg.contains('\0'))
     {
-        return Err("invalid automatic option binding transport".into());
+        return Err(crate::error::AppError::validation(
+            "invalid automatic option binding transport",
+        ));
     }
     transport
         .argv
@@ -711,27 +748,32 @@ pub async fn connect(
     prepared: &PreparedConnection,
     model_id: &str,
     cancel: Arc<AtomicBool>,
-) -> Result<ConnectedRuntime, String> {
-    let (known, target) = inventory()
+) -> Result<ConnectedRuntime, crate::error::AppError> {
+    let (_, known, target) = inventory()
         .lock()
-        .map_err(|_| "automatic discovery lock poisoned")?
+        .map_err(|_| crate::error::AppError::internal("automatic discovery lock poisoned"))?
         .preparations
         .get(&prepared.plan)
         .cloned()
-        .ok_or("find the installation again before connecting")?;
+        .ok_or_else(|| {
+            crate::error::AppError::not_found("find the installation again before connecting")
+        })?;
     if known != *prepared || !known.models.iter().any(|m| m.id == model_id) {
-        return Err("connection or selected model changed; inspect it again".into());
+        return Err(crate::error::AppError::validation(
+            "connection or selected model changed; inspect it again",
+        ));
     }
     check_cancel()?;
     discovery::revalidate_with_cancel(&known.candidate, &cancel)?;
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let engine = ProviderId::parse(&format!("custom.auto-{}", &suffix[..16]))
-        .ok_or("cannot allocate connection identity")?;
+        .ok_or_else(|| crate::error::AppError::internal("cannot allocate connection identity"))?;
     let runtime = format!("connection-{}", &suffix[..16]);
     let directory = registry::root().join(engine.as_str()).join(&runtime);
-    fs::create_dir_all(directory.parent().unwrap()).map_err(|e| e.to_string())?;
+    fs::create_dir_all(directory.parent().unwrap())
+        .map_err(|e| crate::error::AppError::from_io(&e))?;
     // Refuse collisions instead of opening or cleaning an older registration.
-    fs::create_dir(&directory).map_err(|e| e.to_string())?;
+    fs::create_dir(&directory).map_err(|e| crate::error::AppError::from_io(&e))?;
     let spec_path = directory.join("connection.json");
     let reference = directory.join("model-reference.json");
     let attached = matches!(target, Target::Attached { .. });
@@ -755,15 +797,16 @@ pub async fn connect(
                 &serde_json::to_vec(
                     &serde_json::json!({"kind":"external-model-reference","model":model_id}),
                 )
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| crate::error::AppError::internal(e.to_string()))?,
             )?;
         }
         crate::config::atomic_write(
             &spec_path,
-            &serde_json::to_vec(&spec).map_err(|e| e.to_string())?,
+            &serde_json::to_vec(&spec)
+                .map_err(|e| crate::error::AppError::internal(e.to_string()))?,
         )?;
         let helper = std::env::current_exe()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| crate::error::AppError::from_io(&e))?
             .to_string_lossy()
             .into_owned();
         let base_args = vec![
@@ -873,48 +916,28 @@ pub async fn connect(
 }
 
 struct ChildGuard {
-    #[cfg(unix)]
-    child: std::process::Child,
-    #[cfg(windows)]
     child: crate::procutil::OwnedChild,
 }
 impl ChildGuard {
-    fn spawn(command: &mut std::process::Command) -> Result<Self, String> {
+    fn spawn(command: &mut std::process::Command) -> Result<Self, crate::error::AppError> {
         #[cfg(unix)]
-        let child = command.spawn();
-        #[cfg(windows)]
+        let child = crate::procutil::OwnedChild::spawn_inherited_process_group(command);
+        #[cfg(not(unix))]
         let child = crate::procutil::OwnedChild::spawn(command);
-        child
-            .map(|child| Self { child })
-            .map_err(|e| format!("cannot start discovered entry point: {e}"))
+        child.map(|child| Self { child }).map_err(|e| {
+            crate::error::AppError::new(
+                crate::error::AppError::io_kind(&e),
+                format!("cannot start discovered entry point: {e}"),
+            )
+        })
     }
-    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, String> {
-        self.child.try_wait().map_err(|e| e.to_string())
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, crate::error::AppError> {
+        self.child
+            .try_wait()
+            .map_err(|e| crate::error::AppError::from_io(&e))
     }
     fn owns_listener(&self, port: u16) -> bool {
-        #[cfg(unix)]
-        {
-            crate::server::listener_owned_by_child(std::process::id(), port, None)
-        }
-        #[cfg(windows)]
-        {
-            crate::server::listener_owned_by_child(
-                self.child.id(),
-                port,
-                self.child.process_handle(),
-            )
-        }
-    }
-}
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-        #[cfg(windows)]
-        self.child.terminate();
+        crate::server::listener_owned_by_child(self.child.id(), port, self.child.process_handle())
     }
 }
 
@@ -925,7 +948,12 @@ fn has_binding(value: &str, token: &str) -> bool {
             .is_some_and(|(flag, binding)| flag.starts_with('-') && binding == token)
 }
 
-fn expand(value: &str, model: &str, port: u16, alias: &str) -> Result<String, String> {
+fn expand(
+    value: &str,
+    model: &str,
+    port: u16,
+    alias: &str,
+) -> Result<String, crate::error::AppError> {
     let binding = |token: &str| match token {
         "{model}" => Some(model.to_owned()),
         "{port}" => Some(port.to_string()),
@@ -949,22 +977,27 @@ async fn upstream(
     spec: &ConnectionSpec,
     model: &str,
     transport: Option<&OptionTransport>,
-) -> Result<(String, String, Option<ChildGuard>), String> {
+) -> Result<(String, String, Option<ChildGuard>), crate::error::AppError> {
     if model != spec.model_path {
-        return Err("selected model differs from automatic connection".into());
+        return Err(crate::error::AppError::validation(
+            "selected model differs from automatic connection",
+        ));
     }
     match &spec.target {
         Target::Attached { base_url } => Ok((
             base_url.clone(),
             spec.upstream_model
                 .clone()
-                .ok_or("missing upstream model")?,
+                .ok_or_else(|| crate::error::AppError::validation("missing upstream model"))?,
             None,
         )),
         Target::Managed { launch, .. } => {
-            let socket =
-                std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
-            let port = socket.local_addr().map_err(|e| e.to_string())?.port();
+            let socket = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .map_err(|e| crate::error::AppError::from_io(&e))?;
+            let port = socket
+                .local_addr()
+                .map_err(|e| crate::error::AppError::from_io(&e))?
+                .port();
             drop(socket);
             let alias = format!("aiolm-{}", spec.runtime_id);
             let aliased = launch
@@ -989,34 +1022,34 @@ async fn upstream(
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::inherit());
-            // Inherit the helper's owned process group/job. Creating a new group
-            // here would let cancellation leave the engine behind.
+            // Keep the engine in the helper's group for outer-owner SIGKILL.
+            // Normal guard drop walks only the engine's own descendant tree.
             let mut child = ChildGuard::spawn(&mut command)?;
             let url = format!("http://127.0.0.1:{port}/v1");
             let deadline = Instant::now() + Duration::from_secs(MANAGED_READY_SECS);
             loop {
                 if child.try_wait()?.is_some() {
-                    return Err("discovered entry point exited before serving a model API; see the engine diagnostics".into());
+                    return Err(crate::error::AppError::unavailable("discovered entry point exited before serving a model API; see the engine diagnostics"));
                 }
                 if let Ok(info) = probe::inspect_endpoint(&url, None).await {
                     if !child.owns_listener(port) {
-                        return Err(
-                            "model API listener does not belong to the started process".into()
-                        );
+                        return Err(crate::error::AppError::validation(
+                            "model API listener does not belong to the started process",
+                        ));
                     }
                     if info.models.len() != 1 {
-                        return Err("automatic launch requires exactly one served model; its model identity is ambiguous".into());
+                        return Err(crate::error::AppError::validation("automatic launch requires exactly one served model; its model identity is ambiguous"));
                     }
                     let expected = if aliased { alias.as_str() } else { model };
                     if info.models[0].id != expected {
-                        return Err("the model API did not confirm the selected launch identity; automatic connection remains unverified".into());
+                        return Err(crate::error::AppError::validation("the model API did not confirm the selected launch identity; automatic connection remains unverified"));
                     }
                     return Ok((url, info.models[0].id.clone(), Some(child)));
                 }
                 if Instant::now() >= deadline {
-                    return Err(
-                        "discovered entry point did not expose a verified model API in time".into(),
-                    );
+                    return Err(crate::error::AppError::timeout(
+                        "discovered entry point did not expose a verified model API in time",
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
@@ -1027,23 +1060,31 @@ async fn upstream(
 pub fn is_internal(args: &[String]) -> bool {
     args.first().is_some_and(|arg| arg == INTERNAL)
 }
-pub async fn run_internal(args: &[String]) -> Result<(), String> {
+pub async fn run_internal(args: &[String]) -> Result<(), crate::error::AppError> {
     if !is_internal(args) || args.len() < 4 {
-        return Err("invalid internal automatic connection command".into());
+        return Err(crate::error::AppError::validation(
+            "invalid internal automatic connection command",
+        ));
     }
     let header = match args[1].as_str() {
         "probe" => 4,
         "serve" => 5,
-        _ => return Err("unknown internal connection operation".into()),
+        _ => {
+            return Err(crate::error::AppError::validation(
+                "unknown internal connection operation",
+            ))
+        }
     };
     if args.len() < header {
-        return Err("invalid internal automatic connection header".into());
+        return Err(crate::error::AppError::validation(
+            "invalid internal automatic connection header",
+        ));
     }
     let assigned_port = if header == 5 {
         Some(
             args[4]
                 .parse::<u16>()
-                .map_err(|_| "invalid assigned port")?,
+                .map_err(|_| crate::error::AppError::validation("invalid assigned port"))?,
         )
     } else {
         None
@@ -1051,20 +1092,29 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
     let transport = match &args[header..] {
         [] => None,
         [separator, tag, payload] if separator == "--" && tag == ARGV_HEADER => Some(
-            serde_json::from_str::<OptionTransport>(payload)
-                .map_err(|_| "invalid automatic option transport")?,
+            serde_json::from_str::<OptionTransport>(payload).map_err(|_| {
+                crate::error::AppError::validation("invalid automatic option transport")
+            })?,
         ),
-        _ => return Err("invalid automatic option transport header".into()),
+        _ => {
+            return Err(crate::error::AppError::validation(
+                "invalid automatic option transport header",
+            ))
+        }
     };
     if transport
         .as_ref()
         .is_some_and(|transport| transport.version != 1)
     {
-        return Err("unsupported automatic option transport version".into());
+        return Err(crate::error::AppError::validation(
+            "unsupported automatic option transport version",
+        ));
     }
     let spec = read_spec(&decoded_spec_path(&args[2])?)?;
     if matches!(spec.target, Target::Attached { .. }) && transport.is_some() {
-        return Err("attached services do not accept launch arguments".into());
+        return Err(crate::error::AppError::validation(
+            "attached services do not accept launch arguments",
+        ));
     }
     let model = &args[3];
     if args[1] == "probe" && model.is_empty() {
@@ -1136,7 +1186,8 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
-    let port = assigned_port.ok_or("missing assigned port")?;
+    let port =
+        assigned_port.ok_or_else(|| crate::error::AppError::validation("missing assigned port"))?;
     // The existing headless CLI uses a private loopback listener without a
     // credential. GUI launches supply their nonempty app-owned key.
     let key = std::env::var(KEY_ENV).unwrap_or_default();
@@ -1149,8 +1200,8 @@ pub async fn run_internal(args: &[String]) -> Result<(), String> {
     });
     tokio::pin!(serving);
     loop {
-        tokio::select! { result=&mut serving=>return result, _=tokio::time::sleep(Duration::from_millis(200))=>{
-            if let Some(child)=child.as_mut() {if child.try_wait()?.is_some() {return Err("connected engine exited".into());}}
+        tokio::select! { result=&mut serving=>return result.map_err(Into::into), _=tokio::time::sleep(Duration::from_millis(200))=>{
+            if let Some(child)=child.as_mut() {if child.try_wait()?.is_some() {return Err(crate::error::AppError::unavailable("connected engine exited"));}}
         }}
     }
 }
@@ -1185,7 +1236,9 @@ mod tests {
         let result = inspect(&candidate, vec![], None).await;
         cancellation().store(false, Ordering::Release);
         inventory().lock().unwrap().candidates.remove(&candidate.id);
-        assert_eq!(result.unwrap_err(), "runtime discovery cancelled");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "runtime discovery cancelled");
 
         let prepared = PreparedConnection {
             kind: "attached".into(),
@@ -1203,6 +1256,7 @@ mod tests {
         inventory().lock().unwrap().preparations.insert(
             prepared.plan.clone(),
             (
+                Instant::now(),
                 prepared.clone(),
                 Target::Attached {
                     base_url: prepared.base_url.clone().unwrap(),
@@ -1220,7 +1274,9 @@ mod tests {
             .unwrap()
             .preparations
             .remove(&prepared.plan);
-        assert_eq!(result.unwrap_err(), "runtime discovery cancelled");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Cancelled);
+        assert_eq!(error.message, "runtime discovery cancelled");
     }
 
     struct Area(PathBuf);
@@ -1298,7 +1354,7 @@ mod tests {
             let mut changed = candidate.clone();
             change(&mut changed);
             assert_eq!(
-                known_candidate(&changed).unwrap_err(),
+                known_candidate(&changed).unwrap_err().message,
                 "discovered installation changed; find it again"
             );
         }
@@ -1325,6 +1381,7 @@ mod tests {
         inventory().lock().unwrap().preparations.insert(
             prepared.plan.clone(),
             (
+                Instant::now(),
                 prepared.clone(),
                 Target::Attached {
                     base_url: prepared.base_url.clone().unwrap(),
@@ -1346,14 +1403,16 @@ mod tests {
             assert_eq!(
                 connect(&changed, "model-a", Arc::new(AtomicBool::new(true)))
                     .await
-                    .unwrap_err(),
+                    .unwrap_err()
+                    .message,
                 "connection or selected model changed; inspect it again"
             );
         }
         assert_eq!(
             connect(&prepared, "missing-model", Arc::new(AtomicBool::new(true)))
                 .await
-                .unwrap_err(),
+                .unwrap_err()
+                .message,
             "connection or selected model changed; inspect it again"
         );
         inventory()
@@ -1521,7 +1580,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
         assert!(read_spec(&path).is_err());
         fs::write(&path, vec![b' '; SPEC_LIMIT as usize + 1]).unwrap();
-        assert!(read_spec(&path).unwrap_err().contains("exceeds"));
+        assert!(read_spec(&path).unwrap_err().message.contains("exceeds"));
     }
 
     fn manifest_for(spec: &ConnectionSpec, helper: &Path) -> registry::RuntimeManifest {
@@ -1713,7 +1772,7 @@ mod tests {
         changed.push(b' ');
         fs::write(&spec_path, changed).unwrap();
         let error = runtime.block_on(registry::refresh(&cfg, None)).unwrap_err();
-        assert!(error.contains("artifact changed"), "{error}");
+        assert!(error.message.contains("artifact changed"), "{error}");
         assert_eq!(fs::read(&registration_path).unwrap(), record);
         fs::write(&spec_path, serde_json::to_vec(&attached).unwrap()).unwrap();
         let mut incomplete: serde_json::Value = serde_json::from_slice(&record).unwrap();
@@ -1721,7 +1780,7 @@ mod tests {
         let incomplete = serde_json::to_vec(&incomplete).unwrap();
         fs::write(&registration_path, &incomplete).unwrap();
         let error = runtime.block_on(registry::refresh(&cfg, None)).unwrap_err();
-        assert!(error.contains("incomplete"), "{error}");
+        assert!(error.message.contains("incomplete"), "{error}");
         assert_eq!(fs::read(&registration_path).unwrap(), incomplete);
 
         let engine = area.join("external-engine");
@@ -1953,7 +2012,7 @@ mod tests {
         let error = runtime
             .block_on(registry::refresh(&managed_cfg, None))
             .unwrap_err();
-        assert!(error.contains("artifact changed"), "{error}");
+        assert!(error.message.contains("artifact changed"), "{error}");
         assert_eq!(fs::read(&registration_path).unwrap(), managed_record);
         assert_eq!(fs::read(&engine).unwrap(), b"synthetic engine identity");
         assert_eq!(fs::read(&model).unwrap(), b"synthetic model data");
@@ -2004,7 +2063,7 @@ mod tests {
             ),
         ] {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert_eq!(run_internal(&args).await.unwrap_err(), error);
+            assert_eq!(run_internal(&args).await.unwrap_err().message, error);
         }
     }
 }

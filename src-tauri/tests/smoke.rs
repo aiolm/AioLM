@@ -229,7 +229,30 @@ fn smoke_real_server_and_chat() {
         key_file: api_key_file.clone(),
     };
     if aiolm_lib::branding::env_var("AIOLM_SMOKE_CANCEL_LOAD").as_deref() == Ok("1") {
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while ring.tail().is_empty()
+            && std::fs::metadata(log_path)
+                .map(|metadata| metadata.len() == 0)
+                .unwrap_or(true)
+        {
+            assert!(
+                shared
+                    .lock()
+                    .unwrap()
+                    .child
+                    .as_mut()
+                    .unwrap()
+                    .try_wait()
+                    .unwrap()
+                    .is_none(),
+                "server exited before loading began"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "server produced no startup output"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         drop(_guard);
         assert!(
             shared.lock().unwrap().child.is_none(),

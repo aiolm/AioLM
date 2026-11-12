@@ -13,6 +13,7 @@
 //! its asset, its download URL and its digest are all resolved here again
 //! before anything is executed.
 
+use crate::error::AppError;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::BufReader;
@@ -366,30 +367,42 @@ fn download_http() -> reqwest::Client {
         .expect("static HTTP client configuration must be valid")
 }
 
+fn network_error(error: reqwest::Error, message: String) -> AppError {
+    if error.is_timeout() {
+        AppError::timeout(message)
+    } else {
+        AppError::unavailable(message)
+    }
+}
+
 async fn bounded_text(
     response: reqwest::Response,
     limit: usize,
     label: &str,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(format!("{label} response exceeds its size limit"));
+        return Err(AppError::unavailable(format!(
+            "{label} response exceeds its size limit"
+        )));
     }
     let mut bytes = Vec::new();
     let mut stream = response;
-    while let Some(chunk) = stream
-        .chunk()
-        .await
-        .map_err(|error| format!("{label} response failed: {error}"))?
-    {
+    while let Some(chunk) = stream.chunk().await.map_err(|error| {
+        let message = format!("{label} response failed: {error}");
+        network_error(error, message)
+    })? {
         if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(format!("{label} response exceeds its size limit"));
+            return Err(AppError::unavailable(format!(
+                "{label} response exceeds its size limit"
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
-    String::from_utf8(bytes).map_err(|error| format!("{label} response was not UTF-8: {error}"))
+    String::from_utf8(bytes)
+        .map_err(|error| AppError::unavailable(format!("{label} response was not UTF-8: {error}")))
 }
 
 fn api_error(status: reqwest::StatusCode, body: &str) -> String {
@@ -427,17 +440,20 @@ fn release_from_response(
         .map_err(|error| format!("invalid GitHub release response: {error}"))
 }
 
-async fn fetch_release(path: &str) -> Result<Option<Release>, String> {
+async fn fetch_release(path: &str) -> Result<Option<Release>, AppError> {
     let url = format!("https://api.github.com/repos/{RELEASE_REPOSITORY}/{path}");
     let response = metadata_http()
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|error| format!("release lookup failed: {error}"))?;
+        .map_err(|error| {
+            let message = format!("release lookup failed: {error}");
+            network_error(error, message)
+        })?;
     let status = response.status();
     let body = bounded_text(response, MAX_METADATA_BYTES, "release metadata").await?;
-    release_from_response(status, &body)
+    release_from_response(status, &body).map_err(AppError::unavailable)
 }
 
 fn normalize_digest(value: &str) -> Result<String, String> {
@@ -465,44 +481,98 @@ fn digest_from_checksums(text: &str, asset_name: &str) -> Option<String> {
 /// The digest an installer must match before it is allowed to run: GitHub's
 /// own asset digest when the release carries one, otherwise the release's
 /// `checksums.txt` entry for exactly that asset.
-async fn expected_digest(asset: &ReleaseAsset, assets: &[ReleaseAsset]) -> Result<String, String> {
+async fn expected_digest(
+    asset: &ReleaseAsset,
+    assets: &[ReleaseAsset],
+) -> Result<String, AppError> {
     if let Some(digest) = asset.digest.as_deref() {
-        return normalize_digest(digest);
+        return normalize_digest(digest).map_err(AppError::validation);
     }
     let checksums = find_asset(assets, CHECKSUMS_ASSET).map_err(|_| {
-        format!(
+        AppError::not_found(format!(
             "release publishes no SHA-256 digest for {} and no {CHECKSUMS_ASSET}; refusing an unverified installer",
             asset.name
-        )
+        ))
     })?;
-    validate_asset_url(&checksums.browser_download_url)?;
+    validate_asset_url(&checksums.browser_download_url).map_err(AppError::validation)?;
     let response = download_http()
         .get(&checksums.browser_download_url)
         .send()
         .await
-        .map_err(|error| format!("{CHECKSUMS_ASSET} download failed: {error}"))?;
-    validate_asset_url(response.url().as_str())?;
+        .map_err(|error| {
+            let message = format!("{CHECKSUMS_ASSET} download failed: {error}");
+            network_error(error, message)
+        })?;
+    validate_asset_url(response.url().as_str()).map_err(AppError::validation)?;
     if !response.status().is_success() {
-        return Err(format!(
-            "{CHECKSUMS_ASSET} download returned HTTP {}",
-            response.status()
+        let kind = if response.status() == reqwest::StatusCode::NOT_FOUND {
+            crate::error::ErrorKind::NotFound
+        } else {
+            crate::error::ErrorKind::Unavailable
+        };
+        return Err(AppError::new(
+            kind,
+            format!(
+                "{CHECKSUMS_ASSET} download returned HTTP {}",
+                response.status()
+            ),
         ));
     }
     let text = bounded_text(response, MAX_CHECKSUMS_BYTES, CHECKSUMS_ASSET).await?;
     digest_from_checksums(&text, &asset.name).ok_or_else(|| {
-        format!(
+        AppError::not_found(format!(
             "{CHECKSUMS_ASSET} has no SHA-256 entry for {}; refusing an unverified installer",
             asset.name
-        )
+        ))
     })
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+fn open_installer(path: &Path) -> Result<std::fs::File, AppError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Keep the hashed file locked against replacement and writes until the
+    // Windows launcher has opened it. System package openers on Unix require
+    // a pathname, so those platforms re-verify immediately before handoff.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 1);
+    options
+        .open(path)
+        .map_err(|error| AppError::from_io(&error))
+}
+
+fn sha256_reader(file: &std::fs::File) -> Result<String, AppError> {
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
-    std::io::copy(&mut reader, &mut hasher).map_err(|error| error.to_string())?;
+    std::io::copy(&mut reader, &mut hasher).map_err(|error| AppError::from_io(&error))?;
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn sha256_file(path: &Path) -> Result<String, AppError> {
+    sha256_reader(&open_installer(path)?)
+}
+
+fn launch_verified_installer(
+    kind: InstallKind,
+    path: &Path,
+    expected: &str,
+) -> Result<(), AppError> {
+    let file = open_installer(path)?;
+    let actual = sha256_reader(&file)?;
+    if actual != expected {
+        return Err(AppError::validation(format!(
+            "installer SHA-256 mismatch: expected {expected}, got {actual}"
+        )));
+    }
+    // `file` stays open across the launch, including its Windows sharing lock.
+    launch_installer(kind, path)
+}
+
+fn create_installer_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
 }
 
 async fn download_installer(
@@ -510,26 +580,33 @@ async fn download_installer(
     url: &str,
     path: &Path,
     limit: u64,
-) -> Result<u64, String> {
-    let response = download_http()
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("installer download failed: {error}"))?;
-    validate_asset_url(response.url().as_str())?;
+) -> Result<u64, AppError> {
+    let response = download_http().get(url).send().await.map_err(|error| {
+        let message = format!("installer download failed: {error}");
+        network_error(error, message)
+    })?;
+    validate_asset_url(response.url().as_str()).map_err(AppError::validation)?;
     if !response.status().is_success() {
-        return Err(format!(
-            "installer download returned HTTP {}",
-            response.status()
+        let kind = if response.status() == reqwest::StatusCode::NOT_FOUND {
+            crate::error::ErrorKind::NotFound
+        } else {
+            crate::error::ErrorKind::Unavailable
+        };
+        return Err(AppError::new(
+            kind,
+            format!("installer download returned HTTP {}", response.status()),
         ));
     }
     let total = response.content_length();
     if total.is_some_and(|length| length > limit) {
-        return Err("installer download is larger than the release declares".into());
+        return Err(AppError::validation(
+            "installer download is larger than the release declares",
+        ));
     }
-    let file = tokio::fs::File::create(path)
-        .await
-        .map_err(|error| format!("could not write the downloaded installer: {error}"))?;
+    let file = tokio::fs::File::from_std(
+        create_installer_file(path)
+            .map_err(|error| AppError::io("could not write the downloaded installer", &error))?,
+    );
     write_installer(progress, response, file, total, limit, PROGRESS_INTERVAL).await
 }
 
@@ -556,7 +633,7 @@ async fn write_installer<W: tokio::io::AsyncWrite + Unpin>(
     total: Option<u64>,
     limit: u64,
     interval: Duration,
-) -> Result<u64, String> {
+) -> Result<u64, AppError> {
     // The percentage the settings panel shows, computed the same way in
     // floating point: `Math.min(100, Math.floor(downloaded / total * 100))`.
     let percent = |bytes: u64| {
@@ -589,14 +666,22 @@ async fn write_installer<W: tokio::io::AsyncWrite + Unpin>(
         let chunk = match chunk {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break Ok(()),
-            Err(error) => break Err(format!("installer download failed: {error}")),
+            Err(error) => {
+                let message = format!("installer download failed: {error}");
+                break Err(network_error(error, message));
+            }
         };
         let written = received.saturating_add(chunk.len() as u64);
         if written > limit {
-            break Err("installer download is larger than the release declares".to_string());
+            break Err(AppError::validation(
+                "installer download is larger than the release declares",
+            ));
         }
         if let Err(error) = file.write_all(&chunk).await {
-            break Err(format!("could not write the downloaded installer: {error}"));
+            break Err(AppError::io(
+                "could not write the downloaded installer",
+                &error,
+            ));
         }
         received = written;
         let now = tokio::time::Instant::now();
@@ -616,18 +701,27 @@ async fn write_installer<W: tokio::io::AsyncWrite + Unpin>(
     streamed?;
     file.flush()
         .await
-        .map_err(|error| format!("could not write the downloaded installer: {error}"))?;
+        .map_err(|error| AppError::io("could not write the downloaded installer", &error))?;
     Ok(received)
 }
 
-/// A fresh directory under the operating system's temporary location. The
-/// installer keeps running after this process exits, so the directory is
-/// removed only when the update fails before the installer is launched.
-fn update_directory() -> Result<PathBuf, String> {
-    let directory =
-        std::env::temp_dir().join(format!("aiolm-update-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("could not create the update download directory: {error}"))?;
+/// A fresh private directory in the application's home. The installer keeps
+/// running after this process exits, so the directory is removed only when
+/// the update fails before the installer is launched.
+fn update_directory() -> Result<PathBuf, AppError> {
+    update_directory_in(&crate::home::resolve_aiolm_home()?)
+}
+
+fn update_directory_in(home: &Path) -> Result<PathBuf, AppError> {
+    let directory = home.join(format!("aiolm-update-{}", uuid::Uuid::new_v4().simple()));
+    let builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let mut builder = builder;
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(&directory)
+        .map_err(|error| AppError::io("could not create the update download directory", &error))?;
     Ok(directory)
 }
 
@@ -636,13 +730,13 @@ struct InstallGuard {
 }
 
 impl InstallGuard {
-    fn acquire() -> Result<Self, String> {
+    fn acquire() -> Result<Self, AppError> {
         INSTALL_RUNNING
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| Self {
                 release_on_drop: true,
             })
-            .map_err(|_| "an application update is already being installed".to_string())
+            .map_err(|_| AppError::busy("an application update is already being installed"))
     }
 
     /// Keep the latch closed for the rest of this process's life.
@@ -666,21 +760,22 @@ impl Drop for InstallGuard {
 }
 
 #[cfg(windows)]
-pub fn detect_install_kind() -> Result<InstallKind, String> {
+pub fn detect_install_kind() -> Result<InstallKind, AppError> {
     windows_install::detect()
 }
 
 #[cfg(target_os = "macos")]
-pub fn detect_install_kind() -> Result<InstallKind, String> {
+pub fn detect_install_kind() -> Result<InstallKind, AppError> {
     let executable = std::env::current_exe()
         .and_then(std::fs::canonicalize)
-        .map_err(|error| format!("could not locate the running executable: {error}"))?;
+        .map_err(|error| AppError::io("could not locate the running executable", &error))?;
     let home = std::env::home_dir().and_then(|path| path.canonicalize().ok());
     if !mac_install_location(&executable, home.as_deref()) {
-        return Err("this copy is not installed in an Applications folder; install the macOS update from the release page instead".into());
+        return Err(AppError::unavailable("this copy is not installed in an Applications folder; install the macOS update from the release page instead"));
     }
-    unix_install_kind("macos", std::env::consts::ARCH)
-        .ok_or_else(|| "this macOS architecture has no supported update installer".into())
+    unix_install_kind("macos", std::env::consts::ARCH).ok_or_else(|| {
+        AppError::unavailable("this macOS architecture has no supported update installer")
+    })
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -696,32 +791,38 @@ fn mac_install_location(executable: &Path, home: Option<&Path>) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub fn detect_install_kind() -> Result<InstallKind, String> {
+pub fn detect_install_kind() -> Result<InstallKind, AppError> {
     linux_install::detect()
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub fn detect_install_kind() -> Result<InstallKind, String> {
-    Err("this platform has no supported update installer; use the release page instead".into())
+pub fn detect_install_kind() -> Result<InstallKind, AppError> {
+    Err(AppError::unavailable(
+        "this platform has no supported update installer; use the release page instead",
+    ))
 }
 
-async fn installed_kind() -> Result<InstallKind, String> {
+async fn installed_kind() -> Result<InstallKind, AppError> {
     tokio::task::spawn_blocking(detect_install_kind)
         .await
-        .map_err(|error| format!("installation detection failed: {error}"))?
+        .map_err(|error| AppError::internal(format!("installation detection failed: {error}")))?
 }
 
 #[cfg(windows)]
-fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
+fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), AppError> {
     windows_install::launch(kind, path)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
+fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), AppError> {
     let program = match (std::env::consts::OS, kind) {
         ("macos", InstallKind::Dmg(_)) => "/usr/bin/open",
         ("linux", InstallKind::Deb(_)) => "/usr/bin/xdg-open",
-        _ => return Err("installer does not match the running platform".into()),
+        _ => {
+            return Err(AppError::validation(
+                "installer does not match the running platform",
+            ))
+        }
     };
     use std::os::unix::process::CommandExt;
     let mut command = crate::procutil::std_command(program);
@@ -733,15 +834,15 @@ fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
         .stderr(std::process::Stdio::null());
     // The app's managed-process shutdown already ran. The system installer
     // must outlive it, so it is deliberately not an OwnedChild/transient task.
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not open the verified installer: {error}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        AppError::unavailable(format!("could not open the verified installer: {error}"))
+    })?;
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("the system could not open the installer ({status}); install the update from the release page")),
-            Err(error) => return Err(format!("could not check the installer launcher: {error}")),
+            Ok(Some(status)) => return Err(AppError::unavailable(format!("the system could not open the installer ({status}); install the update from the release page"))),
+            Err(error) => return Err(AppError::io("could not check the installer launcher", &error)),
             Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
         }
@@ -749,8 +850,10 @@ fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-fn launch_installer(_kind: InstallKind, _path: &Path) -> Result<(), String> {
-    Err("this platform has no supported update installer".into())
+fn launch_installer(_kind: InstallKind, _path: &Path) -> Result<(), AppError> {
+    Err(AppError::unavailable(
+        "this platform has no supported update installer",
+    ))
 }
 
 // Tauri derives the Debian control Package from the product's kebab-case name.
@@ -787,7 +890,7 @@ fn deb_status_matches(output: &str, arch: InstallerArch) -> bool {
 mod linux_install {
     use super::*;
 
-    fn query(arguments: &[&std::ffi::OsStr]) -> Result<String, String> {
+    fn query(arguments: &[&std::ffi::OsStr]) -> Result<String, AppError> {
         let mut command = crate::procutil::std_command("/usr/bin/dpkg-query");
         command
             .arg("--admindir=/var/lib/dpkg")
@@ -799,17 +902,19 @@ mod linux_install {
             Duration::from_secs(3),
             64 * 1024,
         )
-        .map_err(|error| format!("could not identify the installed Debian package: {error}"))?;
+        .map_err(|error| AppError::io("could not identify the installed Debian package", &error))?;
         if !output.status.success() {
-            return Err("the executable is not owned by an installed Debian package".into());
+            return Err(AppError::unavailable(
+                "the executable is not owned by an installed Debian package",
+            ));
         }
         String::from_utf8(output.stdout)
-            .map_err(|_| "Debian package information is not UTF-8".into())
+            .map_err(|_| AppError::unavailable("Debian package information is not UTF-8"))
     }
 
-    pub(super) fn detect() -> Result<InstallKind, String> {
+    pub(super) fn detect() -> Result<InstallKind, AppError> {
         let unsupported = || {
-            "this copy is not a supported installed Debian package; use the release page for AppImage or manual updates".to_string()
+            AppError::unavailable("this copy is not a supported installed Debian package; use the release page for AppImage or manual updates")
         };
         let Some(kind @ InstallKind::Deb(arch)) =
             unix_install_kind("linux", std::env::consts::ARCH)
@@ -818,7 +923,7 @@ mod linux_install {
         };
         let executable = std::env::current_exe()
             .and_then(std::fs::canonicalize)
-            .map_err(|error| format!("could not locate the running executable: {error}"))?;
+            .map_err(|error| AppError::io("could not locate the running executable", &error))?;
         if executable.file_name() != Some(std::ffi::OsStr::new("aiolm")) {
             return Err(unsupported());
         }
@@ -836,9 +941,9 @@ mod linux_install {
             return Err(unsupported());
         }
         if !Path::new("/usr/bin/xdg-open").is_file() {
-            return Err(
-                "no desktop installer launcher is available; use the release page instead".into(),
-            );
+            return Err(AppError::unavailable(
+                "no desktop installer launcher is available; use the release page instead",
+            ));
         }
         Ok(kind)
     }
@@ -847,8 +952,8 @@ mod linux_install {
 /// What the startup notification and the settings panel call. It never
 /// downloads or installs anything: an install always starts from an explicit
 /// request carrying the version to install.
-pub async fn check(current_version: &str) -> Result<UpdateStatus, String> {
-    let current = parse_version(current_version)?;
+pub async fn check(current_version: &str) -> Result<UpdateStatus, AppError> {
+    let current = parse_version(current_version).map_err(AppError::validation)?;
     // GitHub's "latest" release is already the newest non-draft,
     // non-pre-release one; `stable_release` re-checks both flags rather than
     // relying on that.
@@ -914,15 +1019,15 @@ pub async fn install(
     progress: ProgressSink<'_>,
     requested_version: &str,
     current_version: &str,
-    before_launch: Option<&(dyn Fn() + Send + Sync)>,
-) -> Result<(), String> {
+    before_launch: Option<Box<dyn FnOnce() + Send + 'static>>,
+) -> Result<(), AppError> {
     let guard = InstallGuard::acquire()?;
-    let current = parse_version(current_version)?;
-    let requested = parse_requested_version(requested_version)?;
+    let current = parse_version(current_version).map_err(AppError::validation)?;
+    let requested = parse_requested_version(requested_version).map_err(AppError::validation)?;
     if requested <= current {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "{PRODUCT_NAME} {requested} is not newer than the installed {current}"
-        ));
+        )));
     }
     let kind = installed_kind().await?;
     // Unlike the "latest" lookup, a missing tag here is a failure: the
@@ -930,21 +1035,25 @@ pub async fn install(
     // publish.
     let release = fetch_release(&format!("releases/tags/v{requested}"))
         .await?
-        .ok_or_else(|| format!("release v{requested} is not published by {RELEASE_REPOSITORY}"))?;
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "release v{requested} is not published by {RELEASE_REPOSITORY}"
+            ))
+        })?;
     if release.draft || release.prerelease {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "release v{requested} is a draft or pre-release and is not offered as an update"
-        ));
+        )));
     }
     if parse_version(&release.tag_name).ok() != Some(requested) {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "release v{requested} is published under the unexpected tag {}",
             release.tag_name
-        ));
+        )));
     }
     let name = installer_asset_name(kind, &requested.to_string());
-    let asset = find_asset(&release.assets, &name)?;
-    validate_asset_url(&asset.browser_download_url)?;
+    let asset = find_asset(&release.assets, &name).map_err(AppError::not_found)?;
+    validate_asset_url(&asset.browser_download_url).map_err(AppError::validation)?;
     let expected = expected_digest(asset, &release.assets).await?;
     let limit = if asset.size == 0 {
         MAX_INSTALLER_BYTES
@@ -959,29 +1068,35 @@ pub async fn install(
         let received =
             download_installer(progress, &asset.browser_download_url, &installer, limit).await?;
         if asset.size > 0 && received != asset.size {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "downloaded installer is {received} bytes, but the release declares {}",
                 asset.size
-            ));
+            )));
         }
         progress("verifying", received, Some(received));
         let hash_path = installer.clone();
         let actual = tokio::task::spawn_blocking(move || sha256_file(&hash_path))
             .await
-            .map_err(|error| format!("installer hash task failed: {error}"))??;
+            .map_err(|error| {
+                AppError::internal(format!("installer hash task failed: {error}"))
+            })??;
         if actual != expected {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "installer SHA-256 mismatch: expected {expected}, got {actual}"
-            ));
+            )));
         }
         progress("installing", received, Some(received));
         if let Some(before_launch) = before_launch {
-            before_launch();
+            tokio::task::spawn_blocking(before_launch)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("installer shutdown task failed: {error}"))
+                })?;
         }
         let installer = installer.clone();
-        tokio::task::spawn_blocking(move || launch_installer(kind, &installer))
+        tokio::task::spawn_blocking(move || launch_verified_installer(kind, &installer, &expected))
             .await
-            .map_err(|error| format!("installer launch task failed: {error}"))?
+            .map_err(|error| AppError::internal(format!("installer launch task failed: {error}")))?
     }
     .await;
     match result {
@@ -1006,7 +1121,7 @@ mod windows_install {
     //! other way round, would leave two registered copies behind, so an
     //! installation this app cannot identify is reported as not updatable
     //! rather than guessed at.
-    use super::{InstallKind, PRODUCT_NAME};
+    use super::{AppError, InstallKind, PRODUCT_NAME};
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::Path;
@@ -1213,34 +1328,37 @@ mod windows_install {
         None
     }
 
-    pub(super) fn detect() -> Result<InstallKind, String> {
+    pub(super) fn detect() -> Result<InstallKind, AppError> {
         if !cfg!(target_arch = "x86_64") {
-            return Err("in-app updates are published for Windows x64 only".into());
+            return Err(AppError::unavailable(
+                "in-app updates are published for Windows x64 only",
+            ));
         }
         let executable = std::env::current_exe()
-            .map_err(|error| format!("could not locate the running executable: {error}"))?;
+            .map_err(|error| AppError::io("could not locate the running executable", &error))?;
         let directory = executable
             .parent()
-            .ok_or_else(|| "the running executable has no directory".to_string())?;
+            .ok_or_else(|| AppError::internal("the running executable has no directory"))?;
         for (root, view) in UNINSTALL_ROOTS {
             if let Some(kind) = registered_kind(root, view, directory) {
                 return Ok(kind);
             }
         }
-        Err(format!(
+        Err(AppError::unavailable(format!(
             "this copy of {PRODUCT_NAME} is not registered as an installed Windows application, so it cannot replace itself; install the update from the release page instead"
-        ))
+        )))
     }
 
     /// Start the installer with its own interface, so the user confirms the
     /// installation and sees its progress and any elevation prompt.
-    pub(super) fn launch(kind: InstallKind, path: &Path) -> Result<(), String> {
+    pub(super) fn launch(kind: InstallKind, path: &Path) -> Result<(), AppError> {
         let mut command = match kind {
             InstallKind::Nsis => crate::procutil::std_command(path),
             InstallKind::Msi => {
                 // Resolved from the Windows directory rather than PATH.
-                let root = std::env::var("SystemRoot")
-                    .map_err(|_| "SystemRoot is not set; cannot locate msiexec".to_string())?;
+                let root = std::env::var("SystemRoot").map_err(|_| {
+                    AppError::unavailable("SystemRoot is not set; cannot locate msiexec")
+                })?;
                 let msiexec = Path::new(&root).join("System32").join("msiexec.exe");
                 let mut command = crate::procutil::std_command(&msiexec);
                 command.arg("/i").arg(path);
@@ -1248,12 +1366,17 @@ mod windows_install {
             }
             #[cfg(test)]
             InstallKind::Dmg(_) | InstallKind::Deb(_) => {
-                return Err("installer does not match Windows".into());
+                return Err(AppError::validation("installer does not match Windows"));
             }
         };
-        command
-            .spawn()
-            .map_err(|error| crate::procutil::spawn_error(path, &error))?;
+        command.spawn().map_err(|error| {
+            let message = crate::procutil::spawn_error(path, &error);
+            if error.raw_os_error() == Some(1223) {
+                AppError::denied(message)
+            } else {
+                AppError::unavailable(message)
+            }
+        })?;
         Ok(())
     }
 
@@ -1328,6 +1451,102 @@ mod windows_install {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn update_check_rejects_invalid_versions_without_a_release_lookup() {
+        let error = check("latest").await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert_eq!(
+            error.message,
+            "latest is not a stable MAJOR.MINOR.PATCH release version"
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_release_body_preserves_timeout_kind() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let held = release.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let read = stream.read(&mut request).await.unwrap();
+            assert!(
+                read > 0,
+                "the client sends a request before the stalled body"
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            held.notified().await;
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .read_timeout(Duration::from_millis(50))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap();
+        let result = bounded_text(response, 1024, "release metadata").await;
+        release.notify_one();
+        server.await.unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Timeout);
+        assert!(error
+            .message
+            .starts_with("release metadata response failed: "));
+    }
+
+    #[test]
+    fn missing_installer_file_preserves_not_found_kind() {
+        let path =
+            std::env::temp_dir().join(format!("aiolm-missing-installer-{}", uuid::Uuid::new_v4()));
+        let error = sha256_file(&path).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn installer_staging_is_private_and_cannot_overwrite_an_existing_file() {
+        let home = std::env::temp_dir().join(format!("aiolm-update-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let directory = update_directory_in(&home).unwrap();
+        assert_eq!(directory.parent(), Some(home.as_path()));
+        let path = directory.join("synthetic-installer");
+        let file = create_installer_file(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(file);
+        assert!(create_installer_file(&path).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn modified_installer_is_rejected_at_launch_handoff() {
+        let home = std::env::temp_dir().join(format!("aiolm-update-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let directory = update_directory_in(&home).unwrap();
+        let path = directory.join("synthetic-installer");
+        std::fs::write(&path, b"reviewed installer").unwrap();
+        let expected = sha256_file(&path).unwrap();
+        std::fs::write(&path, b"replaced installer").unwrap();
+        let error = launch_verified_installer(InstallKind::Nsis, &path, &expected).unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("SHA-256 mismatch"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     fn asset(name: &str, digest: Option<&str>) -> ReleaseAsset {
         ReleaseAsset {
@@ -1676,7 +1895,7 @@ mod tests {
             .await
             .expect_err("an unverified installer must be refused");
         assert!(
-            error.contains("refusing an unverified installer"),
+            error.message.contains("refusing an unverified installer"),
             "{error}"
         );
     }
@@ -1701,10 +1920,12 @@ mod tests {
             browser_download_url: format!("https://cdn.attacker.example/{CHECKSUMS_ASSET}"),
             ..asset(CHECKSUMS_ASSET, None)
         };
-        let not_sha256: Result<String, String> =
-            Err("release asset digest is not a SHA-256 value".to_string());
-        let untrusted: Result<String, String> =
-            Err("release asset host is not trusted: cdn.attacker.example".to_string());
+        let not_sha256: Result<String, AppError> = Err(AppError::validation(
+            "release asset digest is not a SHA-256 value",
+        ));
+        let untrusted: Result<String, AppError> = Err(AppError::validation(
+            "release asset host is not trusted: cdn.attacker.example",
+        ));
         let mut failures = Vec::new();
         for kind in [
             InstallKind::Nsis,
@@ -1716,9 +1937,9 @@ mod tests {
         ] {
             let name = installer_asset_name(kind, "0.1.12");
             let installer = |digest: Option<&str>| asset(&name, digest);
-            let unverified: Result<String, String> = Err(format!(
+            let unverified: Result<String, AppError> = Err(AppError::not_found(format!(
                 "release publishes no SHA-256 digest for {name} and no {CHECKSUMS_ASSET}; refusing an unverified installer"
-            ));
+            )));
             // (case, assets with the installer first, offered, what
             // `expected_digest` decides without a request; `None` where it
             // would have to download `checksums.txt`)
@@ -1861,7 +2082,12 @@ mod tests {
         let _order = install_serialiser().await;
         for _ in 0..3 {
             let guard = InstallGuard::acquire().expect("first install acquires the guard");
-            assert!(InstallGuard::acquire().is_err());
+            let error = InstallGuard::acquire().err().unwrap();
+            assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+            assert_eq!(
+                error.message,
+                "an application update is already being installed"
+            );
             // Dropping models a finished install, a failed download and a
             // rejected digest alike: the next attempt must be able to start.
             drop(guard);
@@ -1880,18 +2106,24 @@ mod tests {
         let before_launch = || {
             panic!("a rejected install must not stop running sessions");
         };
-        let error = install(&progress, "0.1.11", "0.1.11", Some(&before_launch))
+        let error = install(&progress, "0.1.11", "0.1.11", Some(Box::new(before_launch)))
             .await
             .expect_err("installing the running version must be refused");
-        assert!(error.contains("is not newer"), "{error}");
-        let error = install(&progress, "0.1.10", "0.1.11", Some(&before_launch))
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("is not newer"), "{error}");
+        let error = install(&progress, "0.1.10", "0.1.11", Some(Box::new(before_launch)))
             .await
             .expect_err("installing an older version must be refused");
-        assert!(error.contains("is not newer"), "{error}");
-        let error = install(&progress, "latest", "0.1.11", Some(&before_launch))
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(error.message.contains("is not newer"), "{error}");
+        let error = install(&progress, "latest", "0.1.11", Some(Box::new(before_launch)))
             .await
             .expect_err("a non-version install target must be refused");
-        assert!(error.contains("stable MAJOR.MINOR.PATCH"), "{error}");
+        assert_eq!(error.kind, crate::error::ErrorKind::Validation);
+        assert!(
+            error.message.contains("stable MAJOR.MINOR.PATCH"),
+            "{error}"
+        );
     }
 
     /// A test binary is never a registered installation, so this also keeps
@@ -1906,10 +2138,16 @@ mod tests {
         let before_launch = || {
             panic!("a rejected install must not stop running sessions");
         };
-        let error = install(&progress, "999.0.0", "0.1.11", Some(&before_launch))
-            .await
-            .expect_err("an unidentified installation must be refused");
-        assert!(error.contains("release page"), "{error}");
+        let error = install(
+            &progress,
+            "999.0.0",
+            "0.1.11",
+            Some(Box::new(before_launch)),
+        )
+        .await
+        .expect_err("an unidentified installation must be refused");
+        assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
+        assert!(error.message.contains("release page"), "{error}");
     }
 
     #[test]
@@ -2098,9 +2336,11 @@ mod tests {
         let before_launch = || {
             panic!("a rejected install must not stop running sessions");
         };
-        assert!(install(&progress, "0.1.10", "0.1.11", Some(&before_launch))
-            .await
-            .is_err());
+        assert!(
+            install(&progress, "0.1.10", "0.1.11", Some(Box::new(before_launch)))
+                .await
+                .is_err()
+        );
         assert!(InstallGuard::acquire().is_ok());
     }
 
@@ -2250,7 +2490,7 @@ mod tests {
         limit: u64,
         interval: Duration,
         (writer, accepted): (TestWriter, Accepted),
-    ) -> (Result<u64, String>, Vec<u64>, (String, u64)) {
+    ) -> (Result<u64, AppError>, Vec<u64>, (String, u64)) {
         let mut offset = 0_u64;
         let mut chunks: Vec<BodyChunk> = sizes
             .iter()
@@ -2451,7 +2691,9 @@ mod tests {
             .await;
             assert_eq!(
                 result,
-                Err("installer download is larger than the release declares".to_string())
+                Err(AppError::validation(
+                    "installer download is larger than the release declares"
+                ))
             );
             assert_eq!(reports, vec![500, 1000]);
             assert_eq!(written, (body_sha(1000), 1000));
@@ -2468,7 +2710,9 @@ mod tests {
         .await;
         assert_eq!(
             result,
-            Err("installer download failed: error decoding response body".to_string())
+            Err(AppError::unavailable(
+                "installer download failed: error decoding response body"
+            ))
         );
         assert_eq!(reports, vec![1, 5]);
         assert_eq!(written, (body_sha(5), 5));
@@ -2480,7 +2724,9 @@ mod tests {
             write_chunks(&[500; 10], false, None, 5000, UNHURRIED, (writer, accepted)).await;
         assert_eq!(
             result,
-            Err("could not write the downloaded installer: synthetic write failure".to_string())
+            Err(AppError::internal(
+                "could not write the downloaded installer: synthetic write failure"
+            ))
         );
         assert_eq!(reports, vec![500, 2500]);
         assert_eq!(written, (body_sha(2750), 2750));
@@ -2491,7 +2737,9 @@ mod tests {
             write_chunks(&[1; 50], false, None, 1000, UNHURRIED, (writer, accepted)).await;
         assert_eq!(
             result,
-            Err("could not write the downloaded installer: synthetic flush failure".to_string())
+            Err(AppError::internal(
+                "could not write the downloaded installer: synthetic flush failure"
+            ))
         );
         assert_eq!(reports, vec![1, 50]);
         assert_eq!(written, (body_sha(50), 50));

@@ -17,7 +17,7 @@ fn joined(folder: &str, file: &str) -> String {
 }
 
 /// Standard split names select the entire group and always identify part one.
-fn shards(path: &str) -> Result<Option<Vec<String>>, String> {
+fn shards(path: &str) -> Result<Option<Vec<String>>, AppError> {
     let Some(stem) = path.strip_suffix(".safetensors") else {
         return Ok(None);
     };
@@ -36,10 +36,14 @@ fn shards(path: &str) -> Result<Option<Vec<String>>, String> {
     {
         return Ok(None);
     }
-    let index: usize = index.parse().map_err(|_| "invalid selected weight shard")?;
-    let count: usize = count.parse().map_err(|_| "invalid selected shard count")?;
+    let index: usize = index
+        .parse()
+        .map_err(|_| AppError::validation("invalid selected weight shard"))?;
+    let count: usize = count
+        .parse()
+        .map_err(|_| AppError::validation("invalid selected shard count"))?;
     if index == 0 || index > count || count > MAX_TREE_ENTRIES {
-        return Err("invalid selected shard count".into());
+        return Err(AppError::validation("invalid selected shard count"));
     }
     Ok(Some(
         (1..=count)
@@ -48,7 +52,7 @@ fn shards(path: &str) -> Result<Option<Vec<String>>, String> {
     ))
 }
 
-fn scope<'a>(entries: &'a [ApiTreeEntry], selected: &str) -> Result<&'a str, String> {
+fn scope<'a>(entries: &'a [ApiTreeEntry], selected: &str) -> Result<&'a str, AppError> {
     let mut folder = parent(selected);
     loop {
         if let Some(config) = entries
@@ -58,7 +62,9 @@ fn scope<'a>(entries: &'a [ApiTreeEntry], selected: &str) -> Result<&'a str, Str
             return Ok(parent(&config.path));
         }
         if folder.is_empty() {
-            return Err("selected weights have no model configuration".into());
+            return Err(AppError::not_found(
+                "selected weights have no model configuration",
+            ));
         }
         folder = parent(folder);
     }
@@ -67,7 +73,7 @@ fn scope<'a>(entries: &'a [ApiTreeEntry], selected: &str) -> Result<&'a str, Str
 fn index_candidates<'a>(
     entries: &'a [ApiTreeEntry],
     selected: &str,
-) -> Result<Vec<&'a ApiTreeEntry>, String> {
+) -> Result<Vec<&'a ApiTreeEntry>, AppError> {
     safe_data_file(selected)?;
     if !selected.ends_with(".safetensors")
         || entries
@@ -76,7 +82,17 @@ fn index_candidates<'a>(
             .count()
             != 1
     {
-        return Err("selected Safetensors path is missing or ambiguous in the repository".into());
+        let missing = !entries
+            .iter()
+            .any(|entry| entry.entry_type == "file" && entry.path == selected);
+        return Err(AppError::new(
+            if missing {
+                ErrorKind::NotFound
+            } else {
+                ErrorKind::Validation
+            },
+            "selected Safetensors path is missing or ambiguous in the repository",
+        ));
     }
     scope(entries, selected)?;
     let indices = entries
@@ -88,7 +104,9 @@ fn index_candidates<'a>(
         })
         .collect::<Vec<_>>();
     if indices.len() > 64 {
-        return Err("selected model has too many weight indices".into());
+        return Err(AppError::validation(
+            "selected model has too many weight indices",
+        ));
     }
     Ok(indices)
 }
@@ -101,7 +119,7 @@ async fn read_indices(
     entries: &[ApiTreeEntry],
     selected: &str,
     cancel: &AtomicBool,
-) -> Result<BTreeMap<String, serde_json::Value>, String> {
+) -> Result<BTreeMap<String, serde_json::Value>, AppError> {
     let candidates = index_candidates(entries, selected)?;
     let mut total = 0u64;
     let mut indices = BTreeMap::new();
@@ -109,28 +127,29 @@ async fn read_indices(
         safe_data_file(&entry.path)?;
         total = total
             .checked_add(entry.size)
-            .ok_or("selected index size overflow")?;
+            .ok_or_else(|| AppError::validation("selected index size overflow"))?;
         if total > MAX_SNAPSHOT_MANIFEST_BYTES {
-            return Err("selected weight indices exceed metadata limit".into());
+            return Err(AppError::validation(
+                "selected weight indices exceed metadata limit",
+            ));
         }
         let response = tokio::select! {
-            _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
-            response = client()?.get(download_url_at(repo, &entry.path, revision)).send() => response.map_err(|error| error.to_string())?
+            _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            response = client()?.get(download_url_at(repo, &entry.path, revision)).send() => response.map_err(|error| network_error(&error, error.to_string()))?
         };
         validate_response_url(&response)?;
         if !response.status().is_success() {
-            return Err(format!(
-                "weight index {}: HTTP {}",
-                entry.path,
-                response.status()
+            return Err(http_error(
+                response.status(),
+                format!("weight index {}: HTTP {}", entry.path, response.status()),
             ));
         }
         let bytes = tokio::select! {
-            _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+            _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             bytes = bounded_response_bytes(response, entry.size as usize) => bytes?
         };
         if bytes.len() as u64 != entry.size {
-            return Err("selected weight index is truncated".into());
+            return Err(AppError::validation("selected weight index is truncated"));
         }
         if let Some(oid) = entry
             .lfs
@@ -141,11 +160,14 @@ async fn read_indices(
             let mut digest = FileDigest::new(oid, entry.size)?;
             digest.update(&bytes);
             if !digest.matches() {
-                return Err("selected weight index checksum mismatch".into());
+                return Err(AppError::validation(
+                    "selected weight index checksum mismatch",
+                ));
             }
         }
-        let value = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("invalid selected weight index: {error}"))?;
+        let value = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::validation(format!("invalid selected weight index: {error}"))
+        })?;
         indices.insert(entry.path.clone(), value);
     }
     Ok(indices)
@@ -157,9 +179,9 @@ pub(in crate::discover) async fn selected_snapshot_plan(
     entries: &[ApiTreeEntry],
     selected: &str,
     cancel: &AtomicBool,
-) -> Result<(String, Vec<SnapshotFile>), String> {
+) -> Result<(String, Vec<SnapshotFile>), AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let indices = read_indices(repo, revision, entries, selected, cancel).await?;
     let (canonical, mut files) = plan(entries, selected, &indices)?;
@@ -178,7 +200,7 @@ pub(in crate::discover) async fn selected_snapshot_plan(
         preserve_weight_names(&mut files)?;
     }
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     Ok((canonical, files))
 }
@@ -191,14 +213,14 @@ async fn range_response_bytes(
     length: usize,
     size: u64,
     cancel: &AtomicBool,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let end = start
         .checked_add(length as u64)
         .and_then(|end| end.checked_sub(1))
-        .ok_or("invalid Safetensors header range")?;
+        .ok_or_else(|| AppError::validation("invalid Safetensors header range"))?;
     let expected = format!("bytes {start}-{end}/{size}");
     if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
         || response
@@ -207,14 +229,21 @@ async fn range_response_bytes(
             .and_then(|value| value.to_str().ok())
             != Some(expected.as_str())
     {
-        return Err("selected Safetensors inspection requires an exact bounded byte range".into());
+        let message = "selected Safetensors inspection requires an exact bounded byte range";
+        return Err(if response.status().is_success() {
+            AppError::validation(message)
+        } else {
+            http_error(response.status(), message.to_owned())
+        });
     }
     let bytes = tokio::select! {
-        _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         bytes = bounded_response_bytes(response, length) => bytes?
     };
     if bytes.len() != length {
-        return Err("selected Safetensors header range is truncated".into());
+        return Err(AppError::validation(
+            "selected Safetensors header range is truncated",
+        ));
     }
     Ok(bytes)
 }
@@ -226,20 +255,20 @@ async fn weight_range(
     start: u64,
     length: usize,
     cancel: &AtomicBool,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, AppError> {
     if cancel.load(Ordering::Acquire) {
-        return Err(DOWNLOAD_CANCELLED.into());
+        return Err(AppError::cancelled(DOWNLOAD_CANCELLED));
     }
     let end = start
         .checked_add(length as u64)
         .and_then(|end| end.checked_sub(1))
-        .ok_or("invalid Safetensors header range")?;
+        .ok_or_else(|| AppError::validation("invalid Safetensors header range"))?;
     let response = tokio::select! {
-        _ = wait_cancelled(cancel) => return Err(DOWNLOAD_CANCELLED.into()),
+        _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         response = client()?.get(download_url_at(repo, file.repository_path(), revision))
             .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send() => response.map_err(|error| error.to_string())?
+            .send() => response.map_err(|error| network_error(&error, error.to_string()))?
     };
     validate_response_url(&response)?;
     range_response_bytes(response, start, length, file.size, cancel).await
@@ -251,21 +280,22 @@ async fn native_weight_header(
     file: &SnapshotFile,
     cancel: &AtomicBool,
     metadata_remaining: &mut u64,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     use crate::providers::artifacts::{inspect_safetensors_metadata, safetensors_header_length};
     *metadata_remaining = metadata_remaining
         .checked_sub(8)
-        .ok_or("selected tensor headers exceed the metadata limit")?;
+        .ok_or_else(|| AppError::validation("selected tensor headers exceed the metadata limit"))?;
     let prefix = weight_range(repo, revision, file, 0, 8, cancel).await?;
-    let length = safetensors_header_length(prefix.try_into().unwrap(), file.size)?;
+    let length = safetensors_header_length(prefix.try_into().unwrap(), file.size)
+        .map_err(AppError::validation)?;
     *metadata_remaining = metadata_remaining
         .checked_sub(length as u64)
-        .ok_or("selected tensor headers exceed the metadata limit")?;
+        .ok_or_else(|| AppError::validation("selected tensor headers exceed the metadata limit"))?;
     let header = weight_range(repo, revision, file, 8, length, cancel).await?;
-    inspect_safetensors_metadata(&header, file.size, None)
+    inspect_safetensors_metadata(&header, file.size, None).map_err(AppError::validation)
 }
 
-fn preserve_weight_names(files: &mut [SnapshotFile]) -> Result<(), String> {
+fn preserve_weight_names(files: &mut [SnapshotFile]) -> Result<(), AppError> {
     let mut names = BTreeSet::new();
     for file in files {
         if file.path.ends_with(".safetensors") {
@@ -274,7 +304,9 @@ fn preserve_weight_names(files: &mut [SnapshotFile]) -> Result<(), String> {
             file.remote_path = (file.path != remote).then_some(remote);
         }
         if !names.insert(file.path.to_ascii_lowercase()) {
-            return Err("selected native snapshot has colliding file paths".into());
+            return Err(AppError::validation(
+                "selected native snapshot has colliding file paths",
+            ));
         }
     }
     Ok(())
@@ -284,14 +316,16 @@ fn plan(
     entries: &[ApiTreeEntry],
     selected: &str,
     indices: &BTreeMap<String, serde_json::Value>,
-) -> Result<(String, Vec<SnapshotFile>), String> {
+) -> Result<(String, Vec<SnapshotFile>), AppError> {
     index_candidates(entries, selected)?;
     let scope = scope(entries, selected)?;
     let folder = parent(selected);
     let mut tree_files = std::collections::HashMap::with_capacity(entries.len());
     for entry in entries.iter().filter(|entry| entry.entry_type == "file") {
         if tree_files.insert(entry.path.as_str(), entry).is_some() {
-            return Err("repository tree has duplicate file paths".into());
+            return Err(AppError::validation(
+                "repository tree has duplicate file paths",
+            ));
         }
     }
     let standard = shards(selected)?;
@@ -308,9 +342,11 @@ fn plan(
         let map = value
             .get("weight_map")
             .and_then(serde_json::Value::as_object)
-            .ok_or("selected weight index has invalid weight_map")?;
+            .ok_or_else(|| AppError::validation("selected weight index has invalid weight_map"))?;
         if map.is_empty() {
-            return Err("selected weight index has empty weight_map".into());
+            return Err(AppError::validation(
+                "selected weight index has empty weight_map",
+            ));
         }
         // Establish membership using borrowed basenames before validating
         // dependencies. Another model's nested paths do not constrain this
@@ -324,20 +360,26 @@ fn plan(
         }
         let mut indexed = BTreeSet::new();
         for value in map.values() {
-            let file = value
-                .as_str()
-                .ok_or("selected weight index has non-string weight path")?;
+            let file = value.as_str().ok_or_else(|| {
+                AppError::validation("selected weight index has non-string weight path")
+            })?;
             safe_data_file(file)?;
             if file.contains('/') || !file.ends_with(".safetensors") {
-                return Err("selected weight index has unsupported weight path".into());
+                return Err(AppError::validation(
+                    "selected weight index has unsupported weight path",
+                ));
             }
             indexed.insert(joined(folder, file));
         }
         if chosen_index.is_some() {
-            return Err("selected weights belong to multiple ambiguous indices".into());
+            return Err(AppError::validation(
+                "selected weights belong to multiple ambiguous indices",
+            ));
         }
         if is_split && indexed != required {
-            return Err("selected weight index disagrees with its split shard group".into());
+            return Err(AppError::validation(
+                "selected weight index disagrees with its split shard group",
+            ));
         }
         chosen_weights = Some(indexed);
         chosen_index = Some(path.as_str());
@@ -346,27 +388,33 @@ fn plan(
     let required = chosen_weights.unwrap_or(required);
     let canonical = required
         .first()
-        .ok_or("selected snapshot has no weight members")?
+        .ok_or_else(|| AppError::validation("selected snapshot has no weight members"))?
         .clone();
     // An indexed group must keep its exact shard names: rewriting upstream
     // weight_map values would manufacture a different model. MLX's standard
     // loader discovers model*.safetensors, so other indexed bindings are unsafe.
     if chosen_index.is_some() && required.iter().any(|path| !name(path).starts_with("model")) {
-        return Err("indexed weights require standard model-prefixed shard filenames".into());
+        return Err(AppError::validation(
+            "indexed weights require standard model-prefixed shard filenames",
+        ));
     }
     let mut files = Vec::new();
     let mut local_names = BTreeSet::new();
     let mut remote_names = BTreeSet::new();
-    let mut add = |entry: &ApiTreeEntry, local: String| -> Result<(), String> {
+    let mut add = |entry: &ApiTreeEntry, local: String| -> Result<(), AppError> {
         safe_data_file(&entry.path)?;
         safe_data_file(&local)?;
         if entry.size > MAX_MODEL_BYTES {
-            return Err("snapshot file exceeds the model size limit".into());
+            return Err(AppError::validation(
+                "snapshot file exceeds the model size limit",
+            ));
         }
         if !local_names.insert(local.to_ascii_lowercase())
             || !remote_names.insert(entry.path.to_ascii_lowercase())
         {
-            return Err("selected snapshot has colliding file paths".into());
+            return Err(AppError::validation(
+                "selected snapshot has colliding file paths",
+            ));
         }
         files.push(SnapshotFile {
             remote_path: (local != entry.path).then(|| entry.path.clone()),
@@ -381,10 +429,9 @@ fn plan(
         Ok(())
     };
     for (part, path) in required.iter().enumerate() {
-        let entry = tree_files
-            .get(path.as_str())
-            .copied()
-            .ok_or_else(|| format!("selected snapshot is missing weight shard: {path}"))?;
+        let entry = tree_files.get(path.as_str()).copied().ok_or_else(|| {
+            AppError::not_found(format!("selected snapshot is missing weight shard: {path}"))
+        })?;
         let local = if chosen_index.is_some() {
             name(path).into()
         } else if is_split {
@@ -398,7 +445,7 @@ fn plan(
         let entry = tree_files
             .get(index)
             .copied()
-            .ok_or("selected weight index is not in the repository")?;
+            .ok_or_else(|| AppError::not_found("selected weight index is not in the repository"))?;
         add(entry, "model.safetensors.index.json".into())?;
     }
     // Only immediate loading assets of this model's configuration scope are
@@ -418,10 +465,12 @@ fn plan(
 
 /// Persisted source bindings are bounded, unique and stay in the selected
 /// model's scope. Whole snapshots retain their original identity-only mapping.
-pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), String> {
+pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), AppError> {
     let Some(selected) = manifest.selected_file.as_deref() else {
         if manifest.files.iter().any(|file| file.remote_path.is_some()) {
-            return Err("whole snapshot has selected-file mappings".into());
+            return Err(AppError::validation(
+                "whole snapshot has selected-file mappings",
+            ));
         }
         return Ok(());
     };
@@ -430,13 +479,15 @@ pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), Stri
     if !selected.ends_with(".safetensors")
         || standard.as_ref().is_some_and(|parts| parts[0] != selected)
     {
-        return Err("snapshot selection is not a canonical weight entrypoint".into());
+        return Err(AppError::validation(
+            "snapshot selection is not a canonical weight entrypoint",
+        ));
     }
     let config = manifest
         .files
         .iter()
         .find(|file| file.path == "config.json")
-        .ok_or("selected snapshot has no configuration binding")?;
+        .ok_or_else(|| AppError::validation("selected snapshot has no configuration binding"))?;
     let config_scope = parent(config.remote_path.as_deref().unwrap_or(&config.path));
     let folder = parent(selected);
     if !config_scope.is_empty()
@@ -445,7 +496,9 @@ pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), Stri
             .strip_prefix(config_scope)
             .is_some_and(|rest| rest.starts_with('/'))
     {
-        return Err("snapshot selection leaves its configuration scope".into());
+        return Err(AppError::validation(
+            "snapshot selection leaves its configuration scope",
+        ));
     }
     let indexed = manifest
         .files
@@ -458,7 +511,9 @@ pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), Stri
         safe_data_file(&file.path)?;
         safe_data_file(remote)?;
         if !remote_names.insert(remote.to_ascii_lowercase()) {
-            return Err("snapshot has duplicate remote bindings".into());
+            return Err(AppError::validation(
+                "snapshot has duplicate remote bindings",
+            ));
         }
         found |= remote == selected;
         let valid = if remote.ends_with(".safetensors") {
@@ -487,11 +542,15 @@ pub(super) fn validate_selection(manifest: &SnapshotManifest) -> Result<(), Stri
             parent(remote) == config_scope && file.path == name(remote) && accepted(remote)
         };
         if !valid {
-            return Err("snapshot has an invalid selected-model source binding".into());
+            return Err(AppError::validation(
+                "snapshot has an invalid selected-model source binding",
+            ));
         }
     }
     if !found {
-        return Err("snapshot manifest is missing its selected weight entrypoint".into());
+        return Err(AppError::validation(
+            "snapshot manifest is missing its selected weight entrypoint",
+        ));
     }
     Ok(())
 }
@@ -721,6 +780,7 @@ mod tests {
         assert!(range_response_bytes(response, 0, 8, 1000000000000, &cancel)
             .await
             .unwrap_err()
+            .message
             .contains("byte range"));
         let response = range_reply("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/100\r\nContent-Length: 8\r\n\r\n", b"12345678").await;
         assert_eq!(
@@ -743,8 +803,24 @@ mod tests {
             range_response_bytes(response, 0, 8, 100, &cancel)
                 .await
                 .unwrap_err(),
-            DOWNLOAD_CANCELLED
+            AppError::cancelled(DOWNLOAD_CANCELLED)
         );
+        for (status, kind) in [
+            ("404 Not Found", ErrorKind::NotFound),
+            ("503 Service Unavailable", ErrorKind::Unavailable),
+            ("504 Gateway Timeout", ErrorKind::Timeout),
+        ] {
+            let reply = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
+            let response = range_reply(&reply, b"").await;
+            let error = range_response_bytes(response, 0, 8, 100, &AtomicBool::new(false))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, kind);
+            assert_eq!(
+                error.message,
+                "selected Safetensors inspection requires an exact bounded byte range"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1099,7 +1175,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!(error, DOWNLOAD_CANCELLED);
+        assert_eq!(error, AppError::cancelled(DOWNLOAD_CANCELLED));
         assert_eq!(fs::read(directory.join(SNAPSHOT_MANIFEST)).unwrap(), before);
         assert!(
             installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap()[0].ready_files()
@@ -1118,7 +1194,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.contains("failed verification"), "{error}");
+        assert!(error.message.contains("failed verification"), "{error}");
         let installed = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
         assert!(!installed[0].ready_files());
         assert_eq!(

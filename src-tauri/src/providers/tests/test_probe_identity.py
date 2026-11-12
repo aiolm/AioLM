@@ -1,5 +1,6 @@
 """Probe package identity using synthetic modules, never installed engines."""
 import importlib.metadata
+import importlib.util
 import json
 from pathlib import Path
 import platform
@@ -11,6 +12,13 @@ from unittest.mock import patch
 
 
 PROVIDERS = Path(__file__).resolve().parents[1]
+
+
+def load_probe(filename):
+    spec = importlib.util.spec_from_file_location(Path(filename).stem, PROVIDERS / filename)
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    return probe
 
 
 def module(name, **attributes):
@@ -63,7 +71,6 @@ class ProbeIdentityTests(unittest.TestCase):
         }
         commit = "9e6acca691e64d6d8bb808c328fcdea459099cca"
         distribution = SimpleNamespace(read_text=lambda _: json.dumps({"vcs_info": {"commit_id": commit}}))
-        namespace = {}
         with patch.dict(sys.modules, modules), \
                 patch.object(importlib.metadata, "version", side_effect=version), \
                 patch.object(importlib.metadata, "distribution", return_value=distribution), \
@@ -74,9 +81,8 @@ class ProbeIdentityTests(unittest.TestCase):
                 patch.object(platform, "mac_ver", return_value=("15.0", (), "arm64")), \
                 patch.object(platform, "python_implementation", return_value="CPython"), \
                 patch.object(sysconfig, "get_config_var", return_value="cpython-312-darwin" if metal else "cpython-312-x86_64-linux-gnu"):
-            source = PROVIDERS.joinpath("vllm_probe.py").read_text(encoding="utf-8")
-            exec(compile(source, "vllm_probe.py", "exec"), namespace)
-        return namespace["out"]
+            probe = load_probe("vllm_probe.py")
+        return probe.out
 
     def test_linux_probe_records_dependency_identity_without_metal_claims(self):
         record = self.probe()
@@ -109,16 +115,13 @@ class ProbeIdentityTests(unittest.TestCase):
             "mlx": module("mlx"),
             "mlx.core": module("mlx.core", metal=SimpleNamespace(is_available=lambda: True)),
         }
-        rust = PROVIDERS.joinpath("python_env.rs").read_text(encoding="utf-8")
-        script = rust.split('const MLX_VLM_PROBE: &str = r#"', 1)[1].split('"#;', 1)[0]
-        namespace = {}
         with patch.dict(sys.modules, modules), \
                 patch.object(importlib.metadata, "version", side_effect=lambda name: versions[name]), \
                 patch("pkgutil.iter_modules", return_value=[]), \
                 patch.object(sysconfig, "get_config_var", return_value="synthetic-abi"), \
                 patch("builtins.print"):
-            exec(compile(script, "mlx_probe.py", "exec"), namespace)
-        record = namespace["out"]
+            probe = load_probe("mlx_probe.py")
+        record = probe.out
         self.assertEqual(record["errors"], [])
         self.assertEqual(record["mlx_version"], "synthetic-mlx")
         self.assertEqual(record["package_versions"]["tokenizers"], "synthetic-tokenizers")

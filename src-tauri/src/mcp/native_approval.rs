@@ -28,14 +28,14 @@ struct DialogState {
 }
 
 #[cfg(test)]
-pub(super) struct Gate {
+pub(crate) struct Gate {
     pub reached: std::sync::mpsc::Sender<isize>,
     pub release: std::sync::mpsc::Receiver<()>,
 }
 
 #[cfg(test)]
 #[derive(Default)]
-pub(super) struct TestGates {
+pub(crate) struct TestGates {
     /// Hold the prompt thread after its dismissal check, before the dialog exists.
     pub before_show: Option<Gate>,
     /// Hold the prompt thread when its dialog has been created but not shown.
@@ -199,7 +199,7 @@ pub(super) fn dismiss_all() {
     }
 }
 
-pub(super) struct Prompt {
+pub(crate) struct Prompt {
     key: u64,
     shared: Arc<Shared>,
     answer: Option<tokio::sync::oneshot::Receiver<Result<bool, String>>>,
@@ -207,7 +207,7 @@ pub(super) struct Prompt {
 }
 
 impl Prompt {
-    pub(super) fn open(title: &str, text: &str) -> Result<Self, String> {
+    pub(crate) fn open(title: &str, text: &str) -> Result<Self, String> {
         Self::open_with(
             title,
             text,
@@ -216,7 +216,7 @@ impl Prompt {
         )
     }
 
-    pub(super) fn open_with(
+    pub(crate) fn open_with(
         title: &str,
         text: &str,
         #[cfg(test)] gates: TestGates,
@@ -265,7 +265,7 @@ impl Prompt {
     }
 
     /// The user's answer. Dropping this future withdraws the prompt.
-    pub(super) async fn answer(mut self) -> Result<bool, String> {
+    pub(crate) async fn answer(mut self) -> Result<bool, String> {
         match self.answer.take() {
             Some(answer) => answer
                 .await
@@ -293,7 +293,7 @@ impl Drop for Prompt {
 impl Prompt {
     /// Hand the prompt's thread and dialog to a test that holds the dialog
     /// hidden at creation (see [`tests::HeldDialog`]).
-    pub(super) fn hold(
+    pub(crate) fn hold(
         &mut self,
         reached: std::sync::mpsc::Receiver<isize>,
         release: std::sync::mpsc::Sender<()>,
@@ -309,7 +309,7 @@ impl Prompt {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
@@ -318,12 +318,12 @@ pub(super) mod tests {
     const WAIT: Duration = Duration::from_secs(10);
 
     /// Prompt tests run one at a time: shutdown answers every open prompt.
-    pub(in crate::mcp) async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
+    pub(crate) async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
         static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         SERIAL.lock().await
     }
 
-    pub(in crate::mcp) fn gate() -> (Gate, mpsc::Receiver<isize>, mpsc::Sender<()>) {
+    pub(crate) fn gate() -> (Gate, mpsc::Receiver<isize>, mpsc::Sender<()>) {
         let (reached, reached_rx) = mpsc::channel();
         let (release_tx, release) = mpsc::channel();
         (Gate { reached, release }, reached_rx, release_tx)
@@ -334,7 +334,7 @@ pub(super) mod tests {
     /// handles before it would first be shown. If the test fails first, the
     /// drop answers No itself, so even a failing test never leaves a visible
     /// dialog behind.
-    pub(in crate::mcp) struct HeldDialog {
+    pub(crate) struct HeldDialog {
         pub(super) shared: Arc<Shared>,
         pub(super) thread: Option<std::thread::JoinHandle<()>>,
         pub(super) reached: mpsc::Receiver<isize>,
@@ -344,7 +344,7 @@ pub(super) mod tests {
 
     impl HeldDialog {
         /// Wait for the dialog and check it is this prompt's own hidden window.
-        pub(in crate::mcp) fn created(&mut self) -> isize {
+        pub(crate) fn created(&mut self) -> isize {
             let hwnd = self
                 .reached
                 .recv_timeout(WAIT)
@@ -363,7 +363,7 @@ pub(super) mod tests {
             hwnd
         }
 
-        pub(in crate::mcp) fn withdrawn(&self) -> bool {
+        pub(crate) fn withdrawn(&self) -> bool {
             self.shared
                 .answered_no
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -372,7 +372,7 @@ pub(super) mod tests {
 
         /// Release a dialog whose withdrawal was already posted, then require
         /// that the dialog and its thread are gone.
-        pub(in crate::mcp) fn release_withdrawn(mut self) {
+        pub(crate) fn release_withdrawn(mut self) {
             assert!(
                 self.withdrawn(),
                 "No must be posted while the dialog is hidden"
@@ -381,7 +381,7 @@ pub(super) mod tests {
         }
 
         /// Release the dialog and wait until it and its thread are gone.
-        pub(in crate::mcp) fn finish(&mut self) {
+        pub(crate) fn finish(&mut self) {
             if let Some(release) = self.release.take() {
                 let _ = release.send(());
             }
@@ -415,7 +415,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::mcp) fn created_gates() -> (TestGates, mpsc::Receiver<isize>, mpsc::Sender<()>) {
+    pub(crate) fn created_gates() -> (TestGates, mpsc::Receiver<isize>, mpsc::Sender<()>) {
         let (created, reached, release) = gate();
         (
             TestGates {
