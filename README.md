@@ -62,13 +62,25 @@ Theme and font controls are in **Settings → Appearance**; density is in **Gene
 
 ## Install
 
-Windows (PowerShell):
+**Windows:** download the x64 setup EXE (or MSI) and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). In PowerShell, calculate the installer's SHA-256:
+
+```powershell
+Get-FileHash .\AioLM_*_x64-setup.exe -Algorithm SHA256
+```
+
+For MSI, use `.\AioLM_*_x64_en-US.msi`. Compare the result with the matching entry in `checksums.txt`; only then open the installer. Alternatively, use this convenience one-liner (it runs the downloaded script without first verifying that script):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
 ```
 
-macOS 13.3 or later:
+**macOS 13.3 or later:** download the Apple silicon `AioLM_<version>_aarch64.dmg` or Intel `AioLM_<version>_x64.dmg` and `checksums.txt` from the same release. Calculate its SHA-256:
+
+```bash
+shasum -a 256 ./AioLM_*.dmg
+```
+
+Compare with the matching entry in `checksums.txt`; only then open the DMG and drag AioLM to Applications. Alternatively, use this convenience one-liner (it runs the downloaded script without first verifying that script):
 
 ```bash
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
@@ -82,13 +94,13 @@ Installers are unsigned; macOS builds are ad-hoc signed but not notarized. Each 
 
 Use the Node, npm and Rust versions pinned in the repository; see [build requirements](docs/guides/install.md#requirements).
 
-- `npm test` runs contract, tooling and direct-script checks, followed by the full Vitest coverage suite.
+- `npm test` runs contract and tooling checks, followed by the full Vitest coverage suite.
 - `npm run test:coverage` also works without prebuilt benchmark contracts: it builds the workspace package before running coverage. `test:coverage:run` is the shared internal execution step and requires that preparation.
-- `npm run test:direct` runs the explicitly ordered Node assertion scripts in separate processes and stops at the first failure. Before starting a child, it rejects unregistered, missing or duplicate entries. Add a regular `tests/direct/test-*.ts` file to both `DIRECT_TEST_SCRIPTS` in `tests/direct/run.ts` and its individual npm command; the runner harness itself is excluded from the child inventory.
-- `npm run typecheck` checks application and tooling types. For UI changes, also run `npm run test:ui` and `npm run test:i18n`, then `npm run build` for the frontend. Native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
+- Vitest discovers TypeScript unit suites in `src/**/*.test.{ts,tsx}` and `tests/**/*.test.ts`, including the pure-module contracts in `tests/direct/`. New suites need no script registration. `npm run test:i18n` runs the translation contract suite alone.
+- `npm run typecheck` checks application, TypeScript tooling/tests, and all `scripts/**/*.mjs` with strict `allowJs`/`checkJs` checking. `npm run lint` applies type-aware TypeScript recommendations to application and test sources, including promise safety and unnecessary-assertion checks; `require-await` is omitted because async test doubles intentionally preserve promise-returning APIs. For UI changes, also run `npm run test:ui` and `npm run test:i18n`, then `npm run build` for the frontend. Native behavior tests run with `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features`.
 - `npm run package:tauri` builds both production executables before creating host installers. macOS bundling enables verbose helper diagnostics so DMG failures include the underlying disk-image tool output.
 
-Vitest coverage measures the frontend sources exercised by its suite, not the separate direct Node scripts. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
+Vitest coverage includes frontend sources exercised by both DOM and pure-module suites. Source-text CSS/JSX assertions are not layout evidence; use an actual rendered application to evaluate layout.
 
 Local native UI checks must isolate both application data and webview storage. Use a disposable `HOME`/`AIOLM_HOME` and a smoke-only window override with `incognito: true`; changing `HOME` alone does not isolate macOS WKWebView storage. Verify that preferences, projects and conversations are fresh before seeding synthetic fixtures, and never run a smoke against a production webview profile.
 

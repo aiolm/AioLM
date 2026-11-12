@@ -50,6 +50,22 @@ is not saved to configuration. Copy it from the API server page; examples and
 diagnostic output do not contain the key. Private model-process credentials are
 separate.
 
+### Local request boundaries
+
+Every request must include a `Host` header naming `127.0.0.1`, `localhost`
+(case-insensitive), or `[::1]`, optionally followed by a numeric port in the
+range 0–65535. Missing or foreign hosts receive HTTP 421 before authentication
+or browser preflight handling. This header check does not change the IPv4-only
+listener bind.
+
+The listener allows at most 64 active connections. Additional accepted sockets
+are closed rather than queued for request handling.
+
+Browser preflights permit only these caller-requested headers:
+`authorization`, `content-type`, `x-api-key`, `anthropic-version`, and `expect`.
+Only the app's allowed origins receive CORS permissions; the actual request
+still needs the API key.
+
 ## Load, unload and stop
 
 - Loading or replacing a model does not start or stop the API listener.

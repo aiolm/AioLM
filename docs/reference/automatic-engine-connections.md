@@ -145,6 +145,19 @@ Stop the headless server before registering. Registration runs the manifest's
 probe; removing a registration deletes only AioLM's record, never the engine's
 files or models.
 
+In the desktop app, choosing a manifest with the native file picker grants its
+canonical path for the current app session. A typed path, or another path
+without that picker grant, requires native confirmation before registration;
+the dialog shows the manifest path and the exact probe and launch programs and
+arguments. CLI `runtime register-manifest` does not use this native approval
+gate.
+
+Importing an adapter setup recipe also uses the native file picker. The backend
+retains the imported recipe and returns `{recipe, token}`; preparation requires
+that session token together with the user's input values and owner identifier,
+not a replacement recipe supplied by the page. Import the file again after
+restarting the app.
+
 ### Runtime manifest
 
 A manifest is a JSON file of at most 256 KiB. Unknown fields are rejected.

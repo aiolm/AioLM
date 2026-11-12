@@ -2,7 +2,21 @@
 
 > **언어:** [English](install.md) | [한국어](install.ko.md) | [日本語](install.ja.md) | [中文](install.zh.md)
 
-## 원라이너 설치 (Windows)
+## Windows: 다운로드, 검증 후 설치
+
+같은 [릴리스](https://github.com/aiolm/AioLM/releases/latest)에서 x64 설치 EXE(또는 MSI)와 `checksums.txt`를 받으세요. 릴리스 설치 파일은 서명되지 않았습니다. 설치 파일의 SHA-256을 계산합니다.
+
+```powershell
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# MSI는 "./AioLM_*_x64_en-US.msi"를 사용하세요.
+(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+결과를 `checksums.txt`의 해당 항목과 비교하세요. 일치한 뒤에만 설치 파일을 열고 안내에 따라 설치합니다. 체크섬 일치는 파일 무결성을 확인할 뿐 게시자의 신원을 보증하지 않습니다.
+
+### 편의용 원라이너 설치
+
+이 대안은 내려받은 스크립트 자체를 먼저 검증하지 않고 실행합니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
@@ -24,19 +38,6 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/
 ```
 
 원라이너는 선택한 릴리스에 포함된 `install.ps1` 사본을 다운로드합니다. 현재 원본: <https://github.com/aiolm/AioLM/blob/main/install.ps1>
-
-## 다운로드 검증
-
-릴리스 인스톨러는 미서명 상태로 배포됩니다. 같은 릴리스의 `checksums.txt`와 SHA-256 값을 비교하세요. 체크섬은 파일이 손상되거나 바뀌지 않았는지만 확인하며 게시자를 보증하지는 않습니다.
-
-```powershell
-$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
-# MSI는 "./AioLM_*_x64_en-US.msi"를 사용하세요.
-(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-# 같은 릴리스의 checksums.txt와 비교
-```
-
-릴리스 페이지: <https://github.com/aiolm/AioLM/releases/latest>
 
 AioLM — All-In-One LM은 이전 앱과 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](../reference/migration.md)을 참고하세요.
 
@@ -87,17 +88,27 @@ AioLM은 창이나 트레이 메뉴에서 정상적으로 종료하세요. 정�
 
 AioLM은 Apple Silicon과 Intel Mac의 macOS Ventura 13.3 이상을 지원합니다. Metal GPU 가속은 Apple Silicon에서 사용하며 Intel Mac은 CPU 런타임을 사용합니다. macOS 패키지는 **v0.3.0**부터 포함됩니다.
 
-### 터미널로 설치
+### DMG로 직접 설치
+
+같은 [릴리스](https://github.com/aiolm/AioLM/releases/latest)에서 `AioLM_<버전>_aarch64.dmg`(Apple Silicon) 또는 `AioLM_<버전>_x64.dmg`(Intel)와 `checksums.txt`를 받으세요. SHA-256을 계산합니다.
+
+```bash
+shasum -a 256 ./AioLM_*.dmg
+```
+
+결과를 `checksums.txt`의 해당 항목과 비교하세요. 일치한 뒤에만 DMG를 열고 AioLM을 Applications로 끌어 놓으세요. 체크섬은 무결성만 확인하며 게시자의 신원을 보증하지 않습니다.
+
+앱은 ad-hoc 서명만 있고 공증되지 않았으므로 브라우저로 받은 사본은 첫 실행이 차단됩니다. 한 번 실행을 시도한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택하세요. macOS 13·14에서는 앱을 Control-클릭하고 **열기**를 선택해도 됩니다. 설치한 사본마다 한 번만 필요합니다.
+
+### 편의용 터미널 설치
+
+이 대안은 내려받은 스크립트 자체를 먼저 검증하지 않고 실행합니다.
 
 ```bash
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 ```
 
 스크립트는 Mac에 맞는 DMG를 받아 릴리스의 SHA-256과 비교한 뒤(GitHub API 사용 한도에 걸리면 릴리스 다운로드 링크와 `checksums.txt`를 사용) `AioLM.app`을 `/Applications`에, 쓸 수 없으면 `~/Applications`에 복사합니다. 실행 전에 AioLM을 종료하세요. `AIOLM_RELEASE=v0.3.0`으로 릴리스를 고르고, `AIOLM_DRY_RUN=1`은 검증까지만 하며, `AIOLM_APPLICATIONS_DIR`로 설치 폴더를 바꿀 수 있습니다. 현재 소스: <https://github.com/aiolm/AioLM/blob/main/install.sh>
-
-### DMG로 직접 설치
-
-`AioLM_<버전>_aarch64.dmg`(Apple Silicon) 또는 `AioLM_<버전>_x64.dmg`(Intel)를 받아 `shasum -a 256` 값을 같은 릴리스의 `checksums.txt`와 비교한 뒤, 열어서 AioLM을 Applications로 끌어 놓으세요. 앱은 ad-hoc 서명만 있고 공증되지 않았으므로 브라우저로 받은 사본은 첫 실행이 차단됩니다. 한 번 실행을 시도한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택하세요. macOS 13·14에서는 앱을 Control-클릭하고 **열기**를 선택해도 됩니다. 설치한 사본마다 한 번만 필요합니다.
 
 AioLM 데이터는 `~/.aiolm`에 있으며 앱을 교체하거나 제거해도 유지됩니다. 앱이 `/Applications` 또는 `~/Applications`에 있으면 설정의 **다운로드 및 설치**가 Mac에 맞는 DMG를 받으므로 새 사본으로 앱을 교체하세요. 서명되지 않은 빌드는 코드 식별값이 바뀌므로, 업데이트 후 벤치마크 공유 자격 증명 같은 Keychain 항목 접근을 다시 물을 수 있습니다. 제거하려면 AioLM을 종료하고 `AioLM.app`을 휴지통으로 옮기세요. 데이터까지 지우려면 `~/.aiolm`을 삭제합니다.
 

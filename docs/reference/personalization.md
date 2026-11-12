@@ -85,3 +85,11 @@ Load tools from the selection row, or open **MCP tools** for server/recovery
 guidance and the catalog. Unavailable choices remain selected until explicitly
 removed, but only resolved tools are sent with a request. Discovery never
 executes a tool call, and existing per-call approval remains required.
+
+Loading a server's tools starts its third-party executable, even though discovery
+does not call a tool. The first launch requires a native operating-system
+approval, separate from tool-call approval. AioLM remembers that approval for
+the command, arguments, allowlisted inherited environment and working directory.
+Changing any of these execution inputs requires approval again. Approval
+fingerprints are kept in the separate Rust-owned `mcp-launch-approvals.json`
+file in the AioLM data folder, not in `mcp-servers.json`.

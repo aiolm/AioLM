@@ -2,7 +2,21 @@
 
 > **Language:** [English](install.md) | [한국어](install.ko.md) | [日本語](install.ja.md) | [中文](install.zh.md)
 
-## One-line install (Windows)
+## Windows: download, verify, then install
+
+Download the x64 setup EXE (or MSI) and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). Release installers are unsigned. Calculate the installer's SHA-256:
+
+```powershell
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# For MSI, use "./AioLM_*_x64_en-US.msi" instead.
+(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+Compare the result with the matching entry in `checksums.txt`. Only after it matches, open the installer and follow its instructions. A matching checksum confirms file integrity, not the publisher's identity.
+
+### Convenience one-line install
+
+This alternative runs the downloaded script without first verifying the script itself:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
@@ -24,19 +38,6 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/
 ```
 
 The one-line command downloads the `install.ps1` copy included in the selected release. Current source: <https://github.com/aiolm/AioLM/blob/main/install.ps1>
-
-## Verify download
-
-Release installers are unsigned. Compare the SHA-256 value with `checksums.txt` from the same release. A matching checksum shows that the file was downloaded intact; it does not establish who published it.
-
-```powershell
-$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
-# For MSI, use "./AioLM_*_x64_en-US.msi" instead.
-(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-# Compare with checksums.txt from the same release
-```
-
-Release page: <https://github.com/aiolm/AioLM/releases/latest>
 
 AioLM — All-In-One LM installs separately from the previous application. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](../reference/migration.md).
 
@@ -101,17 +102,27 @@ Quit AioLM normally from its window or tray menu. A normal quit stops the model 
 
 AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime, and Metal runtimes and Metal PR builds are not offered there. macOS packages are included starting with **v0.3.0**.
 
-### Install from the terminal
+### Install the DMG manually
+
+Download `AioLM_<version>_aarch64.dmg` (Apple silicon) or `AioLM_<version>_x64.dmg` (Intel), together with `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). Calculate its SHA-256:
+
+```bash
+shasum -a 256 ./AioLM_*.dmg
+```
+
+Compare the result with the matching entry in `checksums.txt`. Only after it matches, open the DMG and drag AioLM to Applications. A checksum confirms integrity, not the publisher's identity.
+
+The app is ad-hoc signed but not notarized, so macOS blocks the first launch of a browser-downloaded copy: open it once, then choose **System Settings → Privacy & Security → Open Anyway**. On macOS 13 and 14 you can instead Control-click the app and choose **Open**. This is needed once per installed copy.
+
+### Convenience terminal install
+
+This alternative runs the downloaded script without first verifying the script itself:
 
 ```bash
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 ```
 
 The script downloads the DMG for your Mac, verifies its SHA-256 against the release (falling back to the release download links and `checksums.txt` when the GitHub API is rate limited), and copies `AioLM.app` into `/Applications`, or `~/Applications` when that folder is not writable. Quit AioLM first. `AIOLM_RELEASE=v0.3.0` selects a release, `AIOLM_DRY_RUN=1` stops after verification, and `AIOLM_APPLICATIONS_DIR` chooses another folder. Current source: <https://github.com/aiolm/AioLM/blob/main/install.sh>
-
-### Install the DMG manually
-
-Download `AioLM_<version>_aarch64.dmg` (Apple silicon) or `AioLM_<version>_x64.dmg` (Intel), compare `shasum -a 256` with `checksums.txt` from the same release, open it and drag AioLM to Applications. The app is ad-hoc signed but not notarized, so macOS blocks the first launch of a browser-downloaded copy: open it once, then choose **System Settings → Privacy & Security → Open Anyway**. On macOS 13 and 14 you can instead Control-click the app and choose **Open**. This is needed once per installed copy.
 
 AioLM keeps its data in `~/.aiolm`; replacing or removing the app keeps it. When the app is installed in `/Applications` or `~/Applications`, **Download and install** in settings downloads the DMG for your Mac; replace the app with the new copy. Because unsigned builds change their code identity, macOS may ask again for access to Keychain items such as benchmark sharing credentials after an update. To uninstall, quit AioLM and move `AioLM.app` to the Trash; delete `~/.aiolm` to remove your data.
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install AioLM on macOS from its GitHub release, verifying the DMG's SHA-256.
 #
-#   curl -fsSL https://raw.githubusercontent.com/aiolm/AioLM/main/install.sh | bash
+#   curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 #
 # AIOLM_RELEASE     latest (default) or a release tag such as v0.3.0
 # AIOLM_DRY_RUN     1 to stop after the download has been verified

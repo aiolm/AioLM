@@ -2,7 +2,21 @@
 
 > **语言:** [English](install.md) | [한국어](install.ko.md) | [日本語](install.ja.md) | [中文](install.zh.md)
 
-## 一行安装 (Windows)
+## Windows：先下载并验证，再安装
+
+从同一个[发布版本](https://github.com/aiolm/AioLM/releases/latest)下载 x64 安装 EXE（或 MSI）及 `checksums.txt`。发布的安装程序未签名。计算安装程序的 SHA-256：
+
+```powershell
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# 对 MSI 使用 "./AioLM_*_x64_en-US.msi"。
+(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+将结果与 `checksums.txt` 中的对应条目比较。只有匹配后，才打开安装程序并按提示安装。校验和匹配只能确认文件完整性，不能证明发布者身份。
+
+### 便捷的单行安装
+
+此替代方式会直接执行下载的脚本，不会先验证脚本本身：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
@@ -24,19 +38,6 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/
 ```
 
 单行命令会下载所选发布版本中包含的 `install.ps1` 副本。当前源码: <https://github.com/aiolm/AioLM/blob/main/install.ps1>
-
-## 验证下载
-
-发布的安装程序未签名。请将 SHA-256 值与同一版本的 `checksums.txt` 进行比较。校验和只能确认文件未损坏或被替换，不能证明发布者身份。
-
-```powershell
-$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
-# 对 MSI 使用 "./AioLM_*_x64_en-US.msi"。
-(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-# 与同一版本的 checksums.txt 对比
-```
-
-发布页面: <https://github.com/aiolm/AioLM/releases/latest>
 
 AioLM — All-In-One LM与旧应用独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](../reference/migration.md)。
 
@@ -83,17 +84,27 @@ DEB 更新会在系统安装界面打开已验证文件，由用户完成安装�
 
 AioLM 支持 Apple Silicon 和 Intel Mac 上的 macOS Ventura 13.3 及以上版本。Apple Silicon 可使用 Metal GPU 加速，Intel Mac 使用 CPU 运行时。macOS 安装包从 **v0.3.0** 开始提供。
 
-### 通过终端安装
+### 手动安装 DMG
+
+从同一个[发布版本](https://github.com/aiolm/AioLM/releases/latest)下载 `AioLM_<版本>_aarch64.dmg`（Apple Silicon）或 `AioLM_<版本>_x64.dmg`（Intel），以及 `checksums.txt`。计算 SHA-256：
+
+```bash
+shasum -a 256 ./AioLM_*.dmg
+```
+
+将结果与 `checksums.txt` 中的对应条目比较。只有匹配后，才打开 DMG 并将 AioLM 拖到“应用程序”。校验和只确认完整性，不能证明发布者身份。
+
+应用仅有临时（ad-hoc）签名且未经公证，因此通过浏览器下载的副本首次启动会被阻止：先尝试打开一次，然后选择**系统设置 → 隐私与安全性 → 仍要打开**。在 macOS 13 和 14 上也可以按住 Control 点按应用并选择**打开**。每个安装的副本只需操作一次。
+
+### 便捷的终端安装
+
+此替代方式会直接执行下载的脚本，不会先验证脚本本身：
 
 ```bash
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 ```
 
 脚本会下载适合当前 Mac 的 DMG，与发布中的 SHA-256 核对后（GitHub API 受限时改用发布下载链接和 `checksums.txt`），将 `AioLM.app` 复制到 `/Applications`（不可写时为 `~/Applications`）。运行前请先退出 AioLM。`AIOLM_RELEASE=v0.3.0` 可选择版本，`AIOLM_DRY_RUN=1` 仅执行校验，`AIOLM_APPLICATIONS_DIR` 可指定安装目录。当前源码：<https://github.com/aiolm/AioLM/blob/main/install.sh>
-
-### 手动安装 DMG
-
-下载 `AioLM_<版本>_aarch64.dmg`（Apple Silicon）或 `AioLM_<版本>_x64.dmg`（Intel），将 `shasum -a 256` 的结果与同一版本的 `checksums.txt` 比较，然后打开并将 AioLM 拖到“应用程序”。应用仅有临时（ad-hoc）签名且未经公证，因此通过浏览器下载的副本首次启动会被阻止：先尝试打开一次，然后选择**系统设置 → 隐私与安全性 → 仍要打开**。在 macOS 13 和 14 上也可以按住 Control 点按应用并选择**打开**。每个安装的副本只需操作一次。
 
 AioLM 的数据保存在 `~/.aiolm`，替换或删除应用都会保留。应用安装在 `/Applications` 或 `~/Applications` 时，设置中的**下载并安装**会获取适合当前 Mac 的 DMG，请用新副本替换应用。由于未签名构建的代码标识会变化，更新后 macOS 可能会再次询问是否允许访问钥匙串项目（例如基准测试共享凭据）。卸载时请退出 AioLM 并将 `AioLM.app` 移到废纸篓；如需删除数据，请删除 `~/.aiolm`。
 

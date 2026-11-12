@@ -153,6 +153,10 @@ Expand **Backup and restore** in **Shared results** to save a backup file or
 copy a recovery code for each result. Keep backups private: anyone with one has
 the same permission you do.
 
+Copied recovery codes are cleared from the system clipboard after 60 seconds
+if it still contains that exact code. Copying something else is left untouched.
+Clipboard history or another application's saved copy is not removed.
+
 - To manage results after reinstalling or on another computer, import the
   backup file there. Import works even when the list is empty.
 - The website's management page also accepts AioLM backup `.txt` files; you can

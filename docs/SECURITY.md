@@ -18,6 +18,12 @@ The headless CLI's `server start` mode is different: it intentionally passes `--
 
 The API server is local-only as well. MCP servers are third-party executables launched with the user's permissions; add only trusted executables and review tool calls under the configured approval policy.
 
+An MCP server's first launch requires native OS approval bound to its command, arguments, allowlisted inherited environment and working directory. Changing those inputs prompts again. Approval fingerprints persist in the separate Rust-owned `mcp-launch-approvals.json` data file, not in the editable server list; tool-call approval remains separate.
+
+## Network redirects
+
+Runtime GitHub and Hugging Face requests require HTTPS and a trusted service host on every redirect, with a 10-hop cap. GitHub metadata uses the GitHub host allowlist; runtime and verification-model transfers use their trusted download hosts. The final response URL is checked as well; a permitted first URL cannot redirect through an untrusted host or downgrade to HTTP.
+
 ## Prebuilt PR artifacts
 
 Portable ZIP and workflow-published CPU artifacts are verified for platform/arch/backend/build-id, GitHub asset SHA-256, file-level manifest SHA-256, embedded PR repo/commit, required executables, and clean preflight. Receiving PC needs no CMake/compiler/SDK but needs compatible GPU driver for GPU runtimes. Workflow publishes CPU by default; GPU must be exported from SDK-equipped machine.
