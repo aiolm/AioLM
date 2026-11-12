@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { describeServerOption, SERVER_OPTIONS } from '../config/serverOptions';
 import { serverOptionDescription, serverOptionDescriptions } from './serverOptionDescriptions';
 import { optionDefaultText } from './optionDefaultText';
+import { defined } from '../../testing/assertDefined';
 
 describe('localized server option help', () => {
   it('preserves dotted option names and their switch arity', () => {
@@ -14,7 +15,7 @@ describe('localized server option help', () => {
 
   it('covers every bundled option with Korean, Japanese and Chinese descriptions', () => {
     for (const option of SERVER_OPTIONS) {
-      const translations = serverOptionDescriptions[option.id];
+      const translations = defined(serverOptionDescriptions[option.id], option.id);
       expect(translations, option.id).toBeDefined();
       expect(translations[0], option.id).toMatch(/[가-힣]/);
       expect(translations[1], option.id).toMatch(/[ぁ-んァ-ン一-龯]/);

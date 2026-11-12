@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
 import { notifyCompletion } from "../../shared/lib/notifications";
 import { createTestStore } from "../../testing/appStore";
-import type { ChatHistoryMessage } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
+import type { ChatMcpTool } from "./useChatMcpTools";
 
 vi.mock("../../shared/api/index", () => ({
   chatStream: vi.fn(),
@@ -35,7 +36,7 @@ function setup(withTool = false) {
       attachments, setAttachments, documents, setDocuments, atBottomRef,
       mcpEntryByFunctionName: withTool
         ? new Map([["lookup", { serverId: "catalog", serverName: "Catalog", tool: { name: "lookup", input_schema: { type: "object" } } }]])
-        : new Map(),
+        : new Map<string, ChatMcpTool>(),
       mcpDefinitions: withTool ? [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }] : [],
     });
     return { ...send, msgs, phase };

@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { isIpcErrorKind } from "../../shared/api/ipcError";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
+import type { Locale } from "../../shared/i18n/i18nCatalog";
+import { translate } from "../../shared/i18n/i18nUnified";
 
 interface UseChatAttachmentsOptions {
+  locale?: Locale;
   modalities?: api.Modalities;
   visionReady: boolean;
   /** Mirrors the panel's shared error banner: pass a message to show it, `null` to clear it. */
@@ -24,9 +28,9 @@ type AttachmentApplication = { generation: number } & (
   | { kind: 'media'; value: ImageAttachment }
 );
 interface PendingDrop { id: string; remaining: number; generation: number }
-type ImportOutcome = 'queued' | 'complete' | 'failed' | 'stale';
+type ImportOutcome = 'queued' | 'complete' | 'cancelled' | 'failed' | 'stale';
 
-export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false }: UseChatAttachmentsOptions) {
+export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false, locale = "en" }: UseChatAttachmentsOptions) {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<"idle" | "reading" | "ready" | "failed">("idle");
@@ -56,12 +60,12 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
     // Project bindings may occupy a slot before the queued append commits.
     // Confirm the result after rendering without side effects inside its updater.
     setAttachmentStatus(accepted ? 'ready' : 'failed');
-    setError(accepted ? null : `File attachment failed: You can attach up to 4 ${application.kind === 'document' ? 'documents' : 'media files'} per message.`);
+    setError(accepted ? null : translate(locale, "chat.attachmentError", { error: translate(locale, application.kind === 'document' ? "chat.attachmentDocumentLimit" : "chat.attachmentMediaLimit") }));
     if (pendingImport.current === application.generation) pendingImport.current = null;
     setApplication(null);
     if (accepted) void advanceDrop.current();
     else discardDrop(pendingDrop.current);
-  }, [application, documents, attachments, setError]);
+  }, [application, documents, attachments, setError, locale]);
 
   const importAttachment = async (select: () => Promise<string | null>): Promise<ImportOutcome> => {
     if (pendingImport.current !== null) return 'stale';
@@ -74,7 +78,7 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
       const path = await select();
       if (!current()) return 'stale';
       if (!path) { setAttachmentStatus(attachmentStatus); return 'complete'; }
-      const name = path.split(/[\\/]/).pop() ?? "file";
+      const name = path.split(/[\\/]/).pop() ?? translate(locale, "chat.attachmentFallbackName");
       if (/\.(png|jpe?g|webp|wav|mp3|flac|mp4|webm)$/i.test(path)) {
         const kind = /\.(wav|mp3|flac)$/i.test(path) ? 'audio' : /\.(mp4|webm)$/i.test(path) ? 'video' : 'image';
         const usable = kind === 'audio'
@@ -84,12 +88,12 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
             : (modalities?.image ?? visionReady);
         if (!usable) {
           throw new Error(kind === 'audio' && !audioPreprocessAvailable
-            ? 'The running model does not support audio input. Select a local transcription session to insert its transcript as labeled text.'
+            ? translate(locale, "chat.attachmentAudioUnsupported")
             : kind === 'video' && !videoPreprocessAvailable
-              ? 'The running model does not support video input. Use an image-capable model to send sampled frames.'
-              : `The running model does not support ${kind} input.`);
+              ? translate(locale, "chat.attachmentVideoUnsupported")
+              : translate(locale, "chat.attachmentImageUnsupported"));
         }
-        if (attachments.length >= 4) throw new Error("You can attach up to 4 media files per message.");
+        if (attachments.length >= 4) throw new Error(translate(locale, "chat.attachmentMediaLimit"));
         const attachment = await api.importMedia(path);
         if (!current()) return 'stale';
         const value = { ...attachment, name };
@@ -102,7 +106,7 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
           setError(null);
           return 'complete';
         }
-        if (documents.length >= 4) throw new Error("You can attach up to 4 documents per message.");
+        if (documents.length >= 4) throw new Error(translate(locale, "chat.attachmentDocumentLimit"));
         const text = await api.readDocumentText(path);
         if (!current()) return 'stale';
         const value = { name, path, text };
@@ -115,8 +119,12 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
       return 'queued';
     } catch (caught) {
       if (!current()) return 'stale';
+      if (isIpcErrorKind(caught, 'cancelled')) {
+        setAttachmentStatus(attachmentStatus);
+        return 'cancelled';
+      }
       setAttachmentStatus("failed");
-      setError(`File attachment failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+      setError(translate(locale, "chat.attachmentError", { error: caught instanceof Error ? caught.message : String(caught) }));
       return 'failed';
     } finally {
       if (!queued && pendingImport.current === ownGeneration) pendingImport.current = null;
@@ -146,12 +154,12 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
 
   const addDroppedAttachments = (id: string, count: number) => {
     if (!Number.isInteger(count) || count < 1 || count > 64) {
-      setError('File attachment failed: The native file drop has an invalid file count. Please choose the files again.');
+      setError(translate(locale, "chat.attachmentError", { error: translate(locale, "chat.attachmentInvalidDrop") }));
       void api.discardAttachmentDrop(id).catch(() => undefined);
       return;
     }
     if (pendingImport.current !== null || pendingDrop.current) {
-      setError('File attachment failed: Wait for the current attachment to finish before dropping more files.');
+      setError(translate(locale, "chat.attachmentError", { error: translate(locale, "chat.attachmentWaitForImport") }));
       void api.discardAttachmentDrop(id).catch(() => undefined);
       return;
     }

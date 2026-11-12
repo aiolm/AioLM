@@ -82,10 +82,12 @@ export default function TabNav<T extends string>({
       move(-1);
     } else if (event.key === "Home") {
       event.preventDefault();
-      activate(items[0].id);
+      const first = items[0];
+      if (first) activate(first.id);
     } else if (event.key === "End") {
       event.preventDefault();
-      activate(items[items.length - 1].id);
+      const last = items.at(-1);
+      if (last) activate(last.id);
     }
   };
 

@@ -4,7 +4,9 @@ import * as api from '../../shared/api/runtimeAuto';
 import { pickRuntimePath } from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
+import { defined } from '../../testing/assertDefined';
 import AutomaticRuntimeConnection from './AutomaticRuntimeConnection';
+import { IpcError } from '../../shared/api/ipcError';
 
 vi.mock('../../shared/api/runtimeAuto', () => ({
   runtimeAutoDiscover: vi.fn(), runtimeAutoInspect: vi.fn(), runtimeAutoConnect: vi.fn(), runtimeAutoCancel: vi.fn(),
@@ -267,6 +269,23 @@ it('cancels once and ignores a late verification result', async () => {
   expect(screen.getByText('The operation was cancelled.')).toBeInTheDocument();
 });
 
+it.each([
+  { cause: new IpcError('cancelled', 'Connection attempt superseded'), state: 'cancelled' },
+  { cause: new IpcError('internal', 'automatic connection cancelled'), state: 'failed' },
+])('classifies native connection rejection by kind: $state', async ({ cause, state }) => {
+  vi.mocked(api.runtimeAutoConnect).mockRejectedValueOnce(cause);
+  const { onConnected } = show();
+  await find();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state, detail: cause.message })]));
+  expect(onConnected).not.toHaveBeenCalled();
+  if (state === 'cancelled') {
+    expect(screen.getByText('The operation was cancelled.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  } else expect(screen.getByRole('alert')).toHaveTextContent(cause.message);
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+});
+
 it('cancels active work on unmount without publishing a late connection', async () => {
   let resolve!: (result: api.AutomaticRuntimeResult) => void;
   vi.mocked(api.runtimeAutoConnect).mockReturnValue(new Promise(done => { resolve = done; }));
@@ -318,10 +337,10 @@ it('keeps candidate selection separate from inspection so the group remains navi
   show();
   fireEvent.click(screen.getByRole('button', { name: 'Find automatically' }));
   const radios = await screen.findAllByRole('radio');
-  fireEvent.click(radios[0]);
+  fireEvent.click(defined(radios[0]));
   expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
   expect(radios[1]).toBeEnabled();
-  fireEvent.click(radios[1]);
+  fireEvent.click(defined(radios[1]));
   expect(radios[1]).toBeChecked();
   expect(api.runtimeAutoInspect).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Check selected item' }));

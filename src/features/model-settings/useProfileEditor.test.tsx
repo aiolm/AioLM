@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
 import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, saveSettingsProfile, type SettingsProfile } from '../../shared/config/settingsProfiles';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { mergeProfileEditor, profileLibraryConfigPatch } from './profileEditor';
 import { useProfileEditor } from './useProfileEditor';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
@@ -20,7 +21,7 @@ function editor(entries: SettingsProfile[] = [], benchmark = false, cfg: AppConf
 function accept(hook: ReturnType<typeof editor>, prepared: ReturnType<ReturnType<typeof useProfileEditor>['prepareApply']>) {
   const current = { ...prepared.config, settings_profiles: hook.result.current.library };
   const saved = { ...prepared.config, settings_profiles: mergeProfileEditor(current, prepared.edit, prepared.applyTarget ? 'default' : undefined) };
-  const application = saved.settings_profiles.applied[profileTargetKey(saved.active_model)];
+  const application = defined(saved.settings_profiles.applied[profileTargetKey(saved.active_model)]);
   act(() => { hook.result.current.acceptSaved(saved, application); });
   hook.rerender({ draft: saved });
   return saved;
@@ -205,7 +206,7 @@ describe('profile editor persistence', () => {
     const source = captureProfile(testConfig, 'Shared', 'global', 'Current prompt');
     const hook = editor([source]);
     accept(hook, hook.result.current.prepareApply(source));
-    const activeId = hook.result.current.selected!.id;
+    const activeId = hook.result.current.selected.id;
     const activeRevision = hook.result.current.selected.revision;
     hook.rerender({ draft: { ...testConfig, temperature: 0.3 } });
     const prepared = hook.result.current.prepareUpdate(source.id);
@@ -295,7 +296,7 @@ describe('profile editor persistence', () => {
     const profile = captureProfile(testConfig, 'Disposable name', 'model', 'Current prompt');
     const remaining = { ...defaultSettingsProfile(), settings: { temperature: 0.55 }, system_prompt: 'Fallback prompt' };
     const hook = editor([profile, remaining], false, structuredClone(testConfig), profile);
-    const originalSettings = structuredClone(hook.result.current.savedApplication!.settings);
+    const originalSettings = structuredClone(hook.result.current.savedApplication.settings);
     const prepared = hook.result.current.prepareDelete(profile.id);
     expect(prepared.applyTarget).toBe(false);
     expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([remaining]);
@@ -330,7 +331,7 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.working).toBe(true);
     expect(current).toEqual(before);
     const saved = { ...current, ...patch };
-    const application = saved.settings_profiles!.applied[profileTargetKey(testConfig.active_model)];
+    const application = defined(saved.settings_profiles.applied[profileTargetKey(testConfig.active_model)]);
     act(() => hook.result.current.acceptMetadata(saved, application));
     expect(hook.result.current.library.default_profile_id).toBe(active.id);
     expect(hook.result.current.working).toBe(true);
@@ -358,7 +359,7 @@ describe('profile editor scope', () => {
     const hook = editor([profile], true);
     const selected = hook.result.current.prepareApply(profile).config;
     hook.rerender({ draft: { ...selected, ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', threads: 4, runtime_defaults: [] } });
-    const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
+    const updated = defined(hook.result.current.prepareUpdate(profile.id).edit.library.entries[0]);
 
     expect(updated).toMatchObject({ id: profile.id, scope: 'global', revision: 2, system_prompt: 'Original prompt',
       settings: { ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 0.2, chat_options: { stop: ['original stop'] }, threads: 4, runtime_defaults: [] } });
@@ -372,7 +373,7 @@ describe('profile editor scope', () => {
       coverage: ['ngl', 'temperature'], settings: { ngl: 2, temperature: 0.4, active_backend: 'incomplete-runtime' } };
     const hook = editor([profile], false, { ...testConfig, ngl: 6, temperature: 0.7, runtime_defaults: ['ngl'] });
     act(() => { hook.result.current.setSystemPrompt('Unrelated prompt'); });
-    const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
+    const updated = defined(hook.result.current.prepareUpdate(profile.id).edit.library.entries[0]);
 
     expect(updated).toMatchObject({ id: profile.id, scope: 'global', revision: 2,
       settings: { ngl: 6, temperature: 0.7, runtime_defaults: ['ngl'] } });
@@ -386,7 +387,7 @@ describe('profile editor scope', () => {
       legacy: true, coverage: ['temperature'], settings: { temperature: 0.4 }, system_prompt: 'Original' };
     const hook = editor([profile]);
     act(() => { hook.result.current.setSystemPrompt('Updated'); });
-    const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
+    const updated = defined(hook.result.current.prepareUpdate(profile.id).edit.library.entries[0]);
 
     expect(updated).toMatchObject({ id: profile.id, revision: 2, system_prompt: 'Updated', settings: { temperature: testConfig.temperature, ngl: testConfig.ngl, runtime_defaults: [] } });
     expect(updated).toMatchObject({ scope: 'global', legacy: true });
@@ -414,7 +415,7 @@ describe('profile editor scope', () => {
     expect(selected).toMatchObject({ active_backend: testConfig.active_backend, active_build: testConfig.active_build, threads: 3 });
     expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()] }).entries[0]);
     hook.rerender({ draft: { ...selected, threads: 7 } });
-    const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
+    const updated = defined(hook.result.current.prepareUpdate(profile.id).edit.library.entries[0]);
 
     expect(updated).toMatchObject({ id: profile.id, scope: profile.scope, revision: 2, settings: { threads: 7, runtime_defaults: [] } });
     expect(updated.coverage).not.toContain('active_backend');

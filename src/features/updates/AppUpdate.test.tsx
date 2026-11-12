@@ -3,7 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
-import { createUpdateStore, type AppUpdateInfo, type AppUpdateProgress } from "./updateStore";
+import { createUpdateStore } from "./updateStore";
+import type { AppUpdateInfo, AppUpdateProgress } from "../../shared/api/appUpdates";
 import AppUpdateNotice from "./AppUpdateNotice";
 import AppUpdateSettings from "./AppUpdateSettings";
 

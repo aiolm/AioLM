@@ -1,6 +1,6 @@
 import ModelName from '../../shared/ui/ModelName';
 import { useEffect, useRef, type ReactNode } from "react";
-import type { ChatThread } from "./chatHistory";
+import type { ChatThread } from "../../shared/api/conversationTypes";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
@@ -107,6 +107,8 @@ export default function ChatConversationHeader({
           <label className="sr-only" htmlFor="chat-session-target">{sessionLabel}</label>
           <CustomSelect id="chat-session-target" className="chat-session-picker" triggerClassName="chat-session-trigger" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, title: option.label, disabled: option.disabled }))} />
         </div>
+      {/* Escape is delegated from descendant controls after their own handlers. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
       <details
         ref={detailsRef}
         className="relative shrink-0"

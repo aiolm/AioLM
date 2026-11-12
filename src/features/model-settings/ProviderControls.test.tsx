@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { RenderResult } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import * as api from '../../shared/api';
 import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerTelemetryCopy } from './providerTelemetry';
@@ -10,6 +12,8 @@ import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ORDER_KEY } from '../runtimes/optionOrder';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { ProfileRuntimeSchemaContext } from './useProfileRuntimeSchema';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -127,7 +131,7 @@ describe('runtime-specific option controls', () => {
     fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({
-      provider_options: { vllm: expect.objectContaining({ workers: 4, 'request-value': 0 }) },
+      provider_options: { vllm: match.objectContaining({ workers: 4, 'request-value': 0 }) },
     }));
     schemaImport.mockRestore();
     catalogImport.mockRestore();
@@ -389,7 +393,7 @@ describe('runtime-specific option controls', () => {
     ] }]);
     vi.mocked(api.providerRuntimes).mockResolvedValue([{ provider: 'vllm', id: 'synthetic', engine: 'vllm', server: 'vllm', accelerator: 'cuda', installation: 'external', location: 'runtime', available: true, problems: [], server_flags: [] }]);
     vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
-    vi.mocked(api.providerRuntimeOptions).mockImplementation(async () => (await api.providerCatalog())[0].options);
+    vi.mocked(api.providerRuntimeOptions).mockImplementation(async () => defined((await api.providerCatalog())[0]).options);
   });
   function mount(values: Record<string, unknown> = {}) {
     const onChange = vi.fn(); const onInvalid = vi.fn();
@@ -508,20 +512,30 @@ describe('custom engine before a runtime is chosen (U1)', () => {
     const onInvalid = vi.fn(); const onChecking = vi.fn();
     const config = { ...testConfig, active_provider: 'custom.synthetic' as const, active_runtime: '' };
     const view = (cfg: api.AppConfig) => <I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>;
-    const rendered = render(view(config));
-    expect(await screen.findByText('Choose a runtime')).toBeVisible();
-    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expect(screen.queryByText(/invalid runtime id/)).not.toBeInTheDocument();
-    expect(api.providerOptionIssues).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Command preview' })).toBeDisabled();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let rendered: RenderResult | undefined;
+    try {
+      await act(async () => { rendered = render(view(config)); });
+      expect(screen.getByText('Choose a runtime')).toBeVisible();
+      expect(onChecking).toHaveBeenLastCalledWith(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.queryByText(/invalid runtime id/)).not.toBeInTheDocument();
+      expect(api.providerOptionIssues).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Command preview' })).toBeDisabled();
 
-    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
-    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
-    rendered.rerender(view({ ...config, active_runtime: 'syn-1' }));
-    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.providerOptionIssues).mock.calls[0][0]).toMatchObject({ active_provider: 'custom.synthetic', active_runtime: 'syn-1' });
-    expect(screen.getByRole('button', { name: 'Command preview' })).toBeEnabled();
+      vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+      vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+      await act(async () => {
+        rendered!.rerender(view({ ...config, active_runtime: 'syn-1' }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      expect(api.providerOptionIssues).toHaveBeenCalledOnce();
+      expect(defined(vi.mocked(api.providerOptionIssues).mock.calls[0])[0]).toMatchObject({ active_provider: 'custom.synthetic', active_runtime: 'syn-1' });
+      expect(screen.getByRole('button', { name: 'Command preview' })).toBeEnabled();
+    } finally {
+      rendered?.unmount();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -569,7 +583,7 @@ describe('registered engine options from accepted help (G04)', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
     await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], text, 'windows', undefined));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ template: path }) }) })));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(match.objectContaining({ provider_options: match.objectContaining({ 'custom.synthetic': match.objectContaining({ template: path }) }) })));
     imported.mockRestore();
   });
 
@@ -651,7 +665,7 @@ describe('registered engine options from accepted help (G04)', () => {
     const review = await screen.findByText(/--unknown=•••/);
     expect(review).not.toHaveTextContent(previous);
     expect(review).not.toHaveTextContent(incoming);
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ amber: incoming }) }) }));
+    expect(onChange).toHaveBeenCalledWith(match.objectContaining({ provider_options: match.objectContaining({ 'custom.synthetic': match.objectContaining({ amber: incoming }) }) }));
     imported.mockRestore();
   });
 
@@ -695,7 +709,7 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(review).toHaveTextContent('--amber •••');
     expect(review).not.toHaveTextContent(secret);
     expect(input).toHaveValue(text);
-    expect(vi.mocked(api.providerOptionIssues).mock.calls[1][0].provider_options?.['custom.synthetic']).toEqual({ workers: 4 });
+    expect(defined(vi.mocked(api.providerOptionIssues).mock.calls[1])[0].provider_options?.['custom.synthetic']).toEqual({ workers: 4 });
     expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
     await act(async () => { finishRevalidation([]); });
     await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
@@ -934,7 +948,7 @@ describe('catalog command import before runtime selection', () => {
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'Synthetic JSON engine', server: 'synthetic', options: [option], availability: { supported: true, detail: '' } }]);
     vi.mocked(api.providerRuntimes).mockResolvedValue([]);
     vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
-    const imported = vi.spyOn(api, 'providerImportCommand').mockResolvedValue({ options: JSON.parse('{"payload":{"seed":9007199254740993}}'), model: '/synthetic/replacement.model', issues: [], managed: [], unrecognized: [] });
+    const imported = vi.spyOn(api, 'providerImportCommand').mockResolvedValue({ options: JSON.parse('{"payload":{"seed":9007199254740993}}') as { payload: { seed: number } }, model: '/synthetic/replacement.model', issues: [], managed: [], unrecognized: [] });
     const onChange = vi.fn(); const onInvalid = vi.fn();
     const cfg = { ...testConfig, active_provider: 'vllm' as const, active_runtime: '', provider_options: { vllm: { payload: '9007199254740993' } } };
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
@@ -1032,8 +1046,8 @@ describe('in-place runtime and option recovery', () => {
           if (previous.has(key) === value) return previous;
           const next = new Set(previous); if (value) next.add(key); else next.delete(key); return next;
         });
-      }, [onInvalid]);
-      const reportChecking = useCallback((value: boolean) => { onChecking(value); setChecking(value); }, [onChecking]);
+      }, []);
+      const reportChecking = useCallback((value: boolean) => { onChecking(value); setChecking(value); }, []);
       return <>
         <ProviderOptions cfg={cfg} disabled={disabled} onChange={onChange} onInvalid={reportInvalid} onChecking={reportChecking} />
         <button type="button" disabled={disabled || checking || invalid.size > 0}>Save recovery draft</button>

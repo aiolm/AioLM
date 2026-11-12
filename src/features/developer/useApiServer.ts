@@ -58,9 +58,9 @@ export function useApiServer(fallbackPort: number, active = true) {
     let timer: number | undefined;
     const schedule = () => {
       if (disposed) return;
-      timer = window.setTimeout(async () => {
-        if (isVisible()) await refresh(true, "refresh");
-        schedule();
+      timer = window.setTimeout(() => {
+        if (isVisible()) void refresh(true, "refresh").then(schedule);
+        else schedule();
       }, POLL_INTERVAL_MS);
     };
     // Background re-reads keep the displayed page; only its activation read prepares it.

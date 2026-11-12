@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { firstShard, groupHfFiles, groupSafetensorsFiles, markInstalled, selectedBundleContains, shardTotal } from './discoverUtils';
+import { defined } from '../../testing/assertDefined';
 
 describe('GGUF download choices', () => {
   const file = (path: string, size_bytes = 10) => ({ path, size_bytes, is_mmproj: false, download_url: '' });
@@ -9,10 +10,10 @@ describe('GGUF download choices', () => {
     const parts = Array.from({ length: 33 }, (_, i) => file(`Q4/model-${String(i + 1).padStart(5, '0')}-of-00033.gguf`, i + 1)).reverse();
     const groups = groupHfFiles(parts);
     expect(groups).toHaveLength(1);
-    expect(groups[0]).toMatchObject({ displayPath: 'Q4/model.gguf', sizeBytes: 561, file: { path: 'Q4/model-00001-of-00033.gguf' } });
-    expect(groups[0].files).toHaveLength(33);
-    expect(groups[0].files[0].path).toBe(groups[0].file.path);
-    expect(parts[0].path).toContain('00033-of-00033');
+    expect(defined(groups[0])).toMatchObject({ displayPath: 'Q4/model.gguf', sizeBytes: 561, file: { path: 'Q4/model-00001-of-00033.gguf' } });
+    expect(defined(groups[0]).files).toHaveLength(33);
+    expect(defined(defined(groups[0]).files[0]).path).toBe(defined(groups[0]).file.path);
+    expect(defined(parts[0]).path).toContain('00033-of-00033');
   });
 
   it('keeps directories, quantizations, shard totals and single files separate', () => {
@@ -34,13 +35,13 @@ describe('GGUF download choices', () => {
 describe('downloaded GGUF shard installation marks', () => {
   it('marks the first downloaded shard as incomplete and isolates same-named files in other folders', () => {
     const first = markInstalled({}, 'Q4/model-00001-of-00002.gguf', 'models/Q4/model-00001-of-00002.gguf', 10);
-    expect(first['Q4/model-00001-of-00002.gguf'].missing_shards).toEqual(['model-00002-of-00002.gguf']);
+    expect(defined(first['Q4/model-00001-of-00002.gguf']).missing_shards).toEqual(['model-00002-of-00002.gguf']);
     const other = markInstalled(first, 'Q8/model-00002-of-00002.gguf', 'models/Q8/model-00002-of-00002.gguf', 10);
-    expect(other['Q4/model-00001-of-00002.gguf'].missing_shards).toEqual(['model-00002-of-00002.gguf']);
+    expect(defined(other['Q4/model-00001-of-00002.gguf']).missing_shards).toEqual(['model-00002-of-00002.gguf']);
     const complete = markInstalled(other, 'Q4/model-00002-of-00002.gguf', 'models/Q4/model-00002-of-00002.gguf', 10);
-    expect(complete['Q4/model-00001-of-00002.gguf'].missing_shards).toEqual([]);
-    expect(complete['Q4/model-00002-of-00002.gguf'].missing_shards).toEqual([]);
-    expect(complete['Q8/model-00002-of-00002.gguf'].missing_shards).toEqual(['model-00001-of-00002.gguf']);
+    expect(defined(complete['Q4/model-00001-of-00002.gguf']).missing_shards).toEqual([]);
+    expect(defined(complete['Q4/model-00002-of-00002.gguf']).missing_shards).toEqual([]);
+    expect(defined(complete['Q8/model-00002-of-00002.gguf']).missing_shards).toEqual(['model-00001-of-00002.gguf']);
     expect(firstShard('Q4/model-00002-of-00002.gguf')).toBe('Q4/model-00001-of-00002.gguf');
   });
 });
@@ -85,10 +86,10 @@ describe('Safetensors download choices', () => {
       file('model-00000-of-00002.safetensors'), file('model-00003-of-00002.safetensors'),
     ]);
     expect(groups).toHaveLength(7);
-    expect(groups[2]).toMatchObject({ file: { path: '4bit/model-00001-of-00002.safetensors' }, missingParts: 1 });
-    expect(groups[4]).toMatchObject({ missingParts: 2 });
-    expect(groups[5].shardCount).toBe(1);
-    expect(groups[6].shardCount).toBe(1);
+    expect(defined(groups[2])).toMatchObject({ file: { path: '4bit/model-00001-of-00002.safetensors' }, missingParts: 1 });
+    expect(defined(groups[4])).toMatchObject({ missingParts: 2 });
+    expect(defined(groups[5]).shardCount).toBe(1);
+    expect(defined(groups[6]).shardCount).toBe(1);
   });
 
   it('keeps nonstandard separator case as distinct exact repository paths', () => {

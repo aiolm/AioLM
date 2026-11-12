@@ -1,11 +1,7 @@
-import { invoke, isNativeRuntimeAvailable } from "../api/transport.ts";
+import { isNativeRuntimeAvailable } from "../api/transport.ts";
+import { benchmarkAcknowledgeUpload } from "../api/benchmarkHistory.ts";
 import type { QueuedBenchmark } from "./outbox.ts";
 
-interface LocalAcknowledgement {
-  acknowledged: boolean;
-  pruned: number;
-  warnings: string[];
-}
 
 const maintenanceWarnings = new Set<string>();
 
@@ -23,10 +19,7 @@ export async function acknowledgeUploadedBenchmark(entry: QueuedBenchmark): Prom
   if (entry.state !== "sent" || !entry.receipt || !entry.destination) {
     throw new Error("A saved server receipt is required before acknowledging local benchmark data.");
   }
-  const result = await invoke<LocalAcknowledgement>("benchmark_acknowledge_upload", {
-    runId: entry.source.runId,
-    receipt: { ...entry.receipt, destination: entry.destination },
-  });
+  const result = await benchmarkAcknowledgeUpload(entry.source.runId, { ...entry.receipt, destination: entry.destination });
   if (!result.acknowledged) {
     // The outbox retains the server receipt and retries only this local operation.
     throw new Error("The result was uploaded, but local cache maintenance is not yet complete.");

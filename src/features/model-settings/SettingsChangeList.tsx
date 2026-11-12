@@ -19,10 +19,20 @@ export function valueRenderer(locale: keyof typeof profileControlCopy) {
   const copy = profileControlCopy[locale];
   const render = (value: unknown): string => {
     if (value == null || value === '') return copy.empty;
-    if (typeof value === 'boolean') return value ? copy.on : copy.off;
-    if (Array.isArray(value)) return value.length ? value.map(render).join(', ') : copy.empty;
-    if (typeof value === 'object') return Object.entries(value).map(([key, child]) => `${profileFieldLabel(key, locale)}: ${render(child)}`).join(' · ') || copy.empty;
-    return String(value);
+    switch (typeof value) {
+      case 'boolean': return value ? copy.on : copy.off;
+      case 'object':
+        if (Array.isArray(value)) return value.length ? value.map(render).join(', ') : copy.empty;
+        return Object.entries(value).map(([key, child]) => `${profileFieldLabel(key, locale)}: ${render(child)}`).join(' · ') || copy.empty;
+      case 'string':
+      case 'number':
+      case 'bigint':
+      case 'symbol':
+      case 'function':
+      case 'undefined': return String(value);
+    }
+    // All JavaScript typeof results are handled above.
+    throw new TypeError('Unexpected JavaScript value type');
   };
   return render;
 }

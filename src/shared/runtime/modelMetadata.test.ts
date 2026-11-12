@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { modelMetadata } from '../api/commands';
 import { invalidateModelMetadata, readModelMetadata } from './modelMetadata';
 import type { ModelMetadata } from '../api/types';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../api/commands', () => ({ modelMetadata: vi.fn() }));
 beforeEach(() => { invalidateModelMetadata(); vi.resetAllMocks(); });
@@ -25,8 +26,8 @@ it('deduplicates pending reads and limits concurrent header access', async () =>
   const reads = Array.from({ length: 6 }, (_, i) => readModelMetadata(`models/${i}.gguf`));
   expect(readModelMetadata('models/0.gguf')).toBe(reads[0]);
   await vi.waitFor(() => expect(modelMetadata).toHaveBeenCalledTimes(4));
-  finish[0]({ architecture: 'qwen4exp' });
-  finish[1]({});
+  defined(finish[0])({ architecture: 'qwen4exp' });
+  defined(finish[1])({});
   await vi.waitFor(() => expect(modelMetadata).toHaveBeenCalledTimes(6));
   finish.slice(2).forEach(resolve => resolve({}));
   await Promise.all(reads);

@@ -5,6 +5,7 @@ import { invalidateModelMetadata } from '../runtime/modelMetadata';
 import type { ModelMetadata } from '../api/types';
 import ModelBadges from './ModelBadges';
 import { I18nProvider } from '../i18n/i18n';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../api/commands', () => ({ modelMetadata: vi.fn() }));
 vi.mock('../api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
@@ -25,10 +26,10 @@ it('reads only visible model rows and discards a previous path response', async 
   const view = (path: string) => <I18nProvider initialLocale="en"><ModelBadges model={path} localPath={path} /></I18nProvider>;
   const { rerender } = render(view('models/old.gguf'));
   expect(modelMetadata).not.toHaveBeenCalled();
-  act(() => observe[0]());
+  act(() => defined(observe[0], 'old model observer')());
   await waitFor(() => expect(modelMetadata).toHaveBeenCalledTimes(1));
   rerender(view('models/next.gguf'));
-  act(() => observe[1]());
+  act(() => defined(observe[1], 'next model observer')());
   expect(await screen.findByText('qwen4exp')).toBeVisible();
   expect(screen.getByText('custom-tag')).toBeVisible();
   await act(async () => { finishOld({ architecture: 'llama' }); });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defined } from "../../testing/assertDefined";
 import {
   clearDocumentIndex,
   indexRecordForChunks,
@@ -223,7 +224,7 @@ describe("IndexedDB document vector persistence", () => {
     database.seed(full);
     const expected = full.slice(1).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
     const beforeCalls = { ...database.calls };
-    expect(await removeDocumentVectorsForPaths([full[0].path])).toBe(1);
+    expect(await removeDocumentVectorsForPaths([defined(full[0]).path])).toBe(1);
     expect(database.snapshot()).toEqual(expected);
     // A single-path removal must not rewrite the other retained records.
     expect({
@@ -235,7 +236,7 @@ describe("IndexedDB document vector persistence", () => {
 
   it("removes the exact path across models and namespaces without changing another path", async () => {
     const alpha = chunk("/synthetic/alpha.txt"), beta = chunk("/synthetic/beta.txt");
-    for (const [model, namespace] of [["a", "one"], ["b", "one"], ["a", "two"]]) {
+    for (const [model, namespace] of [["a", "one"], ["b", "one"], ["a", "two"]] as const) {
       await saveDocumentVectors(model, [alpha], [[2, 3]], namespace);
       expect(await loadDocumentVectors(model, [alpha], namespace)).toEqual([[2, 3]]);
     }
@@ -243,7 +244,7 @@ describe("IndexedDB document vector persistence", () => {
     const betaBefore = database.snapshot().find((record) => record.path === beta.document.path)!;
     expect(await removeDocumentVectorsForPaths([alpha.document.path, alpha.document.path])).toBe(3);
     expect(database.snapshot()).toEqual([betaBefore]);
-    for (const [model, namespace] of [["a", "one"], ["b", "one"], ["a", "two"]]) {
+    for (const [model, namespace] of [["a", "one"], ["b", "one"], ["a", "two"]] as const) {
       expect(await loadDocumentVectors(model, [alpha], namespace)).toBeNull();
     }
     expect(await loadDocumentVectors("a", [beta], "one")).toEqual([[4, 5]]);
@@ -260,18 +261,18 @@ describe("IndexedDB document vector persistence", () => {
     const saving = saveDocumentVectors("a", [alpha], vectors, "one");
     await open.opened;
     try {
-      vectors[0][0] = 99;
+      defined(vectors[0])[0] = 99;
     } finally {
       open.release();
     }
     await saving;
-    vectors[0][0] = 99;
+    defined(vectors[0])[0] = 99;
     expect(await loadDocumentVectors("a", [alpha], "one")).toEqual([[1, 2]]);
     await saveDocumentVectors("a", [beta], [[3, 4]], "one");
     const betaBefore = database.snapshot().find((record) => record.path === beta.document.path)!;
     await saveDocumentVectors("a", [alpha], [[5, 6]], "one");
     const loaded = (await loadDocumentVectors("a", [alpha], "one"))!;
-    loaded[0][0] = 88;
+    defined(loaded[0])[0] = 88;
     expect(await loadDocumentVectors("a", [alpha], "one")).toEqual([[5, 6]]);
     expect(database.snapshot().find((record) => record.path === beta.document.path)).toEqual(betaBefore);
     await Promise.all([
@@ -292,9 +293,9 @@ describe("IndexedDB document vector persistence", () => {
       .map((record, index) => ({ ...record, updatedAt: 1000 - index }));
     database.seed(records);
     expect(database.snapshot()).toHaveLength(260);
-    expect(database.snapshot()[0]).toEqual(records[0]);
-    const newest = chunk(records[0].path), oldest = chunk(records.at(-1)!.path);
-    expect(await loadDocumentVectors("a", [newest], "one")).toEqual(records[0].vectors);
+    expect(database.snapshot()[0]).toEqual(defined(records[0]));
+    const newest = chunk(defined(records[0]).path), oldest = chunk(records.at(-1)!.path);
+    expect(await loadDocumentVectors("a", [newest], "one")).toEqual(defined(records[0]).vectors);
     expect(await loadDocumentVectors("a", [oldest], "one")).toBeNull();
     const noMatch = database.snapshot();
     const noMatchCalls = { ...database.calls };
@@ -307,16 +308,16 @@ describe("IndexedDB document vector persistence", () => {
     const expected = [...records.slice(0, 255), indexRecordForChunks("a", [fresh], [[50, 60]], 2000, "one")]
       .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
     expect(database.snapshot()).toEqual(expected);
-    expect(await loadDocumentVectors("a", [newest], "one")).toEqual(records[0].vectors);
+    expect(await loadDocumentVectors("a", [newest], "one")).toEqual(defined(records[0]).vectors);
     expect(await loadDocumentVectors("a", [fresh], "one")).toEqual([[50, 60]]);
     expect(await loadDocumentVectors("a", [oldest], "one")).toBeNull();
 
     const legacy = clone(expected.slice(0, 2));
-    Object.assign(legacy[0], { updatedAt: Number.NaN, extra: { nested: ["retained", { value: 7 }] } });
-    Reflect.deleteProperty(legacy[1], "updatedAt");
+    Object.assign(defined(legacy[0]), { updatedAt: Number.NaN, extra: { nested: ["retained", { value: 7 }] } });
+    Reflect.deleteProperty(defined(legacy[1]), "updatedAt");
     database.seedRaw([
       ...legacy.map((record) => [record.key, record] as [string, unknown]),
-      ["actual-corrupt-primary", { ...legacy[0], key: "different-claimed-key", vectors: [[Number.POSITIVE_INFINITY]] }],
+      ["actual-corrupt-primary", { ...defined(legacy[0]), key: "different-claimed-key", vectors: [[Number.POSITIVE_INFINITY]] }],
     ]);
     const raw = database.snapshot();
     const beforeCleanup = { ...database.calls };

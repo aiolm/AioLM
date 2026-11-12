@@ -85,10 +85,14 @@ export function useChatMcpTools() {
     const selectedKeys = new Set(selectedMcpTools);
     const selectedMcpEntries = mcpCatalog.filter((entry) => selectedKeys.has(`${entry.serverId}:${entry.tool.name}`));
     const generatedMcpNames = buildMcpFunctionNames(selectedMcpEntries.map((entry) => ({ serverId: entry.serverId, toolName: entry.tool.name })));
-    return {
-      mcpEntryByFunctionName: new Map(generatedMcpNames.map((name, index) => [name, selectedMcpEntries[index]])),
-      mcpDefinitions: selectedMcpEntries.map((entry, index) => mcpToolDefinition(entry, generatedMcpNames[index])),
-    } satisfies { mcpEntryByFunctionName: Map<string, ChatMcpTool>; mcpDefinitions: api.ChatToolDefinition[] };
+    const mcpEntryByFunctionName = new Map<string, ChatMcpTool>();
+    const mcpDefinitions = selectedMcpEntries.map((entry, index) => {
+      // buildMcpFunctionNames maps every selected entry to exactly one name.
+      const name = generatedMcpNames[index]!;
+      mcpEntryByFunctionName.set(name, entry);
+      return mcpToolDefinition(entry, name);
+    });
+    return { mcpEntryByFunctionName, mcpDefinitions };
   }, [mcpCatalog, selectedMcpTools]);
 
   return {

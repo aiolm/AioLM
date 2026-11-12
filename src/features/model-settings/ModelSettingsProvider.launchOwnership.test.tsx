@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as api from '../../shared/api/index';
+import { IpcError } from '../../shared/api/ipcError';
 import type { AppConfig } from '../../shared/api/types';
+import type { ConfigPatch } from '../../shared/state/configSaveQueue';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import TaskStrip from '../../shared/ui/TaskStrip';
@@ -84,7 +87,7 @@ it('keeps an unrelated save free of launch cancellation after another target is 
   vi.mocked(store.start).mockReturnValueOnce(launchA.promise);
   const save = store.updateConfig;
   let writes = 0;
-  store.updateConfig = vi.fn(async patch => {
+  store.updateConfig = vi.fn(async (patch: ConfigPatch<AppConfig>) => {
     await (++writes === 1 ? saveA.promise : saveB.promise);
     return save(patch);
   });
@@ -168,7 +171,7 @@ it('keeps the current launch cancellable outside the editor when a prior launch 
     expect(api.cancelLaunch).not.toHaveBeenCalled();
     expect(row).toHaveTextContent('Cancelling');
   } finally {
-    await act(async () => { sessionLaunch.resolve(sessionComplete); defaultLaunch.reject(new Error('server start cancelled')); });
+    await act(async () => { sessionLaunch.resolve(sessionComplete); defaultLaunch.reject(new IpcError('cancelled', 'server start cancelled')); });
   }
 });
 
@@ -189,13 +192,13 @@ it.each(['en', 'ko', 'ja', 'zh'] as const)('keeps a cancelled handed-off launch 
     fireEvent.click(start);
     await waitFor(() => expect(api.preflightLaunch).toHaveBeenCalledOnce());
     await waitFor(() => expect(editor).not.toBeInTheDocument());
-    await act(async () => preflight.resolve(structuredClone(vi.mocked(api.preflightLaunch).mock.calls[0][0])));
+    await act(async () => preflight.resolve(structuredClone(defined(vi.mocked(api.preflightLaunch).mock.calls[0])[0])));
     await waitFor(() => expect(api.sessionStart).toHaveBeenCalledOnce());
     fireEvent.click(within(screen.getByTestId('launch-task-strip')).getByRole('button', { name: copy.cancel }));
-    expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(vi.mocked(api.preflightLaunch).mock.calls[0][1], 'work');
+    expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(defined(vi.mocked(api.preflightLaunch).mock.calls[0])[1], 'work');
     expect(api.sessionStop).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
-    await act(async () => { sessionLaunch.reject(new Error('server start cancelled')); });
+    await act(async () => { sessionLaunch.reject(new IpcError('cancelled', 'server start cancelled')); });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: copy.title })).not.toBeInTheDocument());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
@@ -236,7 +239,7 @@ it.each(['cancelled', 'failed'] as const)('keeps launch ownership live while sav
   const store = targets();
   const gate = deferred<void>();
   const save = store.updateConfig;
-  store.updateConfig = vi.fn(async patch => { await gate.promise; return save(patch); });
+  store.updateConfig = vi.fn(async (patch: ConfigPatch<AppConfig>) => { await gate.promise; return save(patch); });
   render(<I18nProvider initialLocale="en"><ModelSettingsProvider store={store}><OpenTargets /></ModelSettingsProvider></I18nProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'Open default target A' }));
   const editor = await screen.findByRole('dialog', { name: 'Model & settings' });

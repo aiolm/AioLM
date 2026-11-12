@@ -12,6 +12,7 @@ import ModelsPanel from "./Models";
 import { panelText } from "../../shared/i18n/panelI18n";
 import { providerCopy } from "../../shared/i18n/providerCopy";
 import { useAppStore } from "../../shared/state/store";
+import { defined } from "../../testing/assertDefined";
 
 vi.mock("../../shared/api/index", async importOriginal => ({
   ...await importOriginal<typeof import("../../shared/api/index")>(),
@@ -132,7 +133,7 @@ describe("model library loaded path identity", () => {
 
     const button = await screen.findByRole("button", { name: "Configure & run: Example.gguf" });
     await waitFor(() => expect(api.sessionList).toHaveBeenCalled());
-    await act(async () => { await vi.mocked(api.sessionList).mock.results[0].value; });
+    await act(async () => { await defined(vi.mocked(api.sessionList).mock.results[0]).value; });
     const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
     expect.soft(row.queryByText("Running")).toBeVisible();
     const remove = row.getByRole("button", { name: "Delete: Example.gguf" });
@@ -190,7 +191,7 @@ describe("model library loaded path identity", () => {
 
     const button = await screen.findByRole("button", { name: "Configure & run: Shard.gguf" });
     await waitFor(() => expect(api.sessionList).toHaveBeenCalled());
-    await act(async () => { await vi.mocked(api.sessionList).mock.results[0].value; });
+    await act(async () => { await defined(vi.mocked(api.sessionList).mock.results[0]).value; });
     const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
     expect(row.getByText("Running")).toBeVisible();
     const remove = row.getByRole("button", { name: "Delete: Shard.gguf" });
@@ -434,7 +435,7 @@ describe('model folder persistence', () => {
     const browse = screen.getByRole('button', { name: panelText.en.browse });
     act(() => { fireEvent.click(browse); fireEvent.click(browse); });
     await waitFor(() => expect(api.saveConfig).toHaveBeenCalledOnce());
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    await act(async () => {});
     expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(folderA);
     expect(screen.getByRole('button', { name: 'Configure & run: A.gguf' })).toBeVisible();
     expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled();
@@ -457,7 +458,7 @@ describe('model folder persistence', () => {
     expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(savedB);
     expect(screen.getByLabelText('Saved folder')).toHaveTextContent(savedB);
     expect(api.listModels).toHaveBeenCalledOnce();
-    expect(vi.mocked(api.listModels).mock.calls[0][0]).toBe(savedB);
+    expect(defined(vi.mocked(api.listModels).mock.calls[0])[0]).toBe(savedB);
   });
 
   it.each([null, '   '])('keeps the current catalog without saving or scanning when the picker returns %j', async chosen => {
@@ -473,7 +474,6 @@ describe('model folder persistence', () => {
     expect(screen.getByRole('button', { name: 'Rescan' })).toBeDisabled();
     expect(api.pickModelsDir).toHaveBeenCalledOnce();
     await act(async () => { finishPicker(chosen); });
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     expect(screen.getByLabelText(panelText.en.modelsDirectory)).toHaveValue(folderA);
     expect(screen.getByRole('button', { name: 'Configure & run: A.gguf' })).toBeVisible();
     expect(api.saveConfig).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import { PROJECTS_KEY, activeProjectId, exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
@@ -23,14 +24,16 @@ vi.mock("../../shared/api/index", () => ({
   providerRuntimes: vi.fn(async () => []),
 }));
 
-const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mockedApi = vi.mocked(api);
 
 describe("Project configuration snapshots", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); mockedApi.isNativeRuntimeAvailable.mockReturnValue(false); mockedApi.providerRuntimes.mockResolvedValue([]); });
   afterEach(() => { vi.restoreAllMocks(); });
 
   const failWrites = (failedKey = PROJECTS_KEY) => {
-    const original = Storage.prototype.setItem;
+    const setItemDescriptor: TypedPropertyDescriptor<Storage["setItem"]> | undefined = Object.getOwnPropertyDescriptor(Storage.prototype, 'setItem');
+    const original = setItemDescriptor?.value;
+    if (!original) throw new Error('The native storage implementation is unavailable');
     return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
       if (key === failedKey) throw new DOMException('Synthetic project storage failure', 'QuotaExceededError');
       original.call(this, key, value);
@@ -71,7 +74,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     failure.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
-    expect(readProjects()[0].name).toBe('Edited project');
+    expect(defined(readProjects()[0]).name).toBe('Edited project');
     expect(screen.queryByText(/Synthetic project storage failure/)).not.toBeInTheDocument();
   });
 
@@ -153,7 +156,7 @@ describe("Project configuration snapshots", () => {
     if (field === 'tools') fireEvent.click(screen.getByRole('checkbox', { name: 'synthetic:search · Unavailable' }));
     if (field === 'model settings') {
       fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
-      await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...store.cfg!, ctx_size: 8192 }); });
+      await act(async () => { await defined(vi.mocked(settings.open).mock.calls[0])[0].onApply?.({ ...store.cfg!, ctx_size: 8192 }); });
     }
     fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
@@ -212,7 +215,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
     expect(screen.getByLabelText('Project name')).toHaveValue('Imported project');
     expect(readProjects()).toHaveLength(1);
-    expect(readProjects()[0]).toMatchObject({ name: imported.name, systemPrompt: imported.systemPrompt, config: imported.config });
+    expect(defined(readProjects()[0])).toMatchObject({ name: imported.name, systemPrompt: imported.systemPrompt, config: imported.config });
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -237,7 +240,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
-    await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy());
+    await waitFor(() => expect(defined(readProjects()[0]).profileApplication?.profile_id).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'New project' }));
     expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Project name')).toHaveValue('');
@@ -253,7 +256,8 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Export JSON' })).toBeEnabled());
     expect(mockedApi.projectExportJson).toHaveBeenCalledWith(expect.any(String), 'native-workspace.json');
-    expect(JSON.parse(mockedApi.projectExportJson.mock.calls[0][0]).project).toMatchObject({ name: project.name, systemPrompt: project.systemPrompt });
+    const exported: unknown = JSON.parse(defined(mockedApi.projectExportJson.mock.calls[0])[0]);
+    expect(exported).toMatchObject({ project: { name: project.name, systemPrompt: project.systemPrompt } });
     expect(readProjects()).toEqual([project]);
     mockedApi.projectExportJson.mockRejectedValueOnce(new Error('Destination is not writable'));
     fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
@@ -289,7 +293,7 @@ describe("Project configuration snapshots", () => {
 
   it.each([512, -1])('displays Python context %s as an explicit limit or runtime-owned context instead of stale llama settings', async maxModelLen => {
     mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
-    mockedApi.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
+    mockedApi.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', engine: 'vllm', server: 'vllm-metal', location: 'runtime', available: true, problems: [], version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
       provider_options: { vllm: { max_model_len: maxModelLen } } });
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
@@ -307,18 +311,18 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Edit prompt in model settings" }));
-    const request = vi.mocked(settings.open).mock.calls[0][0];
+    const request = defined(vi.mocked(settings.open).mock.calls[0])[0];
     expect(request.target).toEqual({ kind: "project", id: project.id });
     expect(request.systemPrompt).toBe("Keep citations");
     const changed = { ...store.cfg!, active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } };
     await act(async () => { await request.onApply?.(changed); });
     changed.chat_options.stop.push("later mutation");
-    expect(readProjects()[0].config.active_model).toBe("models/default.gguf");
+    expect(defined(readProjects()[0]).config.active_model).toBe("models/default.gguf");
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.start).not.toHaveBeenCalled();
     expect(screen.getByText("project.gguf")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: "Keep citations", toolIds: ["docs:search"], documentBindings: [{ name: "notes.md", path: "notes.md" }], config: { active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } } });
+    expect(defined(readProjects()[0])).toMatchObject({ systemPrompt: "Keep citations", toolIds: ["docs:search"], documentBindings: [{ name: "notes.md", path: "notes.md" }], config: { active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } } });
     expect(store.cfg?.active_model).toBe("models/default.gguf");
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -331,7 +335,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Edit prompt in model settings" }));
-    const request = vi.mocked(settings.open).mock.calls[0][0];
+    const request = defined(vi.mocked(settings.open).mock.calls[0])[0];
     expect(request.systemPrompt).toBe("Original project instruction");
     const next = { ...store.cfg!, active_model: "models/project.gguf", server_args: ["--jinja"], chat_options: { stop: ["finished"] } };
     const application = { model: next.active_model, profile_id: "project-profile", profile_revision: 3, settings: { temperature: 0.3 }, system_prompt: "Use the copied instruction" };
@@ -339,16 +343,16 @@ describe("Project configuration snapshots", () => {
     await act(async () => { await request.onApply?.(next, application); });
     application.system_prompt = "Later profile edit";
     expect(screen.getByLabelText("System prompt")).toHaveTextContent("Use the copied instruction");
-    expect(readProjects()[0].systemPrompt).toBe("Original project instruction");
+    expect(defined(readProjects()[0]).systemPrompt).toBe("Original project instruction");
     fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
-    expect(vi.mocked(settings.open).mock.calls[1][0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
+    expect(defined(vi.mocked(settings.open).mock.calls[1])[0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: "Use the copied instruction", config: { active_model: "models/project.gguf", server_args: ["--jinja"], chat_options: { stop: ["finished"] } } });
-    expect(readProjects()[0].profileApplication).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
+    expect(defined(readProjects()[0])).toMatchObject({ systemPrompt: "Use the copied instruction", config: { active_model: "models/project.gguf", server_args: ["--jinja"], chat_options: { stop: ["finished"] } } });
+    expect(defined(readProjects()[0]).profileApplication).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     view.unmount();
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
-    expect(vi.mocked(settings.open).mock.calls[2][0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
+    expect(defined(vi.mocked(settings.open).mock.calls[2])[0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -363,15 +367,15 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
-    await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy());
+    await waitFor(() => expect(defined(readProjects()[0]).profileApplication?.profile_id).toBeTruthy());
     const saved = store.getConfig()!;
-    const application = saved.settings_profiles!.applied[profileTargetKey(saved.active_model)];
+    const application = defined(saved.settings_profiles!.applied[profileTargetKey(saved.active_model)]);
     expect(saved).toMatchObject({ ctx_size: 16384, temperature: 0.3, chat_options: { stop: ['finished'] } });
     expect(application).toMatchObject({ model: saved.active_model, system_prompt: 'Project prompt', settings: { ctx_size: 16384, temperature: 0.3 } });
     expect(application.profile_id).not.toBe(existing.id);
     expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === application.profile_id)).toMatchObject({ settings: { ctx_size: 16384 }, system_prompt: 'Project prompt' });
     expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === existing.id)).toEqual(existing);
-    expect(readProjects()[0].profileApplication?.profile_id).toBe(application.profile_id);
+    expect(defined(readProjects()[0]).profileApplication?.profile_id).toBe(application.profile_id);
     expect(store.start).not.toHaveBeenCalled();
   });
 
@@ -406,13 +410,13 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     store.cfg!.settings_profiles = { ...store.cfg!.settings_profiles, entries: [fallback] };
     fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
-    const request = vi.mocked(settings.open).mock.calls[0][0];
+    const request = defined(vi.mocked(settings.open).mock.calls[0])[0];
     expect(request.config).toMatchObject({ active_model: project.config.active_model, ctx_size: 8192, temperature: 0.4 });
     expect(request.application).toMatchObject({ profile_id: fallback.id, profile_name: 'Everyday', system_prompt: 'Default instruction' });
     expect(request.systemPrompt).toBe('Default instruction');
     expect(store.updateConfig).not.toHaveBeenCalled();
-    expect(readProjects()[0].profileApplication?.profile_id).toBe(removed.id);
-    expect(readProjects()[0].config.ctx_size).toBe(32768);
+    expect(defined(readProjects()[0]).profileApplication?.profile_id).toBe(removed.id);
+    expect(defined(readProjects()[0]).config.ctx_size).toBe(32768);
   });
 
   it('applies default values and prompt instead of recreating a deleted project profile', async () => {
@@ -427,11 +431,11 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
-    await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBe(fallback.id));
+    await waitFor(() => expect(defined(readProjects()[0]).profileApplication?.profile_id).toBe(fallback.id));
     expect(store.getConfig()).toMatchObject({ ctx_size: 8192, temperature: 0.4 });
     expect(store.getConfig()!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([fallback, active]);
     expect(store.getConfig()!.settings_profiles!.applied[profileTargetKey(project.config.active_model)]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default instruction' });
-    expect(readProjects()[0]).toMatchObject({ config: { ctx_size: 8192, temperature: 0.4 }, systemPrompt: 'Default instruction', profileApplication: { profile_id: fallback.id } });
+    expect(defined(readProjects()[0])).toMatchObject({ config: { ctx_size: 8192, temperature: 0.4 }, systemPrompt: 'Default instruction', profileApplication: { profile_id: fallback.id } });
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Default instruction');
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -442,7 +446,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     const update = store.updateConfig;
     let finish!: () => void;
-    store.updateConfig = vi.fn(async patch => {
+    store.updateConfig = vi.fn<typeof update>(async patch => {
       const saved = await update(patch);
       await new Promise<void>(resolve => { finish = resolve; });
       return saved;
@@ -453,8 +457,8 @@ describe("Project configuration snapshots", () => {
     fireEvent.change(screen.getByDisplayValue('Original name'), { target: { value: 'Updated name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
     await act(async () => { finish(); });
-    expect(readProjects()[0].name).toBe('Updated name');
-    expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy();
+    expect(defined(readProjects()[0]).name).toBe('Updated name');
+    expect(defined(readProjects()[0]).profileApplication?.profile_id).toBeTruthy();
   });
 
   it.each([true, false])('does not reactivate a deleted project when its pending runtime assignment finishes (remaining project: %s)', async hasRemaining => {
@@ -465,7 +469,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project, ...afterDeletion]); setActiveProjectId(project.id);
     const update = store.updateConfig;
     let finish!: () => void;
-    store.updateConfig = vi.fn(async patch => {
+    store.updateConfig = vi.fn<typeof update>(async patch => {
       const saved = await update(patch);
       await new Promise<void>(resolve => { finish = resolve; });
       return saved;
@@ -495,8 +499,8 @@ describe("Project configuration snapshots", () => {
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
     fireEvent.change(screen.getByDisplayValue("Research"), { target: { value: "Research notes" } });
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0].config).toMatchObject({ ctx_size: 8192, temperature: 0.3, runtime_defaults: ["ngl"] });
-    expect(readProjects()[0].name).toBe("Research notes");
+    expect(defined(readProjects()[0]).config).toMatchObject({ ctx_size: 8192, temperature: 0.3, runtime_defaults: ["ngl"] });
+    expect(defined(readProjects()[0]).name).toBe("Research notes");
   });
 
   it('initializes a new project from the assigned saved profile without modifying its source', () => {
@@ -510,7 +514,7 @@ describe("Project configuration snapshots", () => {
     expect(screen.getByText('8,192')).toBeVisible();
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'New workspace' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Current saved instruction', config: { ctx_size: 8192 },
+    expect(defined(readProjects()[0])).toMatchObject({ systemPrompt: 'Current saved instruction', config: { ctx_size: 8192 },
       profileApplication: { profile_id: profile.id, profile_revision: profile.revision } });
     expect(store.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(store.cfg!.ctx_size).toBe(4096);
@@ -531,13 +535,13 @@ describe("Project configuration snapshots", () => {
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile instruction');
     expect(screen.getByText('llama.cpp · cpu · b123')).toBeVisible();
     expect(screen.getByText('32,768')).toBeVisible();
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
+    expect(defined(readProjects()[0])).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
     await waitFor(() => expect(store.getConfig()).toMatchObject({ ctx_size: 32768, temperature: 0.3, active_backend: 'cpu', active_build: 'b123' }));
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Revised profile instruction', config: { ctx_size: 32768 },
+    expect(defined(readProjects()[0])).toMatchObject({ systemPrompt: 'Revised profile instruction', config: { ctx_size: 32768 },
       profileApplication: { profile_id: revised.id, profile_revision: 2 }, toolIds: ['docs:search'], documentBindings: [{ name: 'notes.md', path: 'notes.md' }] });
-    expect(store.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(entries.map(profile => profile.id));
-    expect(store.cfg!.settings_profiles!.entries.find(profile => profile.id === revised.id)).toMatchObject({ revision: 2, legacy_runtime: { active_backend: 'vulkan', active_build: 'b456' } });
+    expect(store.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(entries.map(profile => profile.id));
+    expect(store.cfg!.settings_profiles.entries.find(profile => profile.id === revised.id)).toMatchObject({ revision: 2, legacy_runtime: { active_backend: 'vulkan', active_build: 'b456' } });
     expect(store.start).not.toHaveBeenCalled();
   });
 
@@ -550,7 +554,7 @@ describe("Project configuration snapshots", () => {
       id: `synthetic-${index}`,
       revision: 1,
     }));
-    const selectedProfile = syntheticProfiles[500];
+    const selectedProfile = defined(syntheticProfiles[500]);
     store.cfg!.settings_profiles = {
       ...emptyProfileLibrary(),
       default_profile_id: defaultSettingsProfile().id,
@@ -588,7 +592,7 @@ describe("Project configuration snapshots", () => {
     const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Original profile prompt');
     const revised = { ...profile, revision: 2, system_prompt: 'Revised profile prompt' };
-    store.cfg = { ...store.cfg!, settings_profiles: { ...store.cfg!.settings_profiles!, revision: 2, entries: [defaultSettingsProfile(), revised] } };
+    store.cfg = { ...store.cfg!, settings_profiles: { ...store.cfg!.settings_profiles, revision: 2, entries: [defaultSettingsProfile(), revised] } };
     revision = 2;
     view.rerender(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile prompt');
@@ -607,7 +611,7 @@ describe("Project configuration snapshots", () => {
     expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0]).toMatchObject({ config: { active_model: model }, documentBindings: [{ name: "notes.md", path: document }] });
+    expect(defined(readProjects()[0])).toMatchObject({ config: { active_model: model }, documentBindings: [{ name: "notes.md", path: document }] });
   });
 
   it("adds a document through the file picker and saves its stored path", async () => {
@@ -620,7 +624,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add document" }));
     await waitFor(() => expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent("picked.md"));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0]).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
+    expect(defined(readProjects()[0])).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
   });
 
   it("removes a document without touching the stored copy until saved", () => {
@@ -630,9 +634,9 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
     expect(screen.getByText("No documents yet.")).toBeVisible();
-    expect(readProjects()[0].documentBindings).toEqual([{ name: "notes.md", path: "notes.md" }]);
+    expect(defined(readProjects()[0]).documentBindings).toEqual([{ name: "notes.md", path: "notes.md" }]);
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0].documentBindings).toEqual([]);
+    expect(defined(readProjects()[0]).documentBindings).toEqual([]);
   });
 
   it("selects MCP tools from registered servers instead of typing IDs", async () => {
@@ -646,7 +650,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0].toolIds).toEqual(["docs:search"]);
+    expect(defined(readProjects()[0]).toolIds).toEqual(["docs:search"]);
   });
 
   it("keeps stale tool IDs visible until explicitly removed", async () => {
@@ -657,10 +661,10 @@ describe("Project configuration snapshots", () => {
     await waitFor(() => expect(mockedApi.mcpListServers).toHaveBeenCalled());
     expect(screen.getByRole("checkbox", { name: "gone:missing · Unavailable" })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0].toolIds).toEqual(["gone:missing"]);
+    expect(defined(readProjects()[0]).toolIds).toEqual(["gone:missing"]);
     fireEvent.click(screen.getByRole("checkbox", { name: "gone:missing · Unavailable" }));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0].toolIds).toEqual([]);
+    expect(defined(readProjects()[0]).toolIds).toEqual([]);
   });
 
   it("shows a concrete app default for inherited context size instead of a bare label", async () => {

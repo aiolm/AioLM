@@ -89,7 +89,7 @@ export default function TuningServerSection({
           {cacheFields.map((field) => {
             const inputId = `${id}-${field.key}`;
             const value = serverTextValue(field.key);
-            const label = tuningFieldLabel(t as never, field);
+            const label = tuningFieldLabel(t, field);
             const description = tuningFieldDescription(t, field);
             return (
               <div key={field.key} className="flex min-w-0 flex-col gap-1.5">

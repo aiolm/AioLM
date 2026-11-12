@@ -5,11 +5,12 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { benchmarkCopy } from './benchmarkCopy';
 import { dispatchSelectedBenchmark, enqueuePublicationBenchmark, getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import { serializePublicationRequest } from '@aiolm/benchmark-contracts';
 import { PublicBenchmarkSummary } from './PublicBenchmarkSummary';
 import type { ServingPublicBenchmarkSubmission } from '@aiolm/benchmark-contracts';
+import { defined } from '../../testing/assertDefined';
 
 // Shared feedback banners read the active locale for their dismiss label.
 const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
@@ -63,7 +64,7 @@ describe('public benchmark review', () => {
     render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('en')} />);
     const summary = screen.getByLabelText('Shared details');
     const table = within(summary).getByRole('table', { name: 'Results' });
-    const cells = within(within(table).getAllByRole('row')[1]).getAllByRole('cell');
+    const cells = within(defined(within(table).getAllByRole('row')[1])).getAllByRole('cell');
     expect(cells[6]).toHaveTextContent('45.0');
     expect(cells[6]).toHaveTextContent('30.0 – 60.0 · n=2');
     expect(cells[4]).toHaveTextContent('50.0 – 50.0 · n=1');
@@ -95,7 +96,7 @@ describe('public benchmark review', () => {
         finish_reasons: ['not_reported'], peak_memory_bytes: null, timing_source: 'client', failed: false }] },
     };
     render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('en')} />);
-    const cells = within(within(screen.getByRole('table', { name: 'Results' })).getAllByRole('row')[1]).getAllByRole('cell');
+    const cells = within(defined(within(screen.getByRole('table', { name: 'Results' })).getAllByRole('row')[1])).getAllByRole('cell');
     expect(cells[2]).toHaveTextContent('N/A');
     expect(cells[6]).toHaveTextContent('0.0 – 0.0 · n=1');
     expect(cells[7]).toHaveTextContent('N/A');

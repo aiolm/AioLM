@@ -26,7 +26,7 @@ export function describeServerOption(signature: string, description = '', group 
   const choices = enumeration && /[,|]/.test(enumeration) && !enumeration.includes('...')
     ? enumeration.split(/[,|]/).map(value => value.trim()) : [];
   const arity = !argument ? 0 : argument === 'START END' || argument === 'FNAME SCALE' ? 2 : 1;
-  return { id: flags.find(flag => flag.startsWith('--')) ?? flags[0], signature, description, group, flags, arity, argument, choices };
+  return { id: flags.find(flag => flag.startsWith('--')) ?? flags[0]!, signature, description, group, flags, arity, argument, choices }; // Empty flags returned above.
 }
 
 /** llama.cpp help aligns the description after two or more spaces. */
@@ -43,9 +43,9 @@ export function parseRuntimeHelp(help: string): ServerOption[] {
     if (/^-{3,}.*-{3,}$/.test(line)) { group = line.replace(/^-+|-+$/g, '').trim(); continue; }
     if (raw.length - raw.trimStart().length === indent && /^--?[a-zA-Z]/.test(line)) {
       const [signature, ...description] = line.replace(/,\s+(?=-)/g, ', ').split(/\s{2,}/);
-      rows.push({ signature, description: description.join(' '), group });
+      rows.push({ signature: signature!, description: description.join(' '), group }); // split always has a first item.
     } else if (rows.length && line) {
-      rows[rows.length - 1].description += `\n${line}`;
+      rows[rows.length - 1]!.description += `\n${line}`; // The nonempty rows check proves the last row exists.
     }
   }
   return rows.flatMap(row => {
@@ -128,7 +128,7 @@ export function serverArgsFromText(text: string, options: readonly ServerOption[
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const flag = trimmed.split(/\s/, 1)[0];
+    const flag = trimmed.split(/\s/, 1)[0]!; // split always has a first item.
     const rest = trimmed.slice(flag.length).trim();
     // An unlisted flag from a custom build takes the rest as its single value.
     const arity = arityOf(flag) ?? (rest ? 1 : 0);
@@ -162,13 +162,13 @@ export function serverArgsToText(args: readonly string[], options: readonly Serv
   const lines: string[] = [];
   const arityOf = optionArityLookup(options, args.length > 2);
   for (let index = 0; index < args.length; index++) {
-    const flag = args[index];
+    const flag = args[index]!; // The loop bounds prove this argv entry exists.
     // Mirror the parser: an unlisted flag from a custom build takes one value.
     const arity = arityOf(flag) ?? 1;
     const values: string[] = [];
     // A negative number is a value, while a following switch starts another option.
-    while (values.length < arity && index + 1 < args.length && !FLAG.test(args[index + 1])) {
-      values.push(args[++index]);
+    while (values.length < arity && index + 1 < args.length && !FLAG.test(args[index + 1]!)) {
+      values.push(args[++index]!); // The while condition bounds both reads.
     }
     lines.push([flag, ...values].join(' '));
   }
@@ -190,7 +190,7 @@ interface LocatedOccurrence extends OptionOccurrence { start: number; end: numbe
 function locateOccurrences(args: readonly string[], option: ServerOption): LocatedOccurrence[] {
   const result: LocatedOccurrence[] = [];
   for (let index = 0; index < args.length; index++) {
-    const token = args[index];
+    const token = args[index]!; // The loop bounds prove this argv entry exists.
     const equals = token.indexOf('=');
     const flag = equals < 0 ? token : token.slice(0, equals);
     if (!option.flags.includes(flag)) continue;
@@ -198,8 +198,8 @@ function locateOccurrences(args: readonly string[], option: ServerOption): Locat
     const start = index;
     while (values.length < option.arity && index + 1 < args.length) {
       // Negative numbers are values, while a following switch starts another option.
-      if (FLAG.test(args[index + 1])) break;
-      values.push(args[++index]);
+      if (FLAG.test(args[index + 1]!)) break; // The while condition bounds the next entry.
+      values.push(args[++index]!);
     }
     result.push({ start, end: index + 1, flag, values });
   }
@@ -225,7 +225,7 @@ export function replaceServerOption(args: readonly string[], option: ServerOptio
   const next: string[] = [];
   for (let index = 0; index <= args.length; index++) {
     if (index === insertAt) next.push(...replacement);
-    if (index < args.length && !remove.has(index)) next.push(args[index]);
+    if (index < args.length && !remove.has(index)) next.push(args[index]!); // The length check bounds this read.
   }
   return assertUnmanagedServerArgs(next);
 }

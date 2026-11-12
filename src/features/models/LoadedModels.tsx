@@ -1,66 +1,37 @@
-import ModelName from '../../shared/ui/ModelName';
-import ModelBadges from '../../shared/ui/ModelBadges';
-import ModelIcon from '../../shared/ui/ModelIcon';
-import StatusBadge from "../../shared/ui/StatusBadge";
-import FeedbackBanner from "../../shared/ui/FeedbackBanner";
-import EmptyState from "../../shared/ui/EmptyState";
-import Switch from "../../shared/ui/Switch";
-import "./loaded-models.css";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
-import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
-import ConfirmDialog from "../../shared/ui/ConfirmDialog";
-import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from "../../shared/state/taskRegistry";
-import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
-import { useModelSettings } from "../model-settings/ModelSettingsProvider";
-import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
-import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
-import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
-import { settingsForSession } from "../../shared/config/executionSettings";
-import { profileTargetKey } from "../../shared/config/settingsProfiles";
-import { loadedModelPath } from '../../shared/runtime/loadedModel';
-import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
-import RuntimeFailureDetails from './RuntimeFailureDetails';
-import { loadedModelsCopy } from './loadedModelsCopy';
+import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import {
   DEFAULT_SESSION_ID,
-  cloneGpuPlacement,
-  defaultSessionDefinition,
-  notifySessionStatusChanged,
-  sessionConfig,
-  sessionDefinitionFromStatus,
   sessionPort,
-  sessionStatusLabel,
+  sessionStatusLabel
 } from "../../shared/runtime/sessionUtils";
-
+import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import EmptyState from "../../shared/ui/EmptyState";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
+import ModelName from '../../shared/ui/ModelName';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import StatusBadge from "../../shared/ui/StatusBadge";
+import Switch from "../../shared/ui/Switch";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
+import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
+import RuntimeFailureDetails from './RuntimeFailureDetails';
+import "./loaded-models.css";
+import { useLoadedModelsController, type LoadedModelsProps } from "./useLoadedModelsController";
 /** One delivery from the library's shared detailed session subscription. */
 export type SessionPoll = { sessions: api.SessionStatus[]; error?: undefined } | { sessions: api.SessionStatus[]; error: unknown };
-
-type PendingNavigation =
-  | { kind: "select"; definition: api.SessionDefinition }
-  | { kind: "new" }
-  | { kind: "close" };
-
 const SESSION_STATES = ["stopped", "starting", "running", "stopping", "failed", "crashed"] as const;
-
 function statusTone(state: api.SessionStatus["state"]): "neutral" | "success" | "warning" | "danger" {
   const label = sessionStatusLabel(state);
   if (label === "running") return "success";
   if (label === "starting" || label === "stopping") return "warning";
   return label === "failed" || label === "crashed" ? "danger" : "neutral";
 }
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-function isMissingSessionFacade(error: unknown): boolean {
-  const message = errorText(error).toLowerCase();
-  return message.includes("unknown command") || message.includes("command not found") || message.includes("session_start") && message.includes("not found");
-}
-
 function statusCopy(state: api.SessionStatus["state"], t: ReturnType<typeof useI18n>["t"]): string {
   const label = sessionStatusLabel(state);
   if (label === "running") return t("ui.sessionRunning");
@@ -69,12 +40,6 @@ function statusCopy(state: api.SessionStatus["state"], t: ReturnType<typeof useI
   if (label === "failed") return t("ui.sessionFailed");
   return label === "stopping" ? t("status.working") : t("ui.sessionStopped");
 }
-
-function modelLabel(path: string, empty: string): string {
-  if (!path.trim()) return empty;
-  return modelDisplayName(path) || empty;
-}
-
 /**
  * Loaded, loading and failed models — the default target and every named
  * session, including sessions that are not saved and models outside the
@@ -84,407 +49,9 @@ function modelLabel(path: string, empty: string): string {
  * Status comes from the library's single detailed session subscription, which
  * pauses while the page is hidden; this component adds no polling of its own.
  */
-export default function LoadedModels({ store, poll, refresh }: { store: AppStore; poll: SessionPoll; refresh: () => Promise<void> }) {
-  const { t, locale } = useI18n();
-  const copy = loadedModelsCopy[locale];
-  const modelSettings = useModelSettings();
-  const cfg = store.cfg;
-  const [definitions, setDefinitions] = useState<api.SessionDefinition[]>(() => cfg?.sessions ?? []);
-  const [statuses, setStatuses] = useState<Record<string, api.SessionStatus>>({});
-  const [selectedId, setSelectedId] = useState(DEFAULT_SESSION_ID);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [editing, setEditing] = useState<api.SessionDefinition | null>(null);
-  const [stopExisting, setStopExisting] = useState(cfg?.stop_existing_sessions_on_load ?? true);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const loadCancelling = useSyncExternalStore(subscribeTasks,
-    () => loadingId !== null && getTaskSnapshot().some(task => task.id === `session-load-${loadingId}` && task.state === 'cancelling'),
-    () => false);
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
-  const currentEdit = useRef("");
-  currentEdit.current = JSON.stringify([selectedId, editing]);
-  const currentSelection = useRef(selectedId);
-  currentSelection.current = selectedId;
-  const currentLoad = useRef<object | null>(null);
-  const saving = useRef(false);
-  const legacyState = store.status.state;
-  const legacyUrl = store.status.url;
-  const legacyModel = loadedModelPath(store.status);
-  const legacyMmproj = store.status.mmproj;
-  const legacyPid = store.status.pid;
-  const legacyActiveRequests = store.status.active_requests;
-  const legacyIdleSeconds = store.status.idle_seconds;
-  const legacyLogTail = store.status.log_tail;
-  const legacyError = store.status.error;
-  const legacyExecution = store.status.execution;
-  const legacyEngine = store.status.engine;
-
-  const defaultDefinition = useMemo(() => {
-    const current = cfg ?? ({ active_model: "", mmproj: "", spec_draft_model: "", gpu: undefined } as api.AppConfig);
-    return {
-      ...defaultSessionDefinition(current),
-      id: DEFAULT_SESSION_ID,
-      name: t("ui.defaultSession"),
-    };
-  }, [cfg, t]);
-
-  const definitionsById = useMemo(() => new Map(definitions.map((definition) => [definition.id, definition])), [definitions]);
-  const allDefinitions = useMemo(() => {
-    const knownIds = new Set([DEFAULT_SESSION_ID, ...definitions.map((definition) => definition.id), ...(editing ? [editing.id] : [])]);
-    const liveDefinitions = Object.values(statuses)
-      .filter((status) => !knownIds.has(status.id))
-      .map((status): api.SessionDefinition => cfg ? sessionDefinitionFromStatus(status, cfg) : ({
-        id: status.id,
-        name: status.name || status.id,
-        models: { primary_model: loadedModelPath(status), mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
-        gpu: cloneGpuPlacement(status.gpu),
-        enabled: true,
-      }));
-    return [
-      defaultDefinition,
-      ...definitions.filter((definition) => definition.id !== DEFAULT_SESSION_ID),
-      ...(editing && editing.id !== DEFAULT_SESSION_ID && !definitions.some((definition) => definition.id === editing.id) ? [editing] : []),
-      ...liveDefinitions,
-    ];
-  }, [cfg, defaultDefinition, definitions, editing, statuses]);
-
-  // Without a polled default entry the default row follows the app store's
-  // own status, so it stays current where the session list is unavailable.
-  const fallbackDefaultStatus = useCallback((): api.SessionStatus => ({
-    id: DEFAULT_SESSION_ID,
-    name: t("ui.defaultSession"),
-    state: legacyState,
-    url: legacyUrl,
-    port: sessionPort({ url: legacyUrl }),
-    model: legacyModel ?? cfg?.active_model,
-    mmproj: legacyMmproj ?? cfg?.mmproj,
-    draft_model: cfg?.spec_draft_model,
-    pid: legacyPid,
-    active_requests: legacyActiveRequests,
-    idle_seconds: legacyIdleSeconds,
-    log_tail: legacyLogTail,
-    error: legacyError,
-    gpu: cloneGpuPlacement(cfg?.gpu),
-    // The loaded runtime, not a selection saved after the launch.
-    execution: legacyExecution,
-    engine: legacyEngine,
-  }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, legacyExecution, legacyEngine, t]);
-
-  // Each poll replaces the previous snapshot, including the local placeholders
-  // set while a load or cancellation was in flight.
-  useEffect(() => {
-    if (poll.error !== undefined) {
-      if (!isMissingSessionFacade(poll.error)) setFailure(errorText(poll.error));
-      setStatuses(current => {
-        const next = { ...current };
-        delete next[DEFAULT_SESSION_ID];
-        return next;
-      });
-      return;
-    }
-    setStatuses(Object.fromEntries(poll.sessions.map((status) => [status.id, status])));
-  }, [poll]);
-
-  useEffect(() => {
-    if (!cfg) return;
-    setDefinitions(cfg.sessions ?? []);
-    setStopExisting(cfg.stop_existing_sessions_on_load ?? true);
-  }, [cfg, cfg?.sessions, cfg?.stop_existing_sessions_on_load]);
-
-  const performSelection = (definition: api.SessionDefinition) => {
-    setSelectedId(definition.id);
-    setDetailsOpen(true);
-    setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(definition));
-    setNotice(null);
-    setFailure(null);
-  };
-
-  const selectDefinition = (definition: api.SessionDefinition) => {
-    if (definition.id === selectedId) {
-      setDetailsOpen(true);
-      return;
-    }
-    if (hasUnsavedChanges) {
-      setPendingNavigation({ kind: "select", definition });
-      return;
-    }
-    performSelection(definition);
-  };
-
-  const saveDefinition = async () => {
-    if (!editing || editing.id === DEFAULT_SESSION_ID || saving.current) return;
-    const normalizedEditing = editing;
-    const snapshot = currentEdit.current;
-    saving.current = true;
-    setSavingId(editing.id);
-    const trimmed = normalizedEditing.name.trim();
-    try {
-      const saved = await store.updateConfig(current => {
-        const latestDefinitions = current.sessions ?? [];
-        const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
-        const nextDefinition = {
-          ...(latestDefinition ?? normalizedEditing),
-          name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
-        };
-        return { sessions: [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition] };
-      });
-      setDefinitions(saved.sessions ?? []);
-      if (currentEdit.current === snapshot) {
-        setEditing(saved.sessions?.find((definition) => definition.id === normalizedEditing.id) ?? null);
-        setNotice(t("ui.sessionSaved"));
-      }
-    } catch (error) {
-      setFailure(errorText(error));
-    } finally { saving.current = false; setSavingId(null); }
-  };
-
-  const addDefinition = () => {
-    if (!cfg) return;
-    const definition = defaultSessionDefinition(cfg);
-    setSelectedId(definition.id);
-    setDetailsOpen(true);
-    setEditing(definition);
-    setNotice(null);
-    setFailure(null);
-  };
-
-  const requestNewDefinition = () => {
-    if (hasUnsavedChanges) {
-      setPendingNavigation({ kind: "new" });
-      return;
-    }
-    addDefinition();
-  };
-
-  const load = async (definition: api.SessionDefinition) => {
-    if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
-      setFailure(t("ui.sessionActiveResponseLoad"));
-      return;
-    }
-    const runnableDefinition = definition;
-    if (!runnableDefinition.models.primary_model.trim()) {
-      setFailure(t("ui.sessionNoModel"));
-      return;
-    }
-    if (!cfg) return;
-    const editSnapshot = currentEdit.current;
-    const cleanEditor = editing?.id === runnableDefinition.id && !hasUnsavedChanges;
-    let launchConfig = store.getConfig?.() ?? cfg;
-    const loadOperation = {};
-    currentLoad.current = loadOperation;
-    const taskId = `session-load-${runnableDefinition.id}`;
-    setBusyId(runnableDefinition.id);
-    setLoadingId(runnableDefinition.id);
-    setNotice(null);
-    setFailure(null);
-    setStatuses((current) => ({
-      ...current,
-      [runnableDefinition.id]: {
-        id: runnableDefinition.id,
-        name: runnableDefinition.name || runnableDefinition.id,
-        state: "starting",
-        model: runnableDefinition.models.primary_model,
-        mmproj: runnableDefinition.models.mmproj,
-        draft_model: runnableDefinition.models.draft_model,
-      },
-    }));
-    registerTask({
-      id: taskId,
-      kind: "other",
-      label: `${t("ui.sessionStart")}: ${runnableDefinition.name || runnableDefinition.id}`,
-      phase: t("ui.sessionStarting"),
-      interruptible: true,
-      cancel: async () => {
-        if (currentLoad.current !== loadOperation) return;
-        try { await api.sessionStop(runnableDefinition.id); }
-        catch (error) { if (currentLoad.current === loadOperation) throw error; }
-      },
-    });
-    try {
-      launchConfig = await prepareSessionProfile(store, runnableDefinition);
-      // Profile preparation persists resolved execution settings. Keep an untouched
-      // editor aligned with that save, while retaining user edits and later selections.
-      if (cleanEditor) {
-        const prepared = (store.getConfig?.() ?? store.cfg)?.sessions?.find(item => item.id === runnableDefinition.id);
-        if (prepared) setEditing(current => currentSelection.current === runnableDefinition.id
-          && JSON.stringify([runnableDefinition.id, current]) === editSnapshot ? structuredClone(prepared) : current);
-      }
-      if (getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new Error('Session load cancelled.');
-      const loaded = await api.sessionStart(runnableDefinition.id, launchConfig, stopExisting);
-      notifySessionStatusChanged();
-      setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
-      finishTask(taskId, "completed");
-    } catch (error) {
-      const message = errorText(error);
-      // Preparation normalizes an acknowledged native launch cancellation.
-      // The local sentinel covers cancellation before the native hand-off.
-      const cancelled = message === 'Session load cancelled.' || message === 'server start cancelled';
-      if (cancelled) {
-        setNotice(t("ui.taskCancelled"));
-        finishTask(taskId, "cancelled");
-      } else if (runnableDefinition.id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
-        try {
-          await store.start(launchConfig);
-          notifySessionStatusChanged();
-          finishTask(taskId, "completed");
-        } catch (fallbackError) {
-          const message = errorText(fallbackError);
-          setFailure(message);
-          finishTask(taskId, "failed", message);
-        }
-      } else {
-        setFailure(message);
-        finishTask(taskId, "failed", message);
-      }
-    } finally {
-      if (currentLoad.current === loadOperation) currentLoad.current = null;
-      setBusyId(null);
-      setLoadingId(null);
-      await refresh();
-    }
-  };
-
-  const stop = async (id: string, unload = false) => {
-    if (sessionHasActivity(id)) {
-      setFailure(t("ui.sessionActiveResponseUnload"));
-      return;
-    }
-    setBusyId(id);
-    setNotice(null);
-    setFailure(null);
-    try {
-      if (unload) await api.sessionUnload(id);
-      else await api.sessionStop(id);
-      notifySessionStatusChanged();
-      if (id === DEFAULT_SESSION_ID) await store.refreshStatus();
-    } catch (error) {
-      if (id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
-        try {
-          await store.stop();
-          notifySessionStatusChanged();
-        } catch (fallbackError) {
-          setFailure(errorText(fallbackError));
-        }
-      } else {
-        setFailure(errorText(error));
-      }
-    } finally {
-      setBusyId(null);
-      await refresh();
-    }
-  };
-
-  const cancelLoad = async (id: string) => {
-    const loadOperation = currentLoad.current;
-    updateTask(`session-load-${id}`, { state: "cancelling", phase: t("ui.taskCancelling") });
-    setStatuses((current) => current[id]
-      ? { ...current, [id]: { ...current[id], state: "stopping" } }
-      : current);
-    try {
-      await api.sessionStop(id);
-      if (currentLoad.current !== loadOperation) return;
-      notifySessionStatusChanged();
-    } catch (error) {
-      if (currentLoad.current === loadOperation) setFailure(errorText(error));
-    }
-  };
-
-  const remove = async (definition: api.SessionDefinition) => {
-    if (definition.id === DEFAULT_SESSION_ID) return;
-    if (sessionHasActivity(definition.id)) {
-      setFailure(t("ui.sessionActiveResponseRemove"));
-      return;
-    }
-    setBusyId(definition.id);
-    setNotice(null);
-    setFailure(null);
-    try {
-      await api.sessionUnload(definition.id);
-      notifySessionStatusChanged();
-      const saved = await store.updateConfig(current => {
-        const sessions = (current.sessions ?? []).filter(item => item.id !== definition.id);
-        const library = current.settings_profiles;
-        const key = profileTargetKey(definition.models.primary_model, definition.id);
-        if (!library || !Object.prototype.hasOwnProperty.call(library.applied, key)) return { sessions };
-        const applied = { ...library.applied };
-        delete applied[key];
-        return { sessions, settings_profiles: { ...library, applied, revision: library.revision + 1 } };
-      });
-      setDefinitions(saved.sessions ?? []);
-      if (currentSelection.current === definition.id) {
-        setSelectedId(DEFAULT_SESSION_ID);
-        setDetailsOpen(false);
-        setEditing(null);
-      }
-      setNotice(t("ui.sessionDeleted"));
-    } catch (error) {
-      setFailure(errorText(error));
-    } finally {
-      setBusyId(null);
-      await refresh();
-    }
-  };
-
-  const updateEditing = (patch: Partial<api.SessionDefinition>) => setEditing((current) => current ? { ...current, ...patch } : current);
-  const currentDefinition = editing ?? (selectedId === DEFAULT_SESSION_ID ? defaultDefinition : definitionsById.get(selectedId));
-  const liveBaseline = editing && statuses[editing.id]
-    ? cfg ? sessionDefinitionFromStatus(statuses[editing.id], cfg) : {
-        id: statuses[editing.id].id,
-        name: statuses[editing.id].name || statuses[editing.id].id,
-        models: { primary_model: loadedModelPath(statuses[editing.id]), mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
-        gpu: cloneGpuPlacement(statuses[editing.id].gpu),
-        enabled: true,
-      }
-    : undefined;
-  const savedDefinition = editing?.id === DEFAULT_SESSION_ID ? defaultDefinition : editing ? definitionsById.get(editing.id) ?? liveBaseline : undefined;
-  const hasUnsavedChanges = Boolean(editing && JSON.stringify(editing) !== JSON.stringify(savedDefinition));
-  const closeDetails = () => {
-    if (hasUnsavedChanges) {
-      setPendingNavigation({ kind: "close" });
-      return;
-    }
-    setDetailsOpen(false);
-    setEditing(null);
-    setSelectedId(DEFAULT_SESSION_ID);
-  };
-  const openSettings = (target: api.SessionDefinition) => {
-    if (!modelSettings || !cfg) return;
-    const definition = structuredClone(target.id === selectedId && currentDefinition ? currentDefinition : target);
-    const snapshot = currentEdit.current;
-    modelSettings.open({
-      target: definition.id === DEFAULT_SESSION_ID ? { kind: "default" } : { kind: "session", sessionId: definition.id },
-      definition,
-      ...(definition.id !== DEFAULT_SESSION_ID ? { config: sessionConfig(cfg, definition) } : {}),
-      onApply: (applied) => {
-        const saved = applied.sessions?.find((item) => item.id === definition.id) ?? settingsForSession(definition, applied);
-        if (definition.id !== DEFAULT_SESSION_ID) setDefinitions((current) => [...current.filter((item) => item.id !== saved.id), saved]);
-        if (currentEdit.current === snapshot && definition.id === selectedId) setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(saved));
-        setNotice(t("ui.sessionSaved"));
-        void refresh();
-      },
-    });
-  };
-
-  // Polled state, kept as the local load or cancellation while that is in
-  // flight: preparation can precede creation of the native session, and a
-  // stopped poll must not erase it.
-  const rowFor = (definition: api.SessionDefinition) => {
-    const status = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-    const polledState = status?.state ?? "stopped";
-    const state = loadingId === definition.id && (polledState === 'stopped' || loadCancelling && polledState === 'starting')
-      ? loadCancelling ? 'stopping' : 'starting' : polledState;
-    const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
-    const live = state === "running" || state === "starting" || state === "stopping";
-    const model = live ? loadedModelPath(status, rowDefinition.models.primary_model) : rowDefinition.models.primary_model;
-    const runtime = live ? status?.execution ?? rowDefinition.execution : rowDefinition.execution;
-    const runtimeConfig = { ...cfg, ...runtime, ...(live && status?.engine
-      ? { active_provider: status.engine.provider, active_runtime: status.engine.runtime_id } : {}) };
-    return { status, state, rowDefinition, model, runtimeConfig };
-  };
-  const controlsDisabled = busyId !== null || savingId !== null || store.busy;
+export default function LoadedModels(props: LoadedModelsProps) {
+  const { store } = props;
+  const { allDefinitions, t, locale, copy, cfg, definitions, selectedId, setSelectedId, detailsOpen, setDetailsOpen, editing, setEditing, stopExisting, setStopExistingDraft, busyId, loadingId, notice, failure, setFailure, pendingNavigation, setPendingNavigation, definitionsById, performSelection, selectDefinition, saveDefinition, addDefinition, requestNewDefinition, load, stop, cancelLoad, remove, updateEditing, closeDetails, openSettings, rowFor, controlsDisabled, modelSettings } = useLoadedModelsController(props);
   const settingsButton = (definition: api.SessionDefinition) =>
     // Opening settings only reads; the apply itself is what has to wait for a
     // transition, and it says so, so a loading or stopping model stays inspectable.
@@ -597,7 +164,13 @@ export default function LoadedModels({ store, poll, refresh }: { store: AppStore
           {/* A single switch that changes what Load does for every session. */}
           <div className="loaded-models-option text-xs ui-color-muted">
             <span className="loaded-models-option-title">{copy.options}</span>
-            <Switch id="sessions-stop-existing" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(next) => { setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
+            <Switch id="sessions-stop-existing" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(next) => {
+              const draft = { value: next };
+              setStopExistingDraft(draft);
+              void store.updateConfig({ stop_existing_sessions_on_load: next })
+                .catch(error => setFailure(errorText(error)))
+                .finally(() => setStopExistingDraft(current => current === draft ? null : current));
+            }} />
             <label htmlFor="sessions-stop-existing">{t("ui.sessionStopExisting")}</label>
           </div>
         </div>

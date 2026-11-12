@@ -3,7 +3,10 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
 import { createTestStore } from "../../testing/appStore";
-import { CHAT_WORKSPACE_CLEAR_EVENT, createChatThread, type ChatHistoryMessage, type ChatThread } from "./chatHistory";
+import { defined } from "../../testing/assertDefined";
+import { CHAT_WORKSPACE_CLEAR_EVENT } from "./chatHistory";
+import { createChatThread } from "./chatWorkspace";
+import type { ChatHistoryMessage, ChatThread } from "../../shared/api/conversationTypes";
 import type { ImageAttachment } from "./chatTypes";
 import { toChatMessage } from "./chatSendHelpers";
 import { useChatSend } from "./useChatSend";
@@ -17,7 +20,7 @@ vi.mock("./chatSendHelpers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chatSendHelpers")>();
   return {
     ...actual,
-    toChatMessage: vi.fn((message, mediaBeforeText = false) => {
+    toChatMessage: vi.fn<typeof actual.toChatMessage>((message, mediaBeforeText = false) => {
       conversion.calls.push({ message, mediaBeforeText });
       return actual.toChatMessage(message, mediaBeforeText);
     }),
@@ -77,7 +80,7 @@ function history(): ChatHistoryMessage[] {
 }
 
 function request(index: number): api.ChatMessage[] {
-  return vi.mocked(api.chatStream).mock.calls[index][3];
+  return defined(vi.mocked(api.chatStream).mock.calls[index])[3];
 }
 
 async function send(result: { current: { send: () => Promise<void> } }) {
@@ -118,12 +121,12 @@ describe("private normal history conversion cache", () => {
     conversion.calls.length = 0;
 
     const refreshed = messages.slice();
-    refreshed[0] = { ...refreshed[0], documents: [{ ...document, text: "Refreshed synthetic document" }] };
+    refreshed[0] = { ...defined(refreshed[0]), documents: [{ ...document, text: "Refreshed synthetic document" }] };
     hook.rerender({ messages: refreshed, thread: createChatThread(1, "cache-thread"), sessionId: "cache-session", input: "Current question" });
     await send(hook.result);
 
     expect(conversion.calls).toHaveLength(1);
-    expect(conversion.calls[0].message).toBe(refreshed[0]);
+    expect(defined(conversion.calls[0]).message).toBe(refreshed[0]);
     expect(JSON.stringify(request(1))).toContain("Refreshed synthetic document");
     expect(JSON.stringify(request(1))).not.toContain("Original synthetic document");
   });

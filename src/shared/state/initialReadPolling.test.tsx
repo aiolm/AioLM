@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AppConfig, ServerStatus, SessionStatus } from "../api/types";
 import { testConfig } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 
 type NativeArgs = Record<string, unknown> | undefined;
 type Layout = typeof import("../ui/initialLayout");
@@ -42,7 +43,7 @@ type View = ReturnType<typeof observe>;
 /** The next native call of this command waits for the test; later calls use the normal reply. */
 function holdNext<T>(command: string) {
   const held = deferred<T>();
-  const reply = handlers[command];
+  const reply = defined(handlers[command], command);
   handlers[command] = () => { handlers[command] = reply; return held.promise; };
   return held;
 }

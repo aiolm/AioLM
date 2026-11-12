@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import type { SessionDefinition } from '../api/types';
 import {
   ExecutionConflictError, executionChanges, executionConfig, executionSettings,
@@ -24,9 +25,9 @@ describe('execution settings boundaries', () => {
       expect(snapshot).not.toHaveProperty(key);
     }
     (snapshot.chat_options.stop as string[]).push('done');
-    snapshot.lora_adapters[0].scale = 1;
+    defined(snapshot.lora_adapters[0]).scale = 1;
     expect(source.chat_options.stop).toEqual(['end']);
-    expect(source.lora_adapters[0].scale).toBe(0.5);
+    expect(defined(source.lora_adapters[0]).scale).toBe(0.5);
     expect(executionConfig(testConfig, source)).toMatchObject({ port: testConfig.port, models_dir: testConfig.models_dir });
   });
 

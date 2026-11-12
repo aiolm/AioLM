@@ -1,8 +1,9 @@
-import type { LegacyPerformanceBenchmarkRequest, LegacyPerformanceBenchmarkResult, LegacyPerformanceBenchmarkRow, PerformanceBenchmarkRequest, PerformanceBenchmarkResult } from '../../shared/api/types.ts';
+import type { LegacyPerformanceBenchmarkRow, PerformanceBenchmarkRequest } from '../../shared/api/types.ts';
+import type { BenchmarkDevice, PerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory.ts';
 import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkReport } from './benchmarkReport';
-import { FIXED_OUTPUT_TOKENS, MAX_SERVING_OUTPUT_TOKENS, HISTORICAL_CAP_MAX_OUTPUT_TOKENS, validateBenchmarkConfiguration, type BenchmarkReceipt } from '@aiolm/benchmark-contracts';
+import { FIXED_OUTPUT_TOKENS, MAX_SERVING_OUTPUT_TOKENS, HISTORICAL_CAP_MAX_OUTPUT_TOKENS, validateBenchmarkConfiguration } from '@aiolm/benchmark-contracts';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
 import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark';
 
@@ -10,43 +11,6 @@ export const PERFORMANCE_HISTORY_KEY = 'aiolm-performance-history.v1';
 export { summarizePerformanceRows, summarizeServingPoints, servingMetricValues, SERVING_METRIC_KEYS } from '../../shared/contracts/benchmark/aggregation.ts';
 export type { PerformanceSummary, ServingBenchmarkPoint, ServingMetricKey } from '../../shared/contracts/benchmark/aggregation.ts';
 
-/** Hardware context retained with each measurement; no machine or owner identifiers. */
-export interface BenchmarkDevice {
-  fingerprint: string;
-  os: string;
-  arch: string;
-  cpu: string;
-  cpuThreads: number;
-  gpu?: string;
-  gpuVendor?: string;
-  gpuVramMb?: number;
-}
-
-interface PerformanceRecordIdentity {
-  localState?: 'recovery' | 'cached';
-  remoteReceipt?: BenchmarkReceipt & { destination: string };
-  acknowledgedAt?: number;
-  id: string;
-  createdAt: number;
-  model: string;
-  device?: BenchmarkDevice;
-}
-
-/** Legacy records retain their token-based request/result without migration. */
-export interface LegacyPerformanceBenchmarkRecord extends PerformanceRecordIdentity {
-  schemaVersion: 1;
-  backend: string;
-  build: string;
-  request: LegacyPerformanceBenchmarkRequest;
-  result: LegacyPerformanceBenchmarkResult;
-}
-
-export interface ServingPerformanceBenchmarkRecord extends PerformanceRecordIdentity {
-  schemaVersion: 2;
-  request: PerformanceBenchmarkRequest;
-  result: PerformanceBenchmarkResult;
-}
-export type PerformanceBenchmarkRecord = LegacyPerformanceBenchmarkRecord | ServingPerformanceBenchmarkRecord;
 const isFiniteNonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const isPositiveInteger = (value: unknown): value is number => isFiniteNonnegative(value) && Number.isInteger(value) && value > 0;
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -116,7 +80,7 @@ function isServingRow(value: unknown): boolean {
     || !['reported_prompt_tokens', 'reported_completion_tokens', 'reported_cached_tokens', 'peak_memory_bytes'].every(key => nullableCount(value[key]))
     || value.timing_source !== 'client' || value.failed !== false || value.error != null
     || !Array.isArray(value.finish_reasons) || value.finish_reasons.length !== value.concurrency
-    || !value.finish_reasons.every(reason => ['stop', 'length', 'content_filter', 'tool_calls', 'other', 'not_reported'].includes(reason))) return false;
+    || !value.finish_reasons.every((reason: unknown) => typeof reason === 'string' && ['stop', 'length', 'content_filter', 'tool_calls', 'other', 'not_reported'].includes(reason))) return false;
   const counters = [value.reported_prompt_tokens, value.reported_completion_tokens, value.reported_cached_tokens];
   const known = counters.filter(v => v !== null).length;
   return (value.usage_status === 'complete' ? known === 3 : value.usage_status === 'partial' ? known < 3
@@ -145,8 +109,8 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
     || !Array.isArray(result.args) || !result.args.every(arg => typeof arg === 'string')
     || !Array.isArray(result.rows) || result.rows.length > 10000 || !result.rows.every(isServingRow)) return false;
   const fixed = request.method.version === 2;
-  if (fixed && (request.request_usage !== true || !FIXED_OUTPUT_TOKENS.includes(request.max_output_tokens as number))) return false;
-  if (!fixed && (request.max_output_tokens as number) > HISTORICAL_CAP_MAX_OUTPUT_TOKENS) return false;
+  if (fixed && (request.request_usage !== true || !FIXED_OUTPUT_TOKENS.includes(request.max_output_tokens))) return false;
+  if (!fixed && request.max_output_tokens > HISTORICAL_CAP_MAX_OUTPUT_TOKENS) return false;
   const p = result.provenance;
   // A launch failure can be journaled before any provenance or observations exist.
   if (p === undefined) return result.rows.length === 0 && result.status !== 'complete';
@@ -190,14 +154,14 @@ function isServingRecord(value: Record<string, unknown>, request: Record<string,
     || !Array.isArray(env.execution.devices) || !env.execution.devices.every(v => typeof v === 'string') || typeof env.detection !== 'string') return false;
   const seen = new Set<string>();
   for (const row of result.rows as Record<string, unknown>[]) {
-    const key = `${row.input_bytes}/${row.concurrency}/${row.max_output_tokens}/${row.repetition}`;
-    if (!(request.prompt_bytes as number[]).includes(row.input_bytes as number)
-      || !(request.concurrencies as number[]).includes(row.concurrency as number)
-      || row.max_output_tokens !== request.max_output_tokens || (row.repetition as number) > (request.repetitions as number)
+    const key = `${String(row.input_bytes)}/${String(row.concurrency)}/${String(row.max_output_tokens)}/${String(row.repetition)}`;
+    if (!request.prompt_bytes.includes(row.input_bytes as number)
+      || !request.concurrencies.includes(row.concurrency as number)
+      || row.max_output_tokens !== request.max_output_tokens || (row.repetition as number) > request.repetitions
       || seen.has(key) || ((p.execution as Record<string, unknown>).memory_scope === 'unavailable' && row.peak_memory_bytes !== null)) return false;
     if (fixed && (!Array.isArray(row.reported_completion_tokens_by_request)
       || row.reported_completion_tokens_by_request.some(n => n !== request.max_output_tokens)
-      || row.reported_completion_tokens !== (request.max_output_tokens as number) * (row.concurrency as number))) return false;
+      || row.reported_completion_tokens !== request.max_output_tokens * (row.concurrency as number))) return false;
     if (!fixed && row.reported_completion_tokens_by_request !== undefined) return false;
     seen.add(key);
   }
@@ -241,9 +205,10 @@ export function savePerformanceRecord(record: PerformanceBenchmarkRecord): Perfo
   const stored = localStorage.getItem(PERFORMANCE_HISTORY_KEY);
   const entries: unknown = stored === null ? [] : JSON.parse(stored);
   if (!Array.isArray(entries)) throw new Error('Benchmark history is not readable.');
+  const history: unknown[] = entries;
   const incoming = visibleBenchmarkRecords([record]);
-  if (!incoming.length) return visibleBenchmarkRecords(entries.filter(isPerformanceRecord));
-  const next = [...incoming, ...entries.filter(entry => !isPerformanceRecord(entry) || entry.id !== record.id)];
+  if (!incoming.length) return visibleBenchmarkRecords(history.filter(isPerformanceRecord));
+  const next = [...incoming, ...history.filter(entry => !isPerformanceRecord(entry) || entry.id !== record.id)];
   localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify(next));
   return visibleBenchmarkRecords(next.filter(isPerformanceRecord));
 }
@@ -258,7 +223,7 @@ export function deletePerformanceRecord(id: string): void {
   if (remaining.length !== entries.length) localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify(remaining));
 }
 
-function csvCell(value: unknown): string {
+function csvCell(value: string | number | null): string {
   const text = normalizeDisplayText(String(value ?? ''));
   // Quoting alone does not stop spreadsheets from evaluating a leading formula.
   const safe = /^[\s]*[=+@-]/.test(text) ? `'${text}` : text;

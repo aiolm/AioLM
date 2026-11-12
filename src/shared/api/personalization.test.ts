@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { IpcError } from './ipcError.ts';
 vi.mock('./transport.ts', () => ({
   isNativeRuntimeAvailable: vi.fn(() => true),
   invoke: vi.fn(),
@@ -26,11 +27,10 @@ describe('personalization commands', () => {
 });
 
 describe('save conflicts', () => {
-  it('recognizes the native stale-revision refusal however it is rejected', () => {
-    const message = 'Save conflict: /tmp/AGENTS.md changed after it was opened.';
-    expect(isAgentsFileConflict(message)).toBe(true);
-    expect(isAgentsFileConflict(new Error(message))).toBe(true);
-    expect(isAgentsFileConflict('/tmp/AGENTS.md could not be saved: denied')).toBe(false);
+  it('recognizes a native stale-revision refusal independently of its wording', () => {
+    expect(isAgentsFileConflict(new IpcError('busy', 'The file revision changed.'))).toBe(true);
+    expect(isAgentsFileConflict(new IpcError('internal', 'Save conflict: could not save'))).toBe(false);
+    expect(isAgentsFileConflict(new Error('Save conflict: could not save'))).toBe(false);
     expect(isAgentsFileConflict(undefined)).toBe(false);
   });
 });

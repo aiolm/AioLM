@@ -4,6 +4,7 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { defaultPreferences, savePreferences } from '../../shared/config/preferences';
 import { createTestStore } from '../../testing/appStore';
 import * as api from '../../shared/api/index';
+import { IpcError } from '../../shared/api/ipcError';
 import ModelsPanel from './Models';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null, MANAGE_MODEL_RUNTIMES: 'synthetic-manage-runtimes' }));
@@ -38,15 +39,17 @@ describe('model library replacement launches', () => {
   });
 
   it.each([
-    ['a failure naming cancellation in its path', 'model file does not exist or is unreadable: /synthetic/cancelled-runs/next.gguf (No such file or directory (os error 2))', /^Start failed: model file does not exist/],
-    ['a requested stop', 'server start cancelled', /^Cancelled$/],
-  ])('reports %s from a model library load accordingly', async (_case, rejection, notice) => {
+    ['a failure naming cancellation in its path', new IpcError('not_found', 'model file does not exist or is unreadable: /synthetic/cancelled-runs/next.gguf (No such file or directory (os error 2))'), /^Start failed: model file does not exist/],
+    ['a requested stop', new IpcError('cancelled', 'server start cancelled'), /^Cancelled$/],
+    ['a requested stop with changed wording', new IpcError('cancelled', 'Launch interrupted by request'), /^Cancelled$/],
+    ['a failure with cancellation wording', new IpcError('internal', 'server start cancelled'), /^Start failed: server start cancelled$/],
+  ] as const)('reports %s from a model library load accordingly', async (_case, rejection, notice) => {
     const store = createTestStore({ active_model: 'models/current.gguf', models_dir: 'models' });
     vi.mocked(store.start).mockRejectedValueOnce(rejection);
     render(<I18nProvider initialLocale="en"><ModelsPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: 'Start: next.gguf' }));
     await waitFor(() => expect(screen.getByText(notice)).toBeVisible());
-    expect(screen.queryByText(rejection === 'server start cancelled' ? /^Start failed/ : /^Cancelled$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(rejection.kind === 'cancelled' ? /^Start failed/ : /^Cancelled$/)).not.toBeInTheDocument();
   });
 
   it('explains why Delete is disabled when a model is running in a named session while the default server is stopped', async () => {

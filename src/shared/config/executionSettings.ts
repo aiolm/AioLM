@@ -28,7 +28,7 @@ export function executionConfig(base: AppConfig, settings: Partial<ExecutionSett
 }
 
 export function sessionExecutionSettings(cfg: AppConfig): SessionExecutionSettings {
-  return Object.fromEntries(Object.entries(executionSettings(cfg)).filter(([key]) => !SESSION_BINDING_KEYS.includes(key))) as SessionExecutionSettings;
+  return Object.fromEntries(Object.entries(executionSettings(cfg)).filter(([key]) => !SESSION_BINDING_KEYS.includes(key)));
 }
 
 export function settingsForSession(definition: SessionDefinition, cfg: AppConfig): SessionDefinition {

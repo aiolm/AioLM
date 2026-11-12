@@ -10,7 +10,9 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 import { inNumericRange, type ConfirmedSyntax, type EffectiveSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
-import RuntimeOptionSchemaForm, { OccurrenceOrder, SchemaOptionField } from '../runtimes/RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm from '../runtimes/RuntimeOptionSchemaForm';
+import { OccurrenceOrder } from '../runtimes/OccurrenceOrder';
+import { SchemaOptionField } from '../runtimes/SchemaOptionField';
 import { maskPreview, maskImportReview } from '../runtimes/optionPresentation';
 import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
@@ -253,7 +255,7 @@ export function ProviderOptions({ cfg, disabled, benchmark = false, onChange, on
   };
   const groups: Record<string, readonly string[]> = { runtime: ['parallel', 'multimodal'], tuning: ['model', 'context', 'memory'], sampling: ['sampling'], reasoning: ['reasoning'], adapters: ['lora', 'speculative', 'adapters'] };
   const inGroupSection = (group: string) => !section || (section === 'advanced'
-    ? !Object.values(groups).flat().includes(group) : groups[section]?.includes(group));
+    ? !Object.values(groups).flat().includes(group) : groups[section]?.includes(group) ?? false);
   const inSection = (option: api.ProviderOption) => inGroupSection(option.group);
   const visible = usesEffective ? [] : schema.filter(option => inSection(option) && (option.target === 'request' || !option.flag || !runtimeFlags || runtimeFlags.includes(option.flag) || values[option.key] !== undefined));
   const schemaFilter = (option: OptionSchemaDefinition) => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group)
@@ -413,7 +415,18 @@ function OptionTools({ collapsed, label, children }: { collapsed: boolean; label
 
 function OptionField({ option, value, disabled, readOnly = false, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; readOnly?: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
-  const text = value === undefined ? '' : option.kind.type === 'json' || typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  let text: string | undefined = '';
+  if (value !== undefined) {
+    if (option.kind.type === 'json' || typeof value === 'object') text = JSON.stringify(value, null, 2);
+    else switch (typeof value) {
+      case 'string':
+      case 'number':
+      case 'bigint':
+      case 'boolean':
+      case 'symbol':
+      case 'function': text = String(value);
+    }
+  }
   const [draft, setDraft] = useState(text);
   const [invalid, setInvalid] = useState(false);
   const [jsonNumberError, setJsonNumberError] = useState(false);

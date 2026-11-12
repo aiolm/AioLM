@@ -1,5 +1,6 @@
 import { providerOf } from '../../shared/api/providers';
-import { useCallback, useRef, useState } from 'react';
+import { IpcError } from '../../shared/api/ipcError';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { AppStore } from '../../shared/state/store';
 import type { AppConfig } from '../../shared/api/types';
 import type { ConfigPatch } from '../../shared/state/configSaveQueue';
@@ -56,14 +57,14 @@ function applicationPatch(current: AppConfig, patch: Partial<AppConfig>): Partia
 /** Keys of a plain object or array whose own properties are all enumerable string keys. */
 function dataKeys(value: object): string[] | undefined {
   const array = Array.isArray(value);
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return undefined;
   const keys = Object.keys(value);
   return Reflect.ownKeys(value).length === keys.length + (array ? 1 : 0) ? keys : undefined;
 }
 
 /** Equal configuration data, keeping key order, array length, and undefined and absent fields distinct. */
-function sameData(left: unknown, right: unknown): boolean {
+export function sameData(left: unknown, right: unknown): boolean {
   if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return Object.is(left, right);
   const keys = dataKeys(left);
   const other = dataKeys(right);
@@ -165,7 +166,7 @@ export function useExecutionStore(base: AppStore) {
     try {
       // A failed save rolls back config; an ordinary retry uses the saved profile.
       await pending.current.catch(() => undefined);
-      if (owner.cancelled) throw new Error('server start cancelled');
+      if (owner.cancelled) throw new IpcError('cancelled', 'server start cancelled');
       setError(null);
       const current = latest.current.getConfig();
       if (!current) throw new Error('Configuration is still loading.');
@@ -184,7 +185,7 @@ export function useExecutionStore(base: AppStore) {
       };
       const prepared = prepare(current);
       const saved = Object.keys(prepared.patch).length ? await updateConfig(value => prepare(value).patch) : prepared.next;
-      if (owner.cancelled) throw new Error('server start cancelled');
+      if (owner.cancelled) throw new IpcError('cancelled', 'server start cancelled');
       owner.handedOff = true;
       return await (options ? latest.current.start(saved, replaceRunning, options) : latest.current.start(saved, replaceRunning));
     } finally { if (pendingStart.current === owner) pendingStart.current = null; }
@@ -197,8 +198,11 @@ export function useExecutionStore(base: AppStore) {
   const clearErrors = useCallback(() => { setError(null); latest.current.clearErrors(); }, []);
   // Persistence is serialized above; only server lifecycle operations lock the app.
   // A field save must not flash every page's buttons into their busy state.
-  return { store: { ...base, updateConfig, start, stop,
-    actionError: error ?? base.actionError,
-    clearErrors,
-  } satisfies AppStore, selectModel };
+  const { cfg, status, busy, bootError, bootState, statusPollError, getConfig, getConfigRevision,
+    loadConfig, refreshStatus, clearActionError } = base;
+  const actionError = error ?? base.actionError;
+  return useMemo(() => ({ store: { cfg, status, busy, bootError, bootState, actionError, statusPollError,
+    getConfig, getConfigRevision, loadConfig, refreshStatus, clearActionError, updateConfig, start, stop, clearErrors,
+  } satisfies AppStore, selectModel }), [cfg, status, busy, bootError, bootState, actionError, statusPollError,
+    getConfig, getConfigRevision, loadConfig, refreshStatus, clearActionError, updateConfig, start, stop, clearErrors, selectModel]);
 }

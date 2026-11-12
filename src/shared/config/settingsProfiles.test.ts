@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import {
   applySettingsProfile, canDeleteSettingsProfile, captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication,
   changedSettings, defaultSettingsProfileEntry, MODEL_PROFILE_KEYS, profileMatches, profileTargetKey, setDefaultSettingsProfile, settingsEqual, settingsSnapshot, type SettingsProfile,
@@ -61,12 +62,13 @@ describe('settings profiles', () => {
     const seeded = ensureProfileLibrary(emptyProfileLibrary());
     expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile()]);
     expect(seeded.default_profile_id).toBe(defaultSettingsProfile().id);
-    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings.runtime_defaults).toContain('temperature');
-    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('active_model');
-    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('active_build');
-    expect(seeded.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('gpu');
+    const profile = defined(seeded.entries.find(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp'));
+    expect(profile.settings.runtime_defaults).toContain('temperature');
+    expect(profile.settings).not.toHaveProperty('active_model');
+    expect(profile.settings).not.toHaveProperty('active_build');
+    expect(profile.settings).not.toHaveProperty('gpu');
     expect(ensureProfileLibrary(seeded)).toBe(seeded);
-    seeded.entries[0].settings.runtime_defaults!.push('synthetic');
+    defined(defined(seeded.entries[0]).settings.runtime_defaults).push('synthetic');
     expect(defaultSettingsProfile().settings.runtime_defaults).not.toContain('synthetic');
   });
 
@@ -163,7 +165,7 @@ describe('settings profiles', () => {
   it.each(['llama.cpp', 'vllm', 'custom.synthetic'] as const)('preserves complete %s deletion results and independent target snapshots', provider => {
     const { library, discarded, fallback, fallbackOptions, affected } = deletionFixture(provider);
     const before = structuredClone(library);
-    const expectedApplications = Object.fromEntries(Object.entries(before.applied).map(([key, application]) => affected.includes(key)
+    const expectedApplications = Object.fromEntries(Object.entries(before.applied).map(([key, application]): [string, unknown] => affected.includes(key)
       ? [key, { model: application.model, provider, profile_id: fallback.id, profile_name: fallback.name, profile_revision: fallback.revision,
         settings: { ...application.settings, provider_options: { [provider]: fallbackOptions }, request_timeout_seconds: 17, sleep_idle_seconds: 0 },
         system_prompt: '  Fallback prompt\n' }]
@@ -175,8 +177,8 @@ describe('settings profiles', () => {
     expect(next.entries.map(entry => entry.id)).toEqual(before.entries.filter(entry => entry.id !== discarded.id).map(entry => entry.id));
     expect(library).toEqual(before);
     expect(next.applied.untouched).toBe(library.applied.untouched);
-    const first = next.applied[affected[0]].settings.provider_options![provider] as typeof fallbackOptions;
-    const second = next.applied[affected[1]].settings.provider_options![provider] as typeof fallbackOptions;
+    const first = defined(defined(next.applied[defined(affected[0])]).settings.provider_options)[provider] as typeof fallbackOptions;
+    const second = defined(defined(next.applied[defined(affected[1])]).settings.provider_options)[provider] as typeof fallbackOptions;
     expect(first).not.toBe(second);
     first.synthetic_extra.items.push('output-only');
     expect(second).toEqual(fallbackOptions);
@@ -188,7 +190,7 @@ describe('settings profiles', () => {
     latestFallback.revision += 1;
     latestFallback.system_prompt = 'Fresh prompt';
     const fresh = deleteSettingsProfile(library, discarded.id);
-    expect(fresh.applied[affected[0]]).toMatchObject({ profile_revision: 8, system_prompt: 'Fresh prompt',
+    expect(fresh.applied[defined(affected[0])]).toMatchObject({ profile_revision: 8, system_prompt: 'Fresh prompt',
       settings: { provider_options: { [provider]: { synthetic_extra: { items: ['끝', 'first', '끝', 'fresh-input'] } } } } });
   });
 
@@ -204,14 +206,14 @@ describe('settings profiles', () => {
     const before = structuredClone(library);
     const next = deleteSettingsProfile(library, discarded.id);
     for (const key of ['session:missing-first', 'session:missing-second']) {
-      expect(next.applied[key]).toEqual({ model: before.applied[key].model, provider,
+      expect(next.applied[key]).toEqual({ model: defined(before.applied[key]).model, provider,
         profile_id: 'profile-default-custom.missing', profile_name: 'Default', profile_revision: 1,
         settings: { provider_options: { [provider]: {} }, request_timeout_seconds: 31, sleep_idle_seconds: -1 }, system_prompt: '' });
     }
     expect(next.entries.some(entry => entry.provider === provider)).toBe(false);
     expect(next.applied.anonymous).toBe(library.applied.anonymous);
-    expect(next.applied['session:missing-first'].settings.provider_options![provider])
-      .not.toBe(next.applied['session:missing-second'].settings.provider_options![provider]);
+    expect(defined(defined(next.applied['session:missing-first']).settings.provider_options)[provider])
+      .not.toBe(defined(defined(next.applied['session:missing-second']).settings.provider_options)[provider]);
     expect(library).toEqual(before);
   });
 
@@ -219,7 +221,7 @@ describe('settings profiles', () => {
     const { library, discarded, fallback } = deletionFixture('llama.cpp');
     expect(() => deleteSettingsProfile(library, fallback.id)).toThrow('The default profile cannot be deleted. Choose another default profile first.');
     expect(() => deleteSettingsProfile(library, 'missing')).toThrow('This profile is no longer available.');
-    const application = { ...library.applied['session:first'], model: '/synthetic/Case.gguf' };
+    const application = { ...defined(library.applied['session:first']), model: '/synthetic/Case.gguf' };
     const conflicting = { ...library, applied: { 'model:/synthetic/case.gguf': application,
       'model:/synthetic/Case.gguf': { ...application, system_prompt: 'Conflicting prompt' } } };
     const before = structuredClone(conflicting);

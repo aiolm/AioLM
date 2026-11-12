@@ -1,5 +1,5 @@
 import { memo, useMemo, type ReactNode } from "react";
-import { parseMarkdown, type Block, type Inline } from "./markdown";
+import { createStreamingMarkdown, parseMarkdown, type Block, type Inline } from "./markdown";
 
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((node, index) => {
@@ -40,16 +40,25 @@ function renderBlock(block: Block, index: number): ReactNode {
   }
 }
 
+const CompletedBlocks = memo(function CompletedBlocks({ blocks }: { blocks: Block[] }) {
+  return <>{blocks.map(renderBlock)}</>;
+});
+
 /**
- * An assistant answer, rendered from its markdown.
- *
- * Memoized because a streaming answer re-parses on every delta; the parse is a
- * single pass over the text, and the tree is thrown away once the string
- * changes, so there is nothing else to cache.
+ * A stable stream identity opts into append-only parsing. Finished answers use
+ * the full parser, including any canonical final text returned by the server.
  */
-function ChatMarkdown({ source }: { source: string }) {
-  const blocks = useMemo(() => parseMarkdown(source), [source]);
-  return <div className="chat-markdown">{blocks.map(renderBlock)}</div>;
+function ChatMarkdown({ source, stream }: { source: string; stream?: object }) {
+  const cache = useMemo(() => stream ? { parser: createStreamingMarkdown() } : null, [stream]);
+  const parsed = useMemo(() => {
+    if (!cache) return { completed: parseMarkdown(source), tail: [] };
+    if (source.length < cache.parser.length) cache.parser = createStreamingMarkdown();
+    return cache.parser.append(source.slice(cache.parser.length));
+  }, [source, cache]);
+  return <div className="chat-markdown">
+    <CompletedBlocks blocks={parsed.completed} />
+    {parsed.tail.map((block, index) => renderBlock(block, parsed.completed.length + index))}
+  </div>;
 }
 
 export default memo(ChatMarkdown);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteBenchmarkHistoryRecord, loadAllBenchmarkHistory, migrateBenchmarkHistory, rememberBenchmarkResult, type BenchmarkHistoryStore } from './benchmarkRepository';
-import { PERFORMANCE_HISTORY_KEY, type PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { PERFORMANCE_HISTORY_KEY } from './performanceRecords';
 import * as transport from '../../shared/api/transport';
 
 function record(index: number): PerformanceBenchmarkRecord {
@@ -103,7 +104,7 @@ describe('native benchmark history migration', () => {
     const records = Array.from({ length: 31 }, (_, index) => record(index));
     const bytes = JSON.stringify(records, null, 2);
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
-    const store: BenchmarkHistoryStore = { import: vi.fn(async () => records.length), list: vi.fn(async () => ({ records: records.slice(0, 2), total: 31, next_offset: 2 })) };
+    const store = { import: vi.fn(async () => records.length), list: vi.fn(async () => ({ records: records.slice(0, 2), total: 31, next_offset: 2 })) } satisfies BenchmarkHistoryStore;
     const page = await migrateBenchmarkHistory(store);
     expect(store.import).toHaveBeenCalledWith(records);
     expect(page.next_offset).toBe(2);
@@ -113,7 +114,7 @@ describe('native benchmark history migration', () => {
   it('leaves legacy records untouched when native persistence fails and retries safely', async () => {
     const bytes = JSON.stringify([record(1)]);
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
-    const store: BenchmarkHistoryStore = { import: vi.fn().mockRejectedValueOnce(new Error('disk unavailable')).mockResolvedValue(1), list: vi.fn(async () => ({ records: [record(1)], total: 1, next_offset: null })) };
+    const store = { import: vi.fn<BenchmarkHistoryStore['import']>().mockRejectedValueOnce(new Error('disk unavailable')).mockResolvedValue(1), list: vi.fn(async () => ({ records: [record(1)], total: 1, next_offset: null })) } satisfies BenchmarkHistoryStore;
     await expect(migrateBenchmarkHistory(store)).rejects.toThrow('disk unavailable');
     expect(store.list).not.toHaveBeenCalled();
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(bytes);
@@ -124,7 +125,7 @@ describe('native benchmark history migration', () => {
     const records = Array.from({ length: 251 }, (_, index) => record(index));
     const bytes = JSON.stringify(records);
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
-    const store: BenchmarkHistoryStore = { import: vi.fn(async records => records.length), list: vi.fn(async () => ({ records: records.slice(0, 50), total: records.length, next_offset: 50 })) };
+    const store = { import: vi.fn<BenchmarkHistoryStore['import']>(async records => records.length), list: vi.fn(async () => ({ records: records.slice(0, 50), total: records.length, next_offset: 50 })) } satisfies BenchmarkHistoryStore;
     await migrateBenchmarkHistory(store);
     expect(vi.mocked(store.import).mock.calls.map(call => call[0].length)).toEqual([100, 100, 51]);
     expect(vi.mocked(store.import).mock.calls.flatMap(call => call[0])).toEqual(records);
@@ -134,7 +135,7 @@ describe('native benchmark history migration', () => {
   it('imports readable records and reports corrupt legacy data without deleting it', async () => {
     const bytes = JSON.stringify([{ schemaVersion: 999 }, record(1)]);
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
-    const store: BenchmarkHistoryStore = { import: vi.fn(async () => 1), list: vi.fn(async () => ({ records: [record(1)], total: 1, next_offset: null })) };
+    const store = { import: vi.fn(async () => 1), list: vi.fn(async () => ({ records: [record(1)], total: 1, next_offset: null })) } satisfies BenchmarkHistoryStore;
     const page = await migrateBenchmarkHistory(store);
     expect(store.import).toHaveBeenCalledWith([record(1)]);
     expect(page.warnings).toHaveLength(1);

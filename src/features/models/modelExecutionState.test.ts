@@ -24,7 +24,8 @@ describe('model execution memory', () => {
     rememberExecution(remembered);
     const raw = localStorage.getItem(MODEL_EXECUTION_KEY)!;
     const replacement = JSON.stringify({ version: 1, models: {} });
-    const get = Storage.prototype.getItem;
+    const prototype: { getItem: (this: Storage, key: string) => string | null } = Storage.prototype;
+    const get = prototype.getItem;
     let reads = 0;
     const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
       return key === MODEL_EXECUTION_KEY ? (reads++ === 0 ? raw : replacement) : get.call(this, key);

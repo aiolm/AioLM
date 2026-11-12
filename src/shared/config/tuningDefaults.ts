@@ -28,10 +28,10 @@ export function serverAliasesForRequest(key: string): readonly string[] {
 export function removeArgs(args: readonly string[], names: readonly string[], isSwitch = false): string[] {
   const result: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-    if (!names.includes(token.split("=", 1)[0])) { result.push(token); continue; }
+    const token = args[i]!; // The loop bounds prove this argv entry exists.
+    if (!names.includes(token.split("=", 1)[0]!)) { result.push(token); continue; } // split always has a first item.
     // Negative numeric values are values, not switches. Unknown option boundaries stay intact.
-    if (!isSwitch && !token.includes("=") && i + 1 < args.length && !/^--?[a-zA-Z]/.test(args[i + 1])) i++;
+    if (!isSwitch && !token.includes("=") && i + 1 < args.length && !/^--?[a-zA-Z]/.test(args[i + 1]!)) i++;
   }
   return result;
 }
@@ -79,7 +79,7 @@ export function hasChatOverride(cfg: AppConfig, key: string): boolean {
   const names = chatAliases[key] ?? [key];
   const flags = serverAliasesForRequest(key);
   return names.some((name) => cfg.chat_options[name] !== undefined)
-    || cfg.server_args.some((arg) => flags.includes(arg.split("=", 1)[0]));
+    || cfg.server_args.some((arg) => flags.includes(arg.split("=", 1)[0]!)); // split always has a first item.
 }
 
 export function resetAllTuning(values = tuningResetValues()): Partial<AppConfig> {
@@ -98,8 +98,8 @@ export function withManualOverrides(cfg: AppConfig, patch: Partial<AppConfig>): 
     if (patch.server_args) {
       const aliases = catalog.find((field) => field.key === key)?.args ?? [];
       for (let i = 0; i < patch.server_args.length; i++) {
-        const token = patch.server_args[i];
-        if (!aliases.includes(token.split("=", 1)[0])) continue;
+        const token = patch.server_args[i]!; // The loop bounds prove this argv entry exists.
+        if (!aliases.includes(token.split("=", 1)[0]!)) continue; // split always has a first item.
         explicitRaw.add(key);
         const raw = token.includes("=") ? token.slice(token.indexOf("=") + 1) : patch.server_args[i + 1];
         value = key === "reasoning_effort" ? raw : Number(raw);

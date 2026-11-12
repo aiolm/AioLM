@@ -6,6 +6,7 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 /** Selecting a manifest registers external files; it never installs or removes them. */
 export default function ExternalRuntimeRegistration({ locked, onRegistered, onBusyChange }: { locked: boolean; onRegistered: (provider: api.ProviderId, registered: { runtime_id: string; display_name: string }) => void; onBusyChange: (busy: boolean) => void }) {
@@ -38,7 +39,7 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
       catch (cause) { setError(`${copy.refreshError} ${String(cause)}`); }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      const cancelled = message === 'runtime probe cancelled';
+      const cancelled = isIpcErrorKind(cause, 'cancelled');
       if (!cancelled) setError(message);
       finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
     } finally { operation.current = null; setBusy(false); onBusyChange(false); }

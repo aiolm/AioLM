@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { AppConfig } from "../shared/api/types";
 import type { AppStore } from "../shared/state/store";
+import type { ConfigPatch } from "../shared/state/configSaveQueue";
 
 export const testConfig: AppConfig = {
   config_version: 7, models_dir: "models", port: 8080,
@@ -22,7 +23,7 @@ export function createTestStore(overrides: Partial<AppConfig> = {}): AppStore {
     bootError: null, actionError: null, statusPollError: null,
     getConfig: () => cfg, getConfigRevision: () => 1,
     loadConfig: vi.fn(async () => undefined), refreshStatus: vi.fn(async () => undefined),
-    updateConfig: vi.fn(async (patch) => Object.assign(cfg, typeof patch === "function" ? patch(cfg) : patch)),
+    updateConfig: vi.fn(async (patch: ConfigPatch<AppConfig>) => Object.assign(cfg, typeof patch === "function" ? patch(cfg) : patch)),
     start: vi.fn(async () => "http://127.0.0.1:8080/v1"), stop: vi.fn(async () => undefined),
     clearActionError: vi.fn(), clearErrors: vi.fn(),
   };

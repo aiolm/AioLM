@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import ChatConversationHeader from './ChatConversationHeader';
-import { createChatThread } from './chatHistory';
+import { createChatThread } from './chatWorkspace';
 import { chatText } from '../../shared/i18n/chatI18n';
 
 afterEach(cleanup);

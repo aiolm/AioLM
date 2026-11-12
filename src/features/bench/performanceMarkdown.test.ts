@@ -4,7 +4,8 @@ import type { LegacyPerformanceBenchmarkRow } from '../../shared/api/types';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkCopy } from './benchmarkCopy';
 import { performanceMarkdown } from './performanceMarkdown';
-import type { LegacyPerformanceBenchmarkRecord } from './performanceRecords';
+import type { LegacyPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { defined } from '../../testing/assertDefined';
 
 function record(rows: LegacyPerformanceBenchmarkRow[] = []): LegacyPerformanceBenchmarkRecord {
   return {
@@ -26,7 +27,10 @@ describe('performance Markdown', () => {
       row({ id: 's1', tg_tps: 80 }), row({ id: 's2', repetition: 2, tg_tps: 120 }),
       row({ id: 'b1', concurrency: 2, tg_tps: 170 }), row({ id: 'b2', concurrency: 2, repetition: 2, tg_tps: 190 }),
     ]), 'en');
-    const [headers, , single, batch] = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
+    const lines = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
+    const headers = defined(lines[0]);
+    const single = defined(lines[2]);
+    const batch = defined(lines[3]);
     expect(single[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('100');
     expect(batch[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('180');
     expect(batch[headers.indexOf('Legacy · token-based cold-prompt method · Speedup')]).toBe('1.8');
@@ -41,7 +45,9 @@ describe('performance Markdown', () => {
     failed.result.status = 'failed';
     failed.result.message = 'PRIVATE-TOKEN /synthetic/private/model.gguf';
     const markdown = performanceMarkdown(failed, 'en');
-    const [headers, , values] = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
+    const lines = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
+    const headers = defined(lines[0]);
+    const values = defined(lines[2]);
     expect(values[headers.indexOf('Status')]).toBe('Failed');
     expect(values[headers.indexOf('Legacy · token-based cold-prompt method · Output generation (Decode / TG) (tok/s)')]).toBe('N/A');
     expect(markdown).not.toMatch(/PRIVATE|synthetic/);
@@ -62,7 +68,7 @@ describe('performance Markdown', () => {
     expect(markdown).toContain('Evil\\|Model&lt;img src=x&gt;.gguf');
     const lines = markdown.split('\n').filter(line => line.startsWith('|')).map(cells);
     expect(lines).toHaveLength(4);
-    for (const line of lines) expect(line).toHaveLength(lines[0].length);
+    for (const line of lines) expect(line).toHaveLength(defined(lines[0]).length);
   });
 
   it.each<Locale>(['en', 'ko', 'ja', 'zh'])('supports %s labels and missing values without interpolating absent fields', locale => {

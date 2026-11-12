@@ -3,6 +3,7 @@ import type { AppConfig } from '../../shared/api/types';
 import { providerOf } from '../../shared/api/providers';
 import { migrateProfileLibrary } from '../../shared/config/profileMigration';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, rebaseStaleProfileEdit, requestProfileFromApplication, type ProfileEditorResult } from './profileEditor';
 import { emptyGpuPlacement, sessionConfig } from '../../shared/runtime/sessionUtils';
@@ -51,7 +52,7 @@ describe('profile editor persistence', () => {
 
   it('keeps applied values independent when a global profile is overwritten or renamed', () => {
     const { current, edit, application, other } = fixture();
-    edit.library.entries[0] = { ...edit.library.entries[0], revision: 2, name: 'Renamed', system_prompt: 'Replacement prompt', settings: { temperature: 1.1 } };
+    edit.library.entries[0] = { ...defined(edit.library.entries[0]), revision: 2, name: 'Renamed', system_prompt: 'Replacement prompt', settings: { temperature: 1.1 } };
     const next = mergeProfileEditor(current, edit);
     expect(next.revision).toBe(5);
     expect(next.applied[profileTargetKey(testConfig.active_model)]).toEqual({ ...application, profile_name: 'Renamed' });
@@ -81,22 +82,22 @@ describe('profile editor persistence', () => {
     const next = mergeProfileEditor(current, edit, 'default');
     expect(next.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ system_prompt: 'Edited prompt', settings: { chat_options: { stop: ['new stop'] } } });
     expect(next.applied[profileTargetKey('other.gguf')]).toEqual(other);
-    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].system_prompt).toBe('Original prompt');
+    expect(defined(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).system_prompt).toBe('Original prompt');
     edit.application.system_prompt = 'Changed later';
-    expect(next.applied[profileTargetKey(testConfig.active_model)].system_prompt).toBe('Edited prompt');
+    expect(defined(next.applied[profileTargetKey(testConfig.active_model)]).system_prompt).toBe('Edited prompt');
   });
 
   it.each(['default', 'work', undefined])('saves final normalized values into the selected global profile for target %s', sessionId => {
     const { current, edit, other } = fixture();
     const before = structuredClone(current);
     edit.saveMode = 'all';
-    edit.library.entries[0].revision = 2;
+    defined(edit.library.entries[0]).revision = 2;
     edit.application = { ...edit.application, profile_revision: 2, system_prompt: 'Final prompt',
       settings: { ...edit.application.settings, active_backend: 'vulkan', active_build: 'normalized-build', ngl: 9, mmproj: 'models/vision.gguf', runtime_defaults: [] } };
     const next = mergeProfileEditor(current, edit, sessionId);
     expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'shared', scope: 'global', revision: 2, system_prompt: 'Final prompt',
       settings: { ngl: 9, mmproj: 'models/vision.gguf' } });
-    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).not.toContain('active_backend');
+    expect(defined(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).coverage).not.toContain('active_backend');
     expect(next.applied[profileTargetKey(other.model)]).toEqual(other);
     if (sessionId === undefined) expect(next.applied).toEqual(current.settings_profiles.applied);
     else expect(next.applied[profileTargetKey(testConfig.active_model, sessionId)]).toMatchObject({ profile_id: 'shared', profile_revision: 2, system_prompt: 'Final prompt' });
@@ -105,7 +106,7 @@ describe('profile editor persistence', () => {
 
   it('saves benchmark launch values and explicit request clears while preserving the profile prompt', () => {
     const { current, edit } = fixture();
-    current.settings_profiles.entries[0] = { ...current.settings_profiles.entries[0], legacy: true, coverage: ['temperature', 'threads'],
+    current.settings_profiles.entries[0] = { ...defined(current.settings_profiles.entries[0]), legacy: true, coverage: ['temperature', 'threads'],
       settings: { temperature: 0.2, threads: 4, runtime_defaults: ['temperature'] } };
     edit.library = structuredClone(current.settings_profiles);
     edit.saveMode = 'benchmark';
@@ -114,7 +115,7 @@ describe('profile editor persistence', () => {
     const next = mergeProfileEditor(current, edit);
     expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'shared', revision: 2, system_prompt: 'Original prompt',
       settings: { ctx_size: 32768, parallel: 4, cache_type_k: 'q8_0', temperature: 1.5, chat_options: {}, threads: 7, ngl: 12, runtime_defaults: [] } });
-    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).toContain('ngl');
+    expect(defined(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).coverage).toContain('ngl');
     expect(next.applied).toEqual(current.settings_profiles.applied);
   });
 
@@ -138,9 +139,9 @@ describe('profile editor persistence', () => {
         gpu: emptyGpuPlacement(), execution: { temperature: 0.8, threads: 4 }, model_profile_id: 'legacy-keep' },
     ];
     const current = { ...original, port: 9090, sessions, settings_profiles: { ...original.settings_profiles,
-      entries: [original.settings_profiles.entries[0], fallback], applied: { ...original.settings_profiles.applied } } };
+      entries: [defined(original.settings_profiles.entries[0]), fallback], applied: { ...original.settings_profiles.applied } } };
     for (const definition of sessions) {
-      const source = definition.id === 'untouched' ? fallback : current.settings_profiles.entries[0];
+      const source = definition.id === 'untouched' ? fallback : defined(current.settings_profiles.entries[0]);
       current.settings_profiles.applied[profileTargetKey(definition.models.primary_model, definition.id)] = materializeProfileApplication(sessionConfig(current, definition), `${definition.id} prompt`, source);
     }
     const before = structuredClone(current);
@@ -219,8 +220,8 @@ describe('profile removal membership', () => {
       provider_options: { 'llama.cpp': { synthetic_unknown: { items: ['old'], enabled: true } } }, chat_options: { stop: ['old active'] } };
     const activeKey = profileTargetKey(current.active_model);
     const active = materializeProfileApplication({ ...current, active_model: 'C:\\Synthetic\\Active.gguf' }, 'Active prompt', removed);
-    const work = materializeProfileApplication(sessionConfig(current, sessions[0]), 'Work prompt', removedOther);
-    const keep = materializeProfileApplication(sessionConfig(current, sessions[1]), 'Keep prompt', retained);
+    const work = materializeProfileApplication(sessionConfig(current, defined(sessions[0])), 'Work prompt', removedOther);
+    const keep = materializeProfileApplication(sessionConfig(current, defined(sessions[1])), 'Keep prompt', retained);
     current.settings_profiles = ensureProfileLibrary({ ...emptyProfileLibrary(), revision: 12, legacy_imported: true,
       entries: [removed, retained, fallback, removedOther, tail], default_profile_id: fallback.id,
       provider_defaults: { 'llama.cpp': fallback.id }, provider_recent: { 'llama.cpp': removed.id },
@@ -229,23 +230,23 @@ describe('profile removal membership', () => {
     library.entries = library.entries.filter(entry => entry.id !== removed.id && entry.id !== removedOther.id);
     library.provider_recent = {};
     for (const key of [activeKey, 'session:work']) {
-      const saved = library.applied[key];
+      const saved = defined(library.applied[key]);
       library.applied[key] = { ...saved, profile_id: fallback.id, profile_name: fallback.name, profile_revision: fallback.revision,
         settings: { ...saved.settings, temperature: 0.45, provider_options: { 'llama.cpp': structuredClone(fallbackOptions) }, chat_options: structuredClone(fallbackChat) },
         system_prompt: '  Fallback prompt\n' };
     }
     const edit: ProfileEditorResult = { baseRevision: 12, baseLibrary: structuredClone(current.settings_profiles), library,
-      application: structuredClone(library.applied[activeKey]) };
-    const expectedWorkExecution = { ...structuredClone(library.applied['session:work'].settings), active_provider: 'llama.cpp' as const,
+      application: structuredClone(defined(library.applied[activeKey])) };
+    const expectedWorkExecution = { ...structuredClone(defined(library.applied['session:work']).settings), active_provider: 'llama.cpp' as const,
       active_backend: current.active_backend, active_build: current.active_build };
     delete expectedWorkExecution.gpu;
     delete expectedWorkExecution.mmproj;
     delete expectedWorkExecution.spec_draft_model;
-    const expectedWork = { ...structuredClone(sessions[0]), execution: expectedWorkExecution };
+    const expectedWork = { ...structuredClone(defined(sessions[0])), execution: expectedWorkExecution };
     delete expectedWork.model_profile_id;
     const expected: Partial<AppConfig> = { settings_profiles: { ...structuredClone(library), revision: 13, legacy_imported: true },
       provider_options: { 'llama.cpp': structuredClone(fallbackOptions) }, temperature: 0.45, chat_options: structuredClone(fallbackChat),
-      sessions: [expectedWork, sessions[1]] };
+      sessions: [expectedWork, defined(sessions[1])] };
     return { current, edit, removed, retained, fallback, activeKey, fallbackOptions, expected };
   }
 
@@ -256,16 +257,16 @@ describe('profile removal membership', () => {
     expect(patch).toEqual(expected);
     expect(patch.settings_profiles!.entries.map(entry => entry.id)).toEqual(expected.settings_profiles!.entries.map(entry => entry.id));
     expect(Object.keys(patch.settings_profiles!.applied)).toEqual(Object.keys(expected.settings_profiles!.applied));
-    expect(patch.settings_profiles!.applied['session:keep'].profile_id).toBe(retained.id);
+    expect(defined(patch.settings_profiles!.applied['session:keep']).profile_id).toBe(retained.id);
     expect(patch.sessions![1]).toBe(current.sessions![1]);
     expect(patch.sessions![0]).not.toBe(current.sessions![0]);
     expect(patch.settings_profiles!.entries).not.toBe(edit.library.entries);
-    expect(patch.settings_profiles!.applied[activeKey].settings).not.toBe(edit.library.applied[activeKey].settings);
-    const sessionOptions = patch.sessions![0].execution!.provider_options!['llama.cpp'] as typeof fallbackOptions;
-    expect(sessionOptions).not.toBe(patch.settings_profiles!.applied['session:work'].settings.provider_options!['llama.cpp']);
+    expect(defined(patch.settings_profiles!.applied[activeKey]).settings).not.toBe(defined(edit.library.applied[activeKey]).settings);
+    const sessionOptions = defined(patch.sessions![0]).execution!.provider_options!['llama.cpp'] as typeof fallbackOptions;
+    expect(sessionOptions).not.toBe(defined(patch.settings_profiles!.applied['session:work']).settings.provider_options!['llama.cpp']);
     sessionOptions.synthetic_unknown.items.push('output-only');
     expect(patch.provider_options!['llama.cpp']).toEqual(fallbackOptions);
-    expect(patch.settings_profiles!.applied['session:work'].settings.provider_options!['llama.cpp']).toEqual(fallbackOptions);
+    expect(defined(patch.settings_profiles!.applied['session:work']).settings.provider_options!['llama.cpp']).toEqual(fallbackOptions);
     expect({ current, edit }).toEqual(before);
 
     edit.library.entries.push(structuredClone(removed));
@@ -279,7 +280,7 @@ describe('profile removal membership', () => {
     const library = ensureProfileLibrary(emptyProfileLibrary());
     const current: AppConfig = { ...structuredClone(testConfig), ...(prior === 'empty' ? { settings_profiles: emptyProfileLibrary() } : {}) };
     const edit: ProfileEditorResult = { baseRevision: 0, library,
-      application: materializeProfileApplication(current, '', library.entries[0]) };
+      application: materializeProfileApplication(current, '', defined(library.entries[0])) };
     const before = structuredClone({ current, edit });
     const patch = profileLibraryConfigPatch(current, edit);
     expect(patch).toEqual({ settings_profiles: { ...structuredClone(library), revision: 1, legacy_imported: true } });
@@ -301,7 +302,7 @@ describe('profile removal membership', () => {
 
   it('leaves a named session unchanged when its replacement belongs to a different model', () => {
     const { current, edit, expected } = removalFixture('synthetic-removed', 'synthetic-kept');
-    edit.library.applied['session:work'].model = '/synthetic/Different.gguf';
+    defined(edit.library.applied['session:work']).model = '/synthetic/Different.gguf';
     const before = structuredClone({ current, edit });
     const wanted = { ...expected, settings_profiles: { ...structuredClone(edit.library), revision: 13, legacy_imported: true } };
     delete wanted.sessions;
@@ -322,7 +323,7 @@ describe('profile removal membership', () => {
       }, error: 'Conflicting saved settings for the same model path.' },
       { mutate: ({ edit }) => { edit.saveMode = 'all'; edit.application.profile_id = 'missing'; }, error: 'This profile is no longer available.' },
       { mutate: ({ edit, retained }) => { edit.library.entries = edit.library.entries.filter(entry => entry.id !== retained.id); }, error: 'Every model must reference an available profile.' },
-      { mutate: ({ edit }) => { edit.library.entries[0].settings = null as unknown as SettingsProfileLibrary['entries'][number]['settings'];
+      { mutate: ({ edit }) => { defined(edit.library.entries[0]).settings = null as unknown as SettingsProfileLibrary['entries'][number]['settings'];
         edit.saveMode = 'all'; edit.application.profile_id = 'missing'; }, error: TypeError },
     ];
     for (const scenario of cases) {
@@ -342,20 +343,20 @@ describe('applied profile name refresh boundaries', () => {
       ['llama.cpp', 'vllm', 'Fresh first name', 'Earlier duplicate'],
     ] as const) {
       const { current, edit } = fixture();
-      const original = edit.library.entries[0];
+      const original = defined(edit.library.entries[0]);
       const literal = { ...structuredClone(original), id: '__proto__', name: 'Literal key' };
       edit.library.entries = [
         { ...structuredClone(original), provider: firstProvider, name: firstName },
         { ...structuredClone(original), provider: secondProvider, name: secondName },
-        literal, edit.library.entries[1],
+        literal, defined(edit.library.entries[1]),
       ];
       edit.library.applied['session:literal'] = { ...structuredClone(edit.application), model: 'literal.gguf',
         profile_id: literal.id, profile_name: 'Old literal name', profile_revision: 0, system_prompt: ' Keep literal prompt\n' };
       const before = structuredClone({ current, edit });
       const expected = structuredClone(ensureProfileLibrary(edit.library));
-      expected.applied[profileTargetKey(current.active_model)].profile_name = firstName;
-      expected.applied[profileTargetKey('other.gguf')].profile_name = firstName;
-      expected.applied['session:literal'].profile_name = 'Literal key';
+      defined(expected.applied[profileTargetKey(current.active_model)]).profile_name = firstName;
+      defined(expected.applied[profileTargetKey('other.gguf')]).profile_name = firstName;
+      defined(expected.applied['session:literal']).profile_name = 'Literal key';
       expected.revision = current.settings_profiles.revision + 1;
       expected.legacy_imported = true;
       const next = mergeProfileEditor(current, edit);
@@ -370,8 +371,8 @@ describe('applied profile name refresh boundaries', () => {
     const latestKey = profileTargetKey('latest.gguf');
     const latestOnly = { ...structuredClone(other), model: 'latest.gguf', profile_revision: 0, system_prompt: 'Latest-only prompt\n' };
     current.settings_profiles.applied[latestKey] = latestOnly;
-    edit.library.applied[activeKey].system_prompt = 'Edit takes precedence\n';
-    edit.library.applied[activeKey].settings.provider_options = {
+    defined(edit.library.applied[activeKey]).system_prompt = 'Edit takes precedence\n';
+    defined(edit.library.applied[activeKey]).settings.provider_options = {
       'custom.engine': { synthetic_unknown: { order: [' second ', '\n', 'first'], enabled: false } },
     };
     edit.application = { ...edit.application, profile_revision: 0, system_prompt: 'Target prompt\n', settings: {
@@ -387,13 +388,13 @@ describe('applied profile name refresh boundaries', () => {
     const next = mergeProfileEditor(current, edit, 'work');
     expect(next).toEqual(expected);
     expect(next.applied[activeKey]).not.toBe(edit.library.applied[activeKey]);
-    expect(next.applied[activeKey].settings).not.toBe(edit.library.applied[activeKey].settings);
-    expect(next.applied['session:work'].settings).not.toBe(edit.application.settings);
+    expect(defined(next.applied[activeKey]).settings).not.toBe(defined(edit.library.applied[activeKey]).settings);
+    expect(defined(next.applied['session:work']).settings).not.toBe(edit.application.settings);
     expect(next.applied[latestKey]).not.toBe(latestOnly);
-    expect(next.applied[latestKey].settings).toBe(latestOnly.settings);
+    expect(defined(next.applied[latestKey]).settings).toBe(latestOnly.settings);
     expect(next.entries[0]).not.toBe(edit.library.entries[0]);
-    next.entries[0].settings.temperature = 1.75;
-    (next.applied['session:work'].settings.chat_options!.stop as string[]).push('output only');
+    defined(next.entries[0]).settings.temperature = 1.75;
+    (defined(next.applied['session:work']).settings.chat_options!.stop as string[]).push('output only');
     expect({ current, edit }).toEqual(before);
   });
 
@@ -403,7 +404,7 @@ describe('applied profile name refresh boundaries', () => {
         error: 'Profiles changed elsewhere. Reopen settings to review the latest profiles.' },
       { mutate: edit => { edit.library.entries = []; edit.saveMode = 'all'; edit.application.profile_id = 'missing'; },
         error: 'At least one profile must remain.' },
-      { mutate: edit => { edit.saveMode = 'all'; edit.application.profile_id = 'missing'; edit.library.applied[profileTargetKey(testConfig.active_model)].profile_id = 'also-missing'; },
+      { mutate: edit => { edit.saveMode = 'all'; edit.application.profile_id = 'missing'; defined(edit.library.applied[profileTargetKey(testConfig.active_model)]).profile_id = 'also-missing'; },
         error: 'This profile is no longer available.' },
     ];
     for (const { mutate, error } of priorities) {
@@ -415,8 +416,8 @@ describe('applied profile name refresh boundaries', () => {
     }
     for (const id of [undefined, null, '', 'missing']) {
       const { current, edit } = fixture();
-      if (id === '') edit.library.entries.push({ ...structuredClone(edit.library.entries[0]), id: '', name: 'Empty id' });
-      edit.library.applied[profileTargetKey(current.active_model)].profile_id = id as typeof edit.application.profile_id;
+      if (id === '') edit.library.entries.push({ ...structuredClone(defined(edit.library.entries[0])), id: '', name: 'Empty id' });
+      defined(edit.library.applied[profileTargetKey(current.active_model)]).profile_id = id as typeof edit.application.profile_id;
       const before = structuredClone({ current, edit });
       expect(() => mergeProfileEditor(current, edit)).toThrow('Every model must reference an available profile.');
       expect({ current, edit }).toEqual(before);
@@ -446,7 +447,7 @@ describe('profile library read normalization', () => {
     const posix = '/Models/Example.gguf';
     const posixApplication = { ...structuredClone(application), model: posix };
     return {
-      missing: { ...testConfig } as AppConfig,
+      missing: { ...testConfig },
       empty: { ...testConfig, settings_profiles: emptyProfileLibrary() },
       saved,
       normalized: { ...testConfig, settings_profiles: profileLibrary(saved) },
@@ -494,7 +495,7 @@ describe('profile library read normalization', () => {
     const cases = corpus();
     const missing = profileLibrary(cases.missing);
     expect(missing.default_profile_id).toBe('profile-default');
-    const current = missing.applied[profileTargetKey(testConfig.active_model)];
+    const current = defined(missing.applied[profileTargetKey(testConfig.active_model)]);
     expect(missing.entries.find(item => item.id === current.profile_id)).toMatchObject({ name: 'Recovered profile', provider: 'llama.cpp', system_prompt: '' });
     expect(profileLibrary(cases.empty).provider_defaults).toEqual({ 'llama.cpp': 'profile-default', vllm: 'profile-default-vllm', 'mlx-vlm': 'profile-default-mlx-vlm' });
 
@@ -507,7 +508,7 @@ describe('profile library read normalization', () => {
     expect(entry.settings).not.toHaveProperty('active_backend');
     expect(entry.coverage).not.toContain('active_backend');
     expect(legacy.default_profile_id).toBe('legacy');
-    expect(legacy.applied[profileTargetKey(testConfig.active_model)].settings).not.toHaveProperty('active_runtime');
+    expect(defined(legacy.applied[profileTargetKey(testConfig.active_model)]).settings).not.toHaveProperty('active_runtime');
 
     const providers = profileLibrary(cases.providers);
     expect(providers.provider_defaults).toMatchObject({ 'llama.cpp': 'shared', vllm: 'profile-default-vllm-2', 'custom.synthetic': 'profile-default-custom.synthetic' });
@@ -524,7 +525,7 @@ describe('profile library read normalization', () => {
     const recovered = sessions.entries.find(item => item.name === 'Recovered profile' && item.id.startsWith('profile-recovered-'));
     expect(sessions.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ profile_id: recovered?.id, system_prompt: 'Anonymous', settings: { temperature: 1.7 } });
     expect(sessions.applied['session:first']).toMatchObject({ model: 'first.gguf' });
-    expect(sessions.applied['session:first'].profile_id).toBeTruthy();
+    expect(defined(sessions.applied['session:first']).profile_id).toBeTruthy();
     expect(sessions.applied['session:moved']).toMatchObject({ model: 'moved.gguf' });
   });
 

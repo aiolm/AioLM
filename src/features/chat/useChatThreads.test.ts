@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { ChatThread, ChatWorkspace } from "./chatHistory";
+import type { ChatThread, ChatWorkspace } from "../../shared/api/conversationTypes";
 import { loadChatWorkspaceAsync, saveChatWorkspaceAsync } from "./chatHistory";
 import { useChatThreads } from "./useChatThreads";
 import type { ChatPhase } from "./chatSendTypes";
+import { defined } from "../../testing/assertDefined";
 
 const thread = (id: string, title: string, updatedAt: number): ChatThread => ({
   id, title, systemPrompt: "", createdAt: updatedAt, updatedAt,
@@ -26,6 +27,19 @@ describe("useChatThreads", () => {
     vi.mocked(loadChatWorkspaceAsync).mockResolvedValue(workspace);
     vi.mocked(saveChatWorkspaceAsync).mockReset().mockResolvedValue("local");
   });
+  it('derives idle messages from workspace updates without restoring a mirrored copy', async () => {
+    const { result } = renderHook(useChatThreads, { initialProps: {
+      phase: 'idle' as const, requireIdle: () => true, onSwitchThread: () => undefined,
+    } });
+    await act(async () => { await Promise.resolve(); });
+    const messages = [{ role: 'user' as const, content: 'Updated workspace history' }];
+    act(() => result.current.setWorkspace(current => ({
+      ...current, threads: current.threads.map(thread => thread.id === current.activeThreadId ? { ...thread, messages } : thread),
+    })));
+    expect(result.current.msgs).toBe(messages);
+    expect(result.current.viewMessages).toBe(messages);
+  });
+
 
   it("keeps unsaved messages available and retries saving the current workspace", async () => {
     vi.mocked(saveChatWorkspaceAsync).mockResolvedValue("unavailable");
@@ -41,7 +55,7 @@ describe("useChatThreads", () => {
     vi.mocked(saveChatWorkspaceAsync).mockResolvedValue("native");
     await act(async () => { result.current.retrySave(); });
     expect(result.current.saveFailed).toBe(false);
-    expect(result.current.workspace.threads[0].messages.at(-1)?.content).toBe("Unsaved synthetic reply");
+    expect(defined(result.current.workspace.threads[0]).messages.at(-1)?.content).toBe("Unsaved synthetic reply");
   });
 
   it('hydrates an unchanged workspace without serializing the existing conversations', async () => {
@@ -51,9 +65,9 @@ describe("useChatThreads", () => {
         phase: 'idle' as const, requireIdle: () => true, onSwitchThread: () => undefined,
       } });
       await act(async () => { await Promise.resolve(); });
-      const historyReads = stringify.mock.calls.filter(([value]) => value === workspace || value === workspace.threads[0].messages);
+      const historyReads = stringify.mock.calls.filter(([value]) => value === workspace || value === defined(workspace.threads[0]).messages);
       expect(historyReads).toHaveLength(0);
-      expect(result.current.msgs).toEqual(workspace.threads[0].messages);
+      expect(result.current.msgs).toEqual(defined(workspace.threads[0]).messages);
     } finally {
       stringify.mockRestore();
     }
@@ -69,7 +83,7 @@ describe("useChatThreads", () => {
     const { result, rerender } = renderHook(useChatThreads, { initialProps: options() });
     const original = result.current.msgs;
     act(() => result.current.setMsgs([...original, { role: 'assistant', content: 'Reply in progress' }]));
-    act(() => result.current.selectThread(workspace.threads[1]));
+    act(() => result.current.selectThread(defined(workspace.threads[1])));
     await act(async () => { resolveHydration(workspace); });
     expect(result.current.workspace.activeThreadId).toBe('newer');
     expect(result.current.viewingLiveThread).toBe(false);
@@ -80,7 +94,7 @@ describe("useChatThreads", () => {
     rerender(options());
     expect(result.current.workspace.threads.find(item => item.id === 'older')?.messages.at(-1)?.content).toBe('Final original answer');
     const reader = result.current.workspace.threads.find(item => item.id === 'newer')!;
-    expect(reader.messages).toEqual(workspace.threads[1].messages);
+    expect(reader.messages).toEqual(defined(workspace.threads[1]).messages);
     expect(result.current.msgs).toEqual(reader.messages);
     expect(switched).toHaveBeenCalledOnce();
   });
@@ -92,14 +106,14 @@ describe("useChatThreads", () => {
     const options = () => ({ phase, requireIdle: () => phase === 'idle', onSwitchThread: vi.fn() });
     const { result, rerender } = renderHook(useChatThreads, { initialProps: options() });
     const original = result.current.msgs;
-    await act(async () => { resolveHydration({ activeThreadId: 'newer', threads: [workspace.threads[1]] }); });
+    await act(async () => { resolveHydration({ activeThreadId: 'newer', threads: [defined(workspace.threads[1])] }); });
     expect(result.current.workspace.activeThreadId).toBe('older');
     expect(result.current.msgs).toEqual(original);
     expect(result.current.workspace.threads.find(item => item.id === 'older')?.messages).toEqual(original);
     act(() => result.current.setMsgs([...original, { role: 'assistant', content: 'Answer after preparation' }]));
     phase = 'idle'; rerender(options());
     expect(result.current.workspace.threads.find(item => item.id === 'older')?.messages.at(-1)?.content).toBe('Answer after preparation');
-    expect(result.current.workspace.threads.find(item => item.id === 'newer')?.messages).toEqual(workspace.threads[1].messages);
+    expect(result.current.workspace.threads.find(item => item.id === 'newer')?.messages).toEqual(defined(workspace.threads[1]).messages);
   });
 
   it.each(['existing', 'new'] as const)('keeps an approval-pending turn in its original conversation while reading a %s conversation', async destination => {
@@ -111,7 +125,7 @@ describe("useChatThreads", () => {
     const original = result.current.msgs;
     act(() => result.current.setMsgs([...original, { role: 'assistant', content: '' }]));
     act(() => {
-      if (destination === 'existing') result.current.selectThread(workspace.threads[1]);
+      if (destination === 'existing') result.current.selectThread(defined(workspace.threads[1]));
       else result.current.newThread();
     });
     const readerId = result.current.workspace.activeThreadId;
@@ -138,11 +152,11 @@ describe("useChatThreads", () => {
     const options = () => ({ phase: 'idle' as const, hasPendingTurn: () => pending, requireIdle: () => !pending, onSwitchThread: switched });
     const { result, rerender } = renderHook(useChatThreads, { initialProps: options() });
     await act(async () => { await Promise.resolve(); });
-    act(() => result.current.selectThread(workspace.threads[1]));
-    expect(result.current.msgs).toEqual(workspace.threads[0].messages);
+    act(() => result.current.selectThread(defined(workspace.threads[1])));
+    expect(result.current.msgs).toEqual(defined(workspace.threads[0]).messages);
     pending = false;
     rerender(options());
-    expect(result.current.msgs).toEqual(workspace.threads[1].messages);
+    expect(result.current.msgs).toEqual(defined(workspace.threads[1]).messages);
     expect(switched).toHaveBeenCalledOnce();
   });
 

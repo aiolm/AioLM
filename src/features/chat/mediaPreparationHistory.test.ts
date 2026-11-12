@@ -24,14 +24,14 @@ describe('explicit media preparation in conversation replay', () => {
   });
   it('replays a labeled transcript without sending original audio or changing its source identity', () => {
     const message = toChatMessage({ role: 'user', content: 'Summarize', images: [audio] });
-    expect(message.content).toEqual([{ type: 'text', text: 'Summarize' }, { type: 'text', text: expect.stringContaining(audio.preparation!.kind === 'transcription' ? audio.preparation!.text : '') }]);
+    expect(message.content).toEqual([{ type: 'text', text: 'Summarize' }, { type: 'text', text: expect.stringContaining(audio.preparation!.kind === 'transcription' ? audio.preparation!.text : '') as unknown }]);
     expect(JSON.stringify(message)).not.toContain(audio.ref);
     expect(audio.preparation).toMatchObject({ sessionId: 'speech', model: 'whisper-small' });
   });
   it('replays only immutable sampled images with timestamps and an explicit omitted-audio label', () => {
     const content = buildMultimodalContent('', [video]);
     expect(content).toEqual([
-      { type: 'text', text: expect.stringContaining('Audio track is not included') },
+      { type: 'text', text: expect.stringContaining('Audio track is not included') as unknown },
       { type: 'text', text: '[Frame at 2.50 seconds]' },
       { type: 'aiolm_media', media: { ref: `${'c'.repeat(64)}.jpg`, kind: 'image' } },
     ]);

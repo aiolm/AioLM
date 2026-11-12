@@ -13,6 +13,7 @@ import { modelStatusKey, verificationOverrideKey } from "../shared/lib/serverLif
 import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
+import ConfirmDialog from "../shared/ui/ConfirmDialog";
 import TaskStrip from "../shared/ui/TaskStrip";
 import { TaskCancellationProvider } from "../shared/ui/TaskCancellation";
 import { getTaskSnapshot, useTasks, type AppTask } from "../shared/state/taskRegistry";
@@ -163,6 +164,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // Desktop-only rail state; the mobile drawer always shows full labels.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
+  const [pendingNavigation, setPendingNavigation] = useState<{ next: ViewId; task: string; afterConfirm?: () => void } | null>(null);
+  const confirmedRuntimeEvents = useRef(new WeakSet<Event>());
   const menuRef = useRef<HTMLDialogElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   // Held here, not in Discover, so a download keeps reporting after the user
@@ -173,6 +176,10 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     const dialog = menuRef.current;
     if (menuOpen && dialog && !dialog.open) dialog.showModal();
     if (!menuOpen && dialog?.open) { dialog.close(); menuButton.current?.focus(); }
+    if (!dialog) return;
+    const dismissBackdrop = (event: MouseEvent) => { if (event.target === dialog) setMenuOpen(false); };
+    dialog.addEventListener("click", dismissBackdrop);
+    return () => dialog.removeEventListener("click", dismissBackdrop);
   }, [menuOpen]);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -248,14 +255,17 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     setLocale(next.locale);
   };
 
-  const navigate = (next: ViewId): boolean => {
+  const navigate = (next: ViewId, afterConfirm?: () => void, confirmed = false): boolean => {
     if (next === 'tuning' || next === 'profiles' || next === 'lora') {
       modelSettings.open({ target: { kind: 'default' }, section: next }); setMenuOpen(false); return true;
     }
     const executionTarget = next === 'models' ? 'setup' : null;
     if (executionTarget) next = 'models';
     const blocking = findTaskBlockingTabLeave(getTaskSnapshot());
-    if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: normalizeDisplayText(blocking.label) }))) return false;
+    if (!confirmed && blocking && next !== view) {
+      setPendingNavigation({ next, task: blocking.label, afterConfirm });
+      return false;
+    }
     if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
     setVisited(current => current.has(next) ? current : new Set([...current, next]));
@@ -266,7 +276,11 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const navigateRef = useRef(navigate); navigateRef.current = navigate;
   useEffect(() => {
     const manage = (event: Event) => {
-      if (!navigateRef.current('runtimes')) { event.preventDefault(); return; }
+      if (!confirmedRuntimeEvents.current.has(event) && !navigateRef.current('runtimes', () => {
+        const retry = new Event(MANAGE_MODEL_RUNTIMES, { cancelable: true });
+        confirmedRuntimeEvents.current.add(retry);
+        window.dispatchEvent(retry);
+      })) { event.preventDefault(); return; }
       setRuntimeEngineRequest(previous => ({ revision: (previous?.revision ?? 0) + 1 }));
     };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
@@ -306,6 +320,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
     <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(navigationEntries.find(item => item.id === id)!.label)}><LazyPanel title={labelFor(id)}>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
+  // Escape is delegated from descendant disclosures, not handled by the shell itself.
+  // eslint-disable-next-line jsx-a11y/no-static-element-interactions
   return <PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
     <aside id="aiolm-sidebar" className="aiolm-sidebar">
@@ -313,7 +329,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
       {navigation(sidebarCollapsed)}
       <div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div>
     </aside>
-    <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
+    <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }}>
       <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>{navigation(false)}</div>
     </dialog>
     <div className="app-main-column">
@@ -327,7 +343,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
-        <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
+        <AppUpdateNotice onOpenSettings={() => { const requestUpdate = () => setSettingsUpdateRequest(current => current + 1); if (navigate("settings", requestUpdate)) requestUpdate(); }} />
         <TaskStrip launchesOnly />
         <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={!!hasError}>
         <PanelFeedback>
@@ -352,5 +368,18 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </main>
       </div>
     </div>
+    <ConfirmDialog
+      open={pendingNavigation !== null}
+      title={t("common.confirm")}
+      description={t("ui.taskLeaveConfirm", { task: normalizeDisplayText(pendingNavigation?.task ?? "") })}
+      tone="primary"
+      onCancel={() => setPendingNavigation(null)}
+      onConfirm={() => {
+        if (!pendingNavigation) return;
+        setPendingNavigation(null);
+        navigate(pendingNavigation.next, undefined, true);
+        pendingNavigation.afterConfirm?.();
+      }}
+    />
   </div></PanelFeedbackProvider>;
 }

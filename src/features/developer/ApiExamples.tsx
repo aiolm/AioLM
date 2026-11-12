@@ -49,7 +49,7 @@ export default function ApiExamples({ baseUrl, format, onCopy, copied }: {
         <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="copy" onClick={() => onCopy(snippet)}>{copied ? t('panel.copied') : copy.copyExample}</button>
       </div>
       <p className="api-hint">{copy.exampleHint}</p>
-      <pre tabIndex={0} aria-label={copy.examples} className="api-code"><code>{snippet}</code></pre>
+      <pre role="region" tabIndex={0} aria-label={copy.examples} className="api-code"><code>{snippet}</code></pre>
       <table className="api-endpoints"><caption className="sr-only">{copy.examples}</caption>
         <thead><tr><th scope="col">{copy.method}</th><th scope="col">{copy.endpoint}</th></tr></thead>
         <tbody>{endpoints[format].map(([method, path]) => <tr key={path}><td>{method}</td><td><code>{path}</code></td></tr>)}</tbody>

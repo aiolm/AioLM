@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { emptyGpuPlacement } from '../runtime/sessionUtils';
 import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey } from './settingsProfiles';
 import { migrateProfileLibrary } from './profileMigration';
@@ -38,12 +39,12 @@ describe('profile library migration', () => {
     expect(first).toEqual(again);
     expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').filter(entry => entry.id.startsWith('legacy-'))).toHaveLength(28);
     expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').slice(0, 4).map(entry => entry.name)).toEqual(['Shared name', 'Shared name', 'Shared name', 'Shared name']);
-    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].settings.ctx_size).toBe(65536);
+    expect(defined(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).settings.ctx_size).toBe(65536);
     expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[3]).toMatchObject({ scope: 'global', settings: { temperature: 1.2 } });
     expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[27]).toMatchObject({ scope: 'global', settings: { threads: 4 } });
     expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ scope: 'global', legacy: true });
-    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).not.toHaveProperty('temperature');
-    expect(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[2].settings).not.toHaveProperty('ctx_size');
+    expect(defined(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).settings).not.toHaveProperty('temperature');
+    expect(defined(first.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[2]).settings).not.toHaveProperty('ctx_size');
     expect(first.revision).toBe(0);
     expect(first.legacy_imported).toBe(true);
     expect(storage.setItem).not.toHaveBeenCalled();
@@ -58,11 +59,11 @@ describe('profile library migration', () => {
       { id: 'unset', name: 'Unset' },
     ] } });
     const { entries } = migrateProfileLibrary(testConfig, storage);
-    expect(entries[0].settings.chat_options).toEqual({ stop: [' end ', '\n\n'], seed: 5 });
-    expect(entries[1].settings.chat_options).toEqual({ seed: 5 });
-    expect(entries[2].settings.chat_options).toEqual({ stop: 'literal\n stop ' });
-    expect(entries[3].settings).not.toHaveProperty('chat_options');
-    expect(entries[0].system_prompt).toBe('  Saved prompt.\n');
+    expect(defined(entries[0]).settings.chat_options).toEqual({ stop: [' end ', '\n\n'], seed: 5 });
+    expect(defined(entries[1]).settings.chat_options).toEqual({ seed: 5 });
+    expect(defined(entries[2]).settings.chat_options).toEqual({ stop: 'literal\n stop ' });
+    expect(defined(entries[3]).settings).not.toHaveProperty('chat_options');
+    expect(defined(entries[0]).system_prompt).toBe('  Saved prompt.\n');
     expect(entries[3]).not.toHaveProperty('system_prompt');
   });
 
@@ -83,9 +84,9 @@ describe('profile library migration', () => {
     const before = structuredClone(cfg);
     const library = migrateProfileLibrary(cfg, storage);
     expect(library.applied[profileTargetKey(currentPath)]).toMatchObject({ settings: { temperature: 0.9, ctx_size: 8192, chat_options: { stop: ['current'] } }, system_prompt: generation.system_prompt });
-    expect(library.applied[profileTargetKey(rememberedPath)]).toMatchObject({ model: rememberedPath, profile_id: expect.any(String), settings: { temperature: 0.6, ctx_size: 16384, chat_options: { stop: ['remembered'] }, mmproj: 'remembered-projector.gguf' }, system_prompt: generation.system_prompt });
+    expect(library.applied[profileTargetKey(rememberedPath)]).toMatchObject({ model: rememberedPath, profile_id: expect.any(String) as unknown, settings: { temperature: 0.6, ctx_size: 16384, chat_options: { stop: ['remembered'] }, mmproj: 'remembered-projector.gguf' }, system_prompt: generation.system_prompt });
     expect(library.applied['session:saved-session']).toMatchObject({ model: sessionPath, settings: { temperature: 1.1, mmproj: 'session-projector.gguf', chat_options: { stop: ['session'] } }, system_prompt: 'Session prompt' });
-    expect(library.applied['session:deleted-reference'].system_prompt).toBe('');
+    expect(defined(library.applied['session:deleted-reference']).system_prompt).toBe('');
     expect(cfg).toEqual(before);
     storage.getItem.mockReturnValue(null);
     expect(migrateProfileLibrary({ ...cfg, settings_profiles: library }, storage)).toEqual(library);
@@ -94,7 +95,7 @@ describe('profile library migration', () => {
   it('resolves only selected pairs for inactive models without copying the current private settings', () => {
     const storage = storageWith({ [key]: { version: 3, server: [server], model: [generation], activeServerIds: { 'missing.gguf': server.id }, activeModelIds: { 'missing.gguf': generation.id } } });
     const library = migrateProfileLibrary({ ...testConfig, mmproj: 'current-only.gguf' }, storage);
-    const application = library.applied[profileTargetKey('missing.gguf')];
+    const application = defined(library.applied[profileTargetKey('missing.gguf')]);
     expect(application).toMatchObject({ settings: { ctx_size: 2048, temperature: 0.3, chat_options: { stop: generation.stop_strings } }, system_prompt: generation.system_prompt });
     expect(application.settings).not.toHaveProperty('mmproj');
     expect(application.settings.runtime_defaults).toEqual(['ngl']);
@@ -102,7 +103,7 @@ describe('profile library migration', () => {
 
   it('retains incomplete legacy runtime metadata without applying it to the current runtime', () => {
     const storage = storageWith({ [key]: { version: 4, server: [{ id: 'old', name: 'Old', backend: 'vulkan', ctx_size: 8192 }], model: [] } });
-    const [profile] = migrateProfileLibrary(testConfig, storage).entries;
+    const profile = defined(migrateProfileLibrary(testConfig, storage).entries[0]);
     expect(profile.legacy_runtime?.active_backend).toBe('vulkan');
     expect(profile.settings).not.toHaveProperty('active_backend');
     expect(profile.coverage).not.toContain('active_backend');
@@ -116,9 +117,9 @@ describe('profile library migration', () => {
       'aiolm-model-execution': { version: 1, models: { 'other.gguf': { server_args: ['--threads', '6'] } } },
     });
     const library = migrateProfileLibrary(testConfig, storage);
-    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].settings).toMatchObject({ threads: 4, ctx_size: 8192, spec_draft_model: 'draft.gguf', reasoning_preserve: 'on', server_args: ['--seed', '5'] });
-    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).toContain('ctx_size');
-    expect(library.applied[profileTargetKey('other.gguf')].settings).toMatchObject({ threads: 6, server_args: [] });
+    expect(defined(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).settings).toMatchObject({ threads: 4, ctx_size: 8192, spec_draft_model: 'draft.gguf', reasoning_preserve: 'on', server_args: ['--seed', '5'] });
+    expect(defined(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).coverage).toContain('ctx_size');
+    expect(defined(library.applied[profileTargetKey('other.gguf')]).settings).toMatchObject({ threads: 6, server_args: [] });
     expect(storage.original[key]).toContain('synthetic-secret');
   });
 
@@ -152,8 +153,8 @@ describe('profile library migration', () => {
     const repaired = migrateProfileLibrary({ ...testConfig, temperature: 1.7, settings_profiles: library }, storage);
     expect(repaired.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(defaultSettingsProfile());
     expect(repaired.applied.saved).toMatchObject(application);
-    expect(repaired.applied.saved.profile_id).toBeTruthy();
-    const recovered = repaired.entries.find(entry => entry.id === repaired.applied.saved.profile_id);
+    expect(defined(repaired.applied.saved).profile_id).toBeTruthy();
+    const recovered = repaired.entries.find(entry => entry.id === defined(repaired.applied.saved).profile_id);
     expect(recovered).toMatchObject({ scope: 'global', settings: { temperature: testConfig.temperature }, system_prompt: 'Saved prompt' });
     expect(repaired.revision).toBe(12);
     expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([]);

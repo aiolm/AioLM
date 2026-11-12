@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { cleanup, fireEvent, render as renderView, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderView, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { BenchmarkOwnedList } from './BenchmarkOwnedList';
 import { benchmarkCopy } from './benchmarkCopy';
 import * as sharing from '../../shared/api/benchmarkSharing';
 import * as native from '../../shared/api/transport';
+import { defined } from '../../testing/assertDefined';
 
 // Shared feedback banners read the active locale for their dismiss label.
 const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
@@ -50,7 +51,7 @@ describe('owned recovery list', () => {
     const [row, ...extra] = screen.getAllByRole('listitem');
     expect(extra).toHaveLength(0);
     expect(row).toHaveTextContent(/example\.test/);
-    for (const name of ['Manage on website', 'Save backup file', 'Copy backup code']) expect(within(row).getByRole('button', { name })).toBeEnabled();
+    for (const name of ['Manage on website', 'Save backup file', 'Copy backup code']) expect(within(defined(row)).getByRole('button', { name })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Manage on website' }));
     await waitFor(() => expect(sharing.benchmarkSharingOpenManagement).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001'));
     // Raw identifiers and key material stay out of the visible management list.
@@ -216,7 +217,7 @@ describe('owned recovery list', () => {
     expect(await screen.findByText('Shared results could not be loaded.')).toBeInTheDocument();
     fireEvent.click(retry);
     await waitFor(() => expect(sharing.benchmarkSharingOwnedList).toHaveBeenCalledTimes(2));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await act(async () => {});
     expect(sharing.benchmarkSharingOwnedList).toHaveBeenCalledTimes(2);
   });
 

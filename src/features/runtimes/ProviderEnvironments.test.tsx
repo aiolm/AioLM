@@ -1,30 +1,23 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { createElement } from 'react';
 import ProviderEnvironments from './ProviderEnvironments';
-import { I18nProvider } from '../../shared/i18n/i18n';
+import { I18nProvider, useI18n } from '../../shared/i18n/i18n';
 import * as api from '../../shared/api/index';
 import { notifyCompletion } from '../../shared/lib/notifications';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import TaskStrip from '../../shared/ui/TaskStrip';
 import { defaultPreferences, savePreferences } from '../../shared/config/preferences';
 import { testConfig } from '../../testing/appStore';
+import { IpcError } from '../../shared/api/ipcError';
 
 vi.mock('../../shared/lib/notifications', () => ({ notifyCompletion: vi.fn(async () => undefined) }));
 
-const progressListeners: Array<(event: { payload: { phase: string; line: string } }) => void> = [];
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async (_event: string, handler: (event: { payload: { phase: string; line: string } }) => void) => {
-    progressListeners.push(handler);
-    return () => {
-      const index = progressListeners.indexOf(handler);
-      if (index >= 0) progressListeners.splice(index, 1);
-    };
-  }),
-}));
+const progressListeners: Array<(progress: api.ProviderInstallProgress) => void> = [];
 
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: vi.fn(() => false),
+  onProviderInstallProgress: vi.fn(),
   providerCatalog: vi.fn(),
   providerRuntimes: vi.fn(),
   providerInstall: vi.fn(),
@@ -36,7 +29,12 @@ vi.mock('../../shared/api/index', () => ({
   runtimeLabel: (runtime: { version?: string; id: string }) => runtime.version ?? runtime.id,
 }));
 
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<
+  | 'isNativeRuntimeAvailable' | 'onProviderInstallProgress' | 'providerCatalog'
+  | 'providerRuntimes' | 'providerInstall' | 'providerRegister' | 'providerRemove'
+  | 'providerPortableExport' | 'providerPortableImport' | 'rtCancel',
+  Mock
+>;
 
 const catalog = (overrides = {}) => ([
   {
@@ -68,6 +66,13 @@ beforeEach(() => {
   localStorage.clear();
   progressListeners.length = 0;
   mocked.isNativeRuntimeAvailable.mockReturnValue(false);
+  mocked.onProviderInstallProgress.mockImplementation(async (handler: (progress: api.ProviderInstallProgress) => void) => {
+    progressListeners.push(handler);
+    return () => {
+      const index = progressListeners.indexOf(handler);
+      if (index >= 0) progressListeners.splice(index, 1);
+    };
+  });
   mocked.providerCatalog.mockResolvedValue(catalog());
   mocked.providerRuntimes.mockResolvedValue([runtime()]);
   mocked.rtCancel.mockResolvedValue(undefined);
@@ -175,7 +180,7 @@ describe('provider portable import/export', () => {
       fireEvent.click(button);
     }
     expect(screen.getByText('Unload all model sessions before changing or transferring runtimes.')).toBeVisible();
-    for (const command of ['providerInstall', 'providerRegister', 'providerRemove', 'providerPortableExport', 'providerPortableImport']) {
+    for (const command of ['providerInstall', 'providerRegister', 'providerRemove', 'providerPortableExport', 'providerPortableImport'] as const) {
       expect(mocked[command]).not.toHaveBeenCalled();
     }
   });
@@ -265,7 +270,7 @@ describe('provider portable import/export', () => {
     expect(screen.getByRole('button', { name: 'Cancelling' })).toBeDisabled();
     expect(importButtonNow()).toBeDisabled();
     expect(onBusyChange).toHaveBeenLastCalledWith(true);
-    await act(async () => operation.reject('portable runtime operation cancelled'));
+    await act(async () => operation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     expect(environmentTask()?.state).toBe('cancelled');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(importButtonNow()).toBeEnabled();
@@ -274,10 +279,10 @@ describe('provider portable import/export', () => {
   });
 
   it.each([
-    ['export', 'portable runtime export cancelled'],
-    ['import', 'portable runtime import cancelled'],
+    ['export', 'No archive destination selected'],
+    ['import', 'No archive source selected'],
   ])('leaves a dismissed %s picker cancelled without an error banner', async (operation, message) => {
-    mocked[operation === 'export' ? 'providerPortableExport' : 'providerPortableImport'].mockRejectedValue(new Error(message));
+    mocked[operation === 'export' ? 'providerPortableExport' : 'providerPortableImport'].mockRejectedValue(new IpcError('cancelled', message));
     renderPanel();
     fireEvent.click(await (operation === 'export' ? exportButton() : importButton()));
     await waitFor(() => expect(environmentTask()?.state).toBe('cancelled'));
@@ -286,11 +291,15 @@ describe('provider portable import/export', () => {
     expect(notifyCompletion).not.toHaveBeenCalled();
   });
 
-  it('keeps a real bundle failure visible even when the diagnostic mentions cancellation', async () => {
-    mocked.providerPortableImport.mockRejectedValue('wheel installation failed: dependency resolution cancelled by an upstream error');
+  it.each([
+    new IpcError('internal', 'wheel installation failed: dependency resolution cancelled by an upstream error'),
+    new IpcError('internal', 'portable runtime import cancelled'),
+    new Error('portable runtime import cancelled'),
+  ])('keeps a real bundle failure visible regardless of cancellation wording: %s', async cause => {
+    mocked.providerPortableImport.mockRejectedValue(cause);
     renderPanel();
     fireEvent.click(await importButton());
-    expect(await screen.findByRole('alert')).toHaveTextContent('dependency resolution cancelled by an upstream error');
+    expect(await screen.findByRole('alert')).toHaveTextContent(cause.message);
     expect(environmentTask()?.state).toBe('failed');
     expect(notifyCompletion).not.toHaveBeenCalled();
   });
@@ -307,7 +316,7 @@ describe('provider portable import/export', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(mocked.rtCancel).toHaveBeenCalledTimes(2);
-    await act(async () => operation.reject('portable runtime operation cancelled'));
+    await act(async () => operation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     expect(environmentTask()?.state).toBe('cancelled');
     expect(importButtonNow()).toBeEnabled();
   });
@@ -321,7 +330,7 @@ describe('provider portable import/export', () => {
     renderPanel();
     fireEvent.click(await importButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
-    await act(async () => firstOperation.reject('portable runtime operation cancelled'));
+    await act(async () => firstOperation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     fireEvent.click(importButtonNow());
     await act(async () => cancellation.reject('synthetic late cancellation IPC error'));
     expect(screen.queryByRole('alert')).toBeNull();
@@ -352,7 +361,7 @@ describe('provider portable import/export', () => {
     expect(environmentTask()?.state).toBe('cancelling');
     expect(strip.getByRole('button', { name: 'Cancelling' })).toBeDisabled();
     expect(importButtonNow()).toBeDisabled();
-    await act(async () => operation.reject('portable runtime operation cancelled'));
+    await act(async () => operation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     expect(environmentTask()?.state).toBe('cancelled');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(importButtonNow()).toBeEnabled();
@@ -369,7 +378,7 @@ describe('provider portable import/export', () => {
     fireEvent.click(await importButton());
     const strip = within(screen.getByRole('complementary', { name: 'Background tasks' }));
     fireEvent.click(strip.getByRole('button', { name: 'Cancel' }));
-    await act(async () => firstOperation.reject('portable runtime operation cancelled'));
+    await act(async () => firstOperation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     fireEvent.click(importButtonNow());
     await act(async () => cancellation.reject('synthetic previous cancellation IPC error'));
     expect(environmentTask()?.state).toBe('running');
@@ -389,7 +398,7 @@ describe('provider portable import/export', () => {
     fireEvent.click(await importButton());
     const previousCancel = environmentTask()?.cancel;
     expect(previousCancel).toBeDefined();
-    await act(async () => firstOperation.reject('portable runtime operation cancelled'));
+    await act(async () => firstOperation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     fireEvent.click(importButtonNow());
     await act(async () => previousCancel?.());
     expect(mocked.rtCancel).not.toHaveBeenCalled();
@@ -400,7 +409,7 @@ describe('provider portable import/export', () => {
     expect(environmentTask()?.state).toBe('cancelling');
     await act(async () => previousCancel?.());
     expect(mocked.rtCancel).toHaveBeenCalledTimes(1);
-    await act(async () => nextOperation.reject('portable runtime operation cancelled'));
+    await act(async () => nextOperation.reject(new IpcError('cancelled', 'portable runtime operation cancelled')));
     expect(environmentTask()?.state).toBe('cancelled');
   });
 });
@@ -414,8 +423,8 @@ describe('provider environment installation', () => {
     expect(vi.mocked(notifyCompletion).mock.calls).toEqual([['download']]);
   });
 
-  it.each(['runtime installation cancelled', 'runtime probe cancelled'])('shows %s as cancellation without an error banner', async message => {
-    mocked.providerInstall.mockRejectedValue(message);
+  it.each(['runtime installation cancelled', 'runtime probe cancelled', 'Installation stopped at your request'])('shows typed %s as cancellation without an error banner', async message => {
+    mocked.providerInstall.mockRejectedValue(new IpcError('cancelled', message));
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Install isolated environment 0.31.0' }));
     await waitFor(() => expect(environmentTask()?.state).toBe('cancelled'));
@@ -431,11 +440,51 @@ describe('provider environment installation', () => {
     fireEvent.click(await screen.findByRole('button', { name: '격리 환경에 설치 0.31.0' }));
     await waitFor(() => expect(progressListeners.length).toBeGreaterThan(0));
     act(() => {
-      for (const listener of progressListeners) listener({ payload: { phase: 'preparing', line: 'Creating isolated venv' } });
+      for (const listener of progressListeners) listener({ provider: 'vllm', id: 'synthetic', phase: 'preparing', line: 'Creating isolated venv' });
     });
     expect(screen.getByRole('status')).toHaveTextContent('준비 중: Creating isolated venv');
     expect(environmentTask()).toMatchObject({ phase: '준비 중', detail: 'Creating isolated venv' });
     await act(async () => install.resolve(runtime()));
     expect(environmentTask()?.state).toBe('completed');
+  });
+
+  it('keeps the progress subscription across locale changes and translates subsequent progress in the current locale', async () => {
+    function LocaleSwitch() {
+      const { setLocale } = useI18n();
+      return <button onClick={() => setLocale('ko')}>Switch locale</button>;
+    }
+    mocked.isNativeRuntimeAvailable.mockReturnValue(true);
+    const install = deferred<unknown>();
+    mocked.providerInstall.mockReturnValue(install.promise);
+    render(<I18nProvider initialLocale="en"><LocaleSwitch /><ProviderEnvironments active /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install isolated environment 0.31.0' }));
+    await waitFor(() => expect(progressListeners).toHaveLength(1));
+    const subscriptions = mocked.onProviderInstallProgress.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Switch locale' }));
+    expect(mocked.onProviderInstallProgress).toHaveBeenCalledTimes(subscriptions);
+    act(() => {
+      for (const listener of progressListeners) listener({ provider: 'vllm', id: 'synthetic', phase: 'preparing', line: 'Creating isolated venv' });
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('준비 중: Creating isolated venv');
+    await act(async () => install.resolve(runtime()));
+  });
+
+  it('ignores a listener rejection after the panel becomes inactive', async () => {
+    mocked.isNativeRuntimeAvailable.mockReturnValue(true);
+    const subscription = deferred<() => void>();
+    mocked.onProviderInstallProgress.mockReturnValue(subscription.promise);
+    const { rerender } = render(<I18nProvider initialLocale="en"><ProviderEnvironments active /></I18nProvider>);
+    await waitFor(() => expect(mocked.onProviderInstallProgress).toHaveBeenCalledOnce());
+    rerender(<I18nProvider initialLocale="en"><ProviderEnvironments active={false} /></I18nProvider>);
+    await act(async () => subscription.reject({ message: 'Synthetic listener unavailable' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows structured native installation failures as readable text', async () => {
+    mocked.providerInstall.mockRejectedValue(new IpcError('internal', 'Synthetic installation failure'));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Install isolated environment 0.31.0' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic installation failure');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('[object Object]');
   });
 });

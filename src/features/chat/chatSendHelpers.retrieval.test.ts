@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defined } from "../../testing/assertDefined";
 import * as documentUtils from "./chatUtils";
 import {
   buildDocumentContext, buildVectorDocumentRetrieval, documentChunksExceedSearchLimit,
@@ -7,7 +8,7 @@ import {
 import { retrieveDocumentContext } from "./chatSendHelpers";
 import { embedText } from "../../shared/api/index";
 import { loadDocumentVectors, saveDocumentVectors } from "./documentIndex";
-import type { DocumentAttachment } from "./chatTypes";
+import type { DocumentAttachment } from "../../shared/api/mediaTypes";
 
 vi.mock("../../shared/api/index", () => ({ embedText: vi.fn() }));
 vi.mock("./documentIndex", () => ({ loadDocumentVectors: vi.fn(), saveDocumentVectors: vi.fn() }));
@@ -49,7 +50,7 @@ describe("shared vector ranking", () => {
     const chunks = splitDocumentChunks([{ name: "notes.md", path: "/documents/notes.md", text: "first second" }], 6);
     const coordinateRead = vi.fn();
     const vectors = [[1, 0], [0, 1], [0, 1]].map((vector) => new Proxy(vector, {
-      get(target, key, receiver) {
+      get(target, key, receiver): unknown {
         if (typeof key === "string" && /^\d+$/.test(key)) coordinateRead();
         return Reflect.get(target, key, receiver);
       },
@@ -78,8 +79,8 @@ describe("shared vector ranking", () => {
       ],
     });
     expect(mixedVectors).toEqual(mixedBefore);
-    mixedVectors[2][0] = 0;
-    mixedVectors[2][1] = 1;
+    defined(mixedVectors[2])[0] = 0;
+    defined(mixedVectors[2])[1] = 1;
     expect(buildVectorDocumentRetrieval(chunks, mixedVectors, 2)).toEqual({
       documentContext: reverseContext,
       retrievalSources: ["notes.md @ 6 (1.00)", "notes.md @ 0 (0.00)"],
@@ -118,7 +119,7 @@ describe("shared vector ranking", () => {
     Object.freeze(queryValues);
     let queryReads = 0;
     const query = new Proxy(queryValues, {
-      get(target, key, receiver) {
+      get(target, key, receiver): unknown {
         if (typeof key === "string" && /^\d+$/.test(key)) queryReads += 1;
         return Reflect.get(target, key, receiver);
       },
@@ -152,11 +153,11 @@ describe("document retrieval", () => {
     vi.mocked(embedText).mockImplementation(async (_url, _key, _model, texts) => texts.map(() => [1, 0]));
 
     const result = await retrieveDocumentContext([document], "question", "model", "test-key", "http://127.0.0.1:8080");
-    const embeddedTexts = vi.mocked(embedText).mock.calls[0][3];
+    const embeddedTexts = defined(vi.mocked(embedText).mock.calls[0])[3];
     expect(embeddedTexts).toHaveLength(MAX_SEARCHABLE_DOCUMENT_CHUNKS + 1);
     expect(embeddedTexts[embeddedTexts.length - 1]).toBe("question");
-    expect(vi.mocked(loadDocumentVectors).mock.calls[0][1]).toHaveLength(MAX_SEARCHABLE_DOCUMENT_CHUNKS);
-    expect(vi.mocked(saveDocumentVectors).mock.calls[0][1]).toHaveLength(MAX_SEARCHABLE_DOCUMENT_CHUNKS);
+    expect(defined(vi.mocked(loadDocumentVectors).mock.calls[0])[1]).toHaveLength(MAX_SEARCHABLE_DOCUMENT_CHUNKS);
+    expect(defined(vi.mocked(saveDocumentVectors).mock.calls[0])[1]).toHaveLength(MAX_SEARCHABLE_DOCUMENT_CHUNKS);
     expect(result.documentChunksTruncated).toBe(true);
     expect(result.retrievalCitations.map((citation) => citation.offset)).toEqual([0, 1800, 3600, 5400]);
   });
@@ -198,7 +199,7 @@ describe("document retrieval", () => {
     const pending = retrieveDocumentContext([document], 'question', 'model', 'test-key', 'http://127.0.0.1:8080', 'synthetic', controller.signal);
     await Promise.resolve();
     expect(embedText).toHaveBeenCalledOnce();
-    expect(vi.mocked(embedText).mock.calls[0][4]).toBe(controller.signal);
+    expect(defined(vi.mocked(embedText).mock.calls[0])[4]).toBe(controller.signal);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(saveDocumentVectors).not.toHaveBeenCalled();

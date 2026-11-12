@@ -121,7 +121,7 @@ function SettingsValues({ settings, provider, schema, prompt, runtime, runtimeCo
           const inherited = llama && settings.runtime_defaults?.includes(key);
           const customized = mode !== 'reference' && (llama ? isCustomizedSetting(key, value, settings, source.options, source.verified) : settings.provider_options?.[provider]?.[key] !== undefined);
           const placement = key === 'gpu' && !inherited && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length ? value as Record<string, unknown> : null;
-          const args = key === 'server_args' && !inherited && Array.isArray(value) && value.length && value.every(token => typeof token === 'string') ? value as string[] : null;
+          const args = key === 'server_args' && !inherited && Array.isArray(value) && value.length && value.every(token => typeof token === 'string') ? value : null;
           return <div key={key} className={`settings-profile-value${placement || args ? ' settings-profile-value--stacked' : ''}${customized ? ' settings-profile-value--custom' : ''}`}>
             <dt>{profileFieldLabel(key, locale)}</dt>
             <dd>{inherited ? <DefaultValue info={settingDefaultInfo(key, source.options, source.verified, locale, { selected: mode === 'current' })} />
@@ -249,6 +249,8 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       </div>
     </div>;
 
+  // Descendant controls delegate Escape here so nested editors close together.
+  // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
   return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
     {showBanner && !selectionOnly && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
     {(full || lockSelection) && <p id={`${labelId}-reset-hint`} className="app-section-hint">{copy.resetHint}</p>}

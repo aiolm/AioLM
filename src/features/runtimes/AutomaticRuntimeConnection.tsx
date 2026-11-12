@@ -12,6 +12,7 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import DiagnosticDetails, { summarizeDiagnostic } from '../../shared/ui/DiagnosticDetails';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 type Phase = 'finding' | 'inspecting' | 'connecting';
 
@@ -90,9 +91,10 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     } catch (cause) {
       if (operation.current !== own) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      if (cancellation.current) setCancelled(true);
+      const wasCancelled = cancellation.current || isIpcErrorKind(cause, 'cancelled');
+      if (wasCancelled) setCancelled(true);
       else setError({ phase: activePhase.current, message });
-      finishTask(taskId, cancellation.current ? 'cancelled' : 'failed', message);
+      finishTask(taskId, wasCancelled ? 'cancelled' : 'failed', message);
     } finally {
       if (operation.current === own) { running.current = false; setPhase(null); }
     }
@@ -104,7 +106,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       return;
     }
     setPrepared(next);
-    setModel(next.models.length === 1 ? next.models[0].id : '');
+    setModel(next.models.length === 1 ? next.models[0]?.id ?? '' : '');
   };
   const clearChoices = () => { setChoices([]); setChoice(''); };
   const search = (chooseFolder = false) => execute('finding', async current => {
@@ -118,8 +120,8 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
     if (!current()) return;
     setCandidates(found.candidates); setWarnings(found.warnings); setTruncated(found.truncated);
     setSearched(true); setSelected(''); setPrepared(null); setModel(''); clearChoices();
-    if (found.candidates.length === 1) {
-      const candidate = found.candidates[0];
+    const [candidate] = found.candidates;
+    if (found.candidates.length === 1 && candidate) {
       setSelected(candidate.id);
       // Checking a folder entry runs it (`--help`), so it waits for the user's
       // explicit check; a running server is only probed over its local API.

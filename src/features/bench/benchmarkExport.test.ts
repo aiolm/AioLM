@@ -4,7 +4,8 @@ import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport';
 import { modelArtifact } from '../../shared/api/providers';
 import { exportBenchmarkResults } from './benchmarkExport';
 import { loadAllBenchmarkHistory } from './benchmarkRepository';
-import type { PerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api/transport', () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn(() => true) }));
 vi.mock('../../shared/api/providers', async original => ({ ...await original<typeof import('../../shared/api/providers')>(), modelArtifact: vi.fn() }));
@@ -64,7 +65,7 @@ describe('benchmark CSV delivery', () => {
     const hostile = { ...serving, result: { ...serving.result, provenance: { ...serving.result.provenance!, recorded_model_label: '=SUM("1",2)' } } };
     vi.mocked(invoke).mockResolvedValue(true);
     await exportBenchmarkResults([hostile], 'selected', format);
-    const args = vi.mocked(invoke).mock.calls[0][1]!;
+    const args = defined(defined(vi.mocked(invoke).mock.calls[0])[1]);
     if (format === 'csv') expect(args.contents).toContain('"\'=SUM(""1"",2)"');
     else {
       const workbook = new Workbook();
@@ -77,7 +78,7 @@ describe('benchmark CSV delivery', () => {
   it('defaults to a formatted workbook and sends its bytes unchanged to the native save dialog', async () => {
     vi.mocked(invoke).mockResolvedValue(true);
     expect(await exportBenchmarkResults([record], 'selected', 'xlsx', 'ko')).toBe('saved');
-    const [command, args] = vi.mocked(invoke).mock.calls[0];
+    const [command, args] = defined(vi.mocked(invoke).mock.calls[0]);
     expect(command).toBe('benchmark_export_xlsx');
     expect(args?.fileName).toBe('aiolm-benchmark_예제_2025-04-05_06-07-08.xlsx');
     const bytes = new Uint8Array(args?.contents as number[]);
@@ -96,9 +97,9 @@ describe('benchmark CSV delivery', () => {
     vi.mocked(invoke).mockResolvedValue(true);
     expect(await exportBenchmarkResults([record], 'selected', 'csv')).toBe('saved');
     expect(invoke).toHaveBeenCalledWith('benchmark_export_csv', {
-      contents: expect.stringContaining('예제.gguf'), fileName: 'aiolm-benchmark_예제_2025-04-05_06-07-08.csv',
+      contents: expect.stringContaining('예제.gguf') as unknown, fileName: 'aiolm-benchmark_예제_2025-04-05_06-07-08.csv',
     });
-    const csv = vi.mocked(invoke).mock.calls[0][1]!.contents as string;
+    const csv = defined(defined(vi.mocked(invoke).mock.calls[0])[1]).contents as string;
     expect(csv).toContain('"Failed"');
     expect(csv).not.toContain('Synthetic failure');
     expect(csv).toContain('\r\n');
@@ -116,7 +117,7 @@ describe('benchmark CSV delivery', () => {
     vi.mocked(invoke).mockResolvedValue(true);
     await exportBenchmarkResults([record], 'all', 'csv');
     expect(invoke).toHaveBeenCalledWith('benchmark_export_csv', {
-      contents: expect.any(String), fileName: 'aiolm-benchmarks-all_2025-06-07_08-09-10.csv',
+      contents: expect.any(String) as unknown, fileName: 'aiolm-benchmarks-all_2025-06-07_08-09-10.csv',
     });
   });
 
@@ -129,7 +130,7 @@ describe('benchmark CSV delivery', () => {
     vi.mocked(invoke).mockResolvedValue(true);
     await exportBenchmarkResults([{ ...record, model }], 'selected', 'csv');
     expect(invoke).toHaveBeenCalledWith('benchmark_export_csv', {
-      contents: expect.any(String), fileName: `aiolm-benchmark_${expected}_2025-04-05_06-07-08.csv`,
+      contents: expect.any(String) as unknown, fileName: `aiolm-benchmark_${expected}_2025-04-05_06-07-08.csv`,
     });
   });
 
@@ -140,7 +141,7 @@ describe('benchmark CSV delivery', () => {
     expect(await exportBenchmarkResults(await loadAllBenchmarkHistory(), 'all', 'csv')).toBe('saved');
     expect(invoke).toHaveBeenNthCalledWith(1, 'benchmark_history_list', { offset: 0, limit: 100 });
     expect(invoke).toHaveBeenNthCalledWith(2, 'benchmark_history_list', { offset: 1, limit: 100 });
-    const csv = vi.mocked(invoke).mock.calls[2][1]!.contents as string;
+    const csv = defined(defined(vi.mocked(invoke).mock.calls[2])[1]).contents as string;
     expect(csv).toContain('"예제.gguf"');
     expect(csv).toContain('"older.gguf"');
     expect(csv.split('\r\n').filter(Boolean)).toHaveLength(3);
@@ -154,8 +155,8 @@ describe('benchmark CSV delivery', () => {
     vi.useFakeTimers();
     const revoke = vi.fn();
     vi.stubGlobal('URL', class extends URL {
-      static createObjectURL = vi.fn(() => 'blob:benchmark-csv');
-      static revokeObjectURL = revoke;
+      static override createObjectURL = vi.fn(() => 'blob:benchmark-csv');
+      static override revokeObjectURL = revoke;
     });
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       expect(this.isConnected).toBe(true);

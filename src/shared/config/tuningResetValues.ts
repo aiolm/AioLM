@@ -46,5 +46,5 @@ export function tuningResetValues(options: readonly ServerOption[] = SERVER_OPTI
     if (field.key === 'reasoning_budget_message' && value === 'none') value = '';
     if (field.key === 'reasoning_preserve') value = value === 'enabled' || value === 'true' ? 'on' : value === 'disabled' || value === 'false' ? 'off' : value;
     return [field.key, value];
-  })) as Partial<AppConfig>;
+  }));
 }

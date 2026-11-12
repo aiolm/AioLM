@@ -14,7 +14,7 @@ import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import { ProviderRuntimeControl } from '../model-settings/ProviderControls';
 import { useProfileRuntimeSchema } from '../model-settings/useProfileRuntimeSchema';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 
 interface PendingImport {
   epoch: number;

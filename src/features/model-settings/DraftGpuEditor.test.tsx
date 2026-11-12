@@ -74,7 +74,7 @@ describe('DraftGpuEditor linkage', () => {
   it('stays quiet about missing devices before the runtime reports any', () => {
     // A backend switch empties this list until the new probe answers; warning
     // then claimed every saved GPU was gone.
-    mount(twoGpus, { ...device, profile: { ...device.profile, gpus: [] } } as DeviceReport);
+    mount(twoGpus, { ...device, profile: { ...device.profile, gpus: [] } });
     expect(screen.queryByText('This saved assignment references a GPU that is not detected. Reselect it before loading.')).not.toBeInTheDocument();
   });
 
@@ -105,7 +105,7 @@ describe('DraftGpuEditor linkage', () => {
 
   it('lets the user clear a saved assignment when the selected runtime reports no GPUs', () => {
     const placement = { ...twoGpus, main_gpu: 'gpu-a', tensor_split: [1, 2], draft_gpu_id: 'gpu-b' };
-    const { onChange, onInvalid } = mount(placement, { ...device, profile: { ...device.profile, gpus: [] } } as DeviceReport);
+    const { onChange, onInvalid } = mount(placement, { ...device, profile: { ...device.profile, gpus: [] } });
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Clear GPU assignment' }));
     expect(onChange).toHaveBeenCalledWith(emptyGpuPlacement());
@@ -123,7 +123,7 @@ describe('DraftGpuEditor linkage', () => {
   });
 
   it('does not offer recovery for an already empty CPU assignment', () => {
-    const { onChange } = mount(emptyGpuPlacement(), { ...device, profile: { ...device.profile, gpus: [] } } as DeviceReport);
+    const { onChange } = mount(emptyGpuPlacement(), { ...device, profile: { ...device.profile, gpus: [] } });
     expect(screen.queryByRole('button', { name: 'Clear GPU assignment' })).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
   });

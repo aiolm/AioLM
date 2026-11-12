@@ -173,8 +173,8 @@ export const chatOptionValue = (cfg: { chat_options?: Record<string, unknown>; s
   const flags = serverAliasesForRequest(field.key);
   let inherited = field.defaultValue;
   for (let index = 0; index < args.length; index++) {
-    const token = args[index];
-    if (!flags.includes(token.split('=', 1)[0])) continue;
+    const token = args[index]!; // The loop bound proves this index exists in the unchanged argument array.
+    if (!flags.includes(token.split('=', 1)[0] ?? token)) continue;
     const raw = token.includes('=') ? token.slice(token.indexOf('=') + 1) : args[index + 1];
     const parsed = raw?.trim() ? Number(raw) : NaN;
     if (Number.isFinite(parsed)) inherited = parsed;

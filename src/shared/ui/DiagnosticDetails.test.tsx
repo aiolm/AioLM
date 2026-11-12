@@ -9,6 +9,7 @@ import DiagnosticDetails, {
 import { diagnosticDetailsCopy } from "../i18n/diagnosticDetailsCopy";
 import type { Locale } from "../i18n/i18nCatalog";
 import { I18nProvider } from "../i18n/i18n";
+import { defined } from '../../testing/assertDefined';
 
 const FIRST_LINE =
   "server exited before ready (1). error while handling argument --chat-template-file: failed to open file [synthetic D15 missing path]";
@@ -80,7 +81,7 @@ describe("DiagnosticDetails", () => {
     const { container } = renderWithI18n(<DiagnosticDetails summary={summarizeDiagnostic(full)} detail={full} />);
     fireEvent.click(screen.getByRole("button", { name: diagnosticDetailsCopy.en.copy }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    expect(writeText.mock.calls[0][0]).toBe(full);
+    expect(defined(writeText.mock.calls[0], 'clipboard call')[0]).toBe(full);
     await waitFor(() => expect(feedbackOf(container)).toBe(diagnosticDetailsCopy.en.copied));
   });
 
@@ -112,7 +113,7 @@ describe("DiagnosticDetails", () => {
     const { container } = renderWithI18n(<DiagnosticDetails summary="synthetic summary line" detail={raw} />);
     fireEvent.click(screen.getByRole("button", { name: diagnosticDetailsCopy.en.copy }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    expect(writeText.mock.calls[0][0]).toBe(raw);
+    expect(defined(writeText.mock.calls[0], 'clipboard call')[0]).toBe(raw);
     // Display may normalize ANSI escapes and verbatim prefixes; the clipboard must not.
     const displayed = container.querySelector("pre.app-diagnostic-full")?.textContent ?? "";
     expect(displayed).not.toContain("\x1b[");
@@ -236,7 +237,7 @@ describe("DiagnosticDetails", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: diagnosticDetailsCopy.en.copy }));
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    expect(writeText.mock.calls[0][0]).toBe(full);
+    expect(defined(writeText.mock.calls[0], 'clipboard call')[0]).toBe(full);
     await waitFor(() => expect(feedbackOf(container)).toBe(diagnosticDetailsCopy.en.copied));
   });
 

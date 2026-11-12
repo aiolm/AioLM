@@ -79,10 +79,10 @@ describe("personalization instruction source preferences", () => {
     const values: AppPreferences = { ...defaultPreferences(), personalization: { instructionSources } };
     savePreferences(values);
     expect(loadPreferences()).toEqual(values);
-    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).version).toBe(1);
+    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!)).toHaveProperty("version", 1);
 
     const backup = exportPreferences(loadPreferences());
-    expect(JSON.parse(backup).schemaVersion).toBe(1);
+    expect(JSON.parse(backup)).toHaveProperty("schemaVersion", 1);
     const imported = importPreferences(backup);
     expect(imported).toEqual(values);
     localStorage.clear();
@@ -131,8 +131,8 @@ describe("personalization instruction source preferences", () => {
     } as unknown as AppPreferences;
     const expected = { instructionSources: { agents: false, aiolm: true } };
     savePreferences(values);
-    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).values.personalization).toEqual(expected);
-    expect(JSON.parse(exportPreferences(values)).preferences.personalization).toEqual(expected);
+    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!)).toHaveProperty("values.personalization", expected);
+    expect(JSON.parse(exportPreferences(values))).toHaveProperty("preferences.personalization", expected);
   });
 });
 
@@ -202,23 +202,29 @@ describe("typography and notification preferences", () => {
       server: { autoStart: true, autoStopOnExit: true, pollIntervalMs: 2000, extraServer: { nested: 1 } },
       advanced: { developerMode: true, confirmDestructiveActions: false, extraAdvanced: true },
     } });
-    const retired = (values: AppPreferences) => [
-      "showTimestamps" in values.chat, "autoStopOnExit" in values.server, "pollIntervalMs" in values.server, "developerMode" in values.advanced,
-    ];
-    const kept = (values: AppPreferences) => {
-      expect(values.chat).toMatchObject({ enterToSend: false, streamResponses: false, extraChat: "kept" });
-      expect(values.server).toMatchObject({ autoStart: true, extraServer: { nested: 1 } });
-      expect(values.advanced).toMatchObject({ confirmDestructiveActions: false, extraAdvanced: true });
-      expect(retired(values)).toEqual([false, false, false, false]);
+    const kept = (values: unknown) => {
+      expect(values).toMatchObject({
+        chat: { enterToSend: false, streamResponses: false, extraChat: "kept" },
+        server: { autoStart: true, extraServer: { nested: 1 } },
+        advanced: { confirmDestructiveActions: false, extraAdvanced: true },
+      });
+      for (const path of ["chat.showTimestamps", "server.autoStopOnExit", "server.pollIntervalMs", "advanced.developerMode"]) {
+        expect(values).not.toHaveProperty(path);
+      }
     };
 
     const imported = importPreferences(legacy);
     kept(imported);
     kept(importPreferences(exportPreferences(imported)));
 
-    localStorage.setItem("aiolm-preferences", JSON.stringify({ version: 1, values: JSON.parse(legacy).preferences }));
+    const legacyEnvelope: unknown = JSON.parse(legacy);
+    if (!legacyEnvelope || typeof legacyEnvelope !== "object" || !("preferences" in legacyEnvelope)) throw new Error("Missing legacy preference values.");
+    localStorage.setItem("aiolm-preferences", JSON.stringify({ version: 1, values: legacyEnvelope.preferences }));
     kept(loadPreferences());
     savePreferences(loadPreferences());
-    kept(JSON.parse(localStorage.getItem("aiolm-preferences")!).values);
+    const stored: unknown = JSON.parse(localStorage.getItem("aiolm-preferences")!);
+    expect(stored).toHaveProperty("values");
+    if (!stored || typeof stored !== "object" || !("values" in stored)) throw new Error("Missing saved preference values.");
+    kept(stored.values);
   });
 });

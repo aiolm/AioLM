@@ -1,11 +1,12 @@
 import type { Dispatch, SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import { canBuildPrBackend, formatRuntimeVersion, isInstallCancellation } from "../../shared/runtime/runtimeUtils";
+import { canBuildPrBackend, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { finishTask, getTaskSnapshot, registerTask, type TaskState } from "../../shared/state/taskRegistry";
 import type { BackendRow } from "./runtimesHelpers";
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
+import { isIpcErrorKind } from "../../shared/api/ipcError";
 
 const RUNTIME_TASK_ID = "runtime-operation";
 
@@ -64,7 +65,7 @@ export async function runInstall(
     finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const cancelled = isInstallCancellation(message);
+    const cancelled = isIpcErrorKind(error, "cancelled");
     if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
     finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);
@@ -105,7 +106,7 @@ export async function runExportRuntime(
     finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const cancelled = message === "runtime export cancelled" || isInstallCancellation(message);
+    const cancelled = isIpcErrorKind(error, "cancelled");
     if (cancelled) {
       deps.flashT(translate(deps.locale, "ui.runtimeBundleCancelled"));
     } else {
@@ -144,7 +145,7 @@ export async function runImportRuntime(
     finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const cancelled = message === "runtime import cancelled" || isInstallCancellation(message);
+    const cancelled = isIpcErrorKind(error, "cancelled");
     if (cancelled) {
       deps.flashT(translate(deps.locale, "ui.runtimeBundleCancelled"));
     } else {
@@ -254,7 +255,7 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
     finishRuntimeTask(owner, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const cancelled = isInstallCancellation(message);
+    const cancelled = isIpcErrorKind(error, "cancelled");
     if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
     finishRuntimeTask(owner, cancelled ? "cancelled" : "failed", message);

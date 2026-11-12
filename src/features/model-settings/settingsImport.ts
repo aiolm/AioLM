@@ -140,7 +140,7 @@ export function parseSettingsText(text: string, options: readonly ServerOption[]
   }
 
   for (let at = 0; at < tokens.length; at += 1) {
-    const flag = tokens[at];
+    const flag = tokens[at]!; // The loop bounds guarantee a token.
     // A bare value with no flag in front of it: the executable name, or a
     // positional argument this app has nowhere to put.
     if (!flag.startsWith('-')) continue;
@@ -191,7 +191,7 @@ export function parseSettingsText(text: string, options: readonly ServerOption[]
     ? tuningResetValues(options).batch_size : base.batch_size);
   const rejectBatchSetting = (key: 'batch_size' | 'ubatch_size', range: NonNullable<RejectedSetting['range']>) => {
     for (let index = applied.length - 1; index >= 0; index -= 1) {
-      const entry = applied[index];
+      const entry = applied[index]!; // Reverse iteration only removes the current entry.
       if (TARGETS.get(entry.flag)?.key !== key) continue;
       rejected.push({ flag: entry.flag, value: entry.value, reason: 'value', range });
       applied.splice(index, 1);

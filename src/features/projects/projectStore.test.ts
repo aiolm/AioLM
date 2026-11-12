@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EXECUTION_KEYS, executionSettings } from '../../shared/config/executionSettings';
 import { CACHE_TYPE_OPTIONS } from '../../shared/config/tuningValidation.ts';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { ACTIVE_PROJECT_KEY, MAX_PROJECTS, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, upsertProject, writeProjects } from './projectStore';
 import { materializeProfileApplication, captureProfile } from '../../shared/config/settingsProfiles';
 
@@ -30,27 +31,28 @@ describe('project settings snapshots', () => {
     const extra = projectFromConfig('Extra', '', testConfig, [], [], '', 200);
     expect(() => upsertProject(extra, projects)).toThrow('library is full');
     expect(projects).toHaveLength(MAX_PROJECTS);
-    expect(upsertProject({ ...projects[0], description: 'Updated' }, projects)).toHaveLength(MAX_PROJECTS);
+    expect(upsertProject({ ...defined(projects[0]), description: 'Updated' }, projects)).toHaveLength(MAX_PROJECTS);
   });
 
   function memoryStorage() {
     const values = new Map<string, string>();
+    const setItem = vi.fn((key: string, value: string) => { values.set(key, value); });
+    const removeItem = vi.fn((key: string) => { values.delete(key); });
     const store = { getItem: (key: string) => values.get(key) ?? null,
-      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
-      removeItem: vi.fn((key: string) => { values.delete(key); }),
+      setItem, removeItem,
     } as unknown as Storage;
-    return { values, store };
+    return { values, store, setItem, removeItem };
   }
 
   it('reports quota failure without changing saved projects, the active pointer, or listeners', () => {
-    const { store } = memoryStorage();
+    const { store, setItem } = memoryStorage();
     const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
     writeProjects([original], store, original.id);
     const changed = { ...original, name: 'Edited' };
     const listener = vi.fn();
     window.addEventListener(PROJECTS_CHANGED_EVENT, listener);
     try {
-      vi.mocked(store.setItem).mockImplementationOnce(() => { throw new DOMException('Synthetic project quota exceeded', 'QuotaExceededError'); });
+      setItem.mockImplementationOnce(() => { throw new DOMException('Synthetic project quota exceeded', 'QuotaExceededError'); });
       expect(() => writeProjects([changed], store, changed.id)).toThrow('Synthetic project quota exceeded');
       expect(readProjects(store)).toEqual([original]);
       expect(activeProjectId(store)).toBe(original.id);
@@ -62,12 +64,12 @@ describe('project settings snapshots', () => {
   });
 
   it('restores the previous project list if its active pointer cannot be saved', () => {
-    const { store, values } = memoryStorage();
+    const { store, values, setItem } = memoryStorage();
     const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
     const replacement = projectFromConfig('Replacement', '', testConfig, [], [], '', 200);
     writeProjects([original], store, original.id);
     const raw = values.get(PROJECTS_KEY);
-    vi.mocked(store.setItem).mockImplementation((key, value) => {
+    setItem.mockImplementation((key, value) => {
       if (key === ACTIVE_PROJECT_KEY) throw new Error('Synthetic active-project write failure');
       values.set(key, value);
     });
@@ -79,10 +81,10 @@ describe('project settings snapshots', () => {
   });
 
   it('keeps the project being removed if clearing the active pointer fails', () => {
-    const { store } = memoryStorage();
+    const { store, removeItem } = memoryStorage();
     const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
     writeProjects([original], store, original.id);
-    vi.mocked(store.removeItem).mockImplementationOnce(() => { throw new Error('Synthetic active-project removal failure'); });
+    removeItem.mockImplementationOnce(() => { throw new Error('Synthetic active-project removal failure'); });
     expect(() => writeProjects([], store, null)).toThrow('Synthetic active-project removal failure');
     expect(readProjects(store)).toEqual([original]);
     expect(activeProjectId(store)).toBe(original.id);
@@ -118,7 +120,7 @@ describe('project settings snapshots', () => {
     const cfg = { ...testConfig, keep, top_k: 0, temperature: 1.5, runtime_defaults: [] };
     const project = projectFromConfig('Sampling project', '', cfg);
     writeProjects([project], store);
-    const restored = importProject(exportProject(readProjects(store)[0]));
+    const restored = importProject(exportProject(defined(readProjects(store)[0])));
     expect(restored.config).toMatchObject({ keep, top_k: 0, temperature: 1.5 });
     expect(projectConfigPatch(restored)).toMatchObject({ keep, top_k: 0, temperature: 1.5 });
   });
@@ -128,7 +130,7 @@ describe('project settings snapshots', () => {
     const cfg = { ...testConfig, ctx_size: 0, batch_size: 128, ubatch_size: 1024, runtime_defaults: [inherited] };
     const project = projectFromConfig('Inherited batch project', '', cfg);
     writeProjects([project], store);
-    const restored = importProject(exportProject(readProjects(store)[0]));
+    const restored = importProject(exportProject(defined(readProjects(store)[0])));
     expect(projectConfigPatch(restored)).toMatchObject({
       ctx_size: 0, batch_size: 128, ubatch_size: 1024, runtime_defaults: [inherited],
     });
@@ -165,7 +167,7 @@ describe('project settings snapshots', () => {
     const application = { ...materializeProfileApplication(cfg, 'Use concise answers', profile), ignored: 'Not part of the profile' };
     const project = projectFromConfig('Writing project', 'Use project instructions', cfg, [], [], '', 100, application);
     writeProjects([project], localStorage);
-    const restored = importProject(exportProject(readProjects(localStorage)[0]));
+    const restored = importProject(exportProject(defined(readProjects(localStorage)[0])));
     expect(restored.profileApplication).toMatchObject({ model: cfg.active_model, profile_id: profile.id, profile_name: 'Writing', profile_revision: 1, system_prompt: 'Use project instructions' });
     expect(restored.profileApplication).not.toHaveProperty('ignored');
     expect(restored.profileApplication?.settings).not.toHaveProperty('active_model');
@@ -184,7 +186,7 @@ describe('project settings snapshots', () => {
     const application = materializeProfileApplication(cfg, '', profile);
     const project = projectFromConfig('Synthetic', '', cfg, [], [], '', 100, application);
     writeProjects([project], localStorage);
-    const stored = readProjects(localStorage)[0];
+    const stored = defined(readProjects(localStorage)[0]);
     const restored = importProject(exportProject(stored));
     for (const item of [project, stored, restored]) {
       expect(item.profileApplication).toEqual({ ...application, system_prompt: '' });

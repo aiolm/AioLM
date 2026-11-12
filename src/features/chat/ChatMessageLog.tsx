@@ -1,7 +1,7 @@
 import StableLabel from "../../shared/ui/StableLabel";
-import type { RefObject } from "react";
+import { memo, useLayoutEffect, useMemo, useSyncExternalStore, type ComponentProps, type RefObject } from "react";
 import type * as api from "../../shared/api/types";
-import type { ChatHistoryMessage } from "./chatHistory";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
@@ -10,7 +10,7 @@ import MessageBubble from "./MessageBubble";
 import EmptyState from "../../shared/ui/EmptyState";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import RuntimeFailureDetails from "../models/RuntimeFailureDetails";
-import type { ResponseMetrics } from "../../shared/lib/metrics";
+import type { StreamingDraftStore } from "./streamingDraftStore";
 import { modelActions } from "../../shared/i18n/modelActions";
 
 interface ChatMessageLogProps {
@@ -23,7 +23,8 @@ interface ChatMessageLogProps {
   /** The selected session can answer chat; Retry stays unavailable otherwise. */
   canGenerate: boolean;
   msgs: ChatHistoryMessage[];
-  streamingDraft: { content: string; reasoning: string; metrics?: ResponseMetrics } | null;
+  streamingDraftStore: StreamingDraftStore | null;
+  onDraftRendered: () => void;
   phase: ChatPhase;
   copiedIndex: number | null;
   compactMessages: boolean;
@@ -46,8 +47,18 @@ interface ChatMessageLogProps {
   starting: boolean;
 }
 
-export default function ChatMessageLog({
-  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
+/** Subscribing here keeps token updates out of the log and panel render paths. */
+const StreamingMessageBubble = memo(function StreamingMessageBubble({
+  store, onDraftRendered, message, ...props
+}: ComponentProps<typeof MessageBubble> & { store: StreamingDraftStore; onDraftRendered: () => void }) {
+  const draft = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const displayed = useMemo(() => draft ? { ...message, ...draft } : message, [message, draft]);
+  useLayoutEffect(() => { onDraftRendered(); }, [draft, onDraftRendered]);
+  return <MessageBubble {...props} message={displayed} stream={draft ? message : undefined} />;
+});
+
+function ChatMessageLog({
+  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraftStore, onDraftRendered, phase,
   copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
   onOpenModels, onDiscoverModels, modelSettingsLabel, onStart, starting,
 }: ChatMessageLogProps) {
@@ -106,19 +117,17 @@ export default function ChatMessageLog({
 
       {/* Local preparation retains the previous reply; only show bubble progress
           once the request has installed its new assistant placeholder. */}
-      {msgs.map((message, index) => (
-        <MessageBubble
-          key={`${message.role}-${index}`}
-          message={streamingDraft && index === msgs.length - 1 && message.role === "assistant" ? { ...message, ...streamingDraft } : message}
-          index={index}
-          messageCount={msgs.length}
-          phase={index === msgs.length - 1 && phase !== 'preparing' ? phase : 'idle'}
-          copied={copiedIndex === index}
-          compact={compactMessages}
-          locale={locale}
-          onCopy={onCopy}
-        />
-      ))}
+      {msgs.map((message, index) => {
+        const isLast = index === msgs.length - 1;
+        const bubbleProps = {
+          message, index, isLast,
+          phase: isLast && phase !== 'preparing' ? phase : 'idle' as const,
+          copied: copiedIndex === index, compact: compactMessages, locale, onCopy,
+        };
+        return isLast && message.role === "assistant" && streamingDraftStore
+          ? <StreamingMessageBubble key={`${message.role}-${index}`} {...bubbleProps} store={streamingDraftStore} onDraftRendered={onDraftRendered} />
+          : <MessageBubble key={`${message.role}-${index}`} {...bubbleProps} />;
+      })}
 
       {hasFailureDetails && !showsEmptyState && <FeedbackBanner tone="error" title={ct("requestFailed")}>
         <RuntimeFailureDetails error={status.error} log={status.log_tail} />
@@ -142,3 +151,5 @@ export default function ChatMessageLog({
     </div>
   );
 }
+
+export default memo(ChatMessageLog);

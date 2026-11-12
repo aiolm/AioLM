@@ -7,10 +7,20 @@ import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 export function profileValueMask(view: EffectiveSchema | undefined, ...maps: Array<Record<string, unknown>>) {
   const secrets = new Set<string>(view ? sensitiveEntryTokenStrings(view) : []);
   const collect = (value: unknown) => {
-    if (typeof value === 'string' && value) secrets.add(value);
-    else if (Array.isArray(value)) value.forEach(collect);
-    else if (value && typeof value === 'object') Object.values(value).forEach(collect);
-    else if (value !== null && value !== undefined) secrets.add(String(value));
+    switch (typeof value) {
+      case 'undefined': break;
+      case 'object':
+        if (value === null) break;
+        if (Array.isArray(value)) value.forEach(collect);
+        else Object.values(value).forEach(collect);
+        break;
+      case 'string':
+      case 'number':
+      case 'bigint':
+      case 'boolean':
+      case 'symbol':
+      case 'function': secrets.add(String(value));
+    }
   };
   for (const option of view?.schema.options ?? []) {
     if (option.sensitive.certainty === 'unknown' || option.sensitive.value !== true) continue;

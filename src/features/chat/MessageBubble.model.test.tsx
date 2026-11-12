@@ -1,10 +1,13 @@
 import { render, screen } from '@testing-library/react';
+import { defined } from '../../testing/assertDefined';
 import { expect, it, vi } from 'vitest';
 import MessageBubble from './MessageBubble';
-import { defaultChatWorkspace, loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage } from './chatHistory';
+import { loadChatWorkspace, saveChatWorkspace } from './chatHistory';
+import { defaultChatWorkspace } from './chatWorkspace';
+import type { ChatHistoryMessage } from '../../shared/api/conversationTypes';
 
 function bubble(message: ChatHistoryMessage) {
-  return <MessageBubble message={message} index={0} messageCount={1} phase="idle" copied={false} compact={false} locale="ko" onCopy={vi.fn()} />;
+  return <MessageBubble message={message} index={0} isLast phase="idle" copied={false} compact={false} locale="ko" onCopy={vi.fn()} />;
 }
 
 it('displays the recorded model and icon with a readable filename', () => {
@@ -31,7 +34,7 @@ it('labels legacy answers without attributing them to the currently selected mod
 
 it('preserves different response models through conversation saving and loading', () => {
   const workspace = defaultChatWorkspace(100);
-  workspace.threads[0].messages = [
+  defined(workspace.threads[0]).messages = [
     { role: 'assistant', content: 'First', model: 'Qwen-example.gguf' },
     { role: 'assistant', content: 'Second', model: 'gemma-example.gguf', interrupted: true },
     { role: 'assistant', content: 'Legacy' },
@@ -39,5 +42,5 @@ it('preserves different response models through conversation saving and loading'
   let saved = '';
   const storage = { getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; } };
   saveChatWorkspace(workspace, storage);
-  expect(loadChatWorkspace(storage).threads[0].messages).toEqual(workspace.threads[0].messages);
+  expect(defined(loadChatWorkspace(storage).threads[0]).messages).toEqual(defined(workspace.threads[0]).messages);
 });

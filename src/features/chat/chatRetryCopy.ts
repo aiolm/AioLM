@@ -1,5 +1,5 @@
 import type { Locale } from '../../shared/i18n/i18nCatalog';
-import type { ChatRetryUnavailableReason } from './chatHistory';
+import type { ChatRetryUnavailableReason } from '../../shared/api/conversationTypes'
 import type { RetryToolsState } from './chatRetryTools';
 
 type ReplyState = 'stoppedEmpty' | 'failedEmpty' | 'toolCancelled' | 'toolFailed';

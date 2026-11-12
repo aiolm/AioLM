@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { defined } from '../../testing/assertDefined';
 import { describeServerOption, getOptionOccurrences, managedServerOption, parseRuntimeHelp, replaceServerOption, runtimeServerOptions, SERVER_OPTIONS, serverArgsFromText, serverArgsToText, serverOptionChoices, serverOptionMatches } from './serverOptions';
 
-const option = (signature: string) => describeServerOption(signature)!;
+const option = (signature: string) => defined(describeServerOption(signature));
 describe('runtime server option catalog', () => {
   it('covers the full official catalog and legacy memory controls', () => {
     expect(SERVER_OPTIONS.length).toBeGreaterThanOrEqual(255);
@@ -17,10 +18,10 @@ describe('runtime server option catalog', () => {
     const help = '----- common params -----\n-t,    --threads N                      worker count\n                                       defaults to --threads-batch\n--mmap, --no-mmap                       map weights\n--custom-pr-option START END             custom build option\n--flash-attn [on|off|auto]               attention';
     const parsed = parseRuntimeHelp(help);
     expect(parsed.map(item => item.id)).toEqual(['--threads', '--mmap', '--custom-pr-option', '--flash-attn']);
-    expect(parsed[0].description).toContain('defaults to --threads-batch');
-    expect(parsed[1].arity).toBe(0);
-    expect(parsed[2].arity).toBe(2);
-    expect(parsed[3].choices).toEqual(['on', 'off', 'auto']);
+    expect(defined(parsed[0]).description).toContain('defaults to --threads-batch');
+    expect(defined(parsed[1]).arity).toBe(0);
+    expect(defined(parsed[2]).arity).toBe(2);
+    expect(defined(parsed[3]).choices).toEqual(['on', 'off', 'auto']);
     // The argument form is what an editor prompts for; the flag is never part of it.
     expect(parsed.map(item => item.argument)).toEqual(['N', '', 'START END', '[on|off|auto]']);
     expect(parseRuntimeHelp('--spec-draft-threads N                draft threads (default:\n                                        --threads)\n--threads N                            threads').map(item => item.id)).toEqual(['--spec-draft-threads', '--threads']);
@@ -30,7 +31,7 @@ describe('runtime server option catalog', () => {
   it('recovers values an option lists as prose instead of putting them in its signature', () => {
     // Verbatim shapes from llama-server --help: a bare MODE placeholder whose
     // real values only appear as bullets underneath it.
-    const described = (signature: string, description: string) => describeServerOption(signature, description)!;
+    const described = (signature: string, description: string) => defined(describeServerOption(signature, description));
     const lazy = described('-lzm, --lazy-mode MODE', 'on-demand reading of certain tensors\n(default: auto)\n- on: read the rows of such tensors from disk on demand\n- auto: on, but only for tensors larger than 4 GiB\n- off: always keep them resident');
     expect(lazy.choices).toEqual([]);
     expect(serverOptionChoices(lazy)).toEqual(['on', 'auto', 'off']);
@@ -79,9 +80,9 @@ describe('runtime server option catalog', () => {
     const args = ['--shared', '--custom-path', '한글 경로/cache.bin'];
     expect(serverArgsFromText(text, options)).toEqual(args);
     expect(serverArgsToText(args, options)).toBe(text);
-    options[0].arity = 1;
+    defined(options[0]).arity = 1;
     expect(() => serverArgsFromText(text, options)).toThrow('needs 1 value(s)');
-    options[0].flags = ['--new-flag'];
+    defined(options[0]).flags = ['--new-flag'];
     const changed = '--shared -1\n--custom-path 한글 경로/cache.bin';
     expect(serverArgsToText(serverArgsFromText(changed, options), options)).toBe(changed);
   });

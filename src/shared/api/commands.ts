@@ -1,5 +1,4 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
+import { invoke, listen, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase, type UnlistenFn } from "./transport.ts";
 import type { HfInstalledFile, HfSearchFormat, HfSortKey } from "./models.ts";
 import type { ImageAttachment, PreparedVideoFrame } from "./mediaTypes.ts";
 import type { ModelArtifact } from "./providers.ts";
@@ -88,6 +87,7 @@ export const extractVideoFrames = (reference: string, signal?: AbortSignal, maxF
   mediaOperation<VideoFrames>('extract_video_frames', { reference, maxFrames }, signal);
 export const pickDocument = () => invoke<string | null>("pick_document");
 export const readDocumentText = (path: string) => invoke<string>("read_document_text", { path });
+/** Restored paths may require native approval; denial rejects like an unavailable file. */
 export const readDocumentBinding = (path: string) => invoke<string>("read_document_binding", { path });
 
 export const mcpListServers = () => invoke<McpServer[]>("mcp_list_servers");

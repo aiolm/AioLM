@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isNativeRuntimeAvailable } from "../shared/api/transport";
+import { frameWindow } from "../shared/api/desktop";
+import { errorMessage } from "../shared/api/errors";
 import { AioMark } from "../shared/ui/AppIcons";
 import type { Locale } from "../shared/i18n/i18nCatalog";
 
@@ -27,20 +29,6 @@ const copy: Record<Locale, { controls: string; minimize: string; maximize: strin
   zh: { controls: "窗口控制", minimize: "最小化", maximize: "最大化", restore: "向下还原", close: "关闭" },
 };
 
-async function frameWindow() {
-  const [{ getCurrentWindow }, { invoke }] = await Promise.all([
-    import("@tauri-apps/api/window"),
-    import("@tauri-apps/api/core"),
-  ]);
-  const chrome = await invoke<"frameless" | "overlay" | "native">("window_chrome");
-  return {
-    window: getCurrentWindow(),
-    chrome,
-    // Linux needs an actual System policy, not tao's setTheme(null), which
-    // writes prefer-dark=false. Other platforms retain the SDK behavior.
-    setTheme: (theme: "light" | "dark" | null) => invoke<void>("window_theme", { theme }),
-  };
-}
 
 // The frame is decided once per window, so every mount shares one answer and
 // a remount does not flash the bar away while it asks again.
@@ -98,7 +86,8 @@ function useChromeHost(enabled: boolean) {
         if (dialog.open && dialog.isConnected) stack.push(dialog);
       }
       for (let index = stack.length - 1; index >= 0; index--) {
-        if (!stack[index].open || !stack[index].isConnected) stack.splice(index, 1);
+        const dialog = stack[index];
+        if (dialog && (!dialog.open || !dialog.isConnected)) stack.splice(index, 1);
       }
       const owner = stack.at(-1) ?? slot.current;
       if (owner && host.parentElement !== owner) owner.append(host);
@@ -148,7 +137,7 @@ export default function TitleBar() {
     // even if an earlier native update finishes after a newer selection.
     themeUpdate.current = (themeUpdate.current ?? Promise.resolve())
       .then(() => { if (live) return frame.setTheme(theme); })
-      .catch(error => { console.error("Native window appearance could not be synchronized", error); });
+      .catch(error => { console.error("Native window appearance could not be synchronized", errorMessage(error)); });
     return () => { live = false; };
   }, [frame, theme]);
   if (!frame || !win || frame.chrome === "native") return null;

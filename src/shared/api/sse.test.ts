@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { normalizeStreamDelta, SseParser, type StreamDelta } from "./sse";
+import { defined } from '../../testing/assertDefined';
 
 describe("backend stream telemetry", () => {
   it("retains a split vLLM usage frame after the completion reason until DONE", () => {
@@ -14,9 +15,10 @@ describe("backend stream telemetry", () => {
     parser.push(frame.slice(0, 67));
     parser.push(frame.slice(67));
     expect(parser.isFinished()).toBe(false);
-    expect(deltas[1].metrics).toEqual({ generation_time_ms: 100, time_to_first_token_ms: 250, tokens_per_second: 17.14 });
-    expect(normalizeStreamDelta(deltas[1])).toEqual([{
-      type: "stats", usage: deltas[1].usage, timings: undefined, metrics: deltas[1].metrics,
+    const telemetry = defined(deltas[1], 'telemetry frame');
+    expect(telemetry.metrics).toEqual({ generation_time_ms: 100, time_to_first_token_ms: 250, tokens_per_second: 17.14 });
+    expect(normalizeStreamDelta(telemetry)).toEqual([{
+      type: "stats", usage: telemetry.usage, timings: undefined, metrics: telemetry.metrics,
     }]);
     expect(parser.push("data: [DONE]\n\n")).toBe(true);
     expect(parser.value()).toBe("Hello");
@@ -27,7 +29,7 @@ describe("backend stream telemetry", () => {
     const parser = new SseParser(delta => deltas.push(delta));
     parser.push('data: {"choices":[],"metrics":{"generation_time_ms":null}}\n\n');
     expect(deltas).toHaveLength(1);
-    expect(normalizeStreamDelta(deltas[0])).toEqual([{
+    expect(normalizeStreamDelta(defined(deltas[0], 'telemetry frame'))).toEqual([{
       type: "stats", usage: undefined, timings: undefined, metrics: { generation_time_ms: null },
     }]);
     expect(normalizeStreamDelta({ finish_reason: "stop", metrics: { generation_time_ms: 0 } })).toEqual([{

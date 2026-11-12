@@ -10,7 +10,10 @@ const flags: Record<string, string> = {
 export function automaticProviderTelemetry(provider: ProviderId, key: string, runtimeFlags: string[] | undefined, values: Record<string, unknown>): boolean {
   if (provider !== "vllm" || !flags[key] || !runtimeFlags?.includes(flags[key])) return false;
   const rawFlags = Array.isArray(values.extra_args) ? values.extra_args.filter((argument): argument is string => typeof argument === "string")
-    .map(argument => argument.trim().split("=", 1)[0].replace(/_/g, "-")) : [];
+    .map(argument => {
+      const [flag = ""] = argument.trim().split("=", 1);
+      return flag.replace(/_/g, "-");
+    }) : [];
   // Standard vLLM applies raw BooleanOptionalAction opt-outs after app defaults.
   if (rawFlags.includes(`--no-${flags[key].slice(2)}`)) return false;
   const statsDisabled = rawFlags.includes("--disable-log-stats");

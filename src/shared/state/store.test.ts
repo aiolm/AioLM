@@ -1,10 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/index";
+import { IpcError } from "../api/ipcError";
 import { useAppStore } from "./store";
 import { useExecutionStore } from "../../features/models/useExecutionStore";
 import { testConfig } from "../../testing/appStore";
 import { emptyProfileLibrary, profileTargetKey } from "../config/settingsProfiles";
+import { loadLocale } from "../i18n/i18nUnified";
+import { defined } from "../../testing/assertDefined";
 
 vi.mock("../api/index", () => ({
   isNativeRuntimeAvailable: vi.fn(() => true), getConfig: vi.fn(),
@@ -64,9 +67,9 @@ it("publishes migrated profiles only after their native save succeeds", async ()
   await waitFor(() => expect(api.saveConfig).toHaveBeenCalledOnce());
   expect(result.current.cfg).toBeNull();
   expect(result.current.bootState).toBe('loading');
-  const candidate = vi.mocked(api.saveConfig).mock.calls[0][0];
+  const candidate = defined(vi.mocked(api.saveConfig).mock.calls[0])[0];
   expect(candidate.settings_profiles).toMatchObject({ revision: 1, legacy_imported: true });
-  expect(candidate.settings_profiles?.applied[profileTargetKey('archived.gguf')].settings.temperature).toBe(0.3);
+  expect(defined(candidate.settings_profiles?.applied[profileTargetKey('archived.gguf')]).settings.temperature).toBe(0.3);
   await act(async () => { saving.resolve(candidate); await saving.promise; });
   expect(result.current.bootState).toBe('ready');
   expect(result.current.cfg?.settings_profiles).toEqual(candidate.settings_profiles);
@@ -82,7 +85,7 @@ it("keeps originals and leaves migration retryable after a failed save", async (
   expect(result.current.bootError).toContain('disk full');
   expect(result.current.cfg).toBeNull();
   expect(localStorage.getItem('aiolm-model-execution')).toBe(original);
-  const first = vi.mocked(api.saveConfig).mock.calls[0][0].settings_profiles;
+  const first = defined(vi.mocked(api.saveConfig).mock.calls[0])[0].settings_profiles;
   await act(async () => { await result.current.loadConfig(); });
   expect(result.current.bootState).toBe('ready');
   expect(result.current.cfg?.settings_profiles).toEqual(first);
@@ -239,7 +242,7 @@ it("reloads and rebases a save once when disk profiles moved ahead", async () =>
   const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
   // Disk moved ahead after our snapshot (lost save response, external writer).
   vi.mocked(api.getConfig).mockResolvedValue(structuredClone({ ...result.current.cfg!, port: 9999 }));
-  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new IpcError("busy", "The saved profile revision moved ahead."));
   let saved!: api.AppConfig;
   await act(async () => { saved = await result.current.updateConfig({ port: 8081 }); });
   expect(saved.port).toBe(8081);
@@ -247,13 +250,13 @@ it("reloads and rebases a save once when disk profiles moved ahead", async () =>
   expect(result.current.actionError).toBeNull();
   expect(vi.mocked(api.getConfig).mock.calls.length).toBe(loadsBefore + 1);
   expect(vi.mocked(api.saveConfig).mock.calls.length).toBe(savesBefore + 2);
-  expect(vi.mocked(api.saveConfig).mock.calls[savesBefore + 1][0].port).toBe(8081);
+  expect(defined(vi.mocked(api.saveConfig).mock.calls[savesBefore + 1])[0].port).toBe(8081);
 });
 
 it("surfaces a repeated profile conflict instead of retrying forever", async () => {
   const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
   await waitFor(() => expect(result.current.bootState).toBe("ready"));
-  vi.mocked(api.saveConfig).mockRejectedValue(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  vi.mocked(api.saveConfig).mockRejectedValue(new IpcError("busy", "settings profiles changed since this configuration was opened; reload before saving"));
   const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
   await act(async () => { await expect(result.current.updateConfig({ port: 8081 })).rejects.toThrow("reload before saving"); });
   expect(vi.mocked(api.saveConfig).mock.calls.length).toBe(savesBefore + 2);
@@ -264,7 +267,7 @@ it("does not reload on ordinary save failures", async () => {
   const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
   await waitFor(() => expect(result.current.bootState).toBe("ready"));
   const loadsBefore = vi.mocked(api.getConfig).mock.calls.length;
-  vi.mocked(api.saveConfig).mockRejectedValue(new Error("disk full"));
+  vi.mocked(api.saveConfig).mockRejectedValue(new IpcError("internal", "disk full"));
   await act(async () => { await expect(result.current.updateConfig({ port: 8081 })).rejects.toThrow("disk full"); });
   expect(vi.mocked(api.getConfig).mock.calls.length).toBe(loadsBefore);
 });
@@ -277,7 +280,7 @@ it("heals a stale execution-store save through reload and re-expansion", async (
   vi.mocked(api.saveConfig).mockImplementation(async (cfg) => {
     const same = JSON.stringify(disk.settings_profiles) === JSON.stringify(cfg.settings_profiles);
     if (!same && cfg.settings_profiles?.revision !== (disk.settings_profiles?.revision ?? 0) + 1) {
-      throw new Error("settings profiles changed since this configuration was opened; reload before saving");
+      throw new IpcError("busy", "settings profiles changed since this configuration was opened; reload before saving");
     }
     disk = structuredClone(cfg);
     return structuredClone(cfg);
@@ -306,7 +309,7 @@ it("evaluates an execution-store patch for its preview, native save and conflict
   const previous = result.current.getConfig()!;
   const disk = structuredClone({ ...previous, port: 9999 });
   vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
-  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new IpcError("busy", "settings profiles changed since this configuration was opened; reload before saving"));
   const wrapped = renderHook(() => useExecutionStore(result.current));
   const evaluated: api.AppConfig[] = [];
   let saved!: api.AppConfig;
@@ -315,10 +318,10 @@ it("evaluates an execution-store patch for its preview, native save and conflict
   expect(evaluated[0]).toBe(previous);
   expect(evaluated[1]).toBe(previous);
   expect(evaluated[2]).not.toBe(previous);
-  expect(evaluated[2].port).toBe(9999);
+  expect(defined(evaluated[2]).port).toBe(9999);
   expect(saved).toMatchObject({ port: 9999, temperature: 0.3 });
   expect(saved.settings_profiles?.revision).toBe((disk.settings_profiles?.revision ?? 0) + 1);
-  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings.temperature).toBe(0.3);
+  expect(defined(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)]).settings.temperature).toBe(0.3);
   expect(result.current.actionError).toBeNull();
 });
 
@@ -337,7 +340,7 @@ it("expands a waiting execution-store save against the snapshot a preceding save
   await act(async () => { queued = wrapped.result.current.store.updateConfig(fresh => { evaluated.push(fresh); return { ctx_size: 8192 }; }); });
   await waitFor(() => expect(evaluated).toHaveLength(1));
   // The native save responds with a normalized snapshot the preview never saw.
-  const request = vi.mocked(api.saveConfig).mock.calls[savesBefore][0];
+  const request = defined(vi.mocked(api.saveConfig).mock.calls[savesBefore])[0];
   await act(async () => { persisting.resolve({ ...structuredClone(request), top_k: 7 }); await direct; await queued; });
   expect(evaluated).toHaveLength(2);
   expect(evaluated[0]).toMatchObject({ temperature: 0.5, top_k: testConfig.top_k });
@@ -345,7 +348,7 @@ it("expands a waiting execution-store save against the snapshot a preceding save
   expect(evaluated[1]).toMatchObject({ temperature: 0.5, top_k: 7 });
   const saved = result.current.cfg!;
   expect(saved).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
-  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
+  expect(defined(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)]).settings).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
 });
 
 it("keeps repeated starts pending on the owned readiness promise and rejects a different launch", async () => {
@@ -387,10 +390,10 @@ it("cancels an immediately handed-off start without a late target-wide stop or f
   await waitFor(() => expect(result.current.bootState).toBe("ready"));
   let start!: Promise<unknown>;
   await act(async () => {
-    start = result.current.start().catch(cause => cause);
+    start = result.current.start().catch((cause: unknown) => cause);
     await result.current.stop();
   });
-  expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(vi.mocked(api.startServer).mock.calls[0][1]!.operationId, 'default');
+  expect(api.cancelLaunch).toHaveBeenCalledExactlyOnceWith(defined(defined(vi.mocked(api.startServer).mock.calls[0])[1]).operationId, 'default');
   let outcome: unknown;
   await act(async () => { ready.resolve("http://localhost:8080/v1"); outcome = await start; });
   expect(String(outcome)).toContain("server start cancelled");
@@ -405,7 +408,7 @@ it("does not let an old scoped cancellation or late readiness release a newer lo
   const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
   await waitFor(() => expect(result.current.bootState).toBe("ready"));
   let firstRun!: Promise<unknown>;
-  act(() => { firstRun = result.current.start(result.current.cfg!, false, { persist: false, operationId: "original-launch" }).catch(cause => cause); });
+  act(() => { firstRun = result.current.start(result.current.cfg!, false, { persist: false, operationId: "original-launch" }).catch((cause: unknown) => cause); });
   await act(async () => { await result.current.stop("original-launch"); });
   let secondRun!: Promise<string>;
   act(() => { secondRun = result.current.start({ ...result.current.cfg!, active_model: "replacement.gguf" }, false, { persist: false, operationId: "replacement-launch" }); });
@@ -452,7 +455,7 @@ it("ignores a cancelled start settling after a new start begins", async () => {
   await act(async () => { await result.current.stop(); });
   let secondRun!: Promise<string>;
   act(() => { secondRun = result.current.start(); });
-  await act(async () => { first.reject(new Error("server start cancelled")); await firstRun; });
+  await act(async () => { first.reject(new IpcError("cancelled", "server start cancelled")); await firstRun; });
   expect(result.current.status.state).toBe("starting");
   expect(result.current.busy).toBe(true);
   vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/v1" });
@@ -486,15 +489,25 @@ it("lets a slow model start run past 120 seconds and succeed", async () => {
 it("reports a start failure that merely mentions cancellation and stays quiet for a requested stop", async () => {
   const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
   await waitFor(() => expect(result.current.bootState).toBe("ready"));
-  // Native commands reject with plain strings.
-  const failure = "model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))";
+  const detail = "model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))";
+  const failure = new IpcError("not_found", detail);
   vi.mocked(api.startServer).mockRejectedValueOnce(failure);
   await act(async () => { await expect(result.current.start()).rejects.toBe(failure); });
-  expect(result.current.actionError).toContain(failure);
-  vi.mocked(api.startServer).mockRejectedValueOnce("server start cancelled");
-  await act(async () => { await expect(result.current.start()).rejects.toBe("server start cancelled"); });
+  expect(result.current.actionError).toContain(detail);
+  const cancelled = new IpcError("cancelled", "launch superseded");
+  vi.mocked(api.startServer).mockRejectedValueOnce(cancelled);
+  await act(async () => { await expect(result.current.start()).rejects.toBe(cancelled); });
   expect(result.current.actionError).toBeNull();
   expect(result.current.status.state).toBe("stopped");
+});
+
+it("shows retry guidance for native Busy failures independently of their wording", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const cause = new IpcError("busy", "A model operation is already running.");
+  vi.mocked(api.startServer).mockRejectedValueOnce(cause);
+  await act(async () => { await expect(result.current.start()).rejects.toBe(cause); });
+  expect(result.current.actionError).toBe("Model load failed: Finish or stop the active response, then try again. (A model operation is already running.)");
 });
 
 it("keeps a late failure from a stopped slow start from reporting an error", async () => {
@@ -584,7 +597,7 @@ it('publishes a coherent reloaded snapshot and reevaluates the patch before a de
   const revision = result.current.getConfigRevision();
   const disk = structuredClone({ ...previous, port: 9999 });
   const retry = deferred<api.AppConfig>();
-  const conflict = new Error('settings profiles changed since this configuration was opened; reload before saving');
+  const conflict = new IpcError('busy', 'settings profiles changed since this configuration was opened; reload before saving');
   vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
   vi.mocked(api.saveConfig).mockRejectedValueOnce(conflict).mockReturnValueOnce(retry.promise);
   const evaluations: Array<{ value: api.AppConfig; live: api.AppConfig | null; revision: number }> = [];
@@ -603,10 +616,12 @@ it('publishes a coherent reloaded snapshot and reevaluates the patch before a de
     expect(result.current.getConfigRevision()).toBe(revision + 4);
   });
   const pendingRetry = result.current.cfg!;
-  expect(evaluations[0].live).toBe(previous);
-  expect(evaluations[0].revision).toBe(revision);
-  expect(evaluations[1].live).toBe(evaluations[1].value);
-  expect(evaluations[1].revision).toBe(revision + 3);
+  const initialEvaluation = defined(evaluations[0]);
+  const retryEvaluation = defined(evaluations[1]);
+  expect(initialEvaluation.live).toBe(previous);
+  expect(initialEvaluation.revision).toBe(revision);
+  expect(retryEvaluation.live).toBe(retryEvaluation.value);
+  expect(retryEvaluation.revision).toBe(revision + 3);
   expect(pendingRetry).not.toBe(previous);
   expect(pendingRetry.settings_profiles).toBe(disk.settings_profiles);
   let saved!: api.AppConfig;
@@ -617,4 +632,19 @@ it('publishes a coherent reloaded snapshot and reevaluates the patch before a de
   expect(result.current.getConfigRevision()).toBe(revision + 5);
   expect(result.current.actionError).toBeNull();
   expect(disk.port).toBe(9999);
+});
+
+it('uses the saved locale when a pending launch fails without translating the runtime detail', async () => {
+  await loadLocale('ko');
+  const pending = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValue(pending.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  let launch!: Promise<string>;
+  await act(async () => { launch = result.current.start(); });
+  localStorage.setItem('aiolm-locale', 'ko');
+  const failure = new Error('CUDA out of memory');
+  const rejected = expect(launch).rejects.toBe(failure);
+  await act(async () => { pending.reject(failure); await rejected; });
+  expect(result.current.actionError).toBe('모델 로드 실패: 이 설정에 필요한 메모리 또는 VRAM이 부족합니다. (CUDA out of memory)');
 });

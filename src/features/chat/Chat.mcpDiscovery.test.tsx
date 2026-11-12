@@ -10,7 +10,7 @@ vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: ()
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => false,
   sessionList: vi.fn(async () => []),
-  normalizeSessionList: (value: unknown) => Array.isArray(value) ? value : [],
+  normalizeSessionList: (value: unknown): unknown[] => Array.isArray(value) ? value : [],
   serverActivity: vi.fn(async () => undefined),
   mcpListServers: vi.fn(),
   mcpListTools: vi.fn(),

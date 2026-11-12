@@ -2,16 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractVideoFrames, transcribeMedia } from './commands';
 import { invoke } from './transport';
+import { defined } from '../../testing/assertDefined';
 
-vi.mock('./transport.ts', () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: () => true }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
+vi.mock('./transport.ts', () => ({ invoke: vi.fn(), listen: vi.fn(), isNativeRuntimeAvailable: () => true }));
 
 describe('cancellable immutable media operations', () => {
   beforeEach(() => vi.clearAllMocks());
   it('passes the explicitly selected speech session and an operation id without URLs or keys', async () => {
     vi.mocked(invoke).mockResolvedValue({ text: 'Transcript', sessionId: 'speech', model: 'whisper' });
     await expect(transcribeMedia(`${'a'.repeat(64)}.wav`, 'speech')).resolves.toMatchObject({ sessionId: 'speech' });
-    expect(invoke).toHaveBeenCalledWith('transcribe_media', { reference: `${'a'.repeat(64)}.wav`, sessionId: 'speech', operationId: expect.any(String) });
+    expect(invoke).toHaveBeenCalledWith('transcribe_media', { reference: `${'a'.repeat(64)}.wav`, sessionId: 'speech', operationId: expect.any(String) as unknown });
   });
   it('cancels the same operation while native work is pending and refuses its late result', async () => {
     let finish!: (value: unknown) => void;
@@ -19,7 +19,7 @@ describe('cancellable immutable media operations', () => {
       ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(undefined));
     const controller = new AbortController();
     const pending = extractVideoFrames(`${'a'.repeat(64)}.mp4`, controller.signal);
-    const operationId = vi.mocked(invoke).mock.calls[0][1]?.operationId;
+    const operationId = defined(vi.mocked(invoke).mock.calls[0], 'media invocation')[1]?.operationId;
     controller.abort();
     expect(invoke).toHaveBeenCalledWith('cancel_media_operation', { operationId });
     finish({ frames: [] });

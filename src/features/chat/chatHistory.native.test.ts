@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatThread, ChatWorkspace } from "./chatHistory";
+import { defined } from "../../testing/assertDefined";
+import type { ChatThread, ChatWorkspace } from "../../shared/api/conversationTypes";
+import { savedRetry } from "./chatRetrySnapshot";
 
 // A data folder in memory, standing in for the native conversation store.
 const native = vi.hoisted(() => ({
@@ -106,13 +108,13 @@ describe("conversations in the data folder", () => {
     const video = { name: 'scene.mp4', kind: 'video' as const, ref: `${'b'.repeat(64)}.mp4`, dataUrl: '',
       preparation: { kind: 'video-frames' as const, frames: [{ ref: `${'c'.repeat(64)}.jpg`, timestampSeconds: 2.5 }] } };
     const conversation = thread('prepared', 'Summarize');
-    conversation.messages[0].images = [audio, video];
+    defined(conversation.messages[0]).images = [audio, video];
     const history = await freshHistory();
     await history.loadChatWorkspaceAsync();
     expect(await history.saveChatWorkspaceAsync({ activeThreadId: conversation.id, threads: [conversation] })).toBe('native');
-    expect((native.files.get(conversation.id) as ChatThread).messages[0].images).toEqual([audio, video]);
+    expect(defined((native.files.get(conversation.id) as ChatThread).messages[0]).images).toEqual([audio, video]);
     const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
-    expect(loaded.threads.find(item => item.id === conversation.id)?.messages[0].images).toEqual([audio, video]);
+    expect(defined(loaded.threads.find(item => item.id === conversation.id)?.messages[0]).images).toEqual([audio, video]);
   });
   it('keeps the exact retry snapshot of an unfinished last reply through native save and reload, and only that one', async () => {
     const image = { name: 'chart.png', kind: 'image' as const, ref: `${'d'.repeat(64)}.png`, dataUrl: '' };
@@ -140,10 +142,10 @@ describe("conversations in the data folder", () => {
     expect(stored.messages.at(-1)?.retry).toEqual(retry);
     const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
     const last = loaded.threads.find(item => item.id === conversation.id)?.messages.at(-1);
-    expect(history.savedRetry(last)).toEqual({ kind: 'ready', snapshot: retry });
+    expect(savedRetry(last)).toEqual({ kind: 'ready', snapshot: retry });
     // The same tool turn saved by an earlier version, without its tools, is never resent without them.
     const { tools: _omitted, ...earlier } = retry;
-    expect(history.savedRetry({ ...last!, retry: earlier })).toEqual({ kind: 'unavailable', reason: 'tools-not-saved' });
+    expect(savedRetry({ ...last!, retry: earlier })).toEqual({ kind: 'unavailable', reason: 'tools-not-saved' });
   });
 
   it('keeps a reply whose saved retry snapshot is malformed or from an unknown format, without offering an exact retry', async () => {
@@ -154,11 +156,11 @@ describe("conversations in the data folder", () => {
     const loaded = await history.loadChatWorkspaceAsync();
     const last = loaded.threads.find(item => item.id === conversation.id)?.messages.at(-1);
     expect(last).toMatchObject({ role: 'assistant', content: 'Partial', failed: true });
-    expect(history.savedRetry(last)).toEqual({ kind: 'unavailable', reason: 'not-saved' });
-    expect(history.savedRetry({ ...last!, retry: { version: 1, text: 'Question', images: [], documents: [], history: [{ role: 'user', content: 42 }] } as never }))
+    expect(savedRetry(last)).toEqual({ kind: 'unavailable', reason: 'not-saved' });
+    expect(savedRetry({ ...last!, retry: { version: 1, text: 'Question', images: [], documents: [], history: [{ role: 'user', content: 42 }] } as never }))
       .toEqual({ kind: 'unavailable', reason: 'not-saved' });
     // A finished reply is not offered for retry, whatever it carries.
-    expect(history.savedRetry({ role: 'assistant', content: 'Done', finishReason: 'stop' })).toBeNull();
+    expect(savedRetry({ role: 'assistant', content: 'Done', finishReason: 'stop' })).toBeNull();
   });
 
   it("moves the browser profile's conversations into the data folder once", async () => {
@@ -173,6 +175,7 @@ describe("conversations in the data folder", () => {
     expect([...native.files.keys()].sort()).toEqual(["thread-1", "thread-2"]);
     expect(loaded.activeThreadId).toBe("thread-2");
     expect(loaded.threads.map((item) => item.id)).toEqual(["thread-2", "thread-1"]);
+    expect(commands().filter(command => command === "conversations_load")).toHaveLength(1);
     // The browser copy can no longer bring back a conversation deleted from the data folder.
     expect(localStorage.getItem(WORKSPACE_KEY)).toBeNull();
 
@@ -211,7 +214,7 @@ describe("conversations in the data folder", () => {
     expect(await history.saveChatWorkspaceAsync({ activeThreadId: "thread-1", threads: [changed] })).toBe("native");
 
     expect(native.calls).toEqual([
-      { command: "conversation_save", args: { thread: expect.objectContaining({ id: "thread-1" }) } },
+      { command: "conversation_save", args: { thread: expect.objectContaining({ id: "thread-1" }) as unknown } },
       { command: "conversation_delete", args: { id: "thread-2" } },
     ]);
     native.calls.length = 0;

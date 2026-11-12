@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { Fragment, createElement, memo } from "react";
 import { render } from "@testing-library/react";
 import { MessageBubble } from "./MessageBubble";
-import type { ChatHistoryMessage } from "./chatHistory";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
+import { defined } from "../../testing/assertDefined";
 
 /**
  * Automated stand-in for a React DevTools Profiler capture on a 200+ message
@@ -38,7 +39,7 @@ describe("MessageBubble memoization under streaming (P1-7)", () => {
         key: index,
         message,
         index,
-        messageCount: msgs.length,
+        isLast: index === msgs.length - 1,
         phase: index === msgs.length - 1 ? "decoding" as const : "idle" as const,
         copied: false,
         compact: false,
@@ -61,6 +62,11 @@ describe("MessageBubble memoization under streaming (P1-7)", () => {
     // The whole point of memoizing the bubble: one streaming tick re-renders
     // exactly one component (the last bubble), not all 220.
     expect(renderSpy).toHaveBeenCalledTimes(1);
-    expect(renderSpy.mock.calls[0][0].index).toBe(lastIndex);
+    expect(defined(renderSpy.mock.calls[0])[0].index).toBe(lastIndex);
+
+    renderSpy.mockClear();
+    const appended: ChatHistoryMessage[] = [...streamed, { role: "user", content: "Next question" }, { role: "assistant", content: "" }];
+    rerender(createElement(Fragment, null, ...renderList(appended)));
+    expect(renderSpy.mock.calls.map(([props]) => props.index)).toEqual([lastIndex, MESSAGE_COUNT, MESSAGE_COUNT + 1]);
   });
 });

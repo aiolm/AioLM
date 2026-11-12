@@ -7,13 +7,13 @@ type Props = { children: React.ReactNode; label?: string };
 type State = { error: Error | null };
 
 export default class ErrorBoundary extends React.Component<Props, State> {
-  state: State = { error: null };
+  override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
+  override componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error("aiolm render error", error, info.componentStack);
   }
 
@@ -21,7 +21,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     this.setState({ error: null });
   };
 
-  render() {
+  override render() {
     if (!this.state.error) return this.props.children;
     const language = document.documentElement.lang.split("-")[0];
     const locale: Locale = language === "ko" || language === "ja" || language === "zh" || language === "en" ? language : "en";

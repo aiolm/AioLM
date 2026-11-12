@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { useChatMcpTools } from './useChatMcpTools';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api/index', () => ({ mcpListServers: vi.fn(), mcpListTools: vi.fn() }));
 const tools: api.McpTool[] = [{ name: 'lookup', input_schema: {} }, { name: 'summarize', input_schema: {} }];
@@ -81,7 +82,7 @@ describe('MCP catalog refresh selection', () => {
     await act(async () => { await result.current.refreshMcpTools(); });
     expect(result.current.selectedMcpTools).toEqual(['catalog:summarize']);
     expect(result.current.mcpDefinitions).toHaveLength(1);
-    expect([...result.current.mcpEntryByFunctionName.values()].map(entry => entry.tool.name)).toEqual(['summarize']);
+    expect([...result.current.mcpEntryByFunctionName.values()].map(entry => defined(entry).tool.name)).toEqual(['summarize']);
   });
 
   it('keeps a selected tool through disappearance and offers it again when discovery resolves it', async () => {

@@ -28,7 +28,7 @@ export default function TuningChatOptionField({
   const current = chatOptionValue(cfg, field);
   const draft = chatOptionDrafts[field.key] ?? String(current);
   const inputId = `${id}-${field.key}`;
-  const label = tuningFieldLabel(t as never, field);
+  const label = tuningFieldLabel(t, field);
   const description = tuningFieldDescription(t, field);
   const selectValue = field.options
     ? (chatOptionSelectModes[field.key] === "custom" || !field.options.some((option) => String(option.value) === draft) ? "custom" : draft)

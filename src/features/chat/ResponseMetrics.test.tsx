@@ -16,7 +16,7 @@ const metrics: ResponseMetricsData = {
 };
 
 const bubbleProps = {
-  index: 0, messageCount: 1, phase: "idle" as const, copied: false, compact: false, locale: "en" as const,
+  index: 0, isLast: true, phase: "idle" as const, copied: false, compact: false, locale: "en" as const,
   onCopy: () => undefined,
 };
 

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppConfig, GpuPlacement, SessionDefinition } from "../api/types";
 import { resolvedGpuPlacement, runtimeGpuDevices, sessionConfig, sessionDefinitionFromStatus, toggleGpuSelection } from "./sessionUtils";
+import { defined } from "../../testing/assertDefined";
 
 const placement: GpuPlacement = {
   gpu_ids: ["gpu-a", "gpu-b"],
@@ -15,7 +16,7 @@ describe("GPU placement", () => {
   it("preserves current and legacy Metal device IDs with unified memory", () => {
     const current = runtimeGpuDevices("metal", ["MTL0: Apple Test Chip", "Vulkan0: Other GPU"]);
     expect(current).toMatchObject([{ stable_id: "runtime:metal:MTL0", vendor: "apple", integrated: true }]);
-    expect(runtimeGpuDevices("metal", ["Metal0: Apple Test Chip"])[0].stable_id).toBe("runtime:metal:Metal0");
+    expect(defined(runtimeGpuDevices("metal", ["Metal0: Apple Test Chip"])[0]).stable_id).toBe("runtime:metal:Metal0");
   });
   it("keeps identical devices explicit and scoped to their runtime", () => {
     const devices = runtimeGpuDevices("rocm", ["Available devices:", "ROCm1: R9700 (32768 MiB)", "ROCm0: R9700 (32768 MiB)", "Vulkan0: R9700", "ROCm0: duplicate"]);

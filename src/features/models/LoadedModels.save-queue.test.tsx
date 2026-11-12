@@ -8,11 +8,14 @@ import type { AppStore } from '../../shared/state/store';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import LoadedModels, { type SessionPoll } from './LoadedModels';
+import { defined } from '../../testing/assertDefined';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown; stringMatching: (value: string | RegExp) => unknown } = expect;
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/index', () => ({
   sessionList: vi.fn(async () => []), sessionSummaryList: vi.fn(async () => []),
-  normalizeSessionList: (value: unknown) => Array.isArray(value) ? value : [],
+  normalizeSessionList: (value: unknown): unknown[] => Array.isArray(value) ? value : [],
   sessionStart: vi.fn(), sessionStop: vi.fn(), sessionUnload: vi.fn(),
   isNativeRuntimeAvailable: () => false, rtList: vi.fn(async () => []), providerRuntimes: vi.fn(async () => []),
 }));
@@ -102,7 +105,7 @@ describe('saved session name saves in the configuration queue', () => {
     expect(harness.store.cfg!.port).toBe(8181);
     expect((harness.store.cfg as unknown as typeof base & { synthetic_unrelated: unknown }).synthetic_unrelated).toEqual({ nested: ['keep exact'] });
     expect(harness.store.cfg!.sessions!.find(item => item.id === 'other')).toEqual(other);
-    expect(harness.persisted[1].sessions).toEqual(target === 'sessions'
+    expect(defined(harness.persisted[1]).sessions).toEqual(target === 'sessions'
       ? [...base.sessions!, later]
       : base.sessions!.map(item => item.id === 'work' ? { ...item, enabled: false, execution: { ...item.execution, ctx_size: 32768 } } : item));
     if (target === 'sessions') {
@@ -143,8 +146,8 @@ describe('saved session name saves in the configuration queue', () => {
     fireEvent.change(screen.getByLabelText('Session name'), { target: { value: name } });
     fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
     await waitFor(() => expect(harness.persist).toHaveBeenCalledOnce());
-    const pending = harness.persisted[0].sessions!.find(item => item.id !== 'work' && item.id !== 'other')!;
-    expect(pending).toEqual(expect.objectContaining({ id: expect.stringMatching(/^session-/), name: savedName, models: {
+    const pending = defined(harness.persisted[0]).sessions!.find(item => item.id !== 'work' && item.id !== 'other')!;
+    expect(pending).toEqual(match.objectContaining({ id: match.stringMatching(/^session-/), name: savedName, models: {
       primary_model: base.active_model, mmproj: '', draft_model: '',
     }, gpu: work.gpu, enabled: true }));
     await act(async () => harness.release());

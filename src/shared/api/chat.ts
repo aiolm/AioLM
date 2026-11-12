@@ -146,7 +146,7 @@ async function materializeMedia(messages: ChatMessage[], sampling: ChatSampling,
     const content = await Promise.all(message.content.map(async part => {
       signal?.throwIfAborted();
       const kind = part.type === 'aiolm_media' ? part.media.kind : part.type === 'image_url' ? 'image' : part.type === 'input_audio' ? 'audio' : ['input_video', 'video_url'].includes(part.type) ? 'video' : 'text';
-      if (sampling.engine && !sampling.engine.modalities[kind as keyof typeof sampling.engine.modalities]) throw new Error(`The running model does not support ${kind} input.`);
+      if (sampling.engine && !sampling.engine.modalities[kind]) throw new Error(`The running model does not support ${kind} input.`);
       const resolved = part.type === 'aiolm_media' ? await resolveMedia(part.media.ref, provider) : part;
       signal?.throwIfAborted();
       return resolved;

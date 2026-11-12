@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ValueType, Workbook, type Worksheet } from 'exceljs';
 import type { BenchmarkReport } from './benchmarkReport';
 import { benchmarkWorkbook } from './benchmarkWorkbook';
+import { defined } from '../../testing/assertDefined';
 
 const LONG_MODEL = 'Synthetic-Instruct-70B-A8B-Preview-2507-UD-Q4_K_XL-Extra-Long-Model-Name-For-Wrapping';
 
@@ -26,17 +27,17 @@ const report: BenchmarkReport = {
 async function reopen(input: BenchmarkReport = report): Promise<{ bytes: Uint8Array; sheet: Worksheet; workbook: Workbook }> {
   const bytes = await benchmarkWorkbook(input);
   const workbook = new Workbook();
-  await workbook.xlsx.load(bytes as unknown as Parameters<typeof workbook.xlsx.load>[0]);
-  return { bytes, sheet: workbook.worksheets[0], workbook };
+  await workbook.xlsx.load(bytes);
+  return { bytes, sheet: defined(workbook.worksheets[0]), workbook };
 }
 
 describe('benchmark workbook', () => {
   it('returns a zipped XLSX as a plain Uint8Array with a single worksheet', async () => {
     const { bytes, workbook } = await reopen();
     expect(Object.getPrototypeOf(bytes)).toBe(Uint8Array.prototype);
-    expect(String.fromCharCode(bytes[0], bytes[1])).toBe('PK');
+    expect(String.fromCharCode(defined(bytes[0]), defined(bytes[1]))).toBe('PK');
     expect(workbook.worksheets).toHaveLength(1);
-    expect(workbook.worksheets[0].name).toBe('Results');
+    expect(defined(workbook.worksheets[0]).name).toBe('Results');
   });
 
   it('writes the header and rows without extra title, identifier, formula or link cells', async () => {

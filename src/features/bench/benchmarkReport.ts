@@ -5,7 +5,8 @@ import { SERVING_METRIC_KEYS, summarizePerformanceRows, summarizeServingPoints }
 import { publicModelSource } from '../../shared/contracts/benchmark/publicBenchmark';
 import { benchmarkCopy } from './benchmarkCopy';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
-import { recordedBenchmarkModelLabel, type PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { recordedBenchmarkModelLabel } from './performanceRecords';
 
 export interface BenchmarkReport {
   sheetName: string;
@@ -60,10 +61,12 @@ export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: L
     ['peak_memory_gib', `${copy.memory} (GiB)`],
   ] as const;
   const onlyFixedOutput = records.length > 0 && records.every(record => record.schemaVersion === 2 && record.request.method.version === 2);
-  const columns: BenchmarkReport['columns'] = [
+  const columns: Array<BenchmarkReport['columns'][number] & { key: string }> = [
     { key: 'recorded_model_label', label: copy.shareModel, width: 42 },
-    ...identityKeys.map((key, index) => ({ key, label: identityLabels[locale][index], width: key === 'execution.settings' ? 60 : 24, ...(key === 'model.size_bytes' ? { numFmt: '#,##0' } : {}) })),
-    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: index === 1 && onlyFixedOutput ? copy.outputTokens : pointLabels[locale][index], width: 20, numFmt: '#,##0' })),
+    // Each locale defines one label per identity key, in the same order.
+    ...identityKeys.map((key, index) => ({ key, label: identityLabels[locale][index]!, width: key === 'execution.settings' ? 60 : 24, ...(key === 'model.size_bytes' ? { numFmt: '#,##0' } : {}) })),
+    // Each locale defines the four point labels in this key order.
+    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: index === 1 && onlyFixedOutput ? copy.outputTokens : pointLabels[locale][index]!, width: 20, numFmt: '#,##0' })),
     ...SERVING_METRIC_KEYS.flatMap((key, index) => ['median', 'min', 'max', 'samples'].map((stat, statIndex) => ({
       key: `${key}.${stat}`, label: `${metricLabels[locale][index]} · ${statLabels[locale][statIndex]}`, width: 24,
       numFmt: stat === 'samples' ? '#,##0' : '#,##0.###############',
@@ -95,7 +98,7 @@ export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: L
     };
     const status = { complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[record.result.status];
     const append = (point: Record<string, string | number | null> = {}, pointStatus = status) => {
-      rows.push(columns.map(column => (column.key === 'status' ? pointStatus : point[column.key!] ?? values[column.key!] ?? null)));
+      rows.push(columns.map(column => (column.key === 'status' ? pointStatus : point[column.key] ?? values[column.key] ?? null)));
     };
     if (record.schemaVersion === 2) {
       const points = summarizeServingPoints(record.result.rows);

@@ -171,7 +171,7 @@ function ownedProfileSettings(settings: Omit<ProjectConfig, "active_model">): Pa
   const owned: Record<string, unknown> = safeClone(settings);
   for (const key of ["active_provider", "active_runtime", "active_backend", "active_build", "provider_options"]) delete owned[key];
   if (options && Object.keys(options).length) owned.provider_options = { [provider]: safeClone(options) };
-  return owned as Partial<ExecutionSettings>;
+  return owned;
 }
 
 function normalizeProject(value: unknown): ProjectPreset | null {
@@ -201,7 +201,7 @@ function normalizeProject(value: unknown): ProjectPreset | null {
     } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings
-      .filter((item): item is ProjectDocument => !!item && typeof item === "object" && typeof (item as ProjectDocument).name === "string" && typeof (item as ProjectDocument).path === "string")
+      .filter((item): item is ProjectDocument => !!item && typeof item === "object" && typeof item.name === "string" && typeof item.path === "string")
       .slice(0, MAX_PROJECT_DOCUMENTS)
       .map((item) => ({ name: item.name.slice(0, 256), path: item.path.slice(0, 32_768) }))
     : [];
@@ -385,7 +385,7 @@ export function exportProject(project: ProjectPreset): string {
 
 export function importProject(raw: string, projects = readProjects()): ProjectPreset {
   const parsed: unknown = JSON.parse(raw);
-  const source = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed;
+  const source = parsed && typeof parsed === "object" && "project" in parsed ? parsed.project : parsed;
   const project = normalizeProject(source);
   if (!project) throw new Error("The selected file is not a valid aiolm project preset.");
   // Imports are independent copies. Never replace an existing identity (which

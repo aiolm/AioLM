@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
 import * as api from "../../shared/api/index";
+import { defined } from "../../testing/assertDefined";
 import DeveloperPanel from "./Developer";
 
 vi.mock("../../shared/api/index", () => ({
@@ -11,7 +12,7 @@ vi.mock("../../shared/api/index", () => ({
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
 }));
 
 const path = String.raw`\\?\C:\models\example.gguf`;
@@ -43,7 +44,7 @@ describe("developer page path presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy model ID" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(path));
     expect(writeText).toHaveBeenCalledOnce();
-    expect(models[0].id).toBe(path);
+    expect(defined(models[0]).id).toBe(path);
     expect(runningStore.status.model).toBe(path);
     // The list comes from the API's own URL and key, not the model's private ones.
     expect(api.localModels).toHaveBeenCalledWith(runningApi.url, runningApi.api_key);

@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createElement, type ComponentProps } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ChatHistoryMessage, ChatWorkspace } from "./chatHistory";
+import type { ChatHistoryMessage, ChatWorkspace } from "../../shared/api/conversationTypes";
+import { defined } from "../../testing/assertDefined";
+import type * as SidebarModule from "./ChatThreadSidebar";
+import type * as HeaderModule from "./ChatConversationHeader";
+import type * as ComposerModule from "./ChatComposer";
+import type * as MessageLogModule from "./ChatMessageLog";
 
 /**
  * Streaming regression: Chat.tsx used to pass
@@ -18,7 +23,7 @@ import type { ChatHistoryMessage, ChatWorkspace } from "./chatHistory";
 const SEED_MESSAGE_COUNT = 220;
 const NEW_ASSISTANT_INDEX = SEED_MESSAGE_COUNT + 1;
 
-const { bubbleRenderSpy, seedWorkspace } = vi.hoisted(() => {
+const { bubbleRenderSpy, regionRenderSpy, seedWorkspace } = vi.hoisted(() => {
   const messages: ChatHistoryMessage[] = Array.from({ length: 220 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content: `seed message ${index}`,
@@ -37,7 +42,7 @@ const { bubbleRenderSpy, seedWorkspace } = vi.hoisted(() => {
       messages,
     }],
   };
-  return { bubbleRenderSpy: vi.fn(), seedWorkspace: workspace };
+  return { bubbleRenderSpy: vi.fn(), regionRenderSpy: vi.fn(), seedWorkspace: workspace };
 });
 
 vi.mock("./MessageBubble", async () => {
@@ -48,6 +53,38 @@ vi.mock("./MessageBubble", async () => {
     return React.createElement("div", { "data-testid": `bubble-${index}` }, message.content);
   }
   return { default: React.memo(MessageBubbleStub), MessageBubble: MessageBubbleStub };
+});
+
+vi.mock("./ChatThreadSidebar", async () => {
+  const actual = await vi.importActual<typeof SidebarModule>("./ChatThreadSidebar");
+  return { default: (props: ComponentProps<typeof actual.default>) => {
+    regionRenderSpy("sidebar");
+    return createElement(actual.default, props);
+  } };
+});
+
+vi.mock("./ChatConversationHeader", async () => {
+  const actual = await vi.importActual<typeof HeaderModule>("./ChatConversationHeader");
+  return { default: (props: ComponentProps<typeof actual.default>) => {
+    regionRenderSpy("header");
+    return createElement(actual.default, props);
+  } };
+});
+
+vi.mock("./ChatComposer", async () => {
+  const actual = await vi.importActual<typeof ComposerModule>("./ChatComposer");
+  return { default: (props: ComponentProps<typeof actual.default>) => {
+    regionRenderSpy("composer");
+    return createElement(actual.default, props);
+  } };
+});
+
+vi.mock("./ChatMessageLog", async () => {
+  const actual = await vi.importActual<typeof MessageLogModule>("./ChatMessageLog");
+  return { default: (props: ComponentProps<typeof actual.default>) => {
+    regionRenderSpy("log");
+    return createElement(actual.default, props);
+  } };
 });
 
 vi.mock("./chatHistory", async () => {
@@ -71,7 +108,7 @@ vi.mock("../../shared/api/index", () => ({
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
   sessionList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
 }));
 
 import ChatPanel from "./Chat";
@@ -79,7 +116,7 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as { [K in keyof typeof api]: Mock };
 
 const cfg = {
   config_version: 1,
@@ -180,11 +217,11 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     const retry = await screen.findByRole("button", { name: "Retry last message" });
     expect(retry).toBeEnabled();
     expect(screen.getByText("Partial answer")).toBeInTheDocument();
-    const originalHistory = mocked.chatStream.mock.calls[0][3];
+    const originalHistory: unknown = defined(mocked.chatStream.mock.calls[0])[3];
     const replacement = controlledStream();
     fireEvent.click(retry);
     await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
-    expect(mocked.chatStream.mock.calls[1][3]).toEqual(originalHistory);
+    expect(defined(mocked.chatStream.mock.calls[1])[3]).toEqual(originalHistory);
     expect(screen.getAllByText("Explain the moon")).toHaveLength(1);
     expect(screen.queryByText("Partial answer")).not.toBeInTheDocument();
     await act(async () => replacement.finish("Complete answer"));
@@ -209,6 +246,7 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     // streaming updates from the request's phase transitions.
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello"));
     bubbleRenderSpy.mockClear();
+    regionRenderSpy.mockClear();
 
     act(() => stream.emit("there "));
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there"));
@@ -225,6 +263,7 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     act(() => stream.emitStats({ predicted_n: 12, predicted_ms: 240 }));
     await waitFor(() => expect(bubbleRenderSpy).toHaveBeenCalledWith(NEW_ASSISTANT_INDEX));
     expect(bubbleRenderSpy.mock.calls.every(([index]) => index === NEW_ASSISTANT_INDEX)).toBe(true);
+    expect(regionRenderSpy).not.toHaveBeenCalled();
     await act(async () => stream.finish("Hello there friend."));
   });
 
@@ -233,8 +272,9 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     await screen.findByTestId(`bubble-${SEED_MESSAGE_COUNT - 1}`);
     const log = screen.getByRole("log");
     let height = 400;
+    const readHeight = vi.fn(() => height);
     Object.defineProperties(log, {
-      scrollHeight: { configurable: true, get: () => height },
+      scrollHeight: { configurable: true, get: readHeight },
       clientHeight: { configurable: true, value: 200 },
     });
     log.scrollTop = 200;
@@ -256,11 +296,13 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
 
     log.scrollTop = 0;
     fireEvent.scroll(log);
+    readHeight.mockClear();
     height = 800;
     act(() => stream.emit("friend."));
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there friend."));
     await act(async () => stream.finish("Hello there friend."));
     expect(scroll).not.toHaveBeenCalled();
     expect(log.scrollTop).toBe(0);
+    expect(readHeight).not.toHaveBeenCalled();
   });
 });

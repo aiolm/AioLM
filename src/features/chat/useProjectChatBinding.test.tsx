@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { defined } from "../../testing/assertDefined";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readDocumentBinding } from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { testConfig } from "../../testing/appStore";
 import { projectFromConfig, setActiveProjectId, writeProjects, type ProjectPreset } from "../projects/projectStore";
-import { createChatThread, type ChatWorkspace } from "./chatHistory";
-import type { DocumentAttachment } from "./chatUtils";
+import { createChatThread } from "./chatWorkspace";
+import type { ChatWorkspace } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment } from "../../shared/api/mediaTypes";
 import { useProjectChatBinding } from "./useProjectChatBinding";
 import { projectChatBindingCopy } from "./projectChatBindingCopy";
 import type { ChatPhase } from "./chatSendTypes";
@@ -40,7 +42,7 @@ function setup(initialDocuments: DocumentAttachment[] = [], initialProps: Partia
       setSelectedTools: setTools, locale, ...props,
     });
     return { ...binding, workspace, documents, tools, setWorkspace, setDocuments, setTools };
-  }, { initialProps: { phase: "idle", hasPendingTurn: false, composerRevision: 0, ...initialProps } as Props });
+  }, { initialProps: { phase: "idle", hasPendingTurn: false, composerRevision: 0, ...initialProps } });
   return { ...view, documentWrites };
 }
 
@@ -60,7 +62,7 @@ describe("active project chat binding", () => {
     expect(result.current.documentsLoading).toBe(true);
     expect(result.current.documentsError).toBeNull();
     expect(readDocumentBinding).toHaveBeenCalledTimes(4);
-    expect(result.current.workspace.threads[0].systemPrompt).toBe("research instructions");
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe("research instructions");
     expect(result.current.tools).toEqual(["research-tool"]);
     await act(async () => { reads.forEach((read, index) => read.resolve(`Content ${index}`)); });
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
@@ -103,9 +105,9 @@ describe("active project chat binding", () => {
     await waitFor(() => expect(result.current.documentsError).toBeNull());
     expect(result.current.documents[0]?.name).toBe("beta-0.txt");
     await act(async () => older.resolve("Stale project"));
-    expect(result.current.documents).toEqual([{ ...second.documentBindings[0], text: "Newest project" }]);
+    expect(result.current.documents).toEqual([{ ...defined(second.documentBindings[0]), text: "Newest project" }]);
     expect(result.current.projectName).toBe("beta");
-    expect(result.current.workspace.threads[0].systemPrompt).toBe("beta instructions");
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe("beta instructions");
     expect(result.current.tools).toEqual(["beta-tool"]);
   });
 
@@ -120,7 +122,7 @@ describe("active project chat binding", () => {
       result.current.setWorkspace(workspace => ({ ...workspace, activeThreadId: "second" }));
     });
     await act(async () => next.resolve("New thread context"));
-    expect(result.current.workspace.threads[1].systemPrompt).toBe("threaded instructions");
+    expect(defined(result.current.workspace.threads[1]).systemPrompt).toBe("threaded instructions");
     expect(result.current.documents[0]?.text).toBe("New thread context");
     await act(async () => old.resolve("Wrong thread context"));
     expect(result.current.documents[0]?.text).toBe("New thread context");
@@ -136,12 +138,12 @@ describe("active project chat binding", () => {
     const { result, rerender } = setup([], { hasPendingTurn: true });
     act(() => setActiveProjectId(next.id));
     expect(readDocumentBinding).not.toHaveBeenCalled();
-    expect(result.current.workspace.threads[0].systemPrompt).toBe("");
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe("");
     expect(result.current.tools).toEqual([]);
     rerender({ phase: "idle", hasPendingTurn: false, composerRevision: 0 });
     await waitFor(() => expect(result.current.documents[0]?.name).toBe("after-approval-0.txt"));
     expect(result.current.tools).toEqual(["after-approval-tool"]);
-    expect(result.current.workspace.threads[0].systemPrompt).toBe("after-approval instructions");
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe("after-approval instructions");
   });
 
   it("invalidates an in-flight read when a turn begins and retries after the turn ends", async () => {
@@ -177,7 +179,7 @@ describe("active project chat binding", () => {
   it("preserves a manually attached copy of a project path when that project is deactivated", async () => {
     const selected = project("same-path");
     writeProjects([selected]); setActiveProjectId(selected.id);
-    const manual = { ...selected.documentBindings[0], text: "Explicitly chosen manual content" };
+    const manual = { ...defined(selected.documentBindings[0]), text: "Explicitly chosen manual content" };
     const { result } = setup([manual]);
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
     expect(result.current.documents).toEqual([manual]);
@@ -256,7 +258,7 @@ describe("active project chat binding", () => {
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
     act(() => result.current.retryDocuments());
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
-    expect(result.current.workspace.threads[0].systemPrompt).toBe('Keep my own instructions');
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe('Keep my own instructions');
     expect(result.current.tools).toEqual(['user-selected-tool']);
     expect(result.current.documents).toHaveLength(1);
   });
@@ -277,12 +279,12 @@ describe("active project chat binding", () => {
     for (const library of [[selected], [selected, imported], [saved, imported]]) {
       act(() => writeProjects(library));
       await waitFor(() => expect(result.current.documentsLoading).toBe(false));
-      expect(result.current.workspace.threads[0].systemPrompt).toBe('My thread instructions');
+      expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe('My thread instructions');
       expect(result.current.tools).toEqual(['manual-tool']);
     }
     act(() => setActiveProjectId(saved.id));
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
-    expect(result.current.workspace.threads[0].systemPrompt).toBe('Saved for later');
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe('Saved for later');
     expect(result.current.tools).toEqual(['saved-tool']);
   });
 
@@ -295,12 +297,12 @@ describe("active project chat binding", () => {
     act(() => setActiveProjectId(selected.id));
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
     // Activating a project is explicit and applies its defaults once.
-    expect(result.current.workspace.threads[0].systemPrompt).toBe('existing instructions');
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe('existing instructions');
     act(() => result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
       thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: '' } : thread) })));
     act(() => result.current.retryDocuments());
     await waitFor(() => expect(result.current.documentsLoading).toBe(false));
-    expect(result.current.workspace.threads[0].systemPrompt).toBe('');
+    expect(defined(result.current.workspace.threads[0]).systemPrompt).toBe('');
   });
 
   it('retains overridden instructions when Chat is reopened, including legacy conversations', async () => {
@@ -315,11 +317,11 @@ describe("active project chat binding", () => {
     writeProjects([{ ...selected, systemPrompt: 'New library defaults, not applied', updatedAt: selected.updatedAt + 1 }]);
     const reopened = setup([], {}, 'en', saved);
     await waitFor(() => expect(reopened.result.current.documentsLoading).toBe(false));
-    expect(reopened.result.current.workspace.threads[0].systemPrompt).toBe('Conversation instructions after applying');
+    expect(defined(reopened.result.current.workspace.threads[0]).systemPrompt).toBe('Conversation instructions after applying');
     reopened.unmount();
-    delete saved.threads[0].projectBinding;
+    delete defined(saved.threads[0]).projectBinding;
     const legacy = setup([], {}, 'en', saved);
     await waitFor(() => expect(legacy.result.current.documentsLoading).toBe(false));
-    expect(legacy.result.current.workspace.threads[0].systemPrompt).toBe('Conversation instructions after applying');
+    expect(defined(legacy.result.current.workspace.threads[0]).systemPrompt).toBe('Conversation instructions after applying');
   });
 });

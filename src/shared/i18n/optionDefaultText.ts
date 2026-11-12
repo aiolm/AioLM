@@ -32,7 +32,8 @@ export function optionDefaultText(value: string, locale: Locale): string {
   for (const phrase of phrases) text = text.replace(phrase[0], phrase[position]);
   text = text.replace(/\b(?:all|auto|none)\b/g, (token, offset: number) => {
     if (!/[=()]\s*$/.test(text.slice(0, offset))) return token;
-    return ({ all: ['전체', 'すべて', '全部'], auto: ['자동', '自動', '自动'], none: ['없음', 'なし', '无'] } as const)[token as 'all' | 'auto' | 'none'][position - 1];
+    // Non-English locale positions are 1–3, indexing these three translations.
+    return ({ all: ['전체', 'すべて', '全部'], auto: ['자동', '自動', '自动'], none: ['없음', 'なし', '无'] } as const)[token as 'all' | 'auto' | 'none'][position - 1]!;
   });
   return text;
 }

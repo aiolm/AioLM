@@ -4,8 +4,10 @@ import * as api from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import EntrypointRegistration from './EntrypointRegistration';
+import { IpcError } from '../../shared/api/ipcError';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
@@ -28,6 +30,32 @@ beforeEach(() => {
   vi.mocked(api.entrypointManifestPreview).mockResolvedValue(registered);
   vi.mocked(api.runtimeEntrypointRegister).mockResolvedValue(registered);
   vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic path/한글 engine.py');
+});
+
+it('does not overwrite a newer executable edit with a late picker result', async () => {
+  let resolve!: (value: string | null) => void;
+  vi.mocked(api.pickRuntimePath).mockReturnValueOnce(new Promise(yes => { resolve = yes; }));
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  const field = screen.getByLabelText('Executable or interpreter');
+  fireEvent.click(within(field.closest('.entrypoint-field')!).getByRole('button'));
+  fireEvent.change(field, { target: { value: '/synthetic/newer-engine' } });
+  await act(async () => { resolve('/synthetic/older-engine'); });
+  expect(field).toHaveValue('/synthetic/newer-engine');
+});
+
+it('shows path picker failures and ignores a late failure after unmount', async () => {
+  vi.mocked(api.pickRuntimePath).mockRejectedValueOnce(new Error('Synthetic picker failure'));
+  const view = render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  const field = screen.getByLabelText('Executable or interpreter');
+  const choose = within(field.closest('.entrypoint-field')!).getByRole('button');
+  fireEvent.click(choose);
+  expect(await screen.findByText('Synthetic picker failure')).toBeVisible();
+  let reject!: (cause: Error) => void;
+  vi.mocked(api.pickRuntimePath).mockReturnValueOnce(new Promise((_, no) => { reject = no; }));
+  fireEvent.click(choose);
+  view.unmount();
+  await act(async () => { reject(new Error('Synthetic late picker failure')); });
+  expect(screen.queryByText('Synthetic late picker failure')).not.toBeInTheDocument();
 });
 
 it('discovers the HTTP bridge entry point instead of attaching engine arguments to the bridge program', async () => {
@@ -54,7 +82,7 @@ async function enter() {
   fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
   fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
   fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
-  fireEvent.click(screen.getAllByRole('button', { name: 'Add file argument' })[0]);
+  fireEvent.click(defined(screen.getAllByRole('button', { name: 'Add file argument' })[0]));
   await waitFor(() => expect(screen.getAllByDisplayValue('/synthetic path/한글 engine.py')).toHaveLength(2));
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 }
@@ -172,7 +200,7 @@ it('retains the full published submission across help-save failure and config ch
   expect(screen.getByText('Synthetic help storage refused', { selector: '.app-diagnostic-summary' })).toBeVisible();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(onPublished).toHaveBeenCalledOnce(); expect(onRegistered).not.toHaveBeenCalled();
-  const submitted = vi.mocked(api.runtimeEntrypointRegister).mock.calls[0][0];
+  const submitted = defined(vi.mocked(api.runtimeEntrypointRegister).mock.calls[0])[0];
   expect(submitted).toEqual(expected); expect(submitted).not.toBe(preview);
   expect(submitted.prefix).not.toBe(preview.prefix); expect(submitted.help).not.toBe(preview.help);
   expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
@@ -273,7 +301,7 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
     options_separator: '--',
   };
   vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic/engine.setup.json');
-  vi.mocked(api.adapterSetupImport).mockResolvedValue(recipe);
+  vi.mocked(api.adapterSetupImport).mockResolvedValue({ recipe, token: 'synthetic-token' });
   vi.mocked(api.adapterSetupPrepare).mockResolvedValue(prepared);
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
@@ -326,7 +354,7 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
   fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
   fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   await screen.findByRole('button', { name: 'Register' });
-  const draft = vi.mocked(api.entrypointManifestPreview).mock.calls[0][0];
+  const draft = defined(vi.mocked(api.entrypointManifestPreview).mock.calls[0])[0];
   expect(draft).toMatchObject({ model: { kind: 'flag', flag: '--model', equals: false }, port: { kind: 'flag', flag: '--port', equals: false },
     auth: { kind: 'none' }, protocol: { kind: 'openai_http' }, health_path: '/health', model_formats: ['gguf'],
     probe: { program: '/synthetic/probe', args: ['{model}', '{options_json}'] },
@@ -342,7 +370,7 @@ it('keeps failed entrypoint help mentioning cancelled visible and retries the un
     + 'Help capture: success=false, exit_code=17, timed_out=false\n'
     + 'stderr (encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n'
     + 'An earlier operation was cancelled; this help command failed.';
-  vi.mocked(api.entrypointHelpDiscover).mockRejectedValueOnce(diagnostic);
+  vi.mocked(api.entrypointHelpDiscover).mockRejectedValueOnce(new IpcError('internal', diagnostic));
   const onRegistered = vi.fn();
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={onRegistered} /></I18nProvider>);
   await enter();
@@ -377,18 +405,20 @@ it('keeps failed entrypoint help mentioning cancelled visible and retries the un
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
 });
 
-it.each(['canonical', 'requested'] as const)('keeps %s entrypoint help cancellation quiet and permits retry', async mode => {
-  let reject!: (cause: string) => void;
+it.each(['canonical', 'reworded', 'requested'] as const)('keeps %s entrypoint help cancellation quiet and permits retry', async mode => {
+  let reject!: (cause: IpcError) => void;
   vi.mocked(api.entrypointHelpDiscover).mockReturnValueOnce(new Promise((_, failure) => { reject = failure; }));
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
   await enter();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  const submitted = vi.mocked(api.entrypointHelpDiscover).mock.calls[0];
+  const submitted = defined(vi.mocked(api.entrypointHelpDiscover).mock.calls[0]);
   if (mode === 'requested') {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(api.entrypointHelpCancel).toHaveBeenCalledWith(submitted[0]);
   }
-  await act(async () => { reject(mode === 'canonical' ? 'help discovery cancelled' : 'process stopped before complete help'); });
+  await act(async () => { reject(mode === 'requested'
+    ? new IpcError('internal', 'process stopped before complete help')
+    : new IpcError('cancelled', mode === 'canonical' ? 'help discovery cancelled' : 'Help capture superseded by another request')); });
   expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
@@ -432,7 +462,7 @@ it('cancels only the pending entry point when the registration panel unmounts', 
   const rendered = render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
   await enter();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  const entry = vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0];
+  const entry = defined(vi.mocked(api.entrypointHelpDiscover).mock.calls[0])[0];
   rendered.unmount();
   expect(api.entrypointHelpCancel).toHaveBeenCalledWith(entry);
 });
@@ -478,7 +508,7 @@ it('carries explicit option metadata in the entry so its help review and registr
   await enter();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
-  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0]).toMatchObject({ option_metadata: metadata });
+  expect(defined(vi.mocked(api.entrypointHelpDiscover).mock.calls[0])[0]).toMatchObject({ option_metadata: metadata });
   // The discovered help is reviewed against the metadata before binding.
   const review = screen.getByRole('region', { name: 'Option fact differences' });
   expect(review).toHaveTextContent('adapter synthetic.adapter (r1)');
@@ -490,7 +520,7 @@ it('omits option metadata from the entry when none is given', async () => {
   await enter();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await waitFor(() => expect(api.entrypointHelpDiscover).toHaveBeenCalled());
-  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0]).not.toHaveProperty('option_metadata');
+  expect(defined(vi.mocked(api.entrypointHelpDiscover).mock.calls[0])[0]).not.toHaveProperty('option_metadata');
 });
 
 it('does not register an optional binding the user chose but left without its option', async () => {
@@ -520,5 +550,5 @@ it('does not register an optional binding the user chose but left without its op
   fireEvent.click(screen.getByRole('option', { name: 'Not used' }));
   fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   await screen.findByRole('button', { name: 'Register' });
-  expect(vi.mocked(api.entrypointManifestPreview).mock.calls[0][0]).toMatchObject({ host: null });
+  expect(defined(vi.mocked(api.entrypointManifestPreview).mock.calls[0])[0]).toMatchObject({ host: null });
 });

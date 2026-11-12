@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { use } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../shared/i18n/i18n";
 import { createTestStore } from "../testing/appStore";
@@ -32,11 +33,17 @@ vi.mock('../features/models/ModelWorkspace', () => ({ default: ({ section }: { s
 vi.mock("../features/runtimes/Runtimes", () => ({ default: ({ onOpenProfiles }: { onOpenProfiles: () => void }) => <button onClick={onOpenProfiles}>Saved runtime settings</button> }));
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
 vi.mock("../features/developer/Developer", () => ({ default: ({ onNavigate }: { onNavigate?: (view: ViewId) => void }) => <><p>API server content</p><button onClick={() => onNavigate?.("models")}>Load a model</button></> }));
-vi.mock("../features/bench/Bench", () => ({ default: () => {
-  if (benchmarkLoading) throw benchmarkLoading;
+vi.mock("../features/bench/Bench", () => ({ default: function Bench() {
+  if (benchmarkLoading) use(benchmarkLoading);
   return <><input aria-label="Benchmark result" />{showBenchmarkCancel && <LocalTaskCancelButton taskId="performance-benchmark-active" onClick={cancelBenchmark}>Cancel benchmark</LocalTaskCancelButton>}</>;
 } }));
 vi.mock("../features/model-settings/ModelSettingsDialog", () => ({ default: ({ open, initialConfig, initialSection, requireModelSelection, onClose }: ModelSettingsDialogProps) => open ? <div role="dialog" aria-label="Model settings editor"><p>{initialSection ?? "model"}</p><input aria-label="Editor model" value={requireModelSelection ? '' : initialConfig.active_model} readOnly /><button onClick={onClose}>Close editor</button></div> : null }));
+
+function storedPreferenceValues(): unknown {
+  const stored: unknown = JSON.parse(localStorage.getItem("aiolm-preferences")!);
+  if (!stored || typeof stored !== "object" || !("values" in stored)) throw new Error("Missing saved preference values.");
+  return stored.values;
+}
 
 describe("Workspace navigation", () => {
   beforeEach(() => { localStorage.clear(); store = createTestStore(); showBenchmarkCancel = false; benchmarkLoading = null; cancelBenchmark.mockReset(); });
@@ -76,7 +83,7 @@ describe("Workspace navigation", () => {
       fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
       expect(store.updateConfig).toHaveBeenCalledWith({ models_dir: 'models', onboarding_completed: true });
-      expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values).toMatchObject({ locale: 'en', theme: 'dark' });
+      expect(storedPreferenceValues()).toMatchObject({ locale: 'en', theme: 'dark' });
       expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
       view.unmount();
       mount();
@@ -94,7 +101,7 @@ describe("Workspace navigation", () => {
     mount();
     expect(await screen.findByRole('navigation', { name: '기본 탐색' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: '언어를 선택하세요' })).not.toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values.locale).toBe('ko');
+    expect(storedPreferenceValues()).toHaveProperty('locale', 'ko');
   });
 
   it('keeps setup pending when native persistence fails and enters the workspace only after retry', async () => {
@@ -382,19 +389,21 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("Projects"));
     await screen.findByText("Project parameters");
     act(() => { registerTask({id:"blocked-navigation",kind:"other",label:"Saving work",interruptible:false}); });
-    const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
     fireEvent.click(mainTab("Library"));
-    expect(confirm).toHaveBeenCalledOnce();
+    const confirmation = await screen.findByRole("dialog", { name: "Confirm" });
+    expect(confirmation).toHaveTextContent("Leaving now may interrupt Saving work. Continue?");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Project draft")).toBeVisible();
     fireEvent.click(screen.getByRole("button",{name:"Choose model"}));
     await screen.findByRole("dialog", { name: "Model settings editor" });
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(screen.getByText("Project parameters"));
     expect(await screen.findByText("tuning")).toBeVisible();
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Confirm" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Project draft")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
-    confirm.mockReturnValue(true);
     fireEvent.click(mainTab("Library"));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Confirm" })).getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText("Model library")).toBeVisible();
   });
 
@@ -412,7 +421,7 @@ describe("Workspace navigation", () => {
     fireEvent.click(screen.getByRole("option", { name: "Relaxed" }));
     expect(document.documentElement.style.getPropertyValue("--font-sans")).toMatch(/serif$/);
     expect(document.documentElement.style.getPropertyValue("--chat-prose-leading")).toBe("1.9");
-    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).values).toMatchObject({ appearance: { fontFamily: "serif" }, chat: { lineSpacing: "relaxed" } });
+    expect(storedPreferenceValues()).toMatchObject({ appearance: { fontFamily: "serif" }, chat: { lineSpacing: "relaxed" } });
     fireEvent.click(mainTab("Chat"));
     expect(screen.getByLabelText("Conversation draft")).toBe(draft);
     expect(draft).toHaveValue("Keep this");

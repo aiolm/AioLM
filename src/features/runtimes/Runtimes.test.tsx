@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import { createElement } from "react";
 import RuntimesPanel from "./Runtimes";
@@ -13,7 +13,9 @@ import * as runtimeAuto from "../../shared/api/runtimeAuto";
 import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { effectiveSchema } from "../../testing/effectiveSchema";
 import { testConfig } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import { getTaskSnapshot, registerTask, removeTask } from "../../shared/state/taskRegistry";
+import { IpcError } from "../../shared/api/ipcError";
 
 afterEach(() => { act(() => { for (const task of getTaskSnapshot()) removeTask(task.id); }); });
 
@@ -58,7 +60,14 @@ function openManualRegistration() {
   return details;
 }
 
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<
+  | "providerCatalog" | "providerRuntimes" | "sessionSummaryList"
+  | "rtList" | "rtLatest" | "rtInstall" | "rtInstallPr" | "rtPrPreview"
+  | "rtExport" | "rtImport" | "rtCancel" | "rtUninstall" | "deviceProfile"
+  | "onRuntimeProgress" | "providerInstall" | "providerPortableImport"
+  | "pickRuntimeAdapter" | "runtimeAdapterRegister",
+  Mock
+>;
 
 const store = {
   cfg: null,
@@ -300,8 +309,8 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(mocked.rtImport).not.toHaveBeenCalled();
     const owner = getTaskSnapshot().find(task => task.id === 'runtime-operation')!;
     expect(owner.label).toMatch(/cpu/);
-    const report = mocked.onRuntimeProgress.mock.calls[0][0];
-    act(() => report({ backend: 'cpu', build: 'b10638', phase: 'downloading', received: 512, total: 1024 }));
+    const report = defined(vi.mocked(api.onRuntimeProgress).mock.calls[0])[0];
+    act(() => { report({ backend: 'cpu', build: 'b10638', phase: 'downloading', received: 512, total: 1024 }); });
     expect(screen.getByRole('progressbar', { name: 'cpu installed builds' })).toHaveAttribute('value', '50');
     expect(screen.getAllByRole('button', { name: 'Cancel install' })).toHaveLength(1);
     expect(vulkan).toHaveAttribute('aria-disabled', 'true');
@@ -327,7 +336,7 @@ describe("RuntimesPanel pull-request builds", () => {
     if (outcome === 'cancelled') fireEvent.click(screen.getByRole('button', { name: 'Cancel install' }));
     await act(async () => {
       if (outcome === 'completed') finish({ backend: 'cpu', build: 'b10638', dir: '/synthetic/cpu', size_mb: 1 });
-      else fail(new Error(outcome === 'cancelled' ? 'runtime install cancelled' : 'synthetic install failure'));
+      else fail(new IpcError(outcome === 'cancelled' ? 'cancelled' : 'internal', outcome === 'cancelled' ? 'runtime install cancelled' : 'synthetic install failure'));
     });
     await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')?.state).toBe(outcome));
     expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument();
@@ -336,7 +345,7 @@ describe("RuntimesPanel pull-request builds", () => {
     fireEvent.click(next);
     expect(mocked.rtInstall).toHaveBeenCalledTimes(2);
     expect(mocked.rtInstall).toHaveBeenLastCalledWith('vulkan', 'b10638');
-    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({ state: 'running', label: expect.stringContaining('vulkan') });
+    expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({ state: 'running', label: expect.stringContaining('vulkan') as unknown });
   });
 
   it('does not let a late install completion finish a replacement runtime task', async () => {
@@ -346,7 +355,7 @@ describe("RuntimesPanel pull-request builds", () => {
     fireEvent.click(await screen.findByRole('switch', { name: 'Show all backends' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Install b10638: Vulkan' }));
     const cancelReplacement = vi.fn(async () => undefined);
-    act(() => registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic replacement runtime', phase: 'downloading', state: 'cancelling', interruptible: true, cancel: cancelReplacement }));
+    act(() => { registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic replacement runtime', phase: 'downloading', state: 'cancelling', interruptible: true, cancel: cancelReplacement }); });
     await act(async () => finish({ backend: 'vulkan', build: 'b10638', dir: '/synthetic/vulkan', size_mb: 1 }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel install' })).not.toBeInTheDocument());
     expect(getTaskSnapshot().find(task => task.id === 'runtime-operation')).toMatchObject({
@@ -398,7 +407,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancelling = await screen.findAllByRole("button", { name: "Cancelling" });
     expect(cancelling).toHaveLength(1);
     for (const button of cancelling) expect(button).toBeDisabled();
-    fireEvent.click(cancelling[0]);
+    fireEvent.click(defined(cancelling[0]));
     releaseCancel();
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel build" })).toBeEnabled());
     expect(mocked.rtCancel).toHaveBeenCalledTimes(1);
@@ -675,7 +684,7 @@ describe("RuntimesPanel pull-request builds", () => {
   });
 
   it("keeps the confirmation closed and the panel idle after a cancelled build", async () => {
-    mocked.rtInstallPr.mockRejectedValue(new Error("runtime install cancelled"));
+    mocked.rtInstallPr.mockRejectedValue(new IpcError("cancelled", "Build ended at the user's request"));
     renderPanel();
     await reviewPullRequest();
     fireEvent.click(screen.getByRole("button", { name: "Build this commit" }));
@@ -806,7 +815,7 @@ describe('neutral inference engine inventory', () => {
 
   it('distinguishes an owned runtime operation from a session lock in Add', async () => {
     render(panel());
-    act(() => registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic CPU installation', interruptible: true }));
+    act(() => { registerTask({ id: 'runtime-operation', kind: 'runtime', label: 'Synthetic CPU installation', interruptible: true }); });
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
     expect(screen.getByRole('button', { name: 'Find automatically' })).toBeDisabled();
     expect(screen.getByText(/Another engine operation is in progress/)).toBeVisible();
@@ -829,7 +838,7 @@ describe('neutral inference engine inventory', () => {
       .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const updateConfig = vi.fn(); const onBusyChange = vi.fn();
     const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
-    const view = render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    const view = render(panel({ store: { ...store, cfg, updateConfig }, onBusyChange }));
     try {
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
       openManualRegistration();
@@ -855,7 +864,7 @@ describe('neutral inference engine inventory', () => {
       expect(mocked.providerCatalog).toHaveBeenCalledWith(true);
       expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Open Synthetic' })).not.toBeInTheDocument();
-      const submitted = vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[0][0];
+      const submitted = defined(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[0])[0];
       const saved = structuredClone(submitted);
       expect(submitted.help).toEqual({ fingerprint: HELP_REPORT.identity.fingerprint, request: { program: null, args: ['--help'], scope: [] } });
       expect(runtimeHelp.runtimeEntrypointRegister).toHaveBeenLastCalledWith(submitted, { reportHelpPending: true });
@@ -876,7 +885,7 @@ describe('neutral inference engine inventory', () => {
       expect(retry).toBeEnabled(); expect(retry).toHaveAttribute('aria-disabled', 'true');
       fireEvent.click(retry); expect(runtimeHelp.runtimeEntrypointRegister).toHaveBeenCalledTimes(2);
       expect(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[1]).toEqual([saved, { reportHelpPending: true, resumeHelp: true }]);
-      expect(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[1][0]).toBe(submitted);
+      expect(defined(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[1])[0]).toBe(submitted);
       await act(async () => { finish(REGISTERED); });
       const success = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
       await waitFor(() => expect(success).toHaveFocus());
@@ -911,7 +920,7 @@ describe('neutral inference engine inventory', () => {
     vi.mocked(runtimeAuto.runtimeAutoDiscover).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     const onBusyChange = vi.fn(); const updateConfig = vi.fn();
     const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
-    render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    render(panel({ store: { ...store, cfg, updateConfig }, onBusyChange }));
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
     openManualRegistration();
     fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.kept' } });
@@ -963,7 +972,7 @@ describe('neutral inference engine inventory', () => {
     vi.mocked(runtimeAuto.runtimeAutoConnect).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     const updateConfig = vi.fn(); const onBusyChange = vi.fn();
     const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
-    render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    render(panel({ store: { ...store, cfg, updateConfig }, onBusyChange }));
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
     expect(screen.getByRole('heading', { name: 'Connect an external inference engine' })).toHaveFocus();
     expect(openManualRegistration()).toHaveAttribute('open');
@@ -1085,8 +1094,8 @@ describe('neutral inference engine inventory', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue without help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
-    fireEvent.change(modelFlag, { target: { value: '--model' } });
-    fireEvent.change(portFlag, { target: { value: '--port' } });
+    fireEvent.change(defined(modelFlag), { target: { value: '--model' } });
+    fireEvent.change(defined(portFlag), { target: { value: '--port' } });
     fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
     fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
@@ -1136,8 +1145,8 @@ describe('neutral inference engine inventory', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue without help' }));
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
-      fireEvent.change(modelFlag, { target: { value: '--model' } });
-      fireEvent.change(portFlag, { target: { value: '--port' } });
+      fireEvent.change(defined(modelFlag), { target: { value: '--model' } });
+      fireEvent.change(defined(portFlag), { target: { value: '--port' } });
       fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
       fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
       fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
@@ -1172,8 +1181,8 @@ describe('neutral inference engine inventory', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue without help' }));
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
-      fireEvent.change(modelFlag, { target: { value: '--model' } });
-      fireEvent.change(portFlag, { target: { value: '--port' } });
+      fireEvent.change(defined(modelFlag), { target: { value: '--model' } });
+      fireEvent.change(defined(portFlag), { target: { value: '--port' } });
       fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
       fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
       fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
@@ -1303,7 +1312,7 @@ describe('neutral inference engine inventory', () => {
         expect(mocked.runtimeAdapterRegister).not.toHaveBeenCalled();
         const cancel = screen.getByRole('button', { name: 'Cancel' });
         expect(cancel).toBeEnabled(); fireEvent.click(cancel);
-        await waitFor(() => expect(runtimeHelp.entrypointHelpCancel).toHaveBeenCalledWith(vi.mocked(runtimeHelp.entrypointHelpDiscover).mock.calls[0][0]));
+        await waitFor(() => expect(runtimeHelp.entrypointHelpCancel).toHaveBeenCalledWith(defined(vi.mocked(runtimeHelp.entrypointHelpDiscover).mock.calls[0])[0]));
         expect(onBusyChange).toHaveBeenLastCalledWith(true);
         expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
         await act(async () => { finishHelp(HELP_RESULT); });
@@ -1323,7 +1332,7 @@ describe('neutral inference engine inventory', () => {
     });
 
     it('locks wizard discovery while the manifest probe is pending and keeps its own cancellation available until rejection', async () => {
-      let failManifest!: (cause: string) => void;
+      let failManifest!: (cause: IpcError) => void;
       mocked.runtimeAdapterRegister.mockReturnValueOnce(new Promise((_resolve, reject) => { failManifest = reject; }));
       const state = protectedStore(); const onBusyChange = vi.fn();
       render(panel({ store: state.selectedStore, onBusyChange }));
@@ -1344,7 +1353,7 @@ describe('neutral inference engine inventory', () => {
         await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledOnce());
         expect(onBusyChange).toHaveBeenLastCalledWith(true);
         expect(discover).toBeDisabled();
-        await act(async () => { failManifest('runtime probe cancelled'); });
+        await act(async () => { failManifest(new IpcError('cancelled', 'runtime probe cancelled')); });
         await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
         expect(discover).toBeEnabled();
         expect(screen.getByRole('button', { name: 'Probe & register' })).toBeEnabled();
@@ -1359,7 +1368,7 @@ describe('neutral inference engine inventory', () => {
         expect(screen.getByRole('button', { name: 'All inference engines' })).toBeEnabled();
         expect(state.cfg).toEqual(state.before); expect(state.updateConfig).not.toHaveBeenCalled();
       } finally {
-        await act(async () => { failManifest('runtime probe cancelled'); });
+        await act(async () => { failManifest(new IpcError('cancelled', 'runtime probe cancelled')); });
       }
     });
 

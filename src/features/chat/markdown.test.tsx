@@ -1,7 +1,7 @@
 import { render, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import ChatMarkdown from "./ChatMarkdown";
-import { parseInline, parseMarkdown } from "./markdown";
+import { createStreamingMarkdown, parseInline, parseMarkdown } from "./markdown";
 
 function mount(source: string) {
   const { container } = render(<ChatMarkdown source={source} />);
@@ -101,5 +101,46 @@ describe("assistant markdown", () => {
 
   it("returns nothing for empty output instead of an empty paragraph", () => {
     expect(parseMarkdown("   \n\n  ")).toEqual([]);
+  });
+
+  it.each([
+    "# Heading\n\nA **paragraph**.\n\n```ts\n# not a heading\n\n- not a list\n````\n\n## Done\n",
+    "~~~text\r\none\r\n\r\n``` is not the closer\r\n~~~\r\nAfter\r\n",
+    "- first\n  - nested\n\n    continuation\n- second\n\n# Following\n\n3. third\n4. fourth\n",
+    "Intro\nA | B\n--- | :---:\none | two\n\n> # Quote\n> - item\n\n---\n\nEnd",
+    "# title\n---\n```\nopen fence\n\n# still code",
+  ])("renders every streaming prefix exactly like a one-shot parse: %s", (source) => {
+    const parser = createStreamingMarkdown();
+    for (let length = 1; length <= source.length; length += 1) {
+      const { completed, tail } = parser.append(source.charAt(length - 1));
+      expect([...completed, ...tail]).toEqual(parseMarkdown(source.slice(0, length)));
+    }
+  });
+
+  it("retains completed blocks while a trailing fence grows", () => {
+    const parser = createStreamingMarkdown();
+    const initial = parser.append("# Stable heading\n\n```ts\nconst value = 1;");
+    expect(initial.completed).toEqual(parseMarkdown("# Stable heading"));
+    const next = parser.append("\n\n# still code");
+    expect(next.completed).toBe(initial.completed);
+    expect(next.completed[0]).toBe(initial.completed[0]);
+    expect(next.tail).toEqual([{ kind: "code", language: "ts", value: "const value = 1;\n\n# still code" }]);
+  });
+
+  it("keeps streaming markup identical to the full renderer and accepts canonical final text", () => {
+    const source = "# Heading\n\n- first\n- second\n\n```ts\n# still code\n\n```\n\n## End";
+    const stream = {};
+    const live = render(<ChatMarkdown source="" stream={stream} />);
+    const full = render(<ChatMarkdown source="" />);
+    for (let length = 1; length <= source.length; length += 1) {
+      const prefix = source.slice(0, length);
+      live.rerender(<ChatMarkdown source={prefix} stream={stream} />);
+      full.rerender(<ChatMarkdown source={prefix} />);
+      expect(live.container.innerHTML).toBe(full.container.innerHTML);
+    }
+    const final = "## Canonical result\n\nChanged by the provider.";
+    live.rerender(<ChatMarkdown source={final} />);
+    full.rerender(<ChatMarkdown source={final} />);
+    expect(live.container.innerHTML).toBe(full.container.innerHTML);
   });
 });

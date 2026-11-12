@@ -30,7 +30,6 @@ describe('public measured launch argument groups', () => {
     const input = measured(args);
     const before = structuredClone(input);
     const actual = toPublicBenchmark(input, submissionId);
-    console.log('PUBLIC_ARGUMENT_GROUP', JSON.stringify({ privateOption: privateGroup[0], effective: actual.execution.effective_args }));
     expect.soft(actual.execution.effective_args).toEqual(['--max-model-len', '8192']);
     expect.soft(JSON.stringify(actual)).not.toContain('synthetic-private-');
     expect(validatePublicBenchmark(actual)).toBe(actual);

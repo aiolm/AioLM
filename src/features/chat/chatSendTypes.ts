@@ -1,9 +1,9 @@
 import type * as api from "../../shared/api/types";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import type { StreamMetrics, StreamTimings, StreamUsage } from "../../shared/api/sse";
 import type { ResponseMetrics } from "../../shared/lib/metrics";
 import type { TurnPersonalization } from "./chatPersonalization";
-import type { ChatRetryTool } from "./chatHistory";
+import type { ChatRetryTool } from "../../shared/api/conversationTypes";
 
 export type ChatPhase = "idle" | "preparing" | "prefill" | "decoding";
 

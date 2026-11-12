@@ -5,7 +5,9 @@ import type { PerformanceBenchmarkRow } from '../../shared/api/types';
 import { benchmarkReport } from './benchmarkReport';
 import { benchmarkWorkbook } from './benchmarkWorkbook';
 import { performanceMarkdown } from './performanceMarkdown';
-import { benchmarkHistoryModelLabel, recordedBenchmarkModelLabel, performanceCsv, type LegacyPerformanceBenchmarkRecord, type ServingPerformanceBenchmarkRecord } from './performanceRecords';
+import type { LegacyPerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { benchmarkHistoryModelLabel, recordedBenchmarkModelLabel, performanceCsv } from './performanceRecords';
+import { defined } from '../../testing/assertDefined';
 
 function serving(rows: PerformanceBenchmarkRow[]): ServingPerformanceBenchmarkRecord {
   return {
@@ -38,7 +40,7 @@ function trial(overrides: Partial<PerformanceBenchmarkRow> = {}): PerformanceBen
     reported_cached_tokens: null, usage_status: 'missing', finish_reasons: ['stop'], peak_memory_bytes: null,
     timing_source: 'client', failed: false, ...overrides };
 }
-const csvCells = (line: string) => [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map(match => match[1].replace(/""/g, '"'));
+const csvCells = (line: string) => [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map(match => defined(match[1]).replace(/""/g, '"'));
 const markdownCells = (line: string) => line.slice(1, -1).split(/(?<!\\)\|/).map(cell => cell.trim());
 
 // Export seams: frozen local record -> actual CSV, reopened workbook and copied Markdown.
@@ -53,8 +55,11 @@ describe('benchmark report exports', () => {
     const csv = performanceCsv([record]).trim().split('\r\n').map(csvCells);
     const markdown = performanceMarkdown(record, 'en').split('\n').filter(line => line.startsWith('|')).map(markdownCells);
     const workbook = new Workbook();
-    await workbook.xlsx.load(await benchmarkWorkbook(report) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
-    const sheet = workbook.worksheets[0];
+    await workbook.xlsx.load(await benchmarkWorkbook(report));
+    const sheet = defined(workbook.worksheets[0]);
+    const headers = defined(csv[0]);
+    const csvValues = defined(csv[1]);
+    const markdownValues = defined(markdown[2]);
     const expected = {
       'Model': 'Recorded-label', 'Method': 'openai-chat-serving@1', 'Input unit': 'utf8_bytes',
       'Runtime name': 'sglang', 'Runtime version': '1.2', 'Runtime backend': 'cuda', 'Runtime build': 'build-7',
@@ -69,13 +74,13 @@ describe('benchmark report exports', () => {
       'Legacy · token-based cold-prompt method · Input processing (Prefill / PP) · estimated (tok/s)': null,
     };
     for (const [header, value] of Object.entries(expected)) {
-      const index = csv[0].indexOf(header);
+      const index = headers.indexOf(header);
       expect(index, header).toBeGreaterThanOrEqual(0);
-      expect(csv[1][index], header).toBe(value == null ? '' : String(value));
+      expect(csvValues[index], header).toBe(value == null ? '' : String(value));
       expect(sheet.getCell(2, index + 1).value, header).toBe(value);
-      expect(markdown[2][index], header).toBe(value == null ? 'N/A' : String(value));
+      expect(markdownValues[index], header).toBe(value == null ? 'N/A' : String(value));
     }
-    const settings = JSON.parse(csv[1][csv[0].indexOf('Public settings')]);
+    const settings: unknown = JSON.parse(defined(csvValues[headers.indexOf('Public settings')]));
     expect(settings).toEqual([
       { target: 'launch', scope: [], name: 'threads', value: null, unit: 'threads', role: null },
       { target: 'launch', scope: ['serve'], name: 'enabled', value: false, unit: null, role: null },
@@ -83,7 +88,7 @@ describe('benchmark report exports', () => {
       { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
       { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
     ]);
-    expect(sheet.getCell(2, csv[0].indexOf('Public settings') + 1).value).toBe(JSON.stringify(settings));
+    expect(sheet.getCell(2, headers.indexOf('Public settings') + 1).value).toBe(JSON.stringify(settings));
     expect(performanceMarkdown(record, 'en')).toContain('"value":null');
     for (const exported of [csv.join('\n'), JSON.stringify(sheet.getSheetValues()), performanceMarkdown(record, 'en')]) {
       expect(exported).not.toMatch(/synthetic|PRIVATE|--threads|--credential|replaced-model|local_fingerprint|Infinity|NaN/);
@@ -98,10 +103,12 @@ describe('benchmark report exports', () => {
     const report = benchmarkReport([record]);
     const rate = report.columns.findIndex(column => column.key === 'output_bytes_per_second.median');
     const samples = report.columns.findIndex(column => column.key === 'output_bytes_per_second.samples');
-    expect(report.rows[0][rate]).toBeNull();
-    expect(report.rows[0][samples]).toBeNull();
-    expect(report.rows[1][rate]).toBe(0);
-    expect(report.rows[1][samples]).toBe(1);
+    const first = defined(report.rows[0]);
+    const second = defined(report.rows[1]);
+    expect(first[rate]).toBeNull();
+    expect(first[samples]).toBeNull();
+    expect(second[rate]).toBe(0);
+    expect(second[samples]).toBe(1);
     expect(performanceCsv([record])).not.toMatch(/Infinity|NaN/);
     expect(performanceMarkdown(record, 'en')).not.toMatch(/Infinity|NaN/);
   });
@@ -114,7 +121,7 @@ describe('benchmark report exports', () => {
     expect(recordedBenchmarkModelLabel(record)).toBe('');
     const report = benchmarkReport([record]);
     for (const key of ['recorded_model_label', 'runtime.name', 'model.format', 'model.sha256', 'model.size_bytes', 'execution.settings']) {
-      const value = report.rows[0][report.columns.findIndex(column => column.key === key)];
+      const value = defined(report.rows[0])[report.columns.findIndex(column => column.key === key)];
       expect(value).toBe(key === 'recorded_model_label' ? '' : null);
     }
     expect(performanceCsv([record])).not.toMatch(/synthetic|PRIVATE|replaced-model|--threads/);
@@ -134,14 +141,16 @@ describe('benchmark report exports', () => {
     };
     const report = benchmarkReport([serving([trial()]), legacy]);
     const column = (key: string) => report.columns.findIndex(value => value.key === key);
-    expect(report.rows[0][column('legacy.pp_tps')]).toBeNull();
-    expect(report.rows[1][column('legacy.pp_tps')]).toBe(10240);
-    expect(report.rows[1][column('legacy.tg_tps')]).toBe(100);
-    expect(report.rows[1][column('legacy.tpot_ms')]).toBe(10);
-    expect(report.rows[1][column('legacy.prompt_tokens')]).toBe(1024);
-    expect(report.rows[1][column('input_bytes')]).toBeNull();
-    expect(report.rows[1][column('first_output_ms.median')]).toBeNull();
-    expect(report.rows[1][column('input_unit')]).toBe('tokens');
-    expect(report.rows[1][column('method')]).toBeNull();
+    const servingValues = defined(report.rows[0]);
+    const legacyValues = defined(report.rows[1]);
+    expect(servingValues[column('legacy.pp_tps')]).toBeNull();
+    expect(legacyValues[column('legacy.pp_tps')]).toBe(10240);
+    expect(legacyValues[column('legacy.tg_tps')]).toBe(100);
+    expect(legacyValues[column('legacy.tpot_ms')]).toBe(10);
+    expect(legacyValues[column('legacy.prompt_tokens')]).toBe(1024);
+    expect(legacyValues[column('input_bytes')]).toBeNull();
+    expect(legacyValues[column('first_output_ms.median')]).toBeNull();
+    expect(legacyValues[column('input_unit')]).toBe('tokens');
+    expect(legacyValues[column('method')]).toBeNull();
   });
 });

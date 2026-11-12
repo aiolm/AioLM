@@ -3,6 +3,8 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import AdapterSetupPanel from './AdapterSetupPanel';
+import { IpcError } from '../../shared/api/ipcError';
+import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
@@ -19,7 +21,7 @@ const draft = { engine_id: 'custom.unseen' } as api.EntrypointDraft;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic/engine.setup.json');
-  vi.mocked(api.adapterSetupImport).mockResolvedValue(recipe);
+  vi.mocked(api.adapterSetupImport).mockResolvedValue({ recipe, token: 'synthetic-token' });
 });
 function mount() {
   const onPrepared = vi.fn(), onBusyChange = vi.fn();
@@ -40,7 +42,7 @@ it('loads arbitrary recipe data only on request and passes exact Unicode input t
   vi.mocked(api.adapterSetupPrepare).mockResolvedValue(draft);
   fireEvent.submit(screen.getByRole('button', { name: 'Check installation and continue' }).closest('form')!);
   await waitFor(() => expect(view.onPrepared).toHaveBeenCalledWith(draft));
-  expect(api.adapterSetupPrepare).toHaveBeenCalledWith(expect.any(String), recipe,
+  expect(api.adapterSetupPrepare).toHaveBeenCalledWith(expect.any(String), 'synthetic-token',
     { program: '/synthetic path/눈길 ; &/engine', revision: 'synthetic-revision' });
 });
 
@@ -65,15 +67,34 @@ it('discards a cancelled late result, retains inputs and permits an explicit ret
   await waitFor(() => expect(view.onPrepared).toHaveBeenCalledTimes(1));
 });
 
+it.each([
+  { cause: new IpcError('cancelled', 'Setup request superseded'), state: 'cancelled' },
+  { cause: new IpcError('internal', 'help discovery cancelled'), state: 'failed' },
+])('classifies native setup rejection by kind: $state', async ({ cause, state }) => {
+  vi.mocked(api.adapterSetupPrepare).mockRejectedValueOnce(cause);
+  const view = mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
+  fireEvent.change(await screen.findByLabelText('Installed executable (Required)'), { target: { value: '/synthetic/engine' } });
+  fireEvent.submit(screen.getByRole('button', { name: 'Check installation and continue' }).closest('form')!);
+  await waitFor(() => expect(view.onBusyChange).toHaveBeenLastCalledWith(false));
+  expect(getTaskSnapshot()).toEqual(expect.arrayContaining([expect.objectContaining({ state, detail: cause.message })]));
+  expect(view.onPrepared).not.toHaveBeenCalled();
+  if (state === 'cancelled') expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  else expect(screen.getByRole('alert')).toHaveTextContent(cause.message);
+  expect(screen.getByRole('button', { name: 'Check installation and continue' })).toBeEnabled();
+});
+
 it('imports an additional adapter without a closed engine list and ignores late picker results after leaving', async () => {
   const view = mount();
-  vi.mocked(api.pickRuntimePath).mockResolvedValueOnce('/synthetic/new-adapter.json');
   fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   await screen.findByLabelText('Installed executable (Required)');
-  expect(api.adapterSetupImport).toHaveBeenCalledWith('/synthetic/new-adapter.json');
+  expect(api.adapterSetupImport).toHaveBeenCalledWith();
+  expect(api.pickRuntimePath).not.toHaveBeenCalled();
   vi.mocked(api.adapterSetupImport).mockResolvedValueOnce({
-    ...recipe, id: 'another.vendor', title: 'Another independent adapter',
-    fields: [{ key: 'folder', label: 'Installation folder', kind: 'folder', required: true, default: '/synthetic/package' }],
+    token: 'another-token',
+    recipe: { ...recipe, id: 'another.vendor', title: 'Another independent adapter',
+      fields: [{ key: 'folder', label: 'Installation folder', kind: 'folder', required: true, default: '/synthetic/package' }],
+    },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Import AioLM connection setup (.json)' }));
   expect(await screen.findByLabelText('Installation folder (Required)')).toHaveValue('/synthetic/package');

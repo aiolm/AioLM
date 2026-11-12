@@ -4,6 +4,7 @@ import { invoke } from "../../shared/api/transport";
 import { mcpListTools } from "../../shared/api/commands";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import { useChatMcpTools } from "../chat/useChatMcpTools";
 import McpPanel from "./Mcp";
 
@@ -49,7 +50,7 @@ describe("MCP native tool payloads", () => {
     const { result } = renderHook(() => useChatMcpTools());
     await act(() => result.current.refreshMcpTools());
     expect(result.current.mcpDefinitions).toHaveLength(1);
-    expect(result.current.mcpDefinitions[0].function.parameters).toEqual(schema);
+    expect(defined(result.current.mcpDefinitions[0]).function.parameters).toEqual(schema);
     expect(result.current.mcpError).toBeNull();
   });
 

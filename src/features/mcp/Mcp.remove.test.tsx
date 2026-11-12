@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { defaultPreferences, savePreferences } from '../../shared/config/preferences';
 import McpPanel from './Mcp';
 
@@ -40,6 +41,21 @@ describe('MCP removal ownership', () => {
     vi.mocked(api.mcpCancelToolCall).mockResolvedValue(undefined);
   });
 
+  it('keeps a newly saved server when the initial inventory resolves later', async () => {
+    const inventory = deferred<api.McpServer[]>();
+    vi.mocked(api.mcpListServers).mockReturnValueOnce(inventory.promise);
+    vi.mocked(api.mcpSaveServer).mockImplementationOnce(async server => [server]);
+    render(<I18nProvider initialLocale="en"><McpPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Synthetic saved server' } });
+    fireEvent.change(screen.getByLabelText('Executable / command'), { target: { value: 'synthetic-server' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save server' }));
+    expect(await screen.findByText('Synthetic saved server')).toBeVisible();
+    await act(async () => inventory.resolve(servers));
+    expect(screen.getByText('Synthetic saved server')).toBeVisible();
+    expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Synthetic saved server');
+  });
+
   it('keeps a later server selection and draft after the earlier selected server is removed', async () => {
     const pending = deferred<api.McpServer[]>();
     vi.mocked(api.mcpRemoveServer).mockReturnValue(pending.promise);
@@ -49,7 +65,7 @@ describe('MCP removal ownership', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     select('beta');
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Keep beta draft' } });
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
     expect(screen.getByText('beta tools').closest('button')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByLabelText('Name')).toHaveValue('Keep beta draft');
@@ -64,7 +80,7 @@ describe('MCP removal ownership', () => {
     const dialog = await confirmAlphaRemoval();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete server' }));
     // Settle all issued shared promises before asserting, including a possible duplicate.
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(api.mcpRemoveServer).toHaveBeenCalledTimes(1);
   });
 
@@ -72,7 +88,7 @@ describe('MCP removal ownership', () => {
     const pending = deferred<api.McpServer[]>();
     vi.mocked(api.mcpRemoveServer).mockReturnValue(pending.promise);
     await openPanel(); await confirmAlphaRemoval();
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
     expect(screen.getByText('beta tools')).toBeVisible();
     expect(screen.getByLabelText('Name')).toHaveValue('');
@@ -123,7 +139,7 @@ describe('MCP removal ownership', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove beta tools' }));
     const nextDialog = await screen.findByRole('dialog', { name: 'Delete MCP server?' });
     expect(within(nextDialog).getByText('Remove the saved connection to beta tools? The server program and its files are kept.')).toBeVisible();
-    await act(async () => alpha.resolve([servers[1]]));
+    await act(async () => alpha.resolve([defined(servers[1])]));
     expect(nextDialog).toHaveAttribute('open');
     expect(within(nextDialog).getByText('Remove the saved connection to beta tools? The server program and its files are kept.')).toBeVisible();
     expect(vi.mocked(api.mcpRemoveServer).mock.calls.map(([id]) => id)).toEqual(['alpha']);
@@ -143,7 +159,7 @@ describe('MCP removal ownership', () => {
     const remove = screen.getByRole('button', { name: 'Remove alpha tools' });
     fireEvent.click(remove); fireEvent.click(remove);
     expect(screen.queryByRole('dialog', { name: 'Delete MCP server?' })).not.toBeInTheDocument();
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(api.mcpRemoveServer).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
     expect(screen.getByText('beta tools')).toBeVisible();
@@ -157,7 +173,7 @@ describe('MCP removal ownership', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     select('beta'); select('alpha');
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New alpha draft' } });
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
     expect(screen.getByText('beta tools')).toBeVisible();
     expect(screen.getByLabelText('Name')).toHaveValue('');
@@ -176,7 +192,7 @@ describe('MCP removal ownership', () => {
     const remove = within(reopened).getByRole('button', { name: 'Delete server' });
     expect(remove).toBeDisabled();
     fireEvent.click(remove);
-    await act(async () => pending.resolve([servers[1]]));
+    await act(async () => pending.resolve([defined(servers[1])]));
     expect(api.mcpRemoveServer).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('alpha tools')).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Delete MCP server?' })).not.toBeInTheDocument();
@@ -192,7 +208,7 @@ describe('MCP removal ownership', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Keep beta draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Discover tools' }));
     await screen.findByRole('button', { name: 'Prepare call: beta_echo' });
-    await act(async () => outcome === 'success' ? pending.resolve([servers[1]]) : pending.reject(new Error('Retired unrelated alpha failure')));
+    await act(async () => outcome === 'success' ? pending.resolve([defined(servers[1])]) : pending.reject(new Error('Retired unrelated alpha failure')));
     expect(screen.getByText('beta tools').closest('button')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByLabelText('Name')).toHaveValue('Keep beta draft');
     expect(screen.getByText('Tool descriptions loaded. No tools were run.')).toBeVisible();

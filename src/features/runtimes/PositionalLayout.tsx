@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { staticCandidates, type ConfirmedSyntax, type EffectiveSchema, type PositionalRole } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
@@ -48,20 +48,21 @@ export default function PositionalLayout({ effective, disabled, onSave, onDraftS
     setBase(signature);
     setDraft(initial());
   }
+  const slotsRef = useRef({ signature, slots });
+  if (slotsRef.current.signature !== signature) slotsRef.current = { signature, slots };
+  const review = slotsRef.current;
   // Unsaved draft secret indices, reported for sibling projections from the
   // moment they are picked. Same sourced rule as the saved supplement:
   // explicit static roles for known-sensitive slots only.
   const draftSecretList = useMemo(() => {
     const indices: number[] = [];
-    for (const slot of slots) {
+    for (const slot of review.slots) {
       if (slot.sensitive.certainty === 'unknown' || slot.sensitive.value !== true) continue;
       const role = decode(draft[slot.key] ?? '');
       if (role?.role === 'static') indices.push(role.index);
     }
     return indices;
-    // Slots derive from the same effective schema the signature pins.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, signature]);
+  }, [draft, review]);
   useEffect(() => {
     onDraftSecrets?.(draftSecretList);
     // A new review, runtime switch or unmount drops the draft report.
@@ -69,7 +70,7 @@ export default function PositionalLayout({ effective, disabled, onSave, onDraftS
   }, [draftSecretList, onDraftSecrets]);
   if (slots.length === 0) return null;
   const entry = effective.entry;
-  const conflicts = (effective.supplement?.conflicts ?? []).filter(conflict => conflict.field === 'positional');
+  const conflict = (effective.supplement?.conflicts ?? []).find(conflict => conflict.field === 'positional');
   const confirmable = effective.help_state === 'current' && !!effective.accepted_fingerprint && !!entry;
   // A stale role cannot configure launch, but still identifies a token we
   // already know to be sensitive. Keep that display-only protection while
@@ -106,8 +107,8 @@ export default function PositionalLayout({ effective, disabled, onSave, onDraftS
     <section className="app-card app-card--tight mt-3" aria-labelledby={`${id}-title`}>
       <h4 id={`${id}-title`}>{copy.positionalTitle}</h4>
       <p className="app-section-hint">{entry ? copy.positionalHint : copy.positionalNoEntry}</p>
-      {conflicts.length > 0 && (
-        <FeedbackBanner tone="error">{copy.positionalConflict}: {String(conflicts[0].help)}</FeedbackBanner>
+      {conflict && (
+        <FeedbackBanner tone="error">{copy.positionalConflict}: {String(conflict.help)}</FeedbackBanner>
       )}
       {entry && (
         <>

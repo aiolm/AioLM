@@ -1,4 +1,5 @@
-import type { DocumentAttachment, DocumentChunk } from "./chatTypes";
+import type { DocumentAttachment } from "../../shared/api/mediaTypes";
+import type { DocumentChunk } from "./chatTypes";
 
 const INDEX_DB_NAME = "aiolm-document-index";
 const INDEX_DB_VERSION = 1;
@@ -74,10 +75,11 @@ export function indexRecordForChunks(
   updatedAt = Date.now(),
   namespace = "",
 ): DocumentIndexRecord {
-  if (chunks.length === 0 || chunks.length !== vectors.length) {
+  const first = chunks[0];
+  if (!first || chunks.length !== vectors.length) {
     throw new Error("Document index chunks and vectors must have the same non-zero length.");
   }
-  const path = chunks[0].document.path;
+  const path = first.document.path;
   if (chunks.some((chunk) => chunk.document.path !== path)) {
     throw new Error("Document index records can contain one document at a time.");
   }
@@ -89,7 +91,7 @@ export function indexRecordForChunks(
     model,
     namespace,
     path,
-    fingerprint: documentFingerprint(chunks[0].document.text),
+    fingerprint: documentFingerprint(first.document.text),
     offsets: chunks.map((chunk) => chunk.offset),
     vectors: vectors.map((vector) => [...vector]),
     updatedAt,
@@ -108,7 +110,8 @@ export function indexRecordsForChunks(
   chunks.forEach((chunk, index) => {
     const current = grouped.get(chunk.document.path) ?? { chunks: [], vectors: [] };
     current.chunks.push(chunk);
-    current.vectors.push(vectors[index]);
+    // Equal array lengths were checked before iterating the chunks.
+    current.vectors.push(vectors[index]!);
     grouped.set(chunk.document.path, current);
   });
   return Array.from(grouped.values()).map((group) => indexRecordForChunks(model, group.chunks, group.vectors, updatedAt, namespace));
@@ -140,7 +143,8 @@ export function mergeCachedVectors(
     if (!byOffset) {
       const offsets = new Map<number, number[]>();
       record.offsets.forEach((offset, index) => {
-        if (!offsets.has(offset)) offsets.set(offset, record.vectors[index]);
+        const vector = record.vectors[index];
+        if (vector && !offsets.has(offset)) offsets.set(offset, vector);
       });
       offsetsByRecord.set(record, offsets);
       byOffset = offsets;
@@ -240,11 +244,11 @@ async function writeIndexedRecords(
       transaction = db.transaction(INDEX_STORE, "readwrite");
     } catch (error) {
       db.close();
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
       return;
     }
     let removed = 0;
-    let failure: unknown;
+    let failure: Error | undefined;
     transaction.oncomplete = () => {
       db.close();
       resolve(removed);
@@ -257,12 +261,12 @@ async function writeIndexedRecords(
       failure ??= transaction.error ?? new Error("Document index write failed.");
     };
     const abort = (error: unknown) => {
-      failure = error;
+      failure = error instanceof Error ? error : new Error(String(error));
       try {
         transaction.abort();
       } catch {
         db.close();
-        reject(error);
+        reject(failure);
       }
     };
     try {

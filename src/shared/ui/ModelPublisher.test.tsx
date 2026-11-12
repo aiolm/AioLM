@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import ModelPublisher, { modelPublishers } from './ModelPublisher';
 import ModelBadges from './ModelBadges';
 import { I18nProvider } from '../i18n/i18n';
+import { defined } from '../../testing/assertDefined';
 
 it('keeps repository publisher, quantizer and author roles distinct', () => {
   expect(modelPublishers({ author: 'Original Team', quantized_by: 'Quantizer', organization: 'Research Lab' }, 'publisher/model')).toEqual([
@@ -41,6 +42,6 @@ it('shows the imported repository owner ahead of the original model author', () 
   expect(screen.getByText('Original Team')).not.toBeVisible();
   fireEvent.click(screen.getByText(/전체 모델 정보/));
   expect(screen.getByText('Original Team')).toBeVisible();
-  expect(modelPublishers({ ...metadata, download_repository: 'recorded/model' })[0].name).toBe('recorded');
-  expect(modelPublishers(metadata, 'selected/model')[0].name).toBe('selected');
+  expect(defined(modelPublishers({ ...metadata, download_repository: 'recorded/model' })[0], 'recorded publisher').name).toBe('recorded');
+  expect(defined(modelPublishers(metadata, 'selected/model')[0], 'selected publisher').name).toBe('selected');
 });

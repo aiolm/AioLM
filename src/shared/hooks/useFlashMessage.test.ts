@@ -16,10 +16,10 @@ describe("useFlashMessage", () => {
     act(() => result.current[1]("saved"));
     expect(result.current[0]).toBe("saved");
 
-    act(() => vi.advanceTimersByTime(3999));
+    act(() => { vi.advanceTimersByTime(3999); });
     expect(result.current[0]).toBe("saved");
 
-    act(() => vi.advanceTimersByTime(1));
+    act(() => { vi.advanceTimersByTime(1); });
     expect(result.current[0]).toBeNull();
   });
 
@@ -27,23 +27,23 @@ describe("useFlashMessage", () => {
     const { result } = renderHook(() => useFlashMessage(1000));
     act(() => result.current[1]("saved"));
 
-    act(() => vi.advanceTimersByTime(999));
+    act(() => { vi.advanceTimersByTime(999); });
     expect(result.current[0]).toBe("saved");
 
-    act(() => vi.advanceTimersByTime(1));
+    act(() => { vi.advanceTimersByTime(1); });
     expect(result.current[0]).toBeNull();
   });
 
   it("restarts the timer when a new message replaces the current one", () => {
     const { result } = renderHook(() => useFlashMessage(1000));
     act(() => result.current[1]("first"));
-    act(() => vi.advanceTimersByTime(900));
+    act(() => { vi.advanceTimersByTime(900); });
     act(() => result.current[1]("second"));
 
-    act(() => vi.advanceTimersByTime(900));
+    act(() => { vi.advanceTimersByTime(900); });
     expect(result.current[0]).toBe("second");
 
-    act(() => vi.advanceTimersByTime(100));
+    act(() => { vi.advanceTimersByTime(100); });
     expect(result.current[0]).toBeNull();
   });
 
@@ -53,7 +53,7 @@ describe("useFlashMessage", () => {
     act(() => result.current[2]());
     expect(result.current[0]).toBeNull();
 
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => { vi.advanceTimersByTime(1000); });
     expect(result.current[0]).toBeNull();
   });
 

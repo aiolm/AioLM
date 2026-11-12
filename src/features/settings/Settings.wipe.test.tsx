@@ -7,8 +7,11 @@ import { sessionHasActivity } from '../../shared/state/sessionActivity';
 import { storageAdapter } from '../../shared/storage/storageAdapter';
 import { invoke } from '../../shared/api/transport';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import ChatPanel from '../chat/Chat';
-import { CHAT_WORKSPACE_KEY, createChatThread, type ChatWorkspace } from '../chat/chatHistory';
+import { CHAT_WORKSPACE_KEY } from '../chat/chatHistory';
+import { createChatThread } from '../chat/chatWorkspace';
+import type { ChatWorkspace } from '../../shared/api/conversationTypes';
 import { clearDocumentIndex } from '../chat/documentIndex';
 import SettingsPanel from './Settings';
 
@@ -28,7 +31,7 @@ vi.mock('../chat/documentIndex', async importOriginal => {
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => false,
   sessionList: vi.fn(async () => []),
-  normalizeSessionList: (value: unknown) => Array.isArray(value) ? value : [],
+  normalizeSessionList: (value: unknown): unknown[] => Array.isArray(value) ? value : [],
   serverActivity: vi.fn(async () => undefined),
   chatStream: vi.fn(),
   mcpListServers: vi.fn(async () => [{ id: 'synthetic', name: 'Synthetic tools', command: 'synthetic', args: [], enabled: true }]),
@@ -74,8 +77,8 @@ async function send(text: string) {
 beforeEach(() => {
   localStorage.clear(); cache.clear(); vi.clearAllMocks(); runtime.native = false;
   vi.mocked(invoke).mockReset();
-  vi.mocked(storageAdapter.get).mockReset().mockImplementation(async key => (cache.get(key) ?? null) as never);
-  vi.mocked(storageAdapter.set).mockReset().mockImplementation(async (key, value) => { cache.set(key, value); });
+  vi.spyOn(storageAdapter, 'get').mockReset().mockImplementation(async key => cache.get(key) ?? null);
+  vi.spyOn(storageAdapter, 'set').mockReset().mockImplementation(async (key, value) => { cache.set(key, value); });
   vi.mocked(api.serverActivity).mockReset().mockResolvedValue(undefined);
   vi.mocked(api.mcpCallTool).mockReset();
   vi.mocked(api.chatStream).mockReset().mockResolvedValue('New synthetic answer');
@@ -88,7 +91,7 @@ beforeEach(() => {
 it('clears the mounted chat and does not restore removed conversations on its next save', async () => {
   mount();
   await screen.findByText(originalText, { exact: true });
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   await erase();
   expect(screen.queryByText(originalText, { exact: true })).not.toBeInTheDocument();
   await send('New conversation after removal');
@@ -100,9 +103,9 @@ it('clears the mounted chat and does not restore removed conversations on its ne
 
 it('waits for an older pending save before removing every persisted copy', async () => {
   const pending = deferred<void>();
-  vi.mocked(storageAdapter.set).mockImplementationOnce(async (key, value) => { await pending.promise; cache.set(key, value); });
+  vi.spyOn(storageAdapter, 'set').mockImplementationOnce(async (key, value) => { await pending.promise; cache.set(key, value); });
   mount();
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete all conversation data' }));
   fireEvent.click(screen.getAllByRole('button', { name: 'Delete all conversation data' }).at(-1)!);
@@ -114,7 +117,7 @@ it('waits for an older pending save before removing every persisted copy', async
 
 it('invalidates old hydration when it finishes during removal', async () => {
   const pending = deferred<ChatWorkspace>();
-  vi.mocked(storageAdapter.get).mockReturnValueOnce(pending.promise);
+  vi.spyOn(storageAdapter, 'get').mockReturnValueOnce(pending.promise);
   mount();
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete all conversation data' }));
@@ -134,7 +137,7 @@ it.each(['preparation', 'streaming', 'approval', 'tool-running'] as const)('canc
   vi.mocked(api.chatStream).mockImplementationOnce(async (_url, _key, _model, _history, _sampling, onDelta) => {
     streamDelta = onDelta;
     if (stage === 'approval' || stage === 'tool-running') {
-      onDelta({ tool_calls: [{ index: 0, id: 'synthetic-call', name: _sampling.tools![0].function.name, arguments: '{}' }] });
+      onDelta({ tool_calls: [{ index: 0, id: 'synthetic-call', name: defined(_sampling.tools?.[0]).function.name, arguments: '{}' }] });
       return '';
     }
     onDelta({ content: 'Old stream content' });
@@ -142,7 +145,7 @@ it.each(['preparation', 'streaming', 'approval', 'tool-running'] as const)('canc
   });
   vi.mocked(api.mcpCallTool).mockReturnValueOnce(tool.promise);
   mount();
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   if (stage === 'approval' || stage === 'tool-running') {
     fireEvent.click(screen.getByText('MCP tools'));
     fireEvent.click(screen.getByRole('button', { name: 'Load MCP tools' }));
@@ -186,7 +189,7 @@ it('keeps sending locked until document deletion finishes', async () => {
   const pending = deferred<void>();
   vi.mocked(clearDocumentIndex).mockReturnValueOnce(pending.promise);
   mount();
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete all conversation data' }));
   fireEvent.click(screen.getAllByRole('button', { name: 'Delete all conversation data' }).at(-1)!);
@@ -205,7 +208,7 @@ it('discards an attachment read that was started before removal', async () => {
   const pending = deferred<string>();
   vi.mocked(api.readDocumentText).mockReturnValueOnce(pending.promise);
   mount();
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Attach file' }));
   await waitFor(() => expect(api.readDocumentText).toHaveBeenCalled());
   await erase();
@@ -219,7 +222,7 @@ it('does not recreate the document cache from a cancelled embedding request', as
   vi.mocked(api.embedText).mockReturnValueOnce(pending.promise);
   localStorage.setItem('aiolm.document-index.v1.synthetic', 'OLD-SYNTHETIC-CACHE');
   mount();
-  await waitFor(() => expect(storageAdapter.set).toHaveBeenCalled());
+  await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Attach file' }));
   await screen.findByText('context.md', { exact: true });
   await send('Search the attached document');
@@ -236,9 +239,9 @@ it('reports native deletion failure and keeps its surviving conversation usable'
   localStorage.setItem('aiolm.chat-storage.v1', 'native');
   vi.mocked(invoke).mockImplementation(async command => {
     if (command === 'conversations_clear') throw new Error('Synthetic storage unavailable');
-    if (command === 'conversations_load') return { threads: original.threads, warnings: [] } as never;
-    if (command === 'chat_personalization') return { instructions: [], skills: [], warnings: [] } as never;
-    return undefined as never;
+    if (command === 'conversations_load') return { threads: original.threads, warnings: [] };
+    if (command === 'chat_personalization') return { instructions: [], skills: [], warnings: [] };
+    return undefined;
   });
   mount();
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('conversations_load'));

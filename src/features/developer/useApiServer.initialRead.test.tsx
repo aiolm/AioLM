@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApiServerStatus } from "../../shared/api/types";
+import { defined } from "../../testing/assertDefined";
 
 type NativeArgs = Record<string, unknown> | undefined;
 type Layout = typeof import("../../shared/ui/initialLayout");
@@ -37,7 +38,7 @@ type View = ReturnType<typeof observe>;
 
 function holdNext<T>(command: string) {
   const held = deferred<T>();
-  const reply = handlers[command];
+  const reply = defined(handlers[command]);
   handlers[command] = () => { handlers[command] = reply; return held.promise; };
   return held;
 }

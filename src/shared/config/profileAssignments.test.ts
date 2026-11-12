@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { emptyGpuPlacement } from '../runtime/sessionUtils';
 import { applyDefaultProfile, ensureProfileAssignments, resolveProfileApplication, resolveProfileApplicationOrDefault, resolveProfileForExecution } from './profileAssignments';
 import {
@@ -9,7 +10,7 @@ import {
 } from './settingsProfiles';
 
 function freezeTree(value: object): void {
-  for (const child of Object.values(value)) if (child && typeof child === 'object') freezeTree(child);
+  for (const child of Object.values(value) as unknown[]) if (child && typeof child === 'object') freezeTree(child);
   Object.freeze(value);
 }
 
@@ -19,10 +20,10 @@ describe('required profile assignments', () => {
       id: `profile-${index}`, name: `Updated ${index}`, revision: 3,
       settings: { temperature: 1.5, chat_options: { stop: ['CURRENT'] } },
     }));
-    const source = { ...emptyProfileLibrary(), entries, default_profile_id: entries[0].id };
+    const source = { ...emptyProfileLibrary(), entries, default_profile_id: defined(entries[0]).id };
     for (let index = 0; index < 512; index++) {
       const model = `models/synthetic-${index}.gguf`;
-      source.applied[profileTargetKey(model)] = { model, profile_id: entries[index % entries.length].id,
+      source.applied[profileTargetKey(model)] = { model, profile_id: defined(entries[index % entries.length]).id,
         profile_name: 'Previous name', profile_revision: index % 2 ? 1 : undefined,
         settings: { temperature: index / 1000, chat_options: { stop: [`SAVED ${index}`] }, server_args: ['--seed', `${index}`] },
         system_prompt: `Saved prompt ${index}`,
@@ -34,14 +35,14 @@ describe('required profile assignments', () => {
     expect(result.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(Object.keys(result.applied)).toHaveLength(512);
     for (const [key, saved] of Object.entries(source.applied)) {
-      const profile = entries.find(entry => entry.id === saved.profile_id)!;
+      const profile = defined(entries.find(entry => entry.id === saved.profile_id));
       expect(result.applied[key]).toEqual({ ...saved, provider: 'llama.cpp', profile_name: profile.name, profile_revision: saved.profile_revision ?? profile.revision });
-      expect(result.applied[key].settings).not.toBe(saved.settings);
+      expect(defined(result.applied[key]).settings).not.toBe(saved.settings);
     }
     const firstKey = profileTargetKey('models/synthetic-0.gguf');
-    result.applied[firstKey].settings.server_args!.push('--changed');
-    result.applied[firstKey].settings.chat_options!.stop = ['CHANGED'];
-    result.entries[0].settings.chat_options!.stop = ['CHANGED PROFILE'];
+    defined(defined(result.applied[firstKey]).settings.server_args).push('--changed');
+    defined(defined(result.applied[firstKey]).settings.chat_options).stop = ['CHANGED'];
+    defined(defined(result.entries[0]).settings.chat_options).stop = ['CHANGED PROFILE'];
     expect(source).toEqual(before);
   });
 
@@ -106,10 +107,10 @@ describe('required profile assignments', () => {
     const blank = { ...testConfig, active_model: '' };
     const library = ensureProfileAssignments(blank, emptyProfileLibrary());
     expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile()]);
-    expect(library.applied['model:'].profile_id).toBe('profile-default');
+    expect(defined(library.applied['model:']).profile_id).toBe('profile-default');
     const selected = ensureProfileAssignments(testConfig, library);
     expect(selected.applied).not.toHaveProperty('model:');
-    expect(selected.applied[profileTargetKey(testConfig.active_model)].profile_id).toBeTruthy();
+    expect(defined(selected.applied[profileTargetKey(testConfig.active_model)]).profile_id).toBeTruthy();
     expect(ensureProfileAssignments(testConfig, selected)).toEqual(selected);
   });
 
@@ -151,8 +152,8 @@ describe('required profile assignments', () => {
       applied: { [profileTargetKey(saved.model)]: saved } };
     const before = structuredClone(library);
     const repaired = ensureProfileAssignments(current, library);
-    const application = repaired.applied[profileTargetKey(saved.model)];
-    const recovered = repaired.entries.find(entry => entry.id === application.profile_id)!;
+    const application = defined(repaired.applied[profileTargetKey(saved.model)]);
+    const recovered = defined(repaired.entries.find(entry => entry.id === application.profile_id));
     expect(application).toMatchObject({ settings: saved.settings, system_prompt: saved.system_prompt });
     expect(recovered).toMatchObject({ scope: 'global', system_prompt: saved.system_prompt,
       settings: { temperature: 0.2, mmproj: '', server_args: [], spec_draft_model: '' } });
@@ -169,13 +170,14 @@ describe('required profile assignments', () => {
       models: { primary_model: 'session.gguf', mmproj: 'session-projector.gguf', draft_model: '' },
       gpu: emptyGpuPlacement(), execution: { temperature: 0.15 } }] };
     const library = ensureProfileAssignments(cfg, emptyProfileLibrary());
-    const application = library.applied['session:saved'];
-    expect(application).toMatchObject({ model: 'session.gguf', profile_id: expect.any(String), settings: { temperature: 0.15, mmproj: 'session-projector.gguf' } });
+    const application = defined(library.applied['session:saved']);
+    expect(application).toMatchObject({ model: 'session.gguf', profile_id: expect.any(String) as unknown, settings: { temperature: 0.15, mmproj: 'session-projector.gguf' } });
     expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === application.profile_id)).toMatchObject({ scope: 'global' });
-    const moved = { ...cfg, sessions: [{ ...cfg.sessions[0], models: { ...cfg.sessions[0].models, primary_model: 'another.gguf' }, execution: { temperature: 0.6 } }] };
+    const session = defined(cfg.sessions[0]);
+    const moved = { ...cfg, sessions: [{ ...session, models: { ...session.models, primary_model: 'another.gguf' }, execution: { temperature: 0.6 } }] };
     const reassigned = ensureProfileAssignments(moved, library);
     expect(reassigned.applied['session:saved']).toMatchObject({ model: 'another.gguf', settings: { temperature: 0.6 } });
-    expect(reassigned.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === reassigned.applied['session:saved'].profile_id)).toMatchObject({ scope: 'global' });
+    expect(reassigned.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === defined(reassigned.applied['session:saved']).profile_id)).toMatchObject({ scope: 'global' });
   });
   it('applies the configured default for an explicit deleted reference while recovering anonymous legacy values', () => {
     const profile = captureProfile({ ...testConfig, temperature: 0.45 }, 'Fallback', 'global', 'Fallback prompt');

@@ -6,12 +6,13 @@ import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import { chatText } from '../../shared/i18n/chatI18n';
 import { defaultPreferences } from '../../shared/config/preferences';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => false }));
 vi.mock('../../shared/api/index', () => ({
   chatStream: vi.fn(), serverActivity: vi.fn(async () => undefined),
-  sessionList: vi.fn(async () => []), normalizeSessionList: (value: unknown) => Array.isArray(value) ? value : [],
+  sessionList: vi.fn(async () => []), normalizeSessionList: (value: unknown): unknown[] => Array.isArray(value) ? value : [],
   mcpListServers: vi.fn(async () => []), mcpListTools: vi.fn(async () => []),
 }));
 
@@ -22,7 +23,7 @@ async function composer(enterToSend = true, locale: Locale = 'en') {
   preferences.chat.enterToSend = enterToSend;
   render(<I18nProvider initialLocale={locale}><ChatPanel store={store} preferences={preferences} /></I18nProvider>);
   await screen.findByRole('log', { name: chatText[locale].conversation });
-  return screen.getByRole('textbox', { name: chatText[locale].chatMessage }) as HTMLTextAreaElement;
+  return screen.getByRole<HTMLTextAreaElement>('textbox', { name: chatText[locale].chatMessage });
 }
 
 function nativeInput(textarea: HTMLTextAreaElement, value: string, inputType: string, data: string) {
@@ -70,7 +71,7 @@ describe('chat Enter and IME confirmation', () => {
     fireEvent.keyUp(textarea, { key: 'Enter', keyCode: 13 });
     fireEvent.click(screen.getByRole('button', { name: send }));
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
-    expect(vi.mocked(api.chatStream).mock.calls[0][3]).toEqual(expect.arrayContaining([
+    expect(defined(vi.mocked(api.chatStream).mock.calls[0])[3]).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'user', content: draft }),
     ]));
   });

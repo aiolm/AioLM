@@ -5,6 +5,7 @@ import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ProviderOptions } from '../model-settings/ProviderControls';
 import RuntimeOptionSchemaForm from './RuntimeOptionSchemaForm';
@@ -123,7 +124,7 @@ describe('typed sensitive positional import review', () => {
   const payload = schemaOption({ key: 'payload', target: 'launch', group: 'other', kind: { type: 'json' } });
   payload.position = 0;
   payload.sensitive = { value: true, certainty: 'verified' };
-  const current = effectiveSchema([], [payload, schemaOption(options[1])]);
+  const current = effectiveSchema([], [payload, schemaOption(defined(options[1]))]);
   const raw = '{"token": "synthetic-private-positional", "n":9007199254740993}';
   const paste = `'${raw}' --label public`;
   const refused = () => ({ plan: [{ key: 'label', spelling: '--label', values: ['public'] }], managed: [], unrecognized: [raw] });
@@ -171,7 +172,7 @@ describe('typed sensitive positional import review', () => {
   });
 
   it('masks a registered entry managed positional review without changing the paste or applying its value', async () => {
-    const managed = effectiveSchema([], [{ ...payload, managed: 'discovery' }, schemaOption(options[1])], {
+    const managed = effectiveSchema([], [{ ...payload, managed: 'discovery' }, schemaOption(defined(options[1]))], {
       entry: { version: 1, program: 'synthetic-engine', prefix: [], positional_bindings: [] },
     });
     // Native import_plan_for_entry sends an unmapped/template managed slot's

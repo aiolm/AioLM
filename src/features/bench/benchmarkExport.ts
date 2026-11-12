@@ -1,8 +1,9 @@
-import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport';
+import { isNativeRuntimeAvailable } from '../../shared/api/transport';
+import { benchmarkExportCsv, benchmarkExportXlsx, type PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { modelDisplayName } from '../../shared/lib/displayPaths';
 import type { Locale } from '../../shared/i18n/i18n';
 import { benchmarkReport } from './benchmarkReport';
-import { performanceCsv, recordedBenchmarkModelLabel, type PerformanceBenchmarkRecord } from './performanceRecords';
+import { performanceCsv, recordedBenchmarkModelLabel } from './performanceRecords';
 
 type ExportScope = 'selected' | 'all';
 export type BenchmarkExportFormat = 'xlsx' | 'csv';
@@ -34,13 +35,13 @@ export async function exportBenchmarkResults(
     const { benchmarkWorkbook } = await import('./benchmarkWorkbook');
     const contents = await benchmarkWorkbook(benchmarkReport(records, locale));
     if (native) {
-      return await invoke<boolean>('benchmark_export_xlsx', { contents: Array.from(contents), fileName }) ? 'saved' : 'cancelled';
+      return await benchmarkExportXlsx(Array.from(contents), fileName) ? 'saved' : 'cancelled';
     }
     blob = new Blob([new Uint8Array(contents)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   } else {
     const contents = performanceCsv(records, locale);
     if (native) {
-      return await invoke<boolean>('benchmark_export_csv', { contents, fileName }) ? 'saved' : 'cancelled';
+      return await benchmarkExportCsv(contents, fileName) ? 'saved' : 'cancelled';
     }
     blob = new Blob(['\uFEFF', contents], { type: 'text/csv;charset=utf-8' });
   }

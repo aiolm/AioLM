@@ -7,6 +7,7 @@ import * as api from "../../shared/api/index";
 import { getChatPersonalization, readSkill, type ChatSkill } from "../../shared/api/personalization";
 import { isNativeRuntimeAvailable } from "../../shared/api/transport";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import type { AppStore } from "../../shared/state/store";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
@@ -23,7 +24,7 @@ vi.mock("../../shared/api/index", () => ({
   mcpCallTool: vi.fn(),
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
 }));
 vi.mock("../../shared/api/personalization", () => ({
   getChatPersonalization: vi.fn(),
@@ -99,7 +100,10 @@ describe("chat skill picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await screen.findByText("Reviewed", { exact: true });
     expect(readMock.mock.calls).toEqual([["agents:review"]]);
-    expect(String(streamMock.mock.calls[0][3][0].content).split("BODY-OF-agents:review").length - 1).toBe(1);
+    const content = defined(defined(streamMock.mock.calls[0])[3][0]).content;
+    expect(typeof content).toBe("string");
+    if (typeof content !== "string") throw new Error("Expected text content");
+    expect(content.split("BODY-OF-agents:review").length - 1).toBe(1);
     expect(screen.queryByRole("group", { name: "Selected skills" })).not.toBeInTheDocument();
   });
 
@@ -138,8 +142,8 @@ describe("chat skill picker", () => {
     loadMock.mockReturnValueOnce(new Promise((resolve) => { resolveStale = resolve; }));
     loadMock.mockResolvedValueOnce({ instructions: [], skills: [pdf], warnings: ["agents/skills/bad: unreadable"] });
     const changed = () => window.dispatchEvent(new CustomEvent("aiolm-personalization-changed", { detail: { source: "agents" } }));
-    act(changed);
-    act(changed);
+    await act(changed);
+    await act(changed);
     await waitFor(() => expect(within(details).queryByRole("checkbox", { name: /review/ })).not.toBeInTheDocument());
     expect(within(details).getByText(/unreadable/)).toBeInTheDocument();
     await act(async () => { resolveStale({ instructions: [], skills: [], warnings: [] }); });

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import type { ViewId } from '../../shared/types/navigation';
@@ -48,7 +48,7 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
 
   useEffect(() => () => { window.clearTimeout(copyTimer.current); }, []);
 
-  const refreshModels = async (background = false) => {
+  const refreshModels = useCallback(async (background = false) => {
     if (!canQueryModels) return;
     const request = ++modelsRequest.current;
     if (!background) { setLoadingModels(true); setError(null); }
@@ -60,14 +60,13 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
     } finally {
       if (request === modelsRequest.current) setLoadingModels(false);
     }
-  };
+  }, [canQueryModels, baseUrl, apiKey]);
 
   useEffect(() => {
     if (canQueryModels && panelActive) void refreshModels();
     else if (!canQueryModels) { modelsRequest.current += 1; setModels([]); setModelsFetched(false); setLoadingModels(false); }
     // Default model changes and returning to the page refresh its public model IDs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canQueryModels, baseUrl, apiKey, panelActive, store.status.state, store.status.model]);
+  }, [canQueryModels, baseUrl, apiKey, panelActive, store.status.state, store.status.model, refreshModels]);
 
   const sessionSignature = useRef<string | null>(null);
   useSessionPolling({

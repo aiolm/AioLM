@@ -1,380 +1,62 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import * as api from "../../shared/api/index";
-import type { AppStore } from "../../shared/state/store";
-import type { AppPreferences } from "../../shared/config/preferences";
-import { useI18n } from "../../shared/i18n/i18n";
-import type { ChatTextKey } from "../../shared/i18n/chatI18n";
-import { isLifecycleCancellation, isServerRunning } from "../../shared/lib/serverLifecycle";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { CustomSelect } from '../../shared/ui/CustomSelect';
-import { useChatThreads } from "./useChatThreads";
-import { useChatAttachments } from "./useChatAttachments";
-import { useNativeAttachmentDrop } from './useNativeAttachmentDrop';
-import { useChatMcpTools } from "./useChatMcpTools";
-import { useChatSend } from "./useChatSend";
-import type { ChatPhase } from "./chatSendTypes";
 import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
 import { providerCopy } from '../../shared/i18n/providerCopy';
-import { notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus, sessionPort } from "../../shared/runtime/sessionUtils";
-import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
-import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
-import { useModelSettings } from "../model-settings/ModelSettingsProvider";
-import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { isModelFilePath, modelDisplayName, normalizeDisplayPath, stripModelShardSuffix } from "../../shared/lib/displayPaths";
-import { titleFromMessage, unfinishedReply } from "./chatHistory";
 import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
-import { diagnoseRetryTools, restorableRetryTools } from "./chatRetryTools";
-import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
-import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
-import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
-import { embeddingSessionLabel, embeddingSessions, selectEmbeddingSession } from './embeddingTarget';
+import { embeddingSessionLabel } from './embeddingTarget';
 import { embeddingTargetCopy } from './embeddingTargetCopy';
-import { canPrepareAttachment } from './mediaPreprocessing';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
-import { chatTemplateCopy } from './chatTemplateCopy';
-import { chatTaskCopy } from './chatTaskCopy';
-import { loadedModelPath } from '../../shared/runtime/loadedModel';
-import { useProjectChatBinding } from './useProjectChatBinding';
 import { projectChatBindingCopy } from './projectChatBindingCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import PanelFeedback from '../../shared/ui/PanelFeedback';
 import { displayChatTitle } from './chatThreadTitle';
-import { executionText } from '../../shared/i18n/executionI18n';
 import { chatPersistenceCopy } from './chatPersistenceCopy';
-import { finishTask, getTaskSnapshot, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { chatTurnOwnerCopy } from './chatTurnOwnerCopy';
+import { useChatPanelController, type ChatPanelProps } from './useChatPanelController';
 
-export default function ChatPanel({ store, preferences, onOpenModels, onDiscoverModels, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onDiscoverModels?: () => void; active?: boolean }) {
-  const { t, locale } = useI18n();
-  const modelSettings = useModelSettings();
-  const ct = (key: ChatTextKey) => t(`chat.${key}`);
-  const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
-  const [phase, setPhase] = useState<ChatPhase>("idle");
-  const [input, setInput] = useState("");
-  const [composerRevision, setComposerRevision] = useState(0);
-  const [copiedMessage, showCopied] = useFlashMessage(1800);
-  const copied = copiedMessage === null ? null : Number(copiedMessage);
-  const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
-  const [selectedSessionId, setSelectedSessionId] = useState("default");
-  const [embeddingSelection, setEmbeddingSelection] = useState('auto');
-  const [audioSessionId, setAudioSessionId] = useState('');
-  const [videoFrames, setVideoFrames] = useState(false);
-  const [startingSession, setStartingSession] = useState(false);
-  const currentSessionLoad = useRef<{ id: string; cancelled: boolean } | null>(null);
-  const [sessionLoadNotice, setSessionLoadNotice] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const composerDropRef = useRef<HTMLDivElement>(null);
-  const atBottomRef = useRef(true);
-  const scrollViewportRef = useRef<{ width: number; height: number } | null>(null);
-
-  // The shared poller also refreshes on session status changes, and serves an
-  // open model settings dialog from the same session_list request.
-  useSessionPolling({
-    active,
-    details: true,
-    onData: (items) => {
-      setSessions(items.filter((item) => item.id !== "default"));
-      setSessionsLoaded(true);
+export default function ChatPanel({ store, preferences, onOpenModels, onDiscoverModels, active = true }: ChatPanelProps) {
+  const {
+    t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef,
+    session: {
+      selectedSessionId, setSelectedSessionId, selectedStatus, sessionOptions,
+      embeddingSelection, setEmbeddingSelection, availableEmbeddingSessions,
+      audioSessionId, setAudioSessionId, videoFrames, setVideoFrames, speechSessions,
+      serverOn, visionReady, configuredModel, model, effectiveConfig,
     },
-    onError: () => setSessionsLoaded(true),
-  });
-
-  const savedSessions = store.cfg?.sessions ?? [];
-  const savedSessionNames = new Map(savedSessions.map(definition => [definition.id, definition.name?.trim()]));
-  const namedSessions = sessions.map(session => {
-    const name = savedSessionNames.get(session.id);
-    return name && name !== session.name ? { ...session, name } : session;
-  });
-  const availableSessions = [
-    ...namedSessions,
-    ...savedSessions.filter((definition) => !sessions.some((session) => session.id === definition.id)).map((definition): api.SessionStatus => ({
-      id: definition.id, name: definition.name, state: "stopped", model: definition.models.primary_model,
-      mmproj: definition.models.mmproj, draft_model: definition.models.draft_model,
-    })),
-  ];
-  const selectedSession = selectedSessionId === "default" ? null : availableSessions.find((session) => session.id === selectedSessionId) ?? null;
-  const selectedDefinition = savedSessions.find((definition) => definition.id === selectedSessionId)
-    ?? (selectedSession && store.cfg ? sessionDefinitionFromStatus(selectedSession, store.cfg) : undefined);
-  const selectedSessionAvailable = selectedSessionId === "default" || selectedSession !== null;
-
-  useEffect(() => {
-    if (sessionsLoaded && !selectedSessionAvailable) setSelectedSessionId("default");
-  }, [sessionsLoaded, selectedSessionAvailable]);
-
-  const selectedStatus = selectedSession ?? store.status;
-  const embeddingCandidates = [{ ...store.status, id: 'default', name: t('ui.defaultSession') }, ...namedSessions];
-  const availableEmbeddingSessions = embeddingSessions(embeddingCandidates);
-  const embeddingChoice = selectEmbeddingSession(embeddingCandidates, selectedSessionId, embeddingSelection);
+    sessionLoad: { startingSession, sessionLoadNotice, openModelSettings, startSelectedSession, cancelSelectedSessionLoad },
+    attachmentState: { attachments, documents, attachmentStatus, addAttachment, removeAttachment, removeDocument },
+    mcp: { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpDefinitions },
+    skills,
+    threads: {
+      workspace, activeThread, liveThread, viewMessages, viewingLiveThread, saveFailed, retrySave,
+      threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen, pendingDelete, setPendingDelete,
+      visibleThreads, selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
+    },
+    turn: {
+      contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraftStore,
+      canRetry, retryUnavailable, send, approvePendingTool, rejectPendingTool, stop,
+    },
+    project: {
+      projectName: activeProjectName, documentsLoading: projectDocumentsLoading,
+      documentsError: projectDocumentsError, retryDocuments: retryProjectDocuments,
+    },
+    scroll: { scrollRef, onDraftRendered, onScrollAtBottomChange },
+    retry: { retryTools, restoreRetryTools },
+    visiblePhase, visibleError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
+    chatUnavailable, canSend, disabled, loadingModel, closeThreadPanel, copyMessage, sendMessage,
+    enterToSend, onKeyDown, lastMessage, responseState, recoverable,
+  } = useChatPanelController({ store, preferences, onOpenModels, active });
   const embeddingCopy = embeddingTargetCopy[locale];
-  const serverOn = isServerRunning(selectedStatus.state);
-  const modalities = selectedStatus.engine?.modalities;
-  const visionReady = serverOn && (modalities?.image ?? !!selectedStatus.mmproj);
-  const speechSessions = embeddingCandidates.filter(session => isServerRunning(session.state)
-    && session.engine?.tasks?.includes('transcription'));
-  const mediaOptions = { audioSessionId: speechSessions.some(session => session.id === audioSessionId) ? audioSessionId : undefined, videoFrames };
   const mediaCopy = mediaPreparationCopy[locale];
-
-  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, addDroppedAttachments, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
-    audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: videoFrames && visionReady,
-    setError: (message) => setError(message) });
-  const { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools();
-
-  const skills = useChatSkills();
-
-  const requireIdle = () => {
-    if (phase === "idle" && !pendingToolCall) return true;
-    setError(ct("stopCurrentResponseFirst"));
-    return false;
-  };
-
-  const resetComposer = () => {
-    setInput("");
-    clearComposerAttachments();
-    skills.clearSelectedSkills();
-    resetChatState();
-    setComposerRevision((revision) => revision + 1);
-  };
-
-  const {
-    workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
-    saveFailed, retrySave,
-    threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
-    pendingDelete, setPendingDelete, visibleThreads,
-    selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
-  } = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer, defaultThreadTitle: ct('newConversation') });
-
-  const baseUrl = serverOn && selectedStatus.url ? selectedStatus.url : null;
-  const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
-  const targetConfig = store.cfg && selectedDefinition ? sessionConfig(store.cfg, selectedDefinition) : store.cfg;
-  const configuredModel = selectedDefinition?.models.primary_model ?? (selectedSessionId === "default" ? store.cfg?.active_model ?? "" : selectedStatus.model ?? "");
-  const model = serverOn ? loadedModelPath(selectedStatus, configuredModel) : selectedSessionId === 'default' ? '' : configuredModel;
-  const effectiveConfig = targetConfig
-    ? modelSettings?.getRequestConfig(selectedSessionId, targetConfig, selectedStatus)
-      ?? { ...targetConfig, ...(serverOn ? selectedStatus.execution : {}), active_model: model }
-    : null;
-
-  const {
-    setError, error, contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraft,
-    canRetry, retryUnavailable, retryToolsMissing, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
-  } = useChatSend({
-    store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
-    embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
-      namespace: embeddingChoice.engine!.embedding_namespace ?? `${embeddingChoice.engine!.provider}:${embeddingChoice.model}` }
-      : selectedStatus.engine || embeddingSelection !== 'auto' ? { model: '', baseUrl: '', apiKey: '', namespace: '' } : undefined,
-    sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread: liveThread, msgs, setMsgs,
-    modelProfile: effectiveConfig ? modelSettings?.getRequestProfile(selectedSessionId, effectiveConfig) : undefined,
-    input, setInput, attachments, documents, setAttachments, setDocuments,
-    mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
-    selectedSkillIds: skills.selectedSkillIds, onSkillsAccepted: skills.clearSelectedSkills, locale,
-  });
-
-  const visiblePhase = viewingLiveThread ? phase : 'idle';
-  const visibleDraft = viewingLiveThread ? streamingDraft : null;
-  const visibleError = viewingLiveThread ? error : null;
-  const ownerCopy = chatTurnOwnerCopy[locale];
-  const ownerTitle = displayChatTitle(liveThread?.title, ct('newConversation'));
-
-  const openModelSettings = () => {
-    if (!requireIdle()) return;
-    if (modelSettings) modelSettings.open({
-      target: selectedSessionId === "default" ? { kind: "default" } : { kind: "session", sessionId: selectedSessionId },
-      ...(selectedDefinition ? { definition: selectedDefinition } : {}),
-    });
-    else onOpenModels?.();
-  };
-  const startSelectedSession = async () => {
-    if (!requireIdle() || startingSession || !targetConfig) return;
-    if (selectedSessionId === 'default') { openModelSettings(); return; }
-    const latest = store.getConfig?.() ?? store.cfg;
-    if (!latest) return;
-    if (sessionHasActivity(selectedSessionId) || ((latest.stop_existing_sessions_on_load ?? true) && anySessionActivity())) {
-      setError(ct("stopActiveResponseBeforeLoad"));
-      return;
-    }
-    const sessionId = selectedSessionId;
-    const operation = { id: sessionId, cancelled: false };
-    currentSessionLoad.current = operation;
-    const taskId = `session-load-${sessionId}`;
-    setStartingSession(true);
-    setError(null);
-    setSessionLoadNotice(false);
-    registerTask({
-      id: taskId, kind: 'other', label: `${t('ui.sessionStart')}: ${selectedSession?.name || sessionId}`,
-      phase: t('ui.sessionStarting'), interruptible: true,
-      cancel: async () => {
-        if (currentSessionLoad.current !== operation) return;
-        operation.cancelled = true;
-        updateTask(taskId, { state: 'cancelling', phase: t('ui.taskCancelling') });
-        try { await api.sessionStop(sessionId); }
-        catch (caught) { if (currentSessionLoad.current === operation) throw caught; }
-      },
-    });
-    try {
-      const definition = latest.sessions?.find((item) => item.id === sessionId) ?? selectedDefinition;
-      if (!definition) throw new Error(ct("saveSessionBeforeStart"));
-      const prepared = await prepareSessionProfile(store, definition);
-      if (operation.cancelled || getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') {
-        finishTask(taskId, 'cancelled');
-        setSessionLoadNotice(true);
-        return;
-      }
-      await api.sessionStart(sessionId, prepared, prepared.stop_existing_sessions_on_load ?? true);
-      // A stop can race readiness. Do not leave a late successful launch running
-      // after the user cancelled this operation.
-      if (operation.cancelled) {
-        await api.sessionStop(sessionId);
-        finishTask(taskId, 'cancelled');
-        setSessionLoadNotice(true);
-      } else finishTask(taskId, 'completed');
-      notifySessionStatusChanged();
-      await store.refreshStatus();
-    } catch (caught) {
-      if (isLifecycleCancellation(caught)) {
-        finishTask(taskId, 'cancelled');
-        setSessionLoadNotice(true);
-      } else {
-        const message = caught instanceof Error ? caught.message : String(caught);
-        setError(message);
-        finishTask(taskId, 'failed', message);
-      }
-    } finally {
-      if (currentSessionLoad.current === operation) currentSessionLoad.current = null;
-      setStartingSession(false);
-    }
-  };
-  const cancelSelectedSessionLoad = async () => {
-    const operation = currentSessionLoad.current;
-    if (!operation) return;
-    const taskId = `session-load-${operation.id}`;
-    const task = getTaskSnapshot().find(item => item.id === taskId);
-    if (task?.state !== 'running') return;
-    try { await task.cancel?.(); }
-    catch (caught) {
-      if (currentSessionLoad.current !== operation) return;
-      const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message);
-      finishTask(taskId, 'failed', message);
-    }
-  };
-
-  const {
-    projectName: activeProjectName, documentsLoading: projectDocumentsLoading,
-    documentsError: projectDocumentsError, retryDocuments: retryProjectDocuments,
-  } = useProjectChatBinding({ workspace, setWorkspace, documents, setDocuments,
-    setSelectedTools: setSelectedMcpTools, composerRevision, phase,
-    hasPendingTurn: pendingToolCall !== null, locale });
   const projectCopy = projectChatBindingCopy[locale];
-
-  const incompatibleMedia = attachments.some(attachment => {
-    return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
-  });
-  const chatSupported = selectedStatus.engine?.chat_supported !== false;
-  const generates = selectedStatus.engine?.tasks?.includes('generate') ?? true;
-  // A session that serves only other tasks (embeddings, transcription) is explained by those tasks, not as a missing chat template.
-  const chatUnavailable = !serverOn ? null : !generates ? chatTaskCopy(locale, selectedStatus.engine?.tasks ?? []) : !chatSupported ? chatTemplateCopy[locale] : null;
-  const canSend = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
-  const disabled = !serverOn || !model || !apiKey;
-  const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
-  useNativeAttachmentDrop({ targetRef: composerDropRef, active,
-    enabled: viewingLiveThread && !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
-      && !(documents.length >= 4 && attachments.length >= 4),
-    onDrop: addDroppedAttachments, setError });
-
-  // An empty idle conversation shows its guidance from the top; like the
-  // message effect below, resizing does not pin it to the bottom.
-  const followLatestRef = useRef(false);
-  followLatestRef.current = viewMessages.length > 0 || visiblePhase !== "idle";
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    scrollViewportRef.current = { width: element.clientWidth, height: element.clientHeight };
-    // Keep the latest reply in view when a window or composer changes size.
-    // A reader who scrolled into history retains their place.
-    const observer = new ResizeObserver(() => {
-      scrollViewportRef.current = { width: element.clientWidth, height: element.clientHeight };
-      if (atBottomRef.current && followLatestRef.current) element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element || !atBottomRef.current || (viewMessages.length === 0 && visiblePhase === "idle")) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (atBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [viewMessages, visiblePhase, visibleDraft]);
-
-  // Stable identity (not the inline `ct` closure) so MessageBubble's memo bailout
-  // survives streaming re-renders of ChatPanel; see MessageBubble.tsx's doc comment.
-  const copyMessage = useCallback((index: number, text: string) => {
-    void (async () => {
-      try {
-        await navigator.clipboard.writeText(text);
-        showCopied(String(index));
-      } catch (caught) {
-        setError(`${t("chat.requestFailed")}: ${caught instanceof Error ? caught.message : String(caught)}`);
-      }
-    })();
-  }, [t, setError, showCopied]);
-
-  const sendMessage = () => {
-    if (!canSend) return;
-    // Resolve the full automatic title with the user's action, before retrieval
-    // or generation can finish and resize the conversation heading later.
-    if (activeThread?.title === "New conversation" && input.trim()) {
-      updateActiveThread({ title: titleFromMessage(input) });
-    }
-    void send(false, undefined, canSend);
-  };
-
-  const enterToSend = preferences?.chat.enterToSend ?? true;
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME composition (including the keyCode 229 some engines report) must never send.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === "Enter" && !event.shiftKey && enterToSend) {
-      event.preventDefault();
-      sendMessage();
-    }
-  };
-
-  const lastMessage = viewMessages.at(-1);
-  const responseState = visibleError || lastMessage?.failed ? 'failed'
-    : lastMessage?.interrupted ? 'interrupted'
-    : lastMessage?.finishReason === 'tool_calls' || lastMessage?.toolRound ? 'tool-request'
-    : lastMessage?.role === 'assistant' ? 'complete' : 'none';
-  // Retry belongs to the conversation that owns the live buffer, once nothing is running or awaiting approval.
-  const recoverable = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && unfinishedReply(lastMessage);
-  const retryTools = retryToolsMissing ? diagnoseRetryTools(retryToolsMissing, mcpCatalog, selectedMcpTools, mcpCatalogLoaded) : null;
-  // The conversation and unfinished reply a pending restore must still belong to.
-  const retryScope = useRef({ threadId: workspace.activeThreadId, reply: msgs.at(-1) });
-  retryScope.current = { threadId: workspace.activeThreadId, reply: msgs.at(-1) };
-  // Discovers the MCP tools again and selects only the reply's tools found unchanged,
-  // keeping the user's other choices; any call the retry makes is approved again.
-  const restoreRetryTools = async () => {
-    const missing = retryToolsMissing;
-    if (!viewingLiveThread || !missing || !requireIdle()) return;
-    const scope = retryScope.current;
-    // This is an explicit choice, so a first discovery must not select every listed tool.
-    setSelectedMcpTools(current => current);
-    const revision = mcpSelectionRevision();
-    const catalog = await refreshMcpTools();
-    // Leaving the chat, another conversation or message, or a newer selection by
-    // the user or a project wins: this restore must not land in that context.
-    if (!catalog || retryScope.current.threadId !== scope.threadId || retryScope.current.reply !== scope.reply
-      || mcpSelectionRevision() !== revision) return;
-    const keys = restorableRetryTools(missing, catalog);
-    if (keys.length) setSelectedMcpTools(current => [...current, ...keys.filter(key => !current.includes(key))]);
-  };
+  const ownerCopy = chatTurnOwnerCopy[locale];
 
   return (
     <div className="app-page-scroll chat-page">
@@ -382,7 +64,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
       <div className="chat-layout">
         <ChatThreadSidebar
           open={threadPanelOpen}
-          onClose={() => setThreadPanelOpen(() => false)}
+          onClose={closeThreadPanel}
           activeThreadId={workspace.activeThreadId}
           threadCount={workspace.threads.length}
           threadQuery={threadQuery}
@@ -404,10 +86,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             targetBusy={pendingToolCall !== null || startingSession}
             onUpdateThread={updateActiveThread}
             sessionLabel={t("ui.sessionsTitle")}
-            sessionOptions={[
-              { id: "default", label: t("ui.defaultSession") },
-              ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${sessionPort(session) || "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
-            ]}
+            sessionOptions={sessionOptions}
             selectedSessionId={selectedSessionId}
             embedding={selectedStatus.engine || availableEmbeddingSessions.length ? {
               label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
@@ -458,19 +137,15 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
           {sessionLoadNotice && <p role="status">{t('ui.taskCancelled')}</p>}
           <ChatMessageLog
             scrollRef={scrollRef}
-            onScrollAtBottomChange={(atBottom) => {
-              const element = scrollRef.current;
-              const viewport = scrollViewportRef.current;
-              // Resizing can emit scroll before ResizeObserver restores the bottom.
-              if (!element || !viewport || (element.clientWidth === viewport.width && element.clientHeight === viewport.height)) atBottomRef.current = atBottom;
-            }}
+            onScrollAtBottomChange={onScrollAtBottomChange}
             disabled={disabled}
             status={selectedStatus}
             model={model}
             serverOn={serverOn}
             canGenerate={chatSupported && generates}
             msgs={viewMessages}
-            streamingDraft={visibleDraft}
+            streamingDraftStore={viewingLiveThread ? streamingDraftStore : null}
+            onDraftRendered={onDraftRendered}
             phase={visiblePhase}
             copiedIndex={copied}
             compactMessages={preferences?.chat.compactMessages ?? false}

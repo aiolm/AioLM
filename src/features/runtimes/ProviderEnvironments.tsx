@@ -18,18 +18,15 @@ import { providerRuntimeReferences } from './runtimeReferences';
 import { RuntimeRemovalTargets } from './RuntimeRemovalNotice';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { runtimeAutoCopy } from '../../shared/i18n/runtimeAutoCopy';
+import { errorMessage } from '../../shared/api/errors';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 const TASK_ID = 'provider-environment-operation';
-const CANCELLATION_MESSAGES = new Set([
-  'runtime installation cancelled',
-  'runtime probe cancelled',
-  'portable runtime export cancelled',
-  'portable runtime import cancelled',
-  'portable runtime operation cancelled',
-]);
 
 export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange }: { active: boolean; provider?: api.ProviderId; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void }) {
   const { locale, t } = useI18n(); const copy = providerCopy[locale];
+  const translate = useRef(t);
+  translate.current = t;
   const [catalog, setCatalog] = useState<api.ProviderDescription[]>([]);
   const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
   const [python, setPython] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
@@ -54,21 +51,21 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
   useEffect(() => {
     if (!active) return;
     let current = true;
-    void Promise.all([api.providerCatalog(), api.providerRuntimes()]).then(([catalog, runtimes]) => { if (current) { setCatalog(catalog); setRuntimes(runtimes); } }).catch(cause => { if (current) setError(String(cause)); });
+    void Promise.all([api.providerCatalog(), api.providerRuntimes()]).then(([catalog, runtimes]) => { if (current) { setCatalog(catalog); setRuntimes(runtimes); } }).catch(cause => { if (current) setError(errorMessage(cause)); });
     return () => { current = false; };
   }, [active, revision, refreshRevision]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => {
     if ((!active && !busy) || !api.isNativeRuntimeAvailable()) return;
     let closed = false; let unlisten: (() => void) | undefined;
-    void import('@tauri-apps/api/event').then(({ listen }) => listen<{ phase: string; line: string }>('provider-install-progress', event => {
+    void api.onProviderInstallProgress(progress => {
       if (closed || !operationLock.current) return;
-      const phase = t(`ui.${buildPhaseLabelKey(event.payload.phase)}`);
-      setProgress(`${phase}: ${event.payload.line}`);
-      updateTask(TASK_ID, { phase, detail: event.payload.line });
-    })).then(stop => { if (closed) stop(); else unlisten = stop; }).catch(cause => setError(String(cause)));
+      const phase = translate.current(`ui.${buildPhaseLabelKey(progress.phase)}`);
+      setProgress(`${phase}: ${progress.line}`);
+      updateTask(TASK_ID, { phase, detail: progress.line });
+    }).then(stop => { if (closed) stop(); else unlisten = stop; }).catch(cause => { if (!closed) setError(errorMessage(cause)); });
     return () => { closed = true; unlisten?.(); };
-  }, [active, busy, t]);
+  }, [active, busy]);
   const cancelOperation = async (currentOperation = operationLock.current) => {
     if (!currentOperation || operationLock.current !== currentOperation || currentOperation.cancelRequested) return;
     currentOperation.cancelRequested = true;
@@ -77,7 +74,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     try { await api.rtCancel(); }
     catch (cause) {
       if (operationLock.current !== currentOperation) return;
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       currentOperation.cancelRequested = false;
       updateTask(TASK_ID, { state: 'running', detail: message });
       setError(message);
@@ -93,8 +90,8 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       ...(options.notifyDownload ? { notifyOnComplete: 'download' as const } : {}) });
     try { await operation(); setRevision(value => value + 1); if (options.inventory) notifyRuntimeInventoryChanged(); finishTask(TASK_ID, 'completed'); }
     catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const cancelled = CANCELLATION_MESSAGES.has(message);
+      const message = errorMessage(cause);
+      const cancelled = isIpcErrorKind(cause, 'cancelled');
       if (!cancelled) setError(message);
       finishTask(TASK_ID, cancelled ? 'cancelled' : 'failed', message);
     }

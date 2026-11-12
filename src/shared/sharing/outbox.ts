@@ -52,7 +52,7 @@ export interface PublicationEnqueueOptions {
 /** Transport for one exact selected entry; preserves HTTP status, error body, and Retry-After. */
 export interface SelectedEntryTransport {
   readonly destination: string;
-  submitSnapshot(entry: QueuedBenchmark, signal?: AbortSignal): Promise<BenchmarkReceipt>;
+  submitSnapshot(this: void, entry: QueuedBenchmark, signal?: AbortSignal): Promise<BenchmarkReceipt>;
 }
 
 function serviceCodeOf(error: unknown): string | undefined {
@@ -318,7 +318,7 @@ export function createBenchmarkOutbox(options: {
 
   return {
     /** Explicit publication with frozen exact bytes; legacy attempted rows are never auto-wrapped. */
-    async enqueuePublication(request: BenchmarkPublicationRequest, options: PublicationEnqueueOptions = {}): Promise<QueuedBenchmark> {
+    async enqueuePublication(this: void, request: BenchmarkPublicationRequest, options: PublicationEnqueueOptions = {}): Promise<QueuedBenchmark> {
       const normalized = normalizePublicationInput(request);
       const body = serializePublicationRequest(normalized);
       const submissionId = normalized.benchmark.submission_id;
@@ -386,13 +386,13 @@ export function createBenchmarkOutbox(options: {
       });
       return result!;
     },
-    async get(id: string): Promise<QueuedBenchmark | undefined> {
+    async get(this: void, id: string): Promise<QueuedBenchmark | undefined> {
       if (typeof id !== "string" || !id) throw new Error("Invalid submission lookup.");
       return store.get(id);
     },
     reconcileAccepted,
     pruneAcknowledged,
-    async retry(id: string): Promise<void> {
+    async retry(this: void, id: string): Promise<void> {
       await store.mutate(id, (entry) => {
         if (!entry || entry.state !== "rejected") return entry;
         // Terminal deletes never dispatch again, even on explicit retry.
@@ -401,7 +401,7 @@ export function createBenchmarkOutbox(options: {
       });
     },
     /** Dispatch one exact selected entry; never selects another row. */
-    async dispatchSelected(id: string, transport: SelectedEntryTransport, signal?: AbortSignal): Promise<number> {
+    async dispatchSelected(this: void, id: string, transport: SelectedEntryTransport, signal?: AbortSignal): Promise<number> {
       if (typeof id !== "string" || !id) throw new Error("Invalid selected submission.");
       if (measurement.isActive() || signal?.aborted) return 0;
       await reconcile(10);

@@ -114,7 +114,7 @@ export function ensureProfileLibrary(library: SettingsProfileLibrary, selectedPr
   const selected = llamaProfiles.find(entry => entry.id === populated.default_profile_id)
     ?? llamaProfiles.find(entry => entry.id === populated.provider_defaults?.['llama.cpp'])
     ?? llamaProfiles.find(entry => entry.id === DEFAULT_SETTINGS_PROFILE_ID)
-    ?? llamaProfiles.find(entry => entry.scope === 'global') ?? llamaProfiles[0];
+    ?? llamaProfiles.find(entry => entry.scope === 'global') ?? llamaProfiles[0]!; // A default was inserted above if empty.
   const normalized = setDefaultSettingsProfile(populated, selected.id);
   normalized.provider_defaults ??= {};
   normalized.provider_recent ??= {};
@@ -230,7 +230,7 @@ function migrateModelPathKeys(library: SettingsProfileLibrary): SettingsProfileL
   const entries = library.entries.map(profile => {
     const keys = profileKeys.get(profile.id);
     if (profile.scope !== 'model' || keys?.size !== 1) return profile;
-    const key = [...keys][0];
+    const key = [...keys][0]!; // The size === 1 check above proves there is one key.
     if (key === profile.model_key || key.toLowerCase().replace(/\\/g, '/') !== profile.model_key) return profile;
     changed = true;
     return { ...profile, model_key: key };
@@ -249,12 +249,12 @@ const secretName = /^(?:api[-_]?key(?:[-_]?file)?|authorization|auth|credential|
 function profileArgs(args: readonly string[]): string[] {
   const result: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-    const name = token.trim().split('=', 1)[0];
+    const token = args[i]!; // The loop bounds prove this argv entry exists.
+    const name = token.trim().split('=', 1)[0]!; // split always has a first item.
     if (canonicalServerOptionName(token) || secretName.test(name.replace(/^--?/, ''))) {
       if (!token.includes('=')) {
         const count = name === '--lora-scaled' ? 2 : 1;
-        for (let j = 0; j < count && args[i + 1] !== undefined && !/^--?[a-zA-Z]/.test(args[i + 1]); j++) i++;
+        for (let j = 0; j < count && args[i + 1] !== undefined && !/^--?[a-zA-Z]/.test(args[i + 1]!); j++) i++;
       }
       continue;
     }
@@ -406,11 +406,12 @@ function serverArgumentGroups(value: unknown): { groups: Record<string, string[]
   const groups: Record<string, string[]> = {};
   const order: string[] = [];
   for (let index = 0; index < value.length; index++) {
-    const flag = value[index].match(/^--?[a-zA-Z][\w.-]*/)?.[0];
+    const token = value[index]!; // The loop bounds prove this validated string entry exists.
+    const flag = token.match(/^--?[a-zA-Z][\w.-]*/)?.[0];
     if (!flag) return null;
     order.push(flag);
-    const tokens = [value[index]];
-    while (index + 1 < value.length && !/^--?[a-zA-Z][\w.-]*/.test(value[index + 1])) tokens.push(value[++index]);
+    const tokens = [token];
+    while (index + 1 < value.length && !/^--?[a-zA-Z][\w.-]*/.test(value[index + 1]!)) tokens.push(value[++index]!); // The length check bounds both reads.
     (groups[flag] ??= []).push(tokens.join(' '));
   }
   return { groups, order };

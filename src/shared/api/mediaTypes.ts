@@ -18,3 +18,15 @@ export interface ImageAttachment {
   /** Explicit preparation kept beside the original immutable attachment. */
   preparation?: MediaPreparation;
 }
+export interface DocumentAttachment {
+  name: string;
+  path: string;
+  text: string;
+}
+
+export interface ChatCitation {
+  name: string;
+  path: string;
+  offset: number;
+  score?: number;
+}

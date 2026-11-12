@@ -9,7 +9,8 @@ import { testConfig } from '../../testing/appStore';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import type { AppStore } from '../../shared/state/store';
 import type { AppConfig } from '../../shared/api/types';
-import type { ServingPerformanceBenchmarkRecord } from './performanceRecords';
+import type { JsonValue } from '../../shared/config/tuningValidation';
+import type { ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { webcrypto } from 'node:crypto';
 
 vi.mock('../../shared/api/benchmarkExplorer', () => ({
@@ -127,7 +128,7 @@ describe('public benchmark actions', () => {
   });
 
   it('discards cancelled source reads and stale destination schemas without saving to another target', async () => {
-    let resolveSource!: (value: unknown) => void;
+    let resolveSource!: (value: JsonValue) => void;
     vi.mocked(api.readPublicBenchmark).mockReturnValueOnce(new Promise(resolve => { resolveSource = resolve; }));
     render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
     await openImport();
@@ -194,7 +195,7 @@ describe('public benchmark actions', () => {
     await act(async () => importRecord('another-source'));
     expect(api.readPublicBenchmark).toHaveBeenCalledTimes(1);
     await act(async () => finishSave(cfg));
-    expect(cfg.settings_profiles!.entries.filter(entry => entry.id.startsWith('profile-benchmark-'))).toHaveLength(1);
+    expect(cfg.settings_profiles.entries.filter(entry => entry.id.startsWith('profile-benchmark-'))).toHaveLength(1);
     expect(screen.getByRole('status')).toHaveTextContent('Old edited profile');
   });
 

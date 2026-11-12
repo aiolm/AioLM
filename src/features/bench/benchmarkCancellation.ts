@@ -1,5 +1,5 @@
 import type { LegacyPerformanceBenchmarkResult, PerformanceBenchmarkResult } from '../../shared/api/types';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 
 /** A cancelled run only presents completed measurements, including legitimately unknown metrics.
  * Earlier app versions persisted the interrupted trial as an error row before checking cancellation.
@@ -8,7 +8,7 @@ import type { PerformanceBenchmarkRecord } from './performanceRecords';
 export function withoutCancelledTrials<T extends PerformanceBenchmarkResult | LegacyPerformanceBenchmarkResult>(result: T): T {
   if (result.status !== 'cancelled') return result;
   const rows = result.rows.filter(row => !row.error && !('failed' in row && row.failed));
-  return rows.length === result.rows.length ? result : { ...result, rows } as T;
+  return rows.length === result.rows.length ? result : { ...result, rows };
 }
 
 /** Empty cancellations are operations, not measurement results. Original history bytes stay intact on read. */

@@ -152,7 +152,7 @@ export function mapChatOptionAliases(options: JsonObject): JsonObject {
   for (const [alias, requestKey] of Object.entries(CHAT_OPTION_REQUEST_ALIASES)) {
     if (Object.prototype.hasOwnProperty.call(mapped, requestKey) === false
       && Object.prototype.hasOwnProperty.call(mapped, alias)) {
-      mapped[requestKey] = mapped[alias];
+      mapped[requestKey] = mapped[alias]!; // The own-property check proves the JSON value exists.
     }
     delete mapped[alias];
   }
@@ -160,7 +160,7 @@ export function mapChatOptionAliases(options: JsonObject): JsonObject {
 }
 
 function optionName(argument: string): string {
-  return argument.trim().split("=", 1)[0].trim();
+  return argument.trim().split("=", 1)[0]!.trim(); // Splitting a string always produces a first item.
 }
 
 /** Reject flags the app owns, wherever they appear in an argument vector. */

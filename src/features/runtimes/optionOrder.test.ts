@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { OptionSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import { defined } from '../../testing/assertDefined';
 import { applyPlan, editOption, expandPlan, moveOccurrence, ORDER_KEY, readOrder, setOccurrenceSpelling } from './optionOrder';
 
 const unknown = { value: null, certainty: 'unknown' as const };
@@ -216,7 +217,7 @@ describe('imported JSON option numbers', () => {
   it.each(['9007199254740993', '-9007199254740993', '1e400'])('refuses transported JSON %s before merging any option', number => {
     const current: OptionSchema = { ...schema, options: [option('alpha'), option('payload', { kind: known('json') })] };
     const saved = { alpha: 'original', payload: { seed: 17 }, [ORDER_KEY]: { version: 1, occurrences: [{ key: 'alpha' }] } };
-    const imported = JSON.parse(`{"plan":[{"key":"alpha","values":["new"]},{"key":"payload","values":[{"nested":[${number}]}]}]}`);
+    const imported = JSON.parse(`{"plan":[{"key":"alpha","values":["new"]},{"key":"payload","values":[{"nested":[${number}]}]}]}`) as Parameters<typeof applyPlan>[2];
     const before = structuredClone({ saved, imported });
     expect(() => applyPlan(current, saved, imported)).toThrow('JSON contains a number outside the editor range');
     expect({ saved, imported }).toEqual(before);
@@ -319,8 +320,8 @@ describe('expanded saved occurrences', () => {
       { key: 'missing', spelling: null, values: [] },
       { key: 'ghost', spelling: '--ghost', values: [] },
     ]);
-    expect(plan[2].values[0]).toBe(scalarArray);
-    expect(plan[4].values[0]).toBe(scalarObject);
+    expect(defined(plan[2]).values[0]).toBe(scalarArray);
+    expect(defined(plan[4]).values[0]).toBe(scalarObject);
     expect(new Set(plan.map(item => item.values)).size).toBe(plan.length);
     expect(values).toEqual(before);
   });
@@ -341,12 +342,12 @@ describe('expanded saved occurrences', () => {
       { key: 'alpha', spelling: null, values: [] },
     ]);
     expect(new Set(first.map(item => item.values)).size).toBe(3);
-    first[0].values[0] = 'output-only';
-    first[2].values.push('output-only');
-    expect(first[1].values).toEqual(['same']);
+    defined(first[0]).values[0] = 'output-only';
+    defined(first[2]).values.push('output-only');
+    expect(defined(first[1]).values).toEqual(['same']);
     expect(values).toEqual(before);
     shared[0] = 'changed';
-    stored.occurrences[2].push('new-input');
+    defined(stored.occurrences[2]).push('new-input');
     const changed = structuredClone(values);
     const second = expandPlan(schema, values, state.order);
     expect(second).toEqual([
@@ -354,7 +355,7 @@ describe('expanded saved occurrences', () => {
       { key: 'alpha', spelling: '-a', values: ['changed'] },
       { key: 'alpha', spelling: null, values: ['new-input'] },
     ]);
-    expect(second.every((item, index) => item.values !== first[index].values)).toBe(true);
+    expect(second.every((item, index) => item.values !== defined(first[index]).values)).toBe(true);
     expect(new Set(second.map(item => item.values)).size).toBe(3);
     expect(first.map(item => item.values)).toEqual([['output-only'], ['same'], ['output-only']]);
     expect(values).toEqual(changed);
@@ -400,10 +401,10 @@ describe('imported values without an orderable position', () => {
     expect(new Set([...request, ...position, ...unknownRows]).size).toBe(5);
     expect(unknownRows[0]).not.toBe(shared);
     expect(unknownRows[1]).not.toBe(shared);
-    expect(unknownRows[0][0]).toBe(cell);
-    expect(unknownRows[1][0]).toBe(cell);
-    request[0][0] = 'output-only';
-    unknownRows[0].push('output-only');
+    expect(defined(unknownRows[0])[0]).toBe(cell);
+    expect(defined(unknownRows[1])[0]).toBe(cell);
+    defined(request[0])[0] = 'output-only';
+    defined(unknownRows[0]).push('output-only');
     expect(request[1]).toEqual(['R2']);
     expect(unknownRows[1]).toEqual([cell]);
     expect({ saved, imported }).toEqual(before);
@@ -423,16 +424,16 @@ describe('imported values without an orderable position', () => {
     const first = applyPlan(current, saved, imported);
     expect(first).toEqual({ untouched: 'kept', feature: { spelling: '--disable-feature', occurrences: [[true], [false]] } });
     expect({ saved, imported }).toEqual(before);
-    imported.plan[0].values[0] = false;
-    imported.plan[1].values[0] = true;
-    imported.plan[1].spelling = '--feature';
+    defined(imported.plan[0]).values[0] = false;
+    defined(imported.plan[1]).values[0] = true;
+    defined(imported.plan[1]).spelling = '--feature';
     const changed = structuredClone({ saved, imported });
     const second = applyPlan(current, saved, imported);
     expect(second).toEqual({ untouched: 'kept', feature: { spelling: null, occurrences: [[false], [true]] } });
     const firstRows = (first.feature as { occurrences: unknown[][] }).occurrences;
     const secondRows = (second.feature as { occurrences: unknown[][] }).occurrences;
     expect(secondRows.every((row, index) => row !== firstRows[index])).toBe(true);
-    secondRows[0].push('output-only');
+    defined(secondRows[0]).push('output-only');
     expect(secondRows[1]).toEqual([true]);
     expect(first).toEqual({ untouched: 'kept', feature: { spelling: '--disable-feature', occurrences: [[true], [false]] } });
     expect({ saved, imported }).toEqual(changed);
@@ -470,7 +471,7 @@ describe('imported values without an orderable position', () => {
     // the later key's malformed row is copied. Eager copying changes this error.
     expect(() => applyPlan(current, saved, imported)).toThrow(/find/);
     expect({ saved, imported }).toEqual(before);
-    imported.plan[2].values = null as unknown as unknown[];
+    defined(imported.plan[2]).values = null as unknown as unknown[];
     const malformedRows = structuredClone({ saved, imported });
     // All rows of the first key are copied before that first item normalizes.
     expect(() => applyPlan(current, saved, imported)).toThrow(/iterable/);

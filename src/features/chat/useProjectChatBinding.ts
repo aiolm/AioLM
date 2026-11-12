@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { readDocumentBinding } from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { activeProjectId, PROJECT_APPLIED_EVENT, PROJECTS_CHANGED_EVENT, readProjects, type ProjectPreset } from "../projects/projectStore";
-import type { ChatWorkspace } from "./chatHistory";
-import type { DocumentAttachment } from "./chatUtils";
+import type { ChatWorkspace } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment } from "../../shared/api/mediaTypes";
 import { projectChatBindingCopy, projectDocumentBindingError } from "./projectChatBindingCopy";
 import type { ChatPhase } from "./chatSendTypes";
 
@@ -130,8 +130,9 @@ export function useProjectChatBinding(options: Options) {
       void Promise.all(bindings.map(async binding => {
         try {
           const text = await readDocumentBinding(binding.path);
-          return { document: { ...binding, text } as DocumentAttachment, name: binding.name };
+          return { document: { ...binding, text }, name: binding.name };
         } catch {
+          // Native permission denial is an unavailable binding, not a partial application.
           return { document: null, name: binding.name };
         }
       })).then(results => {

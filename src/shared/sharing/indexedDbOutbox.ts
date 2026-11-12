@@ -114,12 +114,12 @@ export function createIndexedDbOutbox(factory: IDBFactory | undefined = globalTh
     },
     async mutate(id, update) {
       const db = await open();
+      let failure: unknown;
       return new Promise<QueuedBenchmark | undefined>((resolve, reject) => {
         const tx = db.transaction(STORE, "readwrite");
         const objectStore = tx.objectStore(STORE);
         const request = objectStore.get(id);
         let result: QueuedBenchmark | undefined;
-        let failure: unknown;
         request.onsuccess = () => {
           try {
             const current = request.result as QueuedBenchmark | undefined;
@@ -130,9 +130,9 @@ export function createIndexedDbOutbox(factory: IDBFactory | undefined = globalTh
           } catch (error) { failure = error; tx.abort(); }
         };
         tx.oncomplete = () => resolve(result);
-        tx.onabort = () => reject(failure ?? tx.error ?? new Error("Sharing storage did not commit the change."));
+        tx.onabort = () => reject(tx.error ?? new Error("Sharing storage did not commit the change."));
         tx.onerror = () => reject(tx.error ?? new Error("Unable to update sharing storage."));
-      });
+      }).catch((error: unknown) => { throw failure ?? error; });
     },
   };
 }

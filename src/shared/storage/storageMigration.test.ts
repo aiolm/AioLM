@@ -15,7 +15,7 @@ describe("AioLM first-run browser migration", () => {
     localStorage.setItem("llama-board.projects.v1", old);
     await migrateBrowserStorage([{from:"C:/Data/llama-board",to:"C:/Data/aiolm"}]);
     expect(localStorage.getItem("aiolm-theme")).toBe("dark");
-    expect(JSON.parse(localStorage.getItem("aiolm.projects.v1")!).documents).toEqual([{path:"C:/Data/aiolm/docs/one.txt",text:"preserve me"},{path:"D:/documents/two.txt"}]);
+    expect(JSON.parse(localStorage.getItem("aiolm.projects.v1")!)).toHaveProperty("documents", [{path:"C:/Data/aiolm/docs/one.txt",text:"preserve me"},{path:"D:/documents/two.txt"}]);
     expect(localStorage.getItem("llama-board.projects.v1")).toBe(old);
   });
   it("uses an existing AioLM workspace without merging previous preferences", async () => {
@@ -37,7 +37,7 @@ describe("AioLM first-run browser migration", () => {
   it("resumes a partial copy after a quota failure", async () => {
     localStorage.setItem("llama-board-theme", "dark");
     localStorage.setItem("llama-board-locale", "ko");
-    const set = Storage.prototype.setItem;
+    const set = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")!.value as Storage["setItem"];
     const spy = vi.spyOn(Storage.prototype,"setItem").mockImplementation(function(this:Storage,key,value){
       if (key === "aiolm-locale") throw new DOMException("Disk full", "QuotaExceededError");
       set.call(this,key,value);

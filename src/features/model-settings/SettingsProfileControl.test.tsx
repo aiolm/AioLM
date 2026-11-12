@@ -5,6 +5,7 @@ import SettingsProfileControl, { type ProfileViewItem, type SettingsProfileContr
 import * as api from '../../shared/api';
 import { parseRuntimeHelp } from '../../shared/config/serverOptions';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn() }));
@@ -198,19 +199,19 @@ describe('settings profile workspace', () => {
     expect(props.onSaveAs).not.toHaveBeenCalled();
   });
 
-  it('keeps repeated reset feedback visible for a fresh interval then restores the profile status', () => {
+  it('keeps repeated reset feedback visible for a fresh interval then restores the profile status', async () => {
     vi.useFakeTimers();
     try {
       const props = mount({ onReset: vi.fn(() => false) });
       const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
       fireEvent.click(reset);
       expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
-      act(() => vi.advanceTimersByTime(3000));
+      await act(() => vi.advanceTimersByTime(3000));
       fireEvent.click(reset);
-      act(() => vi.advanceTimersByTime(3000));
+      await act(() => vi.advanceTimersByTime(3000));
       expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
       expect(props.onReset).toHaveBeenCalledTimes(2);
-      act(() => vi.advanceTimersByTime(1000));
+      await act(() => vi.advanceTimersByTime(1000));
       expect(screen.queryByText('Options already use defaults.')).not.toBeInTheDocument();
       expect(screen.getByText('Global profile · selected for this model')).toBeVisible();
     } finally {
@@ -516,7 +517,7 @@ describe('settings profile workspace', () => {
     ['ja', 'プロファイルを削除', '既定のプロファイルは削除できません。先に別のプロファイルを既定に設定してください。'],
     ['zh', '删除预设', '无法删除默认预设。请先将其他预设设为默认。'],
   ] as const)('explains in %s why the designated default profile cannot be deleted', (locale, label, hint) => {
-    const props = mount({ items: [items[1], { ...items[2], deletionReason: 'default', deletable: false }], defaultProfileId: 'precise' }, locale);
+    const props = mount({ items: [defined(items[1]), { ...defined(items[2]), deletionReason: 'default', deletable: false }], defaultProfileId: 'precise' }, locale);
     const remove = screen.getByRole('button', { name: label });
     expect(remove).toBeDisabled();
     expect(remove).toHaveAccessibleDescription(hint);
@@ -600,7 +601,7 @@ describe('settings profile workspace', () => {
   it('prevents confirmation from deleting a profile that no longer exists', () => {
     const props = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
-    props.rerenderControl({ items: [items[1]], activeId: 'creative' });
+    props.rerenderControl({ items: [defined(items[1])], activeId: 'creative' });
     const remove = within(screen.getByRole('dialog', { name: /^Delete “/ })).getByRole('button', { name: 'Delete profile' });
     expect(remove).toBeDisabled();
     fireEvent.click(remove);

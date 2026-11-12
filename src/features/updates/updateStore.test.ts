@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { createUpdateStore, type AppUpdateInfo, type AppUpdateProgress } from "./updateStore";
+import { createUpdateStore } from "./updateStore";
+import type { AppUpdateInfo, AppUpdateProgress } from "../../shared/api/appUpdates";
 
 const release: AppUpdateInfo = {
   current_version: "1.0.0", latest_version: "1.1.0", available: true, can_install: true,

@@ -7,6 +7,7 @@ import { testConfig } from '../../testing/appStore';
 import { webcrypto } from 'node:crypto';
 import type { AppConfig } from '../../shared/api/types';
 import { applySettingsProfile } from '../../shared/config/settingsProfiles';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api/runtimeHelp', async importOriginal => ({ ...await importOriginal<object>(), runtimeHelpResolvePlan: vi.fn(async () => ({ argv: [], request: {} })) }));
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const });
@@ -100,7 +101,7 @@ describe('destination-checked benchmark profiles', () => {
     expect(profile.settings).toEqual({ ctx_size: 8192 });
     expect(profile.provider).toBe('llama.cpp');
     expect(profile).not.toHaveProperty('legacy_runtime');
-    expect(dest.effective.schema.options[0].managed).toBe('discovery');
+    expect(defined(dest.effective.schema.options[0]).managed).toBe('discovery');
   });
 
   it('validates the complete imported native batch pair rather than individual fields against destination values', async () => {

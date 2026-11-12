@@ -16,7 +16,7 @@ describe('shared path presentation', () => {
 
   it('cleans a confirmation title and description while the action keeps the original path', () => {
     const raw = String.raw`\\?\UNC\server\share\model.gguf`;
-    const action = vi.fn();
+    const action = vi.fn<(path: string) => void>();
     render(<I18nProvider initialLocale="en"><ConfirmDialog open title={`Open ${raw}`}
       description={`Continue with ${raw}`} onConfirm={() => action(raw)} onCancel={vi.fn()} /></I18nProvider>);
     const dialog = screen.getByRole('dialog', { name: String.raw`Open \\server\share\model.gguf` });

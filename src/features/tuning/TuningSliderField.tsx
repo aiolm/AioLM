@@ -86,7 +86,12 @@ export default function TuningSliderField({
   const commit = (event: FocusEvent<HTMLInputElement> | PointerEvent<HTMLInputElement>) => {
     if (pendingValue.current === null || pendingValue.current !== event.currentTarget.value) return;
     pendingValue.current = null;
-    onCommit(event.currentTarget.value);
+    const pending = onCommit(event.currentTarget.value);
+    if (pending) {
+      void pending.catch((error: unknown) => {
+        console.error("Tuning value could not be committed", error);
+      });
+    }
   };
 
   const commitOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {

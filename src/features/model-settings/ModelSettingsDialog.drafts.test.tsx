@@ -1,4 +1,5 @@
 import { cfg, mount, numeric, openOptions } from '../../testing/modelSettingsDialog';
+import { defined } from '../../testing/assertDefined';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
@@ -8,6 +9,8 @@ import { rememberExecution } from '../models/modelExecutionState';
 import { captureProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor } from './profileEditor';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
@@ -55,7 +58,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Selected profile' })).toBeVisible());
-    const [next, edit, applyTarget] = vi.mocked(onProfileCommit).mock.calls[0];
+    const [next, edit, applyTarget] = defined(vi.mocked(onProfileCommit).mock.calls[0]);
     expect(applyTarget).toBe(true);
     expect(next.ngl).toBe(25);
     expect(edit.application.profile_id).toBe(source.id);
@@ -86,7 +89,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
-    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([match.objectContaining({ id: source.id, revision: source.revision + 1, settings: match.objectContaining({ ctx_size: 8192 }) })]);
     expect(screen.getByRole('tab', { name: 'Performance & memory' })).toHaveAttribute('aria-selected', 'true');
     expect(numeric('ctx_size')).toHaveValue(8192);
 
@@ -100,7 +103,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(onProfileCommit).toHaveBeenCalledTimes(2);
-    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([match.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: match.objectContaining({ ctx_size: 8192 }) })]);
     expect(appliedProfile(getSaved())).toMatchObject({ profile_id: source.id, profile_revision: source.revision + 2, system_prompt: 'Updated prompt' });
     expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -328,7 +331,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getAllByRole('button', { name: 'Save profile' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ ngl: 25, runtime_defaults: ['temperature'] }), expect.objectContaining({ application: expect.objectContaining({ settings: expect.objectContaining({ ngl: 25 }) }) }), true));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(match.objectContaining({ ngl: 25, runtime_defaults: ['temperature'] }), match.objectContaining({ application: match.objectContaining({ settings: match.objectContaining({ ngl: 25 }) }) }), true));
   });
 
   it('starts with no model selected and restores the saved model settings on explicit choice', async () => {

@@ -4,6 +4,7 @@ import * as api from '../../shared/api/index';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { saveMcpApprovalPolicy } from './approvalPolicy';
 import McpPanel from './Mcp';
 
@@ -122,7 +123,7 @@ describe('MCP saved definition ownership', () => {
     await act(async () => call.resolve({ text: 'Retained call result' }));
     expect(await screen.findByLabelText('Tool result')).toHaveTextContent('Retained call result');
     expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('new');
-    expect(getTaskSnapshot()[0].state).toBe('completed');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('completed');
   });
 
   it('discards metadata and the reviewed call when saved arguments change, then discovers the new definition', async () => {
@@ -181,18 +182,18 @@ describe('MCP saved definition ownership', () => {
     const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
     await openPanel(); await discover(); review();
     fireEvent.click(screen.getByRole('button', { name: 'Approve and run once' }));
-    const callId = vi.mocked(api.mcpCallTool).mock.calls[0][3]; editArgs(); save();
+    const callId = defined(vi.mocked(api.mcpCallTool).mock.calls[0])[3]; editArgs(); save();
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledWith(callId));
     await act(async () => call.resolve({ text: 'Retired definition receipt' }));
     expect(screen.queryByLabelText('Tool result')).not.toBeInTheDocument();
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
   });
 
   it.each(['success', 'failure'])('does not move a new selection back to the server whose save %s arrives late', async outcome => {
     const pending = deferred<api.McpServer[]>(); vi.mocked(api.mcpSaveServer).mockReturnValue(pending.promise);
     await openPanel(); editArgs(); save(); fireEvent.click(screen.getByText('beta tools').closest('button')!);
     fireEvent.click(within(await screen.findByRole('dialog', { name: 'Discard unsaved server changes?' })).getByRole('button', { name: 'Discard changes' }));
-    await act(async () => outcome === 'success' ? pending.resolve([{ ...servers[0], args: ['new'] }, servers[1]]) : pending.reject(new Error('Retired save failure')));
+    await act(async () => outcome === 'success' ? pending.resolve([{ ...defined(servers[0]), args: ['new'] }, defined(servers[1])]) : pending.reject(new Error('Retired save failure')));
     expect(screen.getByLabelText('Name')).toHaveValue('beta tools');
     expect(screen.getByLabelText('Arguments, one per line')).toHaveValue('old');
     expect(screen.getByText('beta tools').closest('button')).toHaveAttribute('aria-current', 'true');

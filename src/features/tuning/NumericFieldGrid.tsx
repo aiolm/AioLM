@@ -20,7 +20,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
   return (
     <>
       {fields.map((field) => {
-        const current = typeof cfg[field.key] === "number" ? cfg[field.key] as number : field.min;
+        const current = typeof cfg[field.key] === "number" ? cfg[field.key] : field.min;
         const draft = drafts[field.key] ?? String(current);
         const inputId = `${id}-${field.key}`;
         const label = tuningFieldLabel(t, field);

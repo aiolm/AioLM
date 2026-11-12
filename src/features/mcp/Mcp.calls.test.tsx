@@ -1,12 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
+import { IpcError } from '../../shared/api/ipcError';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import { TaskCancellationProvider } from '../../shared/ui/TaskCancellation';
 import TaskStrip from '../../shared/ui/TaskStrip';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import McpPanel from './Mcp';
 import { saveMcpApprovalPolicy } from './approvalPolicy';
 
@@ -66,17 +68,44 @@ describe('MCP manual call ownership', () => {
   it('keeps one cancellable task through the native approval and RPC wait, and discards a late cancelled result', async () => {
     const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
     render(<Surface />); await startCall();
-    const id = vi.mocked(api.mcpCallTool).mock.calls[0][3];
+    const id = defined(vi.mocked(api.mcpCallTool).mock.calls[0])[3];
     expect(id).toEqual(expect.any(String));
-    expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'running', interruptible: true, label: expect.stringContaining('alpha tools') })]);
+    expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'running', interruptible: true, label: expect.stringContaining('alpha tools') as unknown })]);
     expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledWith(id));
-    expect(getTaskSnapshot()[0].state).toBe('cancelling');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelling');
     await act(async () => call.resolve({ text: 'Late cancelled receipt' }));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
     expect(screen.queryByLabelText('Tool result')).not.toBeInTheDocument();
     expect(api.mcpCancelToolCall).toHaveBeenCalledOnce();
+  });
+
+  it('settles native cancellation quietly without a frontend cancellation request or matching wording', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />); await startCall();
+    await act(async () => call.reject(new IpcError('cancelled', 'Synthetic operation superseded')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
+    expect(screen.queryByText('Synthetic operation superseded')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Tool result')).not.toBeInTheDocument();
+    expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-cancellation diagnostics containing cancellation words visible', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />); await startCall();
+    await act(async () => call.reject(new IpcError('unavailable', 'Synthetic server cancelled unexpectedly')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('failed');
+    expect(screen.getAllByText('Synthetic server cancelled unexpectedly').length).toBeGreaterThan(0);
+  });
+
+  it('preserves the readable native denial diagnostic without reclassifying its wording', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />); await startCall();
+    await act(async () => call.reject(new IpcError('denied', 'Synthetic launch approval withheld')));
+    expect(defined(getTaskSnapshot()[0])).toMatchObject({ state: 'failed', detail: 'Synthetic launch approval withheld' });
+    expect(screen.getAllByText('Synthetic launch approval withheld', { exact: true }).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('Tool result')).not.toBeInTheDocument();
   });
 
   it('retains global cancellation when navigation hides the MCP panel', async () => {
@@ -86,8 +115,8 @@ describe('MCP manual call ownership', () => {
     expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledOnce());
-    await act(async () => call.reject(new Error('MCP tool call cancelled')));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    await act(async () => call.reject(new IpcError('cancelled', 'MCP tool call cancelled')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
   });
 
   it('cancels the owned call on server selection and does not show its result in the new server', async () => {
@@ -97,7 +126,7 @@ describe('MCP manual call ownership', () => {
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledOnce());
     await act(async () => call.resolve({ text: 'Alpha private result' }));
     expect(screen.queryByLabelText('Tool result')).not.toBeInTheDocument();
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
   });
 
   it('requests cancellation on actual unmount and settles the owned task without publishing a result', async () => {
@@ -105,20 +134,20 @@ describe('MCP manual call ownership', () => {
     const view = render(<Surface />); await startCall(); view.unmount();
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledOnce());
     await act(async () => call.resolve({ text: 'Unmounted receipt' }));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
   });
 
   it('keeps cancellation retryable after a transport failure while the original call is pending', async () => {
     const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
-    vi.mocked(api.mcpCancelToolCall).mockRejectedValueOnce(new Error('Synthetic cancel transport failure'));
+    vi.mocked(api.mcpCancelToolCall).mockRejectedValueOnce(new IpcError('internal', 'Synthetic cancel transport failure'));
     render(<Surface />); await startCall();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await screen.findByText('Synthetic cancel transport failure', { exact: true });
-    expect(getTaskSnapshot()[0].state).toBe('running');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('running');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(api.mcpCancelToolCall).toHaveBeenCalledTimes(2));
-    await act(async () => call.reject(new Error('MCP tool call cancelled')));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    await act(async () => call.reject(new IpcError('cancelled', 'MCP tool call cancelled')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
   });
 
   it('does not revive a settled task when the cancellation response fails late', async () => {
@@ -127,10 +156,10 @@ describe('MCP manual call ownership', () => {
     vi.mocked(api.mcpCancelToolCall).mockReturnValue(cancellation.promise);
     render(<Surface />); await startCall();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await act(async () => call.reject(new Error('MCP tool call cancelled')));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
-    await act(async () => cancellation.reject(new Error('Late synthetic cancellation response')));
-    expect(getTaskSnapshot()[0].state).toBe('cancelled');
+    await act(async () => call.reject(new IpcError('cancelled', 'MCP tool call cancelled')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
+    await act(async () => cancellation.reject(new IpcError('internal', 'Late synthetic cancellation response')));
+    expect(defined(getTaskSnapshot()[0]).state).toBe('cancelled');
     expect(screen.queryByText('Late synthetic cancellation response')).not.toBeInTheDocument();
   });
 
@@ -139,7 +168,7 @@ describe('MCP manual call ownership', () => {
     render(<Surface />); await startCall();
     await act(async () => call.resolve({ text: 'Approved receipt' }));
     expect(await screen.findByLabelText('Tool result')).toHaveTextContent('Approved receipt');
-    expect(getTaskSnapshot()[0].state).toBe('completed');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('completed');
     expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
   });
 
@@ -150,7 +179,7 @@ describe('MCP manual call ownership', () => {
     await act(async () => call.resolve(response));
     const result = await screen.findByLabelText('Tool result');
     expect(JSON.parse(result.textContent!)).toEqual(response);
-    expect(getTaskSnapshot()[0]).toEqual(expect.objectContaining({ state: 'failed', detail: 'Tool echo reported an execution error.' }));
+    expect(defined(getTaskSnapshot()[0])).toEqual(expect.objectContaining({ state: 'failed', detail: 'Tool echo reported an execution error.' }));
     expect(screen.queryByText('Tool echo completed.')).not.toBeInTheDocument();
     expect(screen.getAllByText('Tool echo reported an execution error.').length).toBeGreaterThan(0);
     expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
@@ -161,7 +190,7 @@ describe('MCP manual call ownership', () => {
     render(<Surface />); await startCall();
     await act(async () => call.resolve({ content: [{ type: 'text', text: 'Error handling documentation' }], isError: 'true' }));
     expect(await screen.findByLabelText('Tool result')).toHaveTextContent('Error handling documentation');
-    expect(getTaskSnapshot()[0].state).toBe('completed');
+    expect(defined(getTaskSnapshot()[0]).state).toBe('completed');
   });
 
   it('does not remember a cancelled call as a session approval', async () => {

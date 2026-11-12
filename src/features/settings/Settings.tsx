@@ -1,5 +1,5 @@
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { cloneElement, createContext, isValidElement, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import Switch from "../../shared/ui/Switch";
 import StatusBadge from "../../shared/ui/StatusBadge";
@@ -61,15 +61,14 @@ function Group({ id, title, children }: { id: string; title: string; children: R
   </div>;
 }
 
+const settingAria = (id: string) => ({ "aria-labelledby": `${id}-label`, "aria-describedby": `${id}-description` });
+
 function Row({ id, label, description, children }: { id: string; label: string; description: string; children: ReactNode }) {
   const query = useContext(SearchContext);
   if (!matches(query, label, description)) return null;
   const labelId = `${id}-label`;
   const descriptionId = `${id}-description`;
-  const control = isValidElement<{ "aria-describedby"?: string; "aria-labelledby"?: string }>(children)
-    ? cloneElement(children, { "aria-describedby": descriptionId, "aria-labelledby": labelId })
-    : children;
-  return <div className="settings-row" data-setting=""><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{control}</div></div>;
+  return <div className="settings-row" data-setting=""><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{children}</div></div>;
 }
 
 /**
@@ -99,7 +98,7 @@ function LaunchAtLoginRow({ onSaved }: { onSaved: () => void }) {
   };
   return <Row id="settings-launch-at-login" label={copy.label} description={copy.description}>
     <div className="settings-control-stack">
-      <Switch id="settings-launch-at-login" aria-describedby="settings-launch-at-login-description" checked={enabled === true} disabled={enabled === null || saving} onChange={(value) => { void save(value); }} />
+      <Switch id="settings-launch-at-login" {...settingAria("settings-launch-at-login")} checked={enabled === true} disabled={enabled === null || saving} onChange={(value) => { void save(value); }} />
       {error && <FeedbackBanner tone="error">{normalizeDisplayText(error)}</FeedbackBanner>}
     </div>
   </Row>;
@@ -168,9 +167,9 @@ function NotificationSettings({ preferences, patch }: { preferences: AppPreferen
       </div>
       {feedback && <FeedbackBanner tone={feedback.tone} className="settings-notification-feedback" onDismiss={() => setFeedback(null)}>{feedback.message}</FeedbackBanner>}
     </div>}
-    <Row id="settings-notify-chat" label={copy.chatCategory} description={copy.chatCategoryDesc}><Switch id="settings-notify-chat" checked={preferences.notifications.chat} onChange={(value) => setCategory("chat", value)} /></Row>
-    <Row id="settings-notify-downloads" label={copy.downloadsCategory} description={copy.downloadsCategoryDesc}><Switch id="settings-notify-downloads" checked={preferences.notifications.downloads} onChange={(value) => setCategory("downloads", value)} /></Row>
-    <Row id="settings-notify-benchmark" label={copy.benchmarkCategory} description={copy.benchmarkCategoryDesc}><Switch id="settings-notify-benchmark" checked={preferences.notifications.benchmark} onChange={(value) => setCategory("benchmark", value)} /></Row>
+    <Row id="settings-notify-chat" label={copy.chatCategory} description={copy.chatCategoryDesc}><Switch id="settings-notify-chat" {...settingAria("settings-notify-chat")} checked={preferences.notifications.chat} onChange={(value) => setCategory("chat", value)} /></Row>
+    <Row id="settings-notify-downloads" label={copy.downloadsCategory} description={copy.downloadsCategoryDesc}><Switch id="settings-notify-downloads" {...settingAria("settings-notify-downloads")} checked={preferences.notifications.downloads} onChange={(value) => setCategory("downloads", value)} /></Row>
+    <Row id="settings-notify-benchmark" label={copy.benchmarkCategory} description={copy.benchmarkCategoryDesc}><Switch id="settings-notify-benchmark" {...settingAria("settings-notify-benchmark")} checked={preferences.notifications.benchmark} onChange={(value) => setCategory("benchmark", value)} /></Row>
   </>;
 }
 
@@ -245,7 +244,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     setConfirmReset(false);
   };
   const toggle = (key: "enterToSend" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
-  const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} checked={checked} onChange={onChange} />;
+  const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} {...settingAria(id)} checked={checked} onChange={onChange} />;
   const downloadExport = () => {
     const blob = new Blob([exportPreferences(preferences)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -285,22 +284,22 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
       <section className={`settings-content${normalizedQuery ? " is-searching" : ""}`} role="tabpanel" id="settings-tabpanel" aria-labelledby={normalizedQuery ? undefined : `settings-tab-${section}`} aria-label={normalizedQuery ? search.label : undefined} tabIndex={-1}>
         {(normalizedQuery || section === "general") && <Group id="general" title={t("settings.general")}>
           <Row id="settings-language" label={t("settings.language")} description={t("settings.languageDesc")}>
-            <CustomSelect id="settings-language" value={locale} options={localeOptions} onChange={(next) => { setLocale(next); patch({ locale: next }); }} triggerClassName="settings-select" />
+            <CustomSelect id="settings-language" {...settingAria("settings-language")} value={locale} options={localeOptions} onChange={(next) => { setLocale(next); patch({ locale: next }); }} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-density" label={t("settings.density")} description={t("settings.densityDesc")}>
-            <CustomSelect id="settings-density" value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="settings-select" />
+            <CustomSelect id="settings-density" {...settingAria("settings-density")} value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="settings-select" />
           </Row>
           <AppUpdateSettings query={normalizedQuery} />
         </Group>}
         {(normalizedQuery || section === "appearance") && <Group id="appearance" title={t("settings.appearance")}>
           <Row id="settings-theme" label={t("settings.theme")} description={t("settings.themeDesc")}>
-            <CustomSelect id="settings-theme" value={preferences.theme} options={[{ value: "light", label: t("theme.light") }, { value: "dark", label: t("theme.dark") }, { value: "system", label: t("theme.system") }]} onChange={(theme) => patch({ theme })} triggerClassName="settings-select" />
+            <CustomSelect id="settings-theme" {...settingAria("settings-theme")} value={preferences.theme} options={[{ value: "light", label: t("theme.light") }, { value: "dark", label: t("theme.dark") }, { value: "system", label: t("theme.system") }]} onChange={(theme) => patch({ theme })} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-font-family" label={prefCopy.appFont} description={prefCopy.appFontDesc}>
-            <CustomSelect<AppFontFamily> id="settings-font-family" value={preferences.appearance.fontFamily} options={[{ value: "default", label: prefCopy.fontDefault }, { value: "system", label: prefCopy.fontSystem }, { value: "serif", label: prefCopy.fontSerif }]} onChange={(fontFamily) => patch({ appearance: { ...preferences.appearance, fontFamily } })} triggerClassName="settings-select" />
+            <CustomSelect<AppFontFamily> id="settings-font-family" {...settingAria("settings-font-family")} value={preferences.appearance.fontFamily} options={[{ value: "default", label: prefCopy.fontDefault }, { value: "system", label: prefCopy.fontSystem }, { value: "serif", label: prefCopy.fontSerif }]} onChange={(fontFamily) => patch({ appearance: { ...preferences.appearance, fontFamily } })} triggerClassName="settings-select" />
           </Row>
           <Row id="settings-code-font" label={prefCopy.codeFont} description={prefCopy.codeFontDesc}>
-            <CustomSelect<CodeFontFamily> id="settings-code-font" value={preferences.appearance.codeFontFamily} options={[{ value: "default", label: prefCopy.codeFontDefault }, { value: "system", label: prefCopy.codeFontSystem }]} onChange={(codeFontFamily) => patch({ appearance: { ...preferences.appearance, codeFontFamily } })} triggerClassName="settings-select" />
+            <CustomSelect<CodeFontFamily> id="settings-code-font" {...settingAria("settings-code-font")} value={preferences.appearance.codeFontFamily} options={[{ value: "default", label: prefCopy.codeFontDefault }, { value: "system", label: prefCopy.codeFontSystem }]} onChange={(codeFontFamily) => patch({ appearance: { ...preferences.appearance, codeFontFamily } })} triggerClassName="settings-select" />
           </Row>
           {!normalizedQuery && <figure className="settings-preview" aria-label={prefCopy.fontPreview}>
             <p style={{ fontFamily: appFontFamilyValue(preferences.appearance.fontFamily) }}>{prefCopy.fontPreviewText}</p>
@@ -313,7 +312,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           <Row id="settings-stream" label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
           <Row id="settings-compact-messages" label={t("settings.compactMessages")} description={t("settings.compactMessagesDesc")}>{bool("settings-compact-messages", preferences.chat.compactMessages, (value) => toggle("compactMessages", value))}</Row>
           <Row id="settings-chat-line-spacing" label={prefCopy.lineSpacing} description={prefCopy.lineSpacingDesc}>
-            <CustomSelect<ChatLineSpacing> id="settings-chat-line-spacing" value={preferences.chat.lineSpacing} options={[{ value: "compact", label: prefCopy.lineSpacingCompact }, { value: "normal", label: prefCopy.lineSpacingNormal }, { value: "relaxed", label: prefCopy.lineSpacingRelaxed }]} onChange={(lineSpacing) => patch({ chat: { ...preferences.chat, lineSpacing } })} triggerClassName="settings-select" />
+            <CustomSelect<ChatLineSpacing> id="settings-chat-line-spacing" {...settingAria("settings-chat-line-spacing")} value={preferences.chat.lineSpacing} options={[{ value: "compact", label: prefCopy.lineSpacingCompact }, { value: "normal", label: prefCopy.lineSpacingNormal }, { value: "relaxed", label: prefCopy.lineSpacingRelaxed }]} onChange={(lineSpacing) => patch({ chat: { ...preferences.chat, lineSpacing } })} triggerClassName="settings-select" />
           </Row>
           {!normalizedQuery && <figure className="settings-preview" aria-label={prefCopy.lineSpacingPreview}>
             <p style={{ lineHeight: chatLineHeights[preferences.chat.lineSpacing].prose }}>{prefCopy.lineSpacingPreviewText}</p>
@@ -331,7 +330,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div className="settings-control-stack">
-              <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray !== false} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
+              <Switch id="settings-close-to-tray" {...settingAria("settings-close-to-tray")} checked={store.cfg.close_to_tray !== false} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
               {trayError && <FeedbackBanner tone="error">{normalizeDisplayText(trayError)}</FeedbackBanner>}
             </div>
           </Row>}

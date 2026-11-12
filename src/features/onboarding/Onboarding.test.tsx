@@ -32,7 +32,9 @@ describe('First-run setup', () => {
     const paint = async () => { await act(async () => { const queued = [...frames.values()]; frames.clear(); queued.forEach(callback => callback(0)); }); };
     // JSDOM does not enforce inert's native focus rejection. Model only that
     // browser boundary while exercising the real surfaces and focus effect.
-    const nativeFocus = HTMLElement.prototype.focus;
+    const focusDescriptor: TypedPropertyDescriptor<HTMLElement["focus"]> | undefined = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'focus');
+    const nativeFocus = focusDescriptor?.value;
+    if (!nativeFocus) throw new Error('The native focus implementation is unavailable');
     vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
       if (!this.closest('[inert]')) nativeFocus.call(this, options);
     });

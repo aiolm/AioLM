@@ -39,7 +39,7 @@ function openExisting(name: string): Promise<IDBDatabase | null> {
     const request = indexedDB.open(name);
     let missing = false;
     request.onupgradeneeded = () => { missing = true; request.transaction?.abort(); };
-    request.onerror = event => { if (missing) { event.preventDefault(); resolve(null); } else reject(request.error); };
+    request.onerror = event => { if (missing) { event.preventDefault(); resolve(null); } else reject(request.error!); };
     request.onblocked = () => reject(new Error("Close other AioLM windows and retry the data migration."));
     request.onsuccess = () => resolve(request.result);
   });
@@ -79,7 +79,7 @@ async function copyDatabase(name: string, data: Snapshot, paths: MigratedPath[])
         for (const index of entry.indexes) store.createIndex(index.name, index.keyPath, index);
       }
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error!);
     request.onblocked = () => reject(new Error("Close other AioLM windows and retry the data migration."));
     request.onsuccess = () => resolve(request.result);
   });

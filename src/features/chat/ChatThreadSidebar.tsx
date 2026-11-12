@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChatThread } from "./chatHistory";
+import type { ChatThread } from "../../shared/api/conversationTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { chatTitlePreview, displayChatTitle } from './chatThreadTitle';
 

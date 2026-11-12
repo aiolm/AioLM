@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import axe from "axe-core";
 import { Profiler, useState, type ReactNode } from 'react';
 import { CustomSelect, OverlayContainerContext } from "./CustomSelect";
+import { defined } from '../../testing/assertDefined';
 
 const OPTIONS = [
   { value: "light", label: "Light" },
@@ -154,7 +155,7 @@ describe("CustomSelect", () => {
   });
 
   it("does not cancel interactive content within a wrapping label", () => {
-    const onHelp = vi.fn();
+    const onHelp = vi.fn<(defaultPrevented: boolean) => void>();
     render(<label><span>Theme</span><CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} /><button type="button" onClick={(event) => onHelp(event.defaultPrevented)}>Help</button></label>);
     fireEvent.click(screen.getByRole("button", { name: "Help" }));
     expect(onHelp).toHaveBeenCalledWith(false);
@@ -454,7 +455,7 @@ describe("CustomSelect", () => {
       expect(screen.getByRole("listbox").style.left).toBe("242px");
 
       renderedWidth.current = 344;
-      options[0].label = "A long label mutated while the menu is open";
+      defined(options[0], 'mutable option').label = "A long label mutated while the menu is open";
       fireEvent.click(screen.getByRole("button", { name: "Rerender mutable options" }));
 
       expect(screen.getByRole("listbox").style.left).toBe("8px");
@@ -520,7 +521,7 @@ describe("CustomSelect", () => {
   });
 
   it("lowercases an editable query once instead of once per option", () => {
-    const original = String.prototype.toLocaleLowerCase;
+    const original = Object.getOwnPropertyDescriptor(String.prototype, "toLocaleLowerCase")!.value as (this: string) => string;
     let queryLowercaseCalls = 0;
     const lower = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (this: string) {
       if (this === "NEEDLE") queryLowercaseCalls += 1;
@@ -557,7 +558,7 @@ describe("CustomSelect", () => {
       // A menu that fits beside its trigger stays aligned with it.
       { renderedWidth: 110, left: 242 },
     ])("keeps a $renderedWidth px menu inside the viewport", ({ renderedWidth, left }) => layout({ current: renderedWidth }, () => {
-      render(<CustomSelect value={RUNTIMES[0].value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
+      render(<CustomSelect value={defined(RUNTIMES[0], 'runtime option').value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
       fireEvent.click(screen.getByRole("combobox", { name: "Runtime" }));
       const menu = screen.getByRole("listbox").getBoundingClientRect();
       expect(menu.left).toBe(left);
@@ -581,7 +582,7 @@ describe("CustomSelect", () => {
     it("keeps the final clamped right edge after a viewport update", () => {
       const renderedWidth = { current: 344 };
       layout(renderedWidth, () => {
-        render(<CustomSelect value={RUNTIMES[0].value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
+        render(<CustomSelect value={defined(RUNTIMES[0], 'runtime option').value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
         const trigger = screen.getByRole("combobox", { name: "Runtime" });
         fireEvent.click(trigger);
         const menu = screen.getByRole("listbox");

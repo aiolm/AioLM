@@ -57,7 +57,9 @@ function frozenColumnCount(columns: BenchmarkReport['columns']): number {
   let width = 0;
   // Always leave at least one scrolling column.
   while (count < Math.min(MAX_FROZEN_COLUMNS, columns.length - 1)) {
-    width += columns[count].width;
+    const column = columns[count];
+    if (!column) break;
+    width += column.width;
     if (width > MAX_FROZEN_WIDTH) break;
     count += 1;
   }

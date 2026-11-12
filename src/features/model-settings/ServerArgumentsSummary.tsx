@@ -10,7 +10,7 @@ function isFlagToken(token: string): boolean {
 function argumentRows(args: readonly string[], options: readonly ServerOption[]): OptionOccurrence[] {
   const rows: OptionOccurrence[] = [];
   for (let index = 0; index < args.length; index++) {
-    const token = args[index];
+    const token = args[index]!; // The loop bounds guarantee a token.
     if (!isFlagToken(token)) {
       rows.push({ flag: '', values: [token] });
       continue;
@@ -22,8 +22,11 @@ function argumentRows(args: readonly string[], options: readonly ServerOption[])
     // following values with an unknown option, as the profile change list does.
     const arity = options.find(option => option.flags.includes(flag))?.arity ?? Infinity;
     // Like the argument editor, preserve negative numbers and stop at the next switch.
-    while (values.length < arity && index + 1 < args.length && !isFlagToken(args[index + 1])) {
-      values.push(args[++index]);
+    while (values.length < arity) {
+      const next = args[index + 1];
+      if (next === undefined || isFlagToken(next)) break;
+      values.push(next);
+      index++;
     }
     rows.push({ flag, values });
   }

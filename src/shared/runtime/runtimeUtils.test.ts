@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
+import { canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
 
 describe("runtime version labels", () => {
   it("names an installed runtime as version(build)", () => {
@@ -47,22 +47,6 @@ describe("backend row actions", () => {
   it("offers an install only when the newest build is missing", () => {
     expect(runtimeRowAction({ busy: false, newestInstalled: false })).toBe("install");
     expect(runtimeRowAction({ busy: false, newestInstalled: true })).toBe("none");
-  });
-});
-
-describe("install cancellation", () => {
-  it("recognises the backend's own cancellation message", () => {
-    expect(isInstallCancellation("runtime install cancelled")).toBe(true);
-    expect(isInstallCancellation("Error: runtime install cancelled")).toBe(true);
-  });
-
-  it("does not mistake a build log that mentions cancelling for a cancellation", () => {
-    // A swallowed failure shows as a four-second flash instead of an error the
-    // user can read, so this distinction has to be exact.
-    expect(isInstallCancellation("CMake building failed with exit code: 1: ninja: build stopped: operation cancelled by user request")).toBe(false);
-    expect(isInstallCancellation("the operation was canceled by the remote host")).toBe(false);
-    expect(isInstallCancellation("CMake configuring failed with exit code: 1")).toBe(false);
-    expect(isInstallCancellation("")).toBe(false);
   });
 });
 

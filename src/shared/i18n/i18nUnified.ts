@@ -22,6 +22,41 @@ export type UnifiedKey =
 
 export type TranslationVars = Record<string, string | number>;
 
+const localeLoaders = {
+  ko: () => import("./locales/ko.ts"),
+  ja: () => import("./locales/ja.ts"),
+  zh: () => import("./locales/zh.ts"),
+};
+const localeLoads = new Map<Locale, Promise<void>>([["en", Promise.resolve()]]);
+const loadedLocales = new Set<Locale>(["en"]);
+
+export function isLocaleLoaded(locale: Locale): boolean {
+  return loadedLocales.has(locale);
+}
+
+/**
+ * Load one locale's five catalogs before rendering or calling translate directly.
+ * Successful loads are shared for the session; failures may be retried.
+ */
+export function loadLocale(locale: Locale): Promise<void> {
+  const cached = localeLoads.get(locale);
+  if (cached) return cached;
+  if (locale === "en") return localeLoads.get("en")!;
+  const pending = localeLoaders[locale]().then(({ default: catalog }) => {
+    messages[locale] = catalog.messages;
+    uiText[locale] = catalog.ui;
+    panelText[locale] = catalog.panel;
+    extraText[locale] = catalog.extra;
+    chatText[locale] = catalog.chat;
+    loadedLocales.add(locale);
+  }).catch((cause: unknown) => {
+    localeLoads.delete(locale);
+    throw cause;
+  });
+  localeLoads.set(locale, pending);
+  return pending;
+}
+
 function substitute(template: string, vars?: TranslationVars): string {
   if (!vars) return template;
   return template.replace(/\{(\w+)\}/g, (match, name: string) => (name in vars ? String(vars[name]) : match));

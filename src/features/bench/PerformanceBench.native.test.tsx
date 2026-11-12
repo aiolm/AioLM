@@ -6,14 +6,14 @@ import * as repository from './benchmarkRepository';
 import { exportBenchmarkResults } from './benchmarkExport';
 import { testConfig } from '../../testing/appStore';
 import type { AppStore } from '../../shared/state/store';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { snapshotModelName } from '../../shared/api/providers';
 import type { SnapshotDisplayName } from '../../shared/api/providers';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
-vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
+vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true, listen: vi.fn(async () => () => undefined) }));
 vi.mock(import('../../shared/api/providers'), async original => ({ ...await original(), snapshotModelName: vi.fn() }));
 vi.mock('../../shared/api/benchmarkSharing', () => ({
   benchmarkSharingOwnedList: vi.fn(async () => ({ items: [], next_cursor: null })),

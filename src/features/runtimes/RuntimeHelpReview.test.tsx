@@ -6,6 +6,7 @@ import { testConfig } from '../../testing/appStore';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import RuntimeHelpReview from './RuntimeHelpReview';
+import { IpcError } from '../../shared/api/ipcError';
 
 vi.mock('../../shared/api', async origin => ({
   ...await origin<typeof import('../../shared/api')>(),
@@ -156,7 +157,7 @@ it('shows failed help diagnostics containing cancelled without allowing acceptan
     + 'Help capture: success=false, exit_code=17, timed_out=false\n'
     + 'stderr (encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n'
     + 'An optional earlier operation was cancelled; this help command failed.';
-  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(diagnostic);
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new IpcError('internal', diagnostic));
   render(view());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
@@ -175,8 +176,8 @@ it('shows failed help diagnostics containing cancelled without allowing acceptan
   expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled();
 });
 
-it('keeps canonical native cancellation quiet and permits a fresh discovery', async () => {
-  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new Error('help discovery cancelled'));
+it.each(['help discovery cancelled', 'Help capture superseded by another request'])('keeps typed native cancellation quiet regardless of wording: %s', async message => {
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new IpcError('cancelled', message));
   render(view());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
@@ -188,14 +189,14 @@ it('keeps canonical native cancellation quiet and permits a fresh discovery', as
 });
 
 it('keeps an actual Cancel quiet even when the child failure has no cancellation keyword', async () => {
-  let reject!: (cause: string) => void;
+  let reject!: (cause: IpcError) => void;
   vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise((_, failure) => { reject = failure; }));
   render(view());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
-  await act(async () => { reject('process stopped before complete help'); });
+  await act(async () => { reject(new IpcError('internal', 'process stopped before complete help')); });
   expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]);
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();

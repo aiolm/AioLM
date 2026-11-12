@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
@@ -13,15 +14,25 @@ import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import { profileLibrary } from "../model-settings/profileEditor";
 import { profileTargetKey } from "../../shared/config/settingsProfiles";
 import TaskStrip from "../../shared/ui/TaskStrip";
+import { defined } from "../../testing/assertDefined";
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock("../../shared/api/index", () => ({
   sessionList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
   sessionStart: vi.fn(), sessionStop: vi.fn(), sessionUnload: vi.fn(),
   isNativeRuntimeAvailable: vi.fn(() => false), rtList: vi.fn(async () => []), providerRuntimes: vi.fn(async () => []),
 }));
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = {
+  sessionList: api.sessionList as Mock,
+  isNativeRuntimeAvailable: api.isNativeRuntimeAvailable as Mock,
+  providerRuntimes: api.providerRuntimes as Mock,
+  sessionUnload: api.sessionUnload as Mock,
+  sessionStart: api.sessionStart as Mock,
+  sessionStop: api.sessionStop as Mock,
+};
 const definition: api.SessionDefinition = {
   id: "work", name: "Work session", enabled: true,
   models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },
@@ -102,7 +113,7 @@ describe("loaded model and saved session controls", () => {
     const store = renderPanel(cfg, { state: "running", model: "models/live.gguf" });
     fireEvent.click(liveRow("Default server").getByRole("button", { name: "Model & settings" }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" } }));
-    expect(vi.mocked(settings.open).mock.calls[0][0]).not.toHaveProperty("config");
+    expect(defined(vi.mocked(settings.open).mock.calls[0])[0]).not.toHaveProperty("config");
     expect(liveRow("Default server").getByText("live.gguf")).toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(mocked.sessionStart).not.toHaveBeenCalled();
@@ -162,7 +173,7 @@ describe("loaded model and saved session controls", () => {
     const status = { state: "running", model: "models/live.gguf",
       execution: { active_provider: "llama.cpp", active_backend: "cpu", active_build: "b111" },
       ...(withEngine ? { engine: { provider: "llama.cpp", runtime_id: "cpu-b111" } } : {}) } as unknown as api.ServerStatus;
-    const store = renderPanel({ ...cfg, active_backend: "metal", active_build: "b222" } as api.AppConfig, status);
+    const store = renderPanel({ ...cfg, active_backend: "metal", active_build: "b222" }, status);
     fireEvent.click(liveRow("Default server").getByText("Details"));
     expect(liveRow("Default server").getByText("llama.cpp · cpu / b111")).toBeVisible();
     expect(screen.queryByText("llama.cpp · metal / b222")).not.toBeInTheDocument();
@@ -202,7 +213,7 @@ describe("loaded model and saved session controls", () => {
     const store = renderPanel();
     openSaved();
     fireEvent.click(savedRow().getByRole("button", { name: "Model & settings" }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "session", sessionId: "work" }, config: expect.objectContaining({ ctx_size: 8192 }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: "session", sessionId: "work" }, config: match.objectContaining({ ctx_size: 8192 }) }));
     expect(screen.queryByLabelText("Session name")).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -227,8 +238,8 @@ describe("loaded model and saved session controls", () => {
     fireEvent.click(savedRow().getByRole("button", { name: "Model & settings" }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({
       target: { kind: "session", sessionId: "work" },
-      definition: expect.objectContaining({ name: "Renamed draft" }),
-      config: expect.objectContaining({ active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, gpu: definition.gpu }),
+      definition: match.objectContaining({ name: "Renamed draft" }),
+      config: match.objectContaining({ active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, gpu: definition.gpu }),
     }));
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(mocked.sessionStop).not.toHaveBeenCalled();
@@ -239,7 +250,7 @@ describe("loaded model and saved session controls", () => {
     openSaved();
     fireEvent.click(screen.getByRole("button", { name: "New session" }));
     fireEvent.click(savedRow("New session").getByRole("button", { name: "Model & settings" }));
-    const request = vi.mocked(settings.open).mock.calls[0][0];
+    const request = defined(vi.mocked(settings.open).mock.calls[0])[0];
     expect(request.target.kind).toBe("session");
     expect(request.definition?.id).toMatch(/^session-/);
     expect(request.config?.active_model).toBe(cfg.active_model);
@@ -257,7 +268,7 @@ describe("loaded model and saved session controls", () => {
     const configured = structuredClone(cfg);
     const library = profileLibrary(configured);
     const key = profileTargetKey(definition.models.primary_model, definition.id);
-    const application = library.applied[key];
+    const application = defined(library.applied[key]);
     library.entries = library.entries.map(profile => profile.id === application.profile_id
       ? { ...profile, revision: profile.revision + 1, settings: { ...profile.settings, ctx_size: 16384 } } : profile);
     configured.settings_profiles = library;
@@ -267,7 +278,7 @@ describe("loaded model and saved session controls", () => {
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ ctx_size: 16384 }), false));
     expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(before.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp'));
-    expect(store.cfg!.settings_profiles!.applied[key].profile_id).toBe(application.profile_id);
+    expect(defined(store.cfg!.settings_profiles!.applied[key]).profile_id).toBe(application.profile_id);
     expect(store.cfg!.settings_profiles!.applied[profileTargetKey(cfg.active_model)]).toEqual(before.settings_profiles!.applied[profileTargetKey(cfg.active_model)]);
   });
 
@@ -282,13 +293,16 @@ describe("loaded model and saved session controls", () => {
   it.each([
     ['launch', 'server exited before ready (1). gguf_init_from_file: invalid magic in /synthetic/cancel-check.gguf'],
     ['launch', 'server exited before ready (1). loader diagnostic: server start cancelled while reading an invalid fixture'],
+    ['launch', 'server start cancelled'],
+    ['launch', 'Session load cancelled.'],
+    ['preparation', 'Session load cancelled.'],
     ['preparation', 'Unable to persist settings at /synthetic/cancel-profile/config.json'],
     ...['runtime probe cancelled', 'runtime installation cancelled', 'runtime install cancelled', 'server option probe cancelled'].map(message => ['launch', message] as const),
   ] as const)('keeps a %s failure visible when its diagnostic contains cancellation text: %s', async (phase, diagnostic) => {
     const model = '/synthetic/cancel-check.gguf';
     const target = { ...definition, models: { ...definition.models, primary_model: model } };
     const store = renderPanel({ ...cfg, sessions: [target] });
-    if (phase === 'launch') mocked.sessionStart.mockRejectedValueOnce(diagnostic);
+    if (phase === 'launch') mocked.sessionStart.mockRejectedValueOnce(new IpcError('internal', diagnostic));
     else vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error(diagnostic));
     fireEvent.click(savedRow().getByRole('button', { name: 'Load session' }));
 
@@ -300,10 +314,37 @@ describe("loaded model and saved session controls", () => {
     else expect(mocked.sessionStart).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('only falls back for untyped missing session commands (typed: %s)', async typed => {
+    const diagnostic = 'session_start command not found';
+    mocked.sessionStart.mockRejectedValueOnce(typed ? new IpcError('not_found', diagnostic) : new Error(diagnostic));
+    const store = renderPanel(cfg, { state: 'failed' });
+    fireEvent.click(liveRow('Default server').getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-default')?.state).toBe(typed ? 'failed' : 'completed'));
+    if (typed) {
+      expect(screen.getByRole('alert')).toHaveTextContent(diagnostic);
+      expect(store.start).not.toHaveBeenCalled();
+    } else {
+      expect(store.start).toHaveBeenCalledOnce();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([false, true])('only suppresses untyped missing-command polling failures (typed: %s)', async typed => {
+    const diagnostic = 'session_start command not found';
+    mocked.sessionList.mockRejectedValue(typed ? new IpcError('not_found', diagnostic) : new Error(diagnostic));
+    renderPanel();
+    await waitFor(() => expect(mocked.sessionList).toHaveBeenCalled());
+    if (typed) expect(await screen.findByRole('alert')).toHaveTextContent(diagnostic);
+    else {
+      await act(async () => {});
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    }
+  });
+
   it.each([
-    'server start cancelled',
-  ])('retains the cancelled result for the explicit native sentinel "%s"', async diagnostic => {
-    mocked.sessionStart.mockRejectedValueOnce(diagnostic);
+    'server start cancelled', 'The operation ended at the user’s request.',
+  ])('retains native cancellation regardless of wording: "%s"', async diagnostic => {
+    mocked.sessionStart.mockRejectedValueOnce(new IpcError('cancelled', diagnostic));
     renderPanel();
     fireEvent.click(savedRow().getByRole('button', { name: 'Load session' }));
     await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled'));
@@ -312,7 +353,7 @@ describe("loaded model and saved session controls", () => {
   });
 
   it('keeps a runtime failure visible after a cancellation request when the backend does not confirm cancellation', async () => {
-    let fail!: (error: string) => void;
+    let fail!: (error: IpcError) => void;
     mocked.sessionStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     mocked.sessionStop.mockResolvedValueOnce(undefined);
     renderPanel();
@@ -323,7 +364,7 @@ describe("loaded model and saved session controls", () => {
     expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelling');
 
     const diagnostic = 'server exited before ready (1). invalid header in /synthetic/cancel-check.gguf';
-    await act(async () => fail(diagnostic));
+    await act(async () => fail(new IpcError('internal', diagnostic)));
     expect(screen.getByRole('alert')).toHaveTextContent(diagnostic);
     expect(getTaskSnapshot().find(task => task.id === 'session-load-work')).toMatchObject({ state: 'failed', detail: diagnostic });
   });
@@ -362,7 +403,7 @@ describe("loaded model and saved session controls", () => {
       expect(liveRow().getByRole('button', { name: 'Working' })).toBeDisabled();
       expect(liveRow().queryByText('Starting')).not.toBeInTheDocument();
     } finally {
-      await act(async () => { fail(new Error('server start cancelled')); });
+      await act(async () => { fail(new IpcError('cancelled', 'server start cancelled')); });
     }
     await waitFor(() => expect(savedRow().getByText('Stopped')).toBeInTheDocument());
     expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
@@ -402,7 +443,7 @@ describe("loaded model and saved session controls", () => {
     const cancellation = source === 'global' ? within(screen.getByTestId('task-strip')) : liveRow();
     fireEvent.click(cancellation.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
-    await act(async () => failFirst(new Error('server start cancelled')));
+    await act(async () => failFirst(new IpcError('cancelled', 'server start cancelled')));
     await waitFor(() => expect(savedRow().getByRole('button', { name: 'Load session' })).toBeEnabled());
     fireEvent.click(savedRow().getByRole('button', { name: 'Load session' }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledTimes(2));
@@ -445,7 +486,7 @@ describe("loaded model and saved session controls", () => {
     const appliedDefinition = { ...definition, models: { ...definition.models, primary_model: "models/changed.gguf" }, execution: { ...definition.execution, ctx_size: 16384 } };
     await act(async () => {
       await store.updateConfig({ sessions: [appliedDefinition] });
-      await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...store.cfg!, active_model: "models/changed.gguf" });
+      await defined(vi.mocked(settings.open).mock.calls[0])[0].onApply?.({ ...store.cfg!, active_model: "models/changed.gguf" });
     });
     fireEvent.click(savedRow().getByRole("button", { name: "Load session" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/changed.gguf", ctx_size: 16384 }), false));
@@ -474,7 +515,7 @@ describe("loaded model and saved session controls", () => {
     renderPanel();
     await waitFor(() => expect(liveRow("Transient").getByText("temp.gguf")).toBeInTheDocument());
     fireEvent.click(liveRow("Transient").getByRole("button", { name: "Model & settings" }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "session", sessionId: "transient" }, definition: expect.objectContaining({ models: expect.objectContaining({ primary_model: "models/temp.gguf" }) }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: "session", sessionId: "transient" }, definition: match.objectContaining({ models: match.objectContaining({ primary_model: "models/temp.gguf" }) }) }));
   });
   it("updates status while remaining on the model library", async () => {
     renderPanel();
@@ -489,9 +530,13 @@ describe("loaded model and saved session controls", () => {
     fireEvent.click(action === "selection" ? savedRow("Other session").getByRole("button", { name: /Other session/ }) : screen.getByRole("button", { name: "New session" }));
     expect(await screen.findByRole("dialog", { name: "Unsaved changes" })).toBeInTheDocument();
   });
-  it("keeps edits when the selected session is clicked again", async () => {
+  it("keeps edits across status polls and when the selected session is clicked again", async () => {
     renderPanel(); await selectWork();
     fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
+    mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work session", state: "running", model: definition.models.primary_model }]);
+    act(() => { window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT)); });
+    await waitFor(() => expect(liveRow().getByRole("button", { name: "Stop session" })).toBeEnabled());
+    expect(screen.getByLabelText("Session name")).toHaveValue("Changed");
     await selectWork();
     expect(screen.getByLabelText("Session name")).toHaveValue("Changed");
   });
@@ -532,7 +577,7 @@ describe("loaded model and saved session controls", () => {
     const configured = { ...cfg, sessions: [definition, other] };
     const library = profileLibrary(configured);
     const key = profileTargetKey(definition.models.primary_model, definition.id);
-    const application = structuredClone(library.applied[key]);
+    const application = structuredClone(defined(library.applied[key]));
     library.revision = 21;
     library.provider_recent = { ...library.provider_recent, 'llama.cpp': application.profile_id };
     library.applied[profileTargetKey('models/remembered.gguf')] = { ...application, model: 'models/remembered.gguf' };
@@ -570,7 +615,7 @@ describe("loaded model and saved session controls", () => {
     const latest = profileLibrary({ ...store.cfg!, sessions: [definition, later] });
     latest.revision = 22;
     const workKey = profileTargetKey(definition.models.primary_model, definition.id);
-    const profileId = latest.applied[workKey].profile_id!;
+    const profileId = defined(latest.applied[workKey]).profile_id!;
     latest.entries = latest.entries.map(profile => profile.id === profileId
       ? { ...profile, name: 'Updated shared profile', revision: profile.revision + 1,
         settings: { ...profile.settings, ctx_size: 16384 } } : profile);
@@ -627,7 +672,7 @@ describe("loaded model and saved session controls", () => {
     expect(screen.getByLabelText('Session name')).toHaveValue('Keep this unsaved name');
     expect(savedRow('Other session').getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.queryByRole('article', { name: 'Work session' })).not.toBeInTheDocument();
-    expect(store.cfg!.sessions![0].name).toBe('Other session');
+    expect(defined(store.cfg!.sessions![0]).name).toBe('Other session');
     expect(mocked.sessionUnload).toHaveBeenCalledExactlyOnceWith('work');
     expect(mocked.sessionStart).not.toHaveBeenCalled();
     fireEvent.click(savedRow('Other session').getByRole('button', { name: /Other session/ }));
@@ -679,16 +724,16 @@ describe("loaded model and saved session controls", () => {
       active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, active_backend: "vulkan", gpu: definition.gpu,
     }), false));
     expect(store.updateConfig).toHaveBeenCalledOnce();
-    expect(store.cfg!.settings_profiles!.applied[profileTargetKey(definition.models.primary_model, definition.id)].profile_id).toBeTruthy();
+    expect(defined(store.cfg!.settings_profiles!.applied[profileTargetKey(definition.models.primary_model, definition.id)]).profile_id).toBeTruthy();
   });
   it.each(['success', 'failure'] as const)('keeps an unchanged session clean after profile preparation and launch %s', async outcome => {
     const store = renderPanel();
-    if (outcome === 'failure') mocked.sessionStart.mockRejectedValueOnce(new Error('Engine launch failed'));
+    if (outcome === 'failure') mocked.sessionStart.mockRejectedValueOnce(new IpcError('internal', 'Engine launch failed'));
     await selectWork();
     fireEvent.click(savedRow().getByRole('button', { name: 'Load session' }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole('button', { name: 'New session' })).toBeEnabled());
-    expect(store.cfg!.sessions![0].execution).not.toEqual(definition.execution);
+    expect(defined(store.cfg!.sessions![0]).execution).not.toEqual(definition.execution);
     fireEvent.click(screen.getByRole('button', { name: 'New session' }));
     expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Session name')).toHaveValue('');
@@ -712,7 +757,7 @@ describe("loaded model and saved session controls", () => {
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole('button', { name: 'New session' })).toBeEnabled());
     expect(screen.getByLabelText('Session name')).toHaveValue('Keep my unsaved name');
-    expect(store.cfg!.sessions![0].name).toBe('Work session');
+    expect(defined(store.cfg!.sessions![0]).name).toBe('Work session');
     fireEvent.click(screen.getByRole('button', { name: 'New session' }));
     expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeInTheDocument();
   });

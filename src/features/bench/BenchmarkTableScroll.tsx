@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { benchmarkCopy } from './benchmarkCopy';
 
 type Copy = Pick<ReturnType<typeof benchmarkCopy>, 'tableColumns' | 'previousColumns' | 'nextColumns' | 'columnsHint'>;
@@ -38,7 +38,7 @@ export default function BenchmarkTableScroll({ label, copy, children }: { label:
     element.scrollLeft = Math.min(maximum, Math.max(0, target));
     measure();
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (event: KeyboardEvent) => {
     // A future link or control inside a cell retains its own keyboard behavior.
     if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !edges.overflow) return;
     const direction = event.key === 'ArrowLeft' ? 'previous' : event.key === 'ArrowRight' ? 'next'
@@ -48,9 +48,17 @@ export default function BenchmarkTableScroll({ label, copy, children }: { label:
     move(direction);
   };
 
+  const keyHandler = useRef(onKeyDown); keyHandler.current = onKeyDown;
+  useEffect(() => {
+    const element = region.current;
+    const handler = (event: KeyboardEvent) => keyHandler.current(event);
+    element?.addEventListener('keydown', handler);
+    return () => element?.removeEventListener('keydown', handler);
+  }, []);
+
   return <>
     <div ref={region} id={id} className="performance-table-scroll" role="region" aria-label={label}
-      aria-describedby={edges.overflow ? `${id}-hint` : undefined} tabIndex={0} onScroll={measure} onKeyDown={onKeyDown}>
+      aria-describedby={edges.overflow ? `${id}-hint` : undefined} tabIndex={0} onScroll={measure}>
       {children}
     </div>
     {edges.overflow && <div className="performance-table-navigation" role="group" aria-label={`${label} · ${copy.tableColumns}`}>

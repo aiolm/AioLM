@@ -7,7 +7,7 @@ import Badge from "../../shared/ui/Badge";
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { ChatSkill } from "../../shared/api/personalization";
 import type * as api from "../../shared/api/types";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import type { ChatMcpTool } from "./useChatMcpTools";
@@ -132,7 +132,7 @@ export default function ChatComposer({
         {pendingToolCall && <div className="chat-tool-approval app-card app-card--warning app-card--tight text-xs ui-color-warning-ink" role="alert">
           <div className="font-semibold">{ct("mcpApprovalRequired")}</div>
           <p className="mt-1"><span className="ui-color-ink">{normalizeDisplayText(pendingToolCall.serverName)}</span> · <code className="font-mono">{normalizeDisplayText(pendingToolCall.toolName)}</code></p>
-          <pre tabIndex={0} className="chat-tool-arguments font-mono">{normalizeDisplayText(JSON.stringify(pendingToolCall.argumentsValue, null, 2))}</pre>
+          <pre role="region" aria-label={ct("mcpApprovalRequired")} tabIndex={0} className="chat-tool-arguments font-mono">{normalizeDisplayText(JSON.stringify(pendingToolCall.argumentsValue, null, 2))}</pre>
           <div className="chat-tool-approval-actions">
             <button type="button" onClick={onApproveTool} className="app-button app-button--primary app-button--sm">{ct("approveTool")}</button>
             <button type="button" data-icon="close" onClick={onRejectTool} className="app-button app-button--secondary app-button--sm">{ct("rejectTool")}</button>

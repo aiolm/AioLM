@@ -44,7 +44,7 @@ it('keeps the lock when cancellation finishes before the overlapping load settle
 
 it('releases failed synchronous commands and requests fresh native status without manufacturing readiness', async () => {
   const { result } = renderHook(useSessionTransitionInProgress);
-  const changed = vi.fn();
+  const changed = vi.fn<(event: Event) => void>();
   window.addEventListener(SESSION_STATUS_CHANGED_EVENT, changed);
   const failure = new Error('Synthetic IPC unavailable.');
   try {

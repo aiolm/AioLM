@@ -6,6 +6,7 @@ import { adapterSetupCopy } from '../../shared/i18n/adapterSetupCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 /** Recipe fields and commands are data. All engines return the same draft
  * and proceed through the existing explicit help/bindings/probe journey. */
@@ -17,6 +18,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
   const id = useId();
   const owner = `adapter-setup-${id}`;
   const [recipe, setRecipe] = useState<AdapterSetupRecipe | null>(null);
+  const [recipeToken, setRecipeToken] = useState<string | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -36,12 +38,11 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     const own = ++generation.current;
     setBusy(true); onBusyChange(true); setError('');
     try {
-      const path = await pickRuntimePath('file');
-      if (!path) return;
-      const next = await adapterSetupImport(path);
-      if (generation.current !== own) return;
-      setRecipe(next);
-      setInputs(Object.fromEntries(next.fields.map(field => [field.key, field.default ?? ''])));
+      const imported = await adapterSetupImport();
+      if (generation.current !== own || !imported) return;
+      setRecipe(imported.recipe);
+      setRecipeToken(imported.token);
+      setInputs(Object.fromEntries(imported.recipe.fields.map(field => [field.key, field.default ?? ''])));
     } catch (cause) {
       if (generation.current === own) setError(String(cause));
     } finally {
@@ -49,7 +50,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     }
   };
   const prepare = async () => {
-    if (!recipe || busy || disabled) return;
+    if (!recipe || !recipeToken || busy || disabled) return;
     const own = ++generation.current;
     cancelled.current = false;
     running.current = true;
@@ -58,15 +59,16 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
       cancelled.current = true; void adapterSetupCancel(owner);
     } });
     try {
-      const draft = await adapterSetupPrepare(owner, recipe, inputs);
+      const draft = await adapterSetupPrepare(owner, recipeToken, inputs);
       if (generation.current !== own) return;
       running.current = false;
       finishTask(owner, cancelled.current ? 'cancelled' : 'completed');
       if (!cancelled.current) onPrepared(draft);
     } catch (cause) {
       if (generation.current !== own) return;
-      if (!cancelled.current) setError(String(cause));
-      finishTask(owner, cancelled.current ? 'cancelled' : 'failed', String(cause));
+      const wasCancelled = cancelled.current || isIpcErrorKind(cause, 'cancelled');
+      if (!wasCancelled) setError(String(cause));
+      finishTask(owner, wasCancelled ? 'cancelled' : 'failed', String(cause));
     } finally {
       if (generation.current === own) { running.current = false; setBusy(false); setPreparing(false); onBusyChange(false); }
     }

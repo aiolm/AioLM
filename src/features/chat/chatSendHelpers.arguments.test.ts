@@ -25,7 +25,7 @@ describe('approved MCP calls use JSON-owned argument fields', () => {
     });
 
     it(`accepts the explicit JSON ${key} field`, () => {
-      const args = JSON.parse(`{"${key}":"provided"}`);
+      const args: Record<string, unknown> = { [key]: "provided" };
       expect(resolve({ type: 'object', required: [key], properties: { [key]: { type: 'string' } } }, args).argumentsValue).toEqual(args);
     });
   }

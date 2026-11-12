@@ -18,7 +18,7 @@ export function createConfigSaveQueue<T extends object>(
       }
 
       const resolvedPatch = typeof patch === "function" ? patch(previous) : patch;
-      const next = { ...previous, ...resolvedPatch } as T;
+      const next = { ...previous, ...resolvedPatch };
       publish(next);
       try {
         const saved = await persist(next);

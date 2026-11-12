@@ -268,6 +268,8 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-message-content, .chat-composer, .chat-conversation-heading { width: 100%; max-width: 90rem; margin-inline: auto; }
 .chat-message-content { padding-inline: 4px; }
 .chat-message-content > * + * { margin-top: 16px; }
+/* Completed history stays searchable and focusable without laying out every row. */
+.chat-message-completed { content-visibility: auto; contain-intrinsic-size: auto none auto 12rem; }
 .chat-message { position: relative; min-width: 0; font-size: 15px; line-height: var(--chat-prose-leading, 1.7); color: var(--ui-ink); }
 .chat-message-user { max-width: 78%; padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-input); }
 .chat-message-assistant { width: 100%; padding-block: 12px; }

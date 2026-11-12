@@ -9,6 +9,10 @@ export * from "./models.ts";
 export * from "./chat.ts";
 export * from "./benchmarkSharing.ts";
 export * from "./personalization.ts";
+export * from "./errors.ts";
+export * from "./benchmarkHistory.ts";
+export * from "./conversations.ts";
+export * from "./appUpdates.ts";
 
 // Keep request normalization available beside the API request builders.
 export { mapChatOptionAliases } from "../config/tuningValidation.ts";

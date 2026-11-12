@@ -1,4 +1,5 @@
-import { invoke, isNativeRuntimeAvailable } from "../api/transport";
+import { isNativeRuntimeAvailable } from "../api/transport";
+import { notificationPermissionGranted, notificationRequestPermission, sendDesktopNotification, type NativeNotificationPermission } from "../api/notifications";
 import { loadPreferences, type NotificationPreferences } from "../config/preferences";
 import type { Locale } from "../i18n/i18nCatalog";
 
@@ -65,7 +66,7 @@ const COPY: Record<Locale, Record<CompletionNotificationKind | "test", NoticeCop
   },
 };
 
-function fromPluginState(state: unknown): NotificationPermission {
+function fromPluginState(state: NativeNotificationPermission | boolean | null): NotificationPermission {
   if (state === "granted" || state === true) return "granted";
   if (state === "denied" || state === false) return "denied";
   return "default";
@@ -76,7 +77,7 @@ export async function getNotificationPermission(): Promise<NotificationPermissio
   if (!isNativeRuntimeAvailable()) return "unavailable";
   try {
     // `null` is the plugin's "not decided yet".
-    return fromPluginState(await invoke<boolean | null>("plugin:notification|is_permission_granted"));
+    return fromPluginState(await notificationPermissionGranted());
   } catch {
     return "unavailable";
   }
@@ -89,14 +90,14 @@ export async function getNotificationPermission(): Promise<NotificationPermissio
 export async function requestNotificationPermission(): Promise<NotificationPermission> {
   if (!isNativeRuntimeAvailable()) return "unavailable";
   try {
-    return fromPluginState(await invoke<string>("plugin:notification|request_permission"));
+    return fromPluginState(await notificationRequestPermission());
   } catch {
     return "unavailable";
   }
 }
 
 async function submit(copy: NoticeCopy): Promise<void> {
-  await invoke<void>("send_desktop_notification", { options: { title: copy.title, body: copy.body } });
+  await sendDesktopNotification({ title: copy.title, body: copy.body });
 }
 
 /**

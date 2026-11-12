@@ -2,9 +2,9 @@ import * as api from "../../shared/api/index";
 import {
   buildDocumentContext, buildMultimodalContent, buildVectorDocumentRetrieval,
   documentChunksExceedSearchLimit, MAX_SEARCHABLE_DOCUMENT_CHUNKS, splitDocumentChunks,
-  type DocumentAttachment, type ImageAttachment,
 } from "./chatUtils";
-import type { ChatCitation, ChatHistoryMessage } from "./chatHistory";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
+import type { ChatCitation, DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { loadDocumentVectors, saveDocumentVectors } from "./documentIndex";
 import type { ChatMcpTool } from "./useChatMcpTools";
 import type { ChatPhase, PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes";

@@ -1,4 +1,5 @@
 import { invoke, isNativeRuntimeAvailable } from "./transport.ts";
+import { isIpcErrorKind } from "./ipcError.ts";
 import { loadPreferences } from "../config/preferences.ts";
 
 /** Where personal instructions and skills come from: AioLM's data folder or the shared `~/.agents`. */
@@ -39,9 +40,6 @@ export interface SkillContent {
 /** Window event the settings UI dispatches after a successful save so the chat reloads. */
 export const PERSONALIZATION_CHANGED_EVENT = "aiolm-personalization-changed";
 
-/** Prefix of the native error for a save whose expected revision no longer matches the file. */
-const CONFLICT_PREFIX = "Save conflict:";
-
 /** The browser preview has no files to read, so it chats without personalization. */
 export function getChatPersonalization(): Promise<ChatPersonalization> {
   if (!isNativeRuntimeAvailable()) return Promise.resolve({ instructions: [], skills: [], warnings: [] });
@@ -61,6 +59,5 @@ export const saveAgentsFile = (source: PersonalizationSource, content: string, e
 
 /** True when a save was refused because the file changed after it was read; nothing was written. */
 export function isAgentsFileConflict(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return message.startsWith(CONFLICT_PREFIX);
+  return isIpcErrorKind(error, "busy");
 }

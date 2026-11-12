@@ -1,5 +1,6 @@
 import { Suspense, lazy, useId, useMemo } from 'react';
 import { DESCRIPTION_MAX_CODEPOINTS, countCodePoints } from '@aiolm/benchmark-contracts';
+import { useI18n } from '../../shared/i18n/i18n';
 
 const Markdown = lazy(() => import('react-markdown'));
 
@@ -24,9 +25,10 @@ const MARKDOWN_COMPONENTS = {
 };
 
 export function DescriptionPreview({ text }: { text: string }) {
+  const { t } = useI18n();
   const allowed = useMemo(() => [...allowedSet] as AllowedElement[], []);
   return (
-    <Suspense fallback={<p role="status">Loading preview…</p>}>
+    <Suspense fallback={<p role="status">{t('benchmark.descriptionLoading')}</p>}>
       <div className="performance-markdown-preview">
         <Markdown
           skipHtml
@@ -35,7 +37,7 @@ export function DescriptionPreview({ text }: { text: string }) {
           urlTransform={urlTransform}
           components={MARKDOWN_COMPONENTS}
         >
-          {text || 'No description.'}
+          {text || t('benchmark.descriptionEmpty')}
         </Markdown>
       </div>
     </Suspense>
@@ -53,6 +55,7 @@ export function DescriptionEditor({
   label: string; hint: string; countLabel: (used: number, max: number) => string;
   rows?: number;
 }) {
+  const { t } = useI18n();
   const id = useId();
   const used = descriptionCodePoints(value);
   const over = used > DESCRIPTION_MAX_CODEPOINTS;
@@ -74,7 +77,7 @@ export function DescriptionEditor({
       </label>
       <p id={`${id}-count`}>{countLabel(used, DESCRIPTION_MAX_CODEPOINTS)}</p>
       <p id={`${id}-hint`}>{hint}</p>
-      {over && <p id={`${id}-error`} role="alert" className="performance-validation">Description exceeds 4000 characters.</p>}
+      {over && <p id={`${id}-error`} role="alert" className="performance-validation">{t('benchmark.descriptionTooLong', { max: DESCRIPTION_MAX_CODEPOINTS })}</p>}
       {value && !over && <DescriptionPreview text={value} />}
     </div>
   );

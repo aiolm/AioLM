@@ -489,7 +489,7 @@ describe("Discover listing and installed files", () => {
       await act(async () => releaseDownload({ path: `models/${file}`, repo_id: "owner/model", file_path: file, size_bytes: 1000 }));
       expect(screen.getByRole("button", { name: "Discard & continue" })).toBeVisible();
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("completed");
-      act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
+      await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
       const toolbar = screen.getByRole("textbox").closest("form");
       expect(toolbar).toHaveAttribute("aria-busy", "true");
@@ -527,10 +527,10 @@ describe("Discover listing and installed files", () => {
       const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
       expect(previous?.state).toBe("completed");
       const replacementCancel = () => Promise.resolve();
-      act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+      await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
       act(() => finishTask(MODEL_DOWNLOAD_TASK_ID, "completed"));
-      act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
+      await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Discard & continue" }));
@@ -566,10 +566,10 @@ describe("Discover listing and installed files", () => {
       expect(screen.getByRole("button", { name: "Discard & continue" })).toBeVisible();
       const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
       expect(previous?.state).toBe("completed");
-      act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
+      await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
       const replacementCancel = () => Promise.resolve();
-      act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+      await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Discard & continue" }));
         await Promise.resolve();
@@ -612,7 +612,7 @@ describe("Discover listing and installed files", () => {
     vi.useFakeTimers();
     try {
       act(() => finishTask(MODEL_DOWNLOAD_TASK_ID, "completed"));
-      act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
+      await act(() => vi.advanceTimersByTime(TASK_CLEAR_DELAY_MS + 1));
       expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)).toBeUndefined();
       await act(async () => releaseSnapshot(artifact));
       expect(screen.getByRole("button", { name: "Configure and run" })).toBeVisible();
@@ -635,7 +635,7 @@ describe("Discover listing and installed files", () => {
     act(() => updateTask(MODEL_DOWNLOAD_TASK_ID, { received: 4 }));
     expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(previous?.cancel);
     const replacementCancel = () => Promise.resolve();
-    act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
     expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
     act(() => updateTask(MODEL_DOWNLOAD_TASK_ID, { received: 12 }));
     expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.cancel).toBe(replacementCancel);
@@ -659,7 +659,7 @@ describe("Discover listing and installed files", () => {
     const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
     expect(previous?.cancel).toBeTypeOf("function");
     const replacementCancel = () => Promise.resolve();
-    act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
     await act(async () => rejectCancel(new Error("old cancel failed")));
     await waitFor(() => expect(getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID)?.state).toBe("running"));
     expect(screen.queryByText("old cancel failed")).not.toBeInTheDocument();
@@ -678,7 +678,7 @@ describe("Discover listing and installed files", () => {
     await clickDownload("Download complete model folder");
     const replacementCancel = () => Promise.resolve();
     if (retirement === "unmounted") view.unmount();
-    else act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, cancel: replacementCancel }));
+    else await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, cancel: replacementCancel }));
     const changed = vi.fn();
     window.addEventListener(MODEL_CATALOG_CHANGED, changed);
     try {
@@ -707,7 +707,7 @@ describe("Discover listing and installed files", () => {
     const previous = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
     expect(previous?.cancel).toBeTypeOf("function");
     const replacementCancel = () => Promise.resolve();
-    act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
+    await act(() => registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: "model-download", label: "replacement", interruptible: true, startedAt: previous!.startedAt, cancel: replacementCancel }));
     await act(async () => releaseSnapshot({
       path: "models/old-snapshot",
       name: "old-snapshot",

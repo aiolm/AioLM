@@ -39,7 +39,7 @@ describe('entry point registration recovery transport', () => {
       expect(invoke).toHaveBeenLastCalledWith('runtime_entrypoint_register', options?.resumeHelp ? { draft: submitted, resumeHelp: true } : { draft: submitted });
       await expect(result).resolves.toBe(manifest);
     }
-    const rejection = Promise.reject(pending);
+    const rejection = vi.fn<() => Promise<RegisteredManifest>>().mockRejectedValueOnce(pending)();
     vi.mocked(invoke).mockReturnValueOnce(rejection);
     const legacy = runtimeEntrypointRegister(submitted);
     expect(legacy).toBe(rejection);
@@ -109,8 +109,8 @@ describe('additive command import syntax contract', () => {
     vi.mocked(invoke).mockResolvedValue({ options: {}, managed: ['--port 8000'], unrecognized: ['--fresh-value', 'kept'] });
     const result = await providerImportCommand('vllm', '--port 8000 --fresh-value kept', 'posix');
     expect(result.issues).toEqual([
-      expect.objectContaining({ key: 'managed', message: expect.stringContaining('--port 8000') }),
-      expect.objectContaining({ key: 'unrecognized', message: expect.stringContaining('--fresh-value kept') }),
+      expect.objectContaining({ key: 'managed', message: expect.stringContaining('--port 8000') as unknown }),
+      expect.objectContaining({ key: 'unrecognized', message: expect.stringContaining('--fresh-value kept') as unknown }),
     ]);
   });
 

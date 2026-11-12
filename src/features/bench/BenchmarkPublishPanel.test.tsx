@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { BenchmarkPublishPanel } from './BenchmarkPublishPanel';
@@ -209,8 +209,9 @@ describe('publish flow', () => {
     fireEvent.click(screen.getByRole('button', { name: copy.cancelPublish }));
     await waitFor(() => expect(sharing.benchmarkSharingCancel).toHaveBeenCalledWith(id));
     // A late native completion must never attach or send.
-    resolvePrepare({ credential_ref: 'cred-late', body_sha256: 'h', destination: 'https://example.test/v1/benchmark-runs' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await act(async () => {
+      resolvePrepare({ credential_ref: 'cred-late', body_sha256: 'h', destination: 'https://example.test/v1/benchmark-runs' });
+    });
     expect(sharing.benchmarkSharingSubmit).not.toHaveBeenCalled();
     const kept = await engine.get(id);
     expect(kept?.requestBody).toBe(JSON.stringify({ benchmark: snapshot(), description_md: 'durable notes' }));

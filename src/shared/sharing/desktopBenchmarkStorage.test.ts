@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { acknowledgeUploadedBenchmark, takeBenchmarkMaintenanceWarnings } from "./desktopBenchmarkStorage.ts";
 import { invoke, isNativeRuntimeAvailable } from "../api/transport.ts";
 import type { QueuedBenchmark } from "./outbox.ts";
+import { defined } from "../../testing/assertDefined.ts";
 
 vi.mock("../api/transport.ts", () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn() }));
 const receipt = { submission_id: "00000000-0000-4000-8000-000000000001", id: "synthetic-public" };
@@ -24,7 +25,7 @@ describe("desktop copies of accepted benchmark results", () => {
     expect(invoke).toHaveBeenCalledWith("benchmark_acknowledge_upload", {
       runId: "synthetic-local-run", receipt: { ...receipt, destination: "https://synthetic.example/v1/benchmark-runs" },
     });
-    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty("payload");
+    expect(defined(vi.mocked(invoke).mock.calls[0])[1]).not.toHaveProperty("payload");
   });
 
   it("retries local persistence without treating unrelated cache warnings as an acknowledgement failure", async () => {

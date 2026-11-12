@@ -2,7 +2,9 @@ import { Component, StrictMode, type ReactNode } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestStore as createBaseTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import type { AppConfig, SessionDefinition, SessionStatus } from '../../shared/api/types';
+import type { preflightLaunch } from '../../shared/api';
 import type { AppStore } from '../../shared/state/store';
 import { executionConfig, executionSettings, settingsForSession } from '../../shared/config/executionSettings';
 import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
@@ -16,8 +18,8 @@ import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import TaskStrip from '../../shared/ui/TaskStrip';
 
 const mocks = vi.hoisted(() => ({
-  dialog: null as ModelSettingsDialogProps | null, native: false, renders: 0, locale: 'en' as 'en' | 'ko',
-  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunch: vi.fn(),
+  dialog: null as ModelSettingsDialogProps | null, native: false, renders: 0, locale: 'en',
+  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn<typeof preflightLaunch>(), cancelLaunch: vi.fn(),
   sessionStart: vi.fn(), sessionStop: vi.fn(), applyRequestSettings: vi.fn(),
 }));
 
@@ -54,7 +56,7 @@ function createTestStore(overrides: Partial<AppConfig> = {}): AppStore {
 
 function editorResult(dialog: ModelSettingsDialogProps, cfg: AppConfig, profileId = 'profile-old'): ProfileEditorResult {
   const library = structuredClone(dialog.initialConfig.settings_profiles!);
-  const profile = library.entries.find(entry => entry.id === profileId) ?? library.entries[0];
+  const profile = defined(library.entries.find(entry => entry.id === profileId) ?? library.entries[0]);
   return { baseRevision: library.revision, library, application: materializeProfileApplication(cfg, profile?.system_prompt ?? '', profile) };
 }
 
@@ -104,6 +106,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); for (const task of getTaskSnapshot()) removeTask(task.id); });
 
 describe('model settings target application', () => {
+  it('keeps the consumer context stable while opening and closing an editor', async () => {
+    const store = createTestStore();
+    render(<ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider>);
+    const initial = context;
+    act(() => context.open({ target: { kind: 'default' } }));
+    await waitFor(() => expect(mocks.dialog).not.toBeNull());
+    expect(context).toBe(initial);
+    act(() => mocks.dialog!.onClose());
+    expect(context).toBe(initial);
+  });
+
   it('saves an external candidate before checking it but never launches a rejected model', async () => {
     const store = createTestStore({ active_provider: 'custom.example', active_runtime: 'specific-build', active_model: 'deployment.json' });
     const dialog = await open(store, { target: { kind: 'default' } });
@@ -124,7 +137,7 @@ describe('model settings target application', () => {
     await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
     const task = getTaskSnapshot().find(item => item.state === 'running')!;
-    const owner = mocks.preflightLaunch.mock.calls[0][1];
+    const owner = defined(mocks.preflightLaunch.mock.calls[0])[1];
     await act(async () => { await task.cancel!(); });
     expect(mocks.cancelLaunch).toHaveBeenCalledWith(owner, 'default');
     await act(async () => { finish({ ...dialog.initialConfig, ctx_size: 512 }); });
@@ -138,7 +151,7 @@ describe('model settings target application', () => {
     act(() => context.open({ target: { kind: 'default' } }));
     await act(async () => { await apply(mocks.dialog!, mocks.dialog!.initialConfig, 'start'); });
     expect(mocks.preflightLaunch).toHaveBeenCalledTimes(2);
-    expect(mocks.preflightLaunch.mock.calls[1][1]).not.toBe(owner);
+    expect(defined(mocks.preflightLaunch.mock.calls[1])[1]).not.toBe(owner);
     await waitFor(() => expect(store.start).toHaveBeenCalledTimes(1));
     expect(mocks.cancelLaunch).toHaveBeenCalledTimes(1);
   });
@@ -213,14 +226,14 @@ describe('model settings target application', () => {
     expect(store.cfg?.sessions?.[0]).toMatchObject({ id: 'work', execution: { temperature: 0.2, ctx_size: 8192 } });
     expect(store.cfg?.sessions?.[0]).not.toHaveProperty('model_profile_id');
     expect(store.cfg?.settings_profiles?.applied['session:work']).toMatchObject({ profile_id: 'profile-new', system_prompt: 'New prompt' });
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].system_prompt).toBe('Old prompt');
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).system_prompt).toBe('Old prompt');
     expect(mocks.sessionStart).not.toHaveBeenCalled();
   });
 
   it('rechecks session removal at the serialized save boundary', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const save = store.updateConfig;
-    store.updateConfig = vi.fn(async patch => { store.cfg!.sessions = []; return save(patch); });
+    store.updateConfig = vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => { store.cfg!.sessions = []; return save(patch); });
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await act(async () => { await expect(apply(dialog, { ...dialog.initialConfig, temperature: 0.2 }, 'save')).rejects.toThrow('removed'); });
     expect(store.cfg?.sessions).toEqual([]);
@@ -230,8 +243,8 @@ describe('model settings target application', () => {
   it('preserves a concurrent session rename and rejects overlapping tuning changes', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const save = store.updateConfig;
-    store.updateConfig = vi.fn(async patch => {
-      store.cfg!.sessions = [{ ...store.cfg!.sessions![0], name: 'Renamed elsewhere', execution: { temperature: 0.4 } }];
+    store.updateConfig = vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => {
+      store.cfg!.sessions = [{ ...defined(store.cfg!.sessions![0]), name: 'Renamed elsewhere', execution: { temperature: 0.4 } }];
       return save(patch);
     });
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
@@ -242,8 +255,8 @@ describe('model settings target application', () => {
   it('merges a tuning edit with unrelated session metadata changed while saving', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const save = store.updateConfig;
-    store.updateConfig = vi.fn(async patch => {
-      store.cfg!.sessions = [{ ...store.cfg!.sessions![0], name: 'Renamed elsewhere', enabled: false }];
+    store.updateConfig = vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => {
+      store.cfg!.sessions = [{ ...defined(store.cfg!.sessions![0]), name: 'Renamed elsewhere', enabled: false }];
       return save(patch);
     });
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
@@ -254,7 +267,7 @@ describe('model settings target application', () => {
   it('rejects a stale profile revision at the serialized save boundary without saving execution changes', async () => {
     const store = createTestStore();
     const save = store.updateConfig;
-    store.updateConfig = vi.fn(async patch => {
+    store.updateConfig = vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => {
       store.cfg!.settings_profiles = { ...store.cfg!.settings_profiles!, revision: 2 };
       return save(patch);
     });
@@ -271,13 +284,13 @@ describe('model settings target application', () => {
     const dialog = await open(store, { target: { kind: 'project', id: 'project' }, onApply });
     const draft = { ...dialog.initialConfig, active_model: 'project.gguf', temperature: 0.4 };
     const edit = editorResult(dialog, draft);
-    edit.library.entries[0].name = 'Renamed';
+    defined(edit.library.entries[0]).name = 'Renamed';
     edit.application.system_prompt = 'Project prompt';
     await act(async () => { await dialog.onApply(draft, 'save', edit); });
     expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.cfg).toMatchObject({ active_model: 'model.gguf', temperature: 0.8 });
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].name).toBe('Renamed');
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].system_prompt).toBe('Old prompt');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).name).toBe('Renamed');
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).system_prompt).toBe('Old prompt');
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'project.gguf', temperature: 0.4 }), expect.objectContaining({ system_prompt: 'Project prompt' }));
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -314,7 +327,7 @@ describe('model settings target application', () => {
 
   it('opens full saved settings for another model using the same selected profile', async () => {
     const store = createTestStore();
-    const profile = store.cfg!.settings_profiles!.entries[0];
+    const profile = defined(store.cfg!.settings_profiles!.entries[0]);
     store.cfg!.settings_profiles!.applied[profileTargetKey('other.gguf')] = materializeProfileApplication({ ...store.cfg!, active_model: 'other.gguf' }, 'Old prompt', profile);
     const dialog = await open(store, { target: { kind: 'default' } });
     const draft = { ...dialog.initialConfig, active_backend: 'cuda', active_build: 'b456', ngl: 7 };
@@ -382,8 +395,8 @@ describe('profile actions within an open editor', () => {
     await act(async () => { await dialog.onProfileCommit(draft, edit, false); });
     expect(store.cfg?.settings_profiles?.default_profile_id).toBe('profile-new');
     expect(store.cfg?.temperature).toBe(0.8);
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].settings.temperature).toBe(0.8);
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).profile_id).toBe('profile-old');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).settings.temperature).toBe(0.8);
     expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
   });
 
@@ -391,7 +404,7 @@ describe('profile actions within an open editor', () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const library = store.cfg!.settings_profiles!;
     library.default_profile_id = 'profile-new';
-    library.entries[1].settings.temperature = 0.25;
+    defined(library.entries[1]).settings.temperature = 0.25;
     const live = running(store.cfg!); store.status = live;
     const dialog = await open(store, { target: { kind: 'default' } });
     const edit = editorResult(dialog, dialog.initialConfig);
@@ -416,7 +429,7 @@ describe('profile actions within an open editor', () => {
 
   it('opens a project with a deleted profile using default values and prompt', async () => {
     const store = createTestStore();
-    const removed = { ...materializeProfileApplication({ ...store.cfg!, temperature: 1.2 }, 'Deleted prompt', store.cfg!.settings_profiles!.entries[1]), profile_id: 'removed' };
+    const removed = { ...materializeProfileApplication({ ...store.cfg!, temperature: 1.2 }, 'Deleted prompt', defined(store.cfg!.settings_profiles!.entries[1])), profile_id: 'removed' };
     const dialog = await open(store, { target: { kind: 'project', id: 'project' }, config: { ...store.cfg!, temperature: 1.2 }, application: removed });
     expect(dialog.initialConfig.temperature).toBe(0.8);
     expect(dialog.initialApplication).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Old prompt' });
@@ -427,9 +440,9 @@ describe('profile actions within an open editor', () => {
   it.each(['project', 'benchmark'] as const)('delivers default replacement to a %s editor when its profile is deleted', async kind => {
     const store = createTestStore();
     store.cfg!.settings_profiles!.default_profile_id = 'profile-new';
-    store.cfg!.settings_profiles!.entries[1].settings.temperature = 0.25;
+    defined(store.cfg!.settings_profiles!.entries[1]).settings.temperature = 0.25;
     const target = { ...store.cfg!, active_model: 'target.gguf', temperature: 1.2 };
-    const application = materializeProfileApplication(target, 'Old prompt', store.cfg!.settings_profiles!.entries[0]);
+    const application = materializeProfileApplication(target, 'Old prompt', defined(store.cfg!.settings_profiles!.entries[0]));
     const onApply = vi.fn();
     const dialog = await open(store, { target: { kind, id: 'target' }, config: target, application, onApply });
     const edit = editorResult(dialog, dialog.initialConfig);
@@ -446,7 +459,7 @@ describe('profile actions within an open editor', () => {
 
   it('persists and applies a profile without closing the editor or restarting the model', async () => {
     const store = createTestStore();
-    store.cfg!.settings_profiles!.entries[1].settings.temperature = 0.2;
+    defined(store.cfg!.settings_profiles!.entries[1]).settings.temperature = 0.2;
     const live = running(store.cfg!); store.status = live;
     mocks.serverStatus.mockResolvedValue(live);
     const dialog = await open(store, { target: { kind: 'default' } });
@@ -468,24 +481,24 @@ describe('profile actions within an open editor', () => {
     const dialog = await open(store, { target: { kind: 'default' } });
     const draft = { ...dialog.initialConfig, temperature: 0.1, ctx_size: 32768 };
     const edit = editorResult(dialog, draft, 'profile-new');
-    edit.library.entries[1].name = 'Renamed';
+    defined(edit.library.entries[1]).name = 'Renamed';
     let saved: Awaited<ReturnType<ModelSettingsDialogProps['onProfileCommit']>> | undefined;
     await act(async () => { saved = await dialog.onProfileCommit(draft, edit, false); });
     expect(store.cfg).toMatchObject({ temperature: 0.8, ctx_size: 4096 });
     expect(saved?.config).toMatchObject({ temperature: 0.8, ctx_size: 4096 });
     expect(saved?.application.profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).name).toBe('Renamed');
     expect(mocks.sessionList).not.toHaveBeenCalled();
     expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
     act(() => mocks.dialog!.onClose());
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).name).toBe('Renamed');
   });
 
   it('reloads the latest saved profile without rewriting the previous target snapshot', async () => {
     const store = createTestStore();
     const dialog = await open(store, { target: { kind: 'default' } });
-    store.cfg!.settings_profiles!.entries[0].settings.temperature = 1.4;
-    store.cfg!.settings_profiles!.entries[0].system_prompt = 'Changed reusable prompt';
+    defined(store.cfg!.settings_profiles!.entries[0]).settings.temperature = 1.4;
+    defined(store.cfg!.settings_profiles!.entries[0]).system_prompt = 'Changed reusable prompt';
     let result!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
     await act(async () => { result = await dialog.onReloadProfile(dialog.initialConfig); });
     expect(result.config.temperature).toBe(1.4);
@@ -498,13 +511,13 @@ describe('profile actions within an open editor', () => {
   it('reloads another model using its assigned profile instead of stale target options', async () => {
     const store = createTestStore();
     const other = { ...store.cfg!, active_model: 'other.gguf', ctx_size: 16384, temperature: 0.3 };
-    store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', store.cfg!.settings_profiles!.entries[0]);
+    store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', defined(store.cfg!.settings_profiles!.entries[0]));
     const dialog = await open(store, { target: { kind: 'default' } });
     let result!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
     await act(async () => { result = await dialog.onReloadProfile({ ...dialog.initialConfig, active_model: 'other.gguf' }); });
     expect(result.config).toMatchObject({ active_model: 'other.gguf', ctx_size: 4096, temperature: 0.8 });
     expect(result.application).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Old prompt' });
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey(other.active_model)].settings.ctx_size).toBe(16384);
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey(other.active_model)]).settings.ctx_size).toBe(16384);
     expect(store.cfg?.active_model).toBe('model.gguf');
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -512,7 +525,7 @@ describe('profile actions within an open editor', () => {
   it('keeps the selected model when applying after its saved settings are reloaded', async () => {
     const store = createTestStore();
     const other = { ...store.cfg!, active_model: 'other.gguf', ctx_size: 16384, temperature: 0.3 };
-    store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', store.cfg!.settings_profiles!.entries[0]);
+    store.cfg!.settings_profiles!.applied[profileTargetKey(other.active_model)] = materializeProfileApplication(other, 'Other model prompt', defined(store.cfg!.settings_profiles!.entries[0]));
     const dialog = await open(store, { target: { kind: 'default' } });
     let result: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>> | undefined;
     await act(async () => { result = await dialog.onReloadProfile({ ...dialog.initialConfig, active_model: 'other.gguf' }); });
@@ -530,12 +543,12 @@ describe('profile actions within an open editor', () => {
     const draft = { ...dialog.initialConfig, active_model: 'target.gguf', ngl: 7 };
     const edit = editorResult(dialog, draft, 'profile-new');
     edit.saveMode = kind === 'benchmark' ? 'benchmark' : 'all';
-    edit.library.entries[1].name = 'Changed';
+    defined(edit.library.entries[1]).name = 'Changed';
     await act(async () => { await dialog.onProfileCommit(draft, edit, true); });
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'target.gguf', ngl: 7 }), expect.objectContaining({ profile_id: 'profile-new', system_prompt: 'New prompt' }));
     expect(store.cfg).toMatchObject({ active_model: 'model.gguf', ctx_size: 4096 });
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Changed');
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).profile_id).toBe('profile-old');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).name).toBe('Changed');
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
     let reloaded!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
     await act(async () => { reloaded = await mocks.dialog!.onReloadProfile(draft); });
@@ -571,12 +584,12 @@ describe('profile actions within an open editor', () => {
     const dialog = await open(store, { target: { kind: 'project', id: 'project' }, onApply });
     const draft = { ...dialog.initialConfig, temperature: 0.2 };
     const edit = editorResult(dialog, draft, 'profile-new');
-    edit.library.entries[1].name = 'Renamed';
+    defined(edit.library.entries[1]).name = 'Renamed';
     let failure: unknown;
     await act(async () => { try { await dialog.onProfileCommit(draft, edit, true); } catch (cause) { failure = cause; } });
     expect(failure).toBeInstanceOf(SettingsDeliveryError);
     expect(store.cfg?.settings_profiles?.revision).toBe(2);
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).name).toBe('Renamed');
     const restored = await mocks.dialog!.onReloadProfile(dialog.initialConfig);
     expect(restored.config.temperature).toBe(0.8);
     expect(restored.config.settings_profiles?.revision).toBe(2);
@@ -613,7 +626,7 @@ describe('model launch preparation', () => {
     expect(store.updateConfig).toHaveBeenCalledOnce();
     act(() => context.open({ target: { kind: 'session', sessionId: 'missing' } }));
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
-    await act(async () => { preflight.resolve(structuredClone(mocks.preflightLaunch.mock.calls[0][0])); });
+    await act(async () => { preflight.resolve(structuredClone(defined(mocks.preflightLaunch.mock.calls[0])[0])); });
     await waitFor(() => expect(store.start).toHaveBeenCalledOnce());
     expect(store.stop).not.toHaveBeenCalled();
     expect(getTaskSnapshot().find(item => item.id === task.id)).toMatchObject({ state: 'running', interruptible: true });
@@ -629,7 +642,7 @@ describe('model launch preparation', () => {
     mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
     const dialog = await open(store, { target: { kind: 'default' } });
     let result!: Promise<unknown>;
-    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch((cause: unknown) => cause); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
     await act(async () => { await result; });
     await act(async () => { preflight.reject(new Error('Selected runtime rejected this model')); await result; });
@@ -648,12 +661,12 @@ describe('model launch preparation', () => {
     mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
     const dialog = await open(store, { target: { kind: 'default' } });
     let result!: Promise<unknown>;
-    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch(cause => cause); });
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch((cause: unknown) => cause); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
     await act(async () => { await result; });
     const task = getTaskSnapshot().find(item => item.state === 'running')!;
     act(() => { void task.cancel!(); });
-    expect(mocks.cancelLaunch).toHaveBeenCalledWith(mocks.preflightLaunch.mock.calls[0][1], 'default');
+    expect(mocks.cancelLaunch).toHaveBeenCalledWith(defined(mocks.preflightLaunch.mock.calls[0])[1], 'default');
     await act(async () => { preflight.resolve(dialog.initialConfig); await result; });
     expect(getTaskSnapshot().find(item => item.id === task.id)?.state).toBe('cancelled');
     expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
@@ -713,8 +726,8 @@ describe('model launch preparation', () => {
     try {
       await act(async () => { await apply(original, original.initialConfig, 'start'); });
       await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
-      const captured = structuredClone(mocks.preflightLaunch.mock.calls[0][0]);
-      const operationId = mocks.preflightLaunch.mock.calls[0][1];
+      const captured = structuredClone(defined(mocks.preflightLaunch.mock.calls[0])[0]);
+      const operationId = defined(mocks.preflightLaunch.mock.calls[0])[1];
       act(() => context.open({ target: { kind: 'default' } }));
       const newer = mocks.dialog!;
       await act(async () => { await apply(newer, { ...newer.initialConfig, active_model: 'next.gguf', ctx_size: 8192 }, 'save', 'profile-new'); });
@@ -786,7 +799,7 @@ describe('model launch preparation', () => {
     expect(store.cfg?.ctx_size).toBe(512);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ctx_size: 512 } });
-    expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ ctx_size: 512 }), true, { persist: false, operationId: mocks.preflightLaunch.mock.calls[0][1] });
+    expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ ctx_size: 512 }), true, { persist: false, operationId: defined(mocks.preflightLaunch.mock.calls[0])[1] });
     expect(store.stop).not.toHaveBeenCalled();
   });
 
@@ -798,8 +811,8 @@ describe('model launch preparation', () => {
     const dialog = await open(store, { target });
     await act(async () => { await apply(dialog, dialog.initialConfig, 'start'); });
     await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledOnce());
-    const captured = structuredClone(mocks.preflightLaunch.mock.calls[0][0]);
-    const operationId = mocks.preflightLaunch.mock.calls[0][1];
+    const captured = structuredClone(defined(mocks.preflightLaunch.mock.calls[0])[0]);
+    const operationId = defined(mocks.preflightLaunch.mock.calls[0])[1];
     await act(async () => { await store.updateConfig({ stop_existing_sessions_on_load: true }); });
     setSessionActivity(kind === 'default' ? 'work' : 'default', true);
     await act(async () => { preflight.resolve({ ...captured, ctx_size: 8192 }); });
@@ -888,18 +901,18 @@ describe('model launch preparation', () => {
     await act(async () => { await apply(reopened, reopened.initialConfig, 'start', 'profile-new'); });
     expect(store.start).toHaveBeenCalledTimes(2);
     expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
-    expect(store.cfg?.settings_profiles?.applied[profileTargetKey('replacement.gguf')].system_prompt).toBe('New prompt');
+    expect(defined(store.cfg?.settings_profiles?.applied[profileTargetKey('replacement.gguf')]).system_prompt).toBe('New prompt');
     expect(store.stop).not.toHaveBeenCalled();
   });
 
   it('keeps live request settings and profile when changes are saved for the next run', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const liveConfig = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const liveConfig = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     const live = running(liveConfig, 'work');
     mocks.sessionList.mockResolvedValue([live]);
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await act(async () => { await apply(dialog, { ...dialog.initialConfig, ctx_size: 8192, temperature: 0.2 }, 'save', 'profile-new'); });
-    const saved = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const saved = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     expect(saved).toMatchObject({ ctx_size: 8192, temperature: 0.2 });
     expect(context.getRequestConfig('work', saved, live)).toMatchObject({ ctx_size: 4096, temperature: 0.8 });
     expect(context.getRequestProfile('work', liveConfig)?.system_prompt).toBe('Old prompt');
@@ -909,7 +922,7 @@ describe('model launch preparation', () => {
 
   it('applies request-only edits to the running target without restarting its process', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const liveConfig = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const liveConfig = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     mocks.sessionList.mockResolvedValue([running(liveConfig, 'work')]);
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await act(async () => { await apply(dialog, { ...dialog.initialConfig, temperature: 0.2 }, 'save'); });
@@ -930,18 +943,18 @@ describe('model launch preparation', () => {
     expect(mocks.applyRequestSettings).toHaveBeenCalledOnce();
     expect(context.getRequestProfile('default', store.cfg!)?.system_prompt).toBe('Only the prompt changed');
     expect(store.start).not.toHaveBeenCalled();
-    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].system_prompt).toBe('Only the prompt changed');
+    expect(defined(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).system_prompt).toBe('Only the prompt changed');
   });
 
   it('uses the saved profile after another entry point restarts the same model', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const liveConfig = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const liveConfig = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     const live = running(liveConfig, 'work');
     mocks.sessionList.mockResolvedValue([live]);
     const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
     await act(async () => { await apply(dialog, { ...dialog.initialConfig, ctx_size: 8192 }, 'save', 'profile-new'); });
     expect(context.getRequestProfile('work', liveConfig)?.system_prompt).toBe('Old prompt');
-    const restarted = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const restarted = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     context.getRequestConfig('work', restarted, { ...running(restarted, 'work'), pid: 5678 });
     expect(context.getRequestProfile('work', restarted)?.system_prompt).toBe('New prompt');
   });
@@ -962,7 +975,7 @@ describe('model launch preparation', () => {
 describe('session polling', () => {
   it('skips editor renders when a poll only changes usage counters and delivers lifecycle changes', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     mocks.native = true;
     let idle = 0;
     const nextStatus = () => ({ ...running(cfg, 'work'), idle_seconds: ++idle, active_requests: idle % 2 });
@@ -995,7 +1008,7 @@ describe('session polling', () => {
 
   it('keeps another target current for a later session editor opened after the poll', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     mocks.native = true;
     mocks.sessionList.mockResolvedValue([running(cfg, 'work')]);
     await open(store, { target: { kind: 'default' } });
@@ -1010,7 +1023,7 @@ describe('session polling', () => {
 
   it('delivers nested execution changes when the same session object is reused in StrictMode', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     const status = running(cfg, 'work');
     mocks.native = true;
     mocks.sessionList.mockResolvedValue([status]);
@@ -1022,7 +1035,7 @@ describe('session polling', () => {
     status.execution!.gpu = { ...cfg.gpu!, gpu_ids: ['gpu-2'] };
     await pollSessions();
     expect(mocks.dialog?.liveConfig).toMatchObject({ temperature: 0.35, gpu: { gpu_ids: ['gpu-2'] } });
-    status.execution!.gpu!.gpu_ids[0] = 'gpu-3';
+    status.execution!.gpu.gpu_ids[0] = 'gpu-3';
     await pollSessions();
     expect(mocks.dialog?.liveConfig?.gpu?.gpu_ids).toEqual(['gpu-3']);
 
@@ -1042,10 +1055,10 @@ describe('session polling', () => {
     { name: 'native null to omitted', initialPid: null, nextPid: undefined },
   ])('refreshes the displayed profile when only the PID changes from $name', async ({ initialPid, nextPid }) => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     // Native Option<u32> serializes as null; optional frontend status fields
     // may be absent. Both wire shapes must retain their process identity.
-    const wireStatus = (pid: number | null | undefined): SessionStatus => JSON.parse(JSON.stringify({ ...running(cfg, 'work'), pid }));
+    const wireStatus = (pid: number | null | undefined): SessionStatus => JSON.parse(JSON.stringify({ ...running(cfg, 'work'), pid })) as SessionStatus;
     let status = wireStatus(initialPid);
     mocks.native = true;
     mocks.sessionList.mockImplementation(async () => [status]);
@@ -1066,7 +1079,7 @@ describe('session polling', () => {
 
   it('updates the load-policy notice when another session arrives, stops or disappears', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     const selected = running(cfg, 'work');
     let statuses = [selected];
     mocks.native = true;
@@ -1091,7 +1104,7 @@ describe('session polling', () => {
   it('refreshes the editor label and missing-session feedback when the locale changes between polls', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     mocks.native = true;
-    mocks.sessionList.mockResolvedValue([running(sessionConfig(store.cfg!, store.cfg!.sessions![0]), 'work')]);
+    mocks.sessionList.mockResolvedValue([running(sessionConfig(store.cfg!, defined(store.cfg!.sessions![0])), 'work')]);
     const view = render(<ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider>);
     act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
     await initialPoll();
@@ -1105,7 +1118,7 @@ describe('session polling', () => {
 
   it('reopens with a fresh first result after a pending poll completes while closed', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
-    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const cfg = sessionConfig(store.cfg!, defined(store.cfg!.sessions![0]));
     mocks.native = true;
     mocks.sessionList.mockImplementation(async () => [running(cfg, 'work')]);
     await open(store, { target: { kind: 'session', sessionId: 'work' } });
@@ -1129,9 +1142,9 @@ describe('session polling', () => {
 
 describe('running profile without a live cache', () => {
   class Failure extends Component<{ children: ReactNode }, { error?: Error }> {
-    state: { error?: Error } = {};
+    override state: { error?: Error } = {};
     static getDerivedStateFromError(error: Error) { return { error }; }
-    render() { return this.state.error ? <p role="alert">{this.state.error.message}</p> : this.props.children; }
+    override render() { return this.state.error ? <p role="alert">{this.state.error.message}</p> : this.props.children; }
   }
   // Each re-render stands in for a session poll: the provider renders again
   // with whatever the store holds at that moment.
@@ -1160,11 +1173,11 @@ describe('running profile without a live cache', () => {
     expect(live()).toMatchObject({ profile_id: 'profile-old', profile_name: 'Renamed', system_prompt: 'Old prompt' });
 
     await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
-      [key]: { ...current.settings_profiles!.applied[key], system_prompt: 'Saved prompt' } } } }));
+      [key]: { ...defined(current.settings_profiles!.applied[key]), system_prompt: 'Saved prompt' } } } }));
     rerender();
     expect(live()).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Saved prompt' });
 
-    cfg.settings_profiles!.applied[key].profile_id = 'profile-new';
+    defined(cfg.settings_profiles!.applied[key]).profile_id = 'profile-new';
     rerender();
     expect(live()).toMatchObject({ profile_id: 'profile-new', profile_name: 'New', system_prompt: 'Saved prompt' });
 
@@ -1184,7 +1197,7 @@ describe('running profile without a live cache', () => {
 
     const other = { ...cfg, active_model: 'other.gguf', temperature: 0.6 };
     await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
-      [profileTargetKey('other.gguf')]: materializeProfileApplication(other, 'Other prompt', current.settings_profiles!.entries[1]) } } }));
+      [profileTargetKey('other.gguf')]: materializeProfileApplication(other, 'Other prompt', defined(current.settings_profiles!.entries[1])) } } }));
     rerender();
     expect(live()).toMatchObject({ model: 'model.gguf', settings: { temperature: 0.3 } });
     store.status = running(other);
@@ -1214,7 +1227,7 @@ describe('running profile without a live cache', () => {
     expect(live()?.system_prompt).toBe('Delivered prompt');
 
     await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
-      [key]: { ...current.settings_profiles!.applied[key], system_prompt: 'Later saved prompt' } } } }));
+      [key]: { ...defined(current.settings_profiles!.applied[key]), system_prompt: 'Later saved prompt' } } } }));
     rerender();
     expect(live()?.system_prompt).toBe('Delivered prompt');
     store.status = { ...status, pid: 5678 };
@@ -1231,7 +1244,7 @@ describe('running profile without a live cache', () => {
     const play = { ...namedSession(), id: 'play', name: 'Play', models: { ...work.models, primary_model: 'play.gguf' } };
     const store = createTestStore({ sessions: [work, play] });
     const cfg = store.cfg!;
-    cfg.settings_profiles!.applied['session:play'] = materializeProfileApplication(sessionConfig(cfg, play), 'Play prompt', cfg.settings_profiles!.entries[1]);
+    cfg.settings_profiles!.applied['session:play'] = materializeProfileApplication(sessionConfig(cfg, play), 'Play prompt', defined(cfg.settings_profiles!.entries[1]));
     mocks.sessionList.mockImplementation(async () => [running(sessionConfig(cfg, work), 'work'), running(sessionConfig(cfg, play), 'play')]);
     await openView(store, { target: { kind: 'session', sessionId: 'work' } });
     await waitFor(() => expect(live()).toMatchObject({ model: 'work.gguf', profile_id: 'profile-old', system_prompt: 'Old prompt' }));
@@ -1265,7 +1278,7 @@ describe('running profile without a live cache', () => {
     const rerender = await openView(store, { target: { kind: 'default' } });
     expect(live()?.system_prompt).toBe('Old prompt');
     const posix = '/Models/Example.gguf';
-    const saved = { ...store.cfg!.settings_profiles!.applied[key], model: posix };
+    const saved = { ...defined(store.cfg!.settings_profiles!.applied[key]), model: posix };
     await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
       'model:/models/example.gguf': saved, [profileTargetKey(posix)]: { ...saved, system_prompt: 'Different prompt' } } } }));
     rerender();
@@ -1278,13 +1291,13 @@ describe('post-save profile removal snapshots', () => {
     const store = createTestStore({ runtime_defaults: [], sessions: [namedSession()],
       chat_options: { stop: ['old request'] }, provider_options: { 'llama.cpp': { synthetic: { order: ['old'] } } } });
     const library = store.cfg!.settings_profiles!;
-    library.entries[0].id = removedId;
-    library.entries[1].id = retainedId;
-    library.entries[1].settings = { ...library.entries[1].settings, temperature: 0.25, ctx_size: 32768,
+    defined(library.entries[0]).id = removedId;
+    defined(library.entries[1]).id = retainedId;
+    defined(library.entries[1]).settings = { ...defined(library.entries[1]).settings, temperature: 0.25, ctx_size: 32768,
       chat_options: { stop: [' retained ', '\n'], synthetic: { order: ['second', 'first'] } } };
-    library.entries[1].system_prompt = '  Replacement prompt\n';
+    defined(library.entries[1]).system_prompt = '  Replacement prompt\n';
     for (const application of Object.values(library.applied)) application.profile_id = removedId;
-    store.cfg!.sessions![0].model_profile_id = removedId;
+    defined(store.cfg!.sessions![0]).model_profile_id = removedId;
     library.default_profile_id = retainedId;
     store.cfg!.settings_profiles = ensureProfileLibrary(library);
     return store;
@@ -1345,7 +1358,7 @@ describe('post-save profile removal snapshots', () => {
     const background = queue(latestCfg => {
       const library = deleteSettingsProfile(latestCfg.settings_profiles!, removedId);
       return profileLibraryConfigPatch(latestCfg, { baseRevision: latestCfg.settings_profiles!.revision, library,
-        application: structuredClone(library.applied[profileTargetKey(latestCfg.active_model)]) });
+        application: structuredClone(defined(library.applied[profileTargetKey(latestCfg.active_model)])) });
     });
     let pending!: ReturnType<ModelSettingsDialogProps['onProfileCommit']>;
     act(() => { pending = dialog.onProfileCommit(dialog.initialConfig, edit, false); });
@@ -1371,19 +1384,19 @@ describe('post-save profile removal snapshots', () => {
     expect(result.config.settings_profiles).not.toBe(store.cfg!.settings_profiles);
     expect(result.application.settings).not.toBe(edit.application.settings);
     expect(result.application.settings.chat_options).not.toBe(store.cfg!.settings_profiles!.entries.find(entry => entry.id === retainedId)!.settings.chat_options);
-    if (kind === 'default' || kind === 'session') expect(result.application.settings).not.toBe(store.cfg!.settings_profiles!.applied[profileTargetKey(result.config.active_model, kind === 'session' ? 'work' : 'default')].settings);
+    if (kind === 'default' || kind === 'session') expect(result.application.settings).not.toBe(defined(store.cfg!.settings_profiles!.applied[profileTargetKey(result.config.active_model, kind === 'session' ? 'work' : 'default')]).settings);
     if (kind === 'project' || kind === 'benchmark') expect(onApply.mock.calls).toEqual([[expected.config, expected.application]]);
     else expect(onApply).not.toHaveBeenCalled();
 
     const activeKey = profileTargetKey(expectedSaved.active_model);
-    const activeApplication = expectedSaved.settings_profiles!.applied[activeKey];
+    const activeApplication = defined(expectedSaved.settings_profiles!.applied[activeKey]);
     const requestConfig = context.getRequestConfig('default', store.cfg!, live);
     expect(requestConfig).toEqual({ ...executionConfig(expectedSaved, live.execution!),
       temperature: 0.25, top_p: activeApplication.settings.top_p, top_k: activeApplication.settings.top_k,
       reasoning_effort: activeApplication.settings.reasoning_effort, chat_options: structuredClone(activeApplication.settings.chat_options), runtime_defaults: [] });
     expect(context.getRequestProfile('default', requestConfig)).toEqual(requestProfileFromApplication(activeApplication));
-    const work = sessionConfig(expectedSaved, expectedSaved.sessions![0]);
-    const workRequest = context.getRequestConfig('work', work, running(sessionConfig(liveBase, liveBase.sessions![0]), 'work'));
+    const work = sessionConfig(expectedSaved, defined(expectedSaved.sessions![0]));
+    const workRequest = context.getRequestConfig('work', work, running(sessionConfig(liveBase, defined(liveBase.sessions![0])), 'work'));
     expect(context.getRequestProfile('work', workRequest)).toEqual(requestProfileFromApplication(expectedSaved.settings_profiles!.applied['session:work']));
 
     const freshEdit: ProfileEditorResult = { baseRevision: expectedSaved.settings_profiles!.revision,
@@ -1405,17 +1418,17 @@ describe('post-save profile removal snapshots', () => {
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
 
     (result.application.settings.chat_options!.stop as string[]).push('output only');
-    result.config.settings_profiles!.entries[0].name = 'Output only';
+    defined(result.config.settings_profiles!.entries[0]).name = 'Output only';
     expect(store.cfg).toEqual(freshSaved);
     expect(edit).toEqual(editBefore);
     if (kind === 'project' || kind === 'benchmark') expect(onApply.mock.calls).toEqual([[expected.config, expected.application]]);
 
     // Invalidate the deletion fallback. The live cache must also have dropped
     // the deleted ID, so request-profile resolution now uses the saved identity.
-    store.cfg!.settings_profiles!.applied[activeKey].system_prompt = 'Later saved prompt';
+    defined(store.cfg!.settings_profiles!.applied[activeKey]).system_prompt = 'Later saved prompt';
     const incoming = executionConfig(store.cfg!, live.execution!);
     expect(context.getRequestProfile('default', incoming)).toEqual(requestProfileFromApplication({
-      ...store.cfg!.settings_profiles!.applied[activeKey], settings: profileSettingsSnapshot(incoming),
+      ...defined(store.cfg!.settings_profiles!.applied[activeKey]), settings: profileSettingsSnapshot(incoming),
     }));
   });
 
@@ -1424,22 +1437,22 @@ describe('post-save profile removal snapshots', () => {
     const onApply = vi.fn().mockRejectedValueOnce(new Error('replacement delivery failed'));
     const target = { ...store.cfg!, active_model: 'target.gguf' };
     const dialog = await open(store, { target: { kind, id: 'target' }, config: target,
-      application: materializeProfileApplication(target, 'Old prompt', store.cfg!.settings_profiles!.entries[0]), onApply });
+      application: materializeProfileApplication(target, 'Old prompt', defined(store.cfg!.settings_profiles!.entries[0])), onApply });
     const before = structuredClone(store.cfg!);
     const edit = editorResult(dialog, dialog.initialConfig);
     edit.library = deleteSettingsProfile(edit.library, 'profile-old');
     const editBefore = structuredClone(edit);
     let failure: unknown;
     await act(async () => { try { await dialog.onProfileCommit(dialog.initialConfig, edit, false); } catch (cause) { failure = cause; } });
-    const expectedSaved = { ...executionConfig(before, edit.library.applied[profileTargetKey(before.active_model)].settings),
+    const expectedSaved = { ...executionConfig(before, defined(edit.library.applied[profileTargetKey(before.active_model)]).settings),
       settings_profiles: { ...structuredClone(edit.library), revision: before.settings_profiles!.revision + 1, legacy_imported: true } };
     expect(before).not.toHaveProperty('gpu');
     expect(expectedSaved.gpu).toEqual({ gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null });
     // Equivalent empty placement is not a saved change from an absent GPU.
     delete expectedSaved.gpu;
     // No named-session replacement is omitted from this full expected config.
-    const definition = before.sessions![0];
-    const replacement = edit.library.applied['session:work'];
+    const definition = defined(before.sessions![0]);
+    const replacement = defined(edit.library.applied['session:work']);
     const expectedWork = settingsForSession(definition, executionConfig(sessionConfig(before, definition), replacement.settings));
     delete expectedWork.model_profile_id;
     expectedSaved.sessions = [expectedWork];

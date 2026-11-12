@@ -342,7 +342,8 @@ export function staticCandidates(entry: CommandEntry): number[] {
   const layout = entry.layout;
   if (!layout) return [];
   const owned = new Set(layout.options.flatMap(option => Array.from({ length: option.values + 1 }, (_, i) => option.index + i)));
-  const start = layout.subcommands.length ? layout.subcommands[layout.subcommands.length - 1] + 1 : 0;
+  const lastSubcommand = layout.subcommands.at(-1);
+  const start = lastSubcommand === undefined ? 0 : lastSubcommand + 1;
   return entry.prefix.map((_, index) => index).filter(index => index >= start && !owned.has(index));
 }
 
@@ -529,7 +530,13 @@ export interface AdapterSetupRecipe {
   prepare: ProcessSpec;
   artifacts?: string[];
 }
-export const adapterSetupImport = (path: string): Promise<AdapterSetupRecipe> => invoke<AdapterSetupRecipe>('adapter_setup_import', { path });
-export const adapterSetupPrepare = (owner: string, recipe: AdapterSetupRecipe, inputs: Record<string, string>): Promise<EntrypointDraft> =>
-  invoke<EntrypointDraft>('adapter_setup_prepare', { owner, recipe, inputs });
+export interface ImportedAdapterSetup {
+  recipe: AdapterSetupRecipe;
+  token: string;
+}
+/** Native-picked recipes stay in Rust; the displayed copy is never executed. */
+export const adapterSetupImport = (): Promise<ImportedAdapterSetup | null> =>
+  invoke<ImportedAdapterSetup | null>('adapter_setup_import');
+export const adapterSetupPrepare = (owner: string, token: string, inputs: Record<string, string>): Promise<EntrypointDraft> =>
+  invoke<EntrypointDraft>('adapter_setup_prepare', { owner, token, inputs });
 export const adapterSetupCancel = (owner: string): Promise<boolean> => invoke<boolean>('adapter_setup_cancel', { owner });

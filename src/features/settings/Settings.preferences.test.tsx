@@ -65,9 +65,9 @@ describe("typography preferences", () => {
     expect(preview.querySelector("code")!.style.fontFamily).toMatch(/monospace$/);
 
     choose("App font", "System sans-serif");
-    expect(update).toHaveBeenLastCalledWith({ appearance: expect.objectContaining({ fontFamily: "system", codeFontFamily: "system", density: "comfortable" }) });
+    expect(update).toHaveBeenLastCalledWith({ appearance: expect.objectContaining({ fontFamily: "system", codeFontFamily: "system", density: "comfortable" }) as unknown });
     choose("Code font", "AioLM default");
-    expect(update).toHaveBeenLastCalledWith({ appearance: expect.objectContaining({ fontFamily: "serif", codeFontFamily: "default" }) });
+    expect(update).toHaveBeenLastCalledWith({ appearance: expect.objectContaining({ fontFamily: "serif", codeFontFamily: "default" }) as unknown });
   });
 
   it("previews the default fonts through the stylesheet tokens", () => {
@@ -90,9 +90,9 @@ describe("typography preferences", () => {
     const update = mount();
     fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
     resetCategory('appearance');
-    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ appearance: expect.objectContaining({ fontFamily: "default", codeFontFamily: "default" }) }));
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ appearance: expect.objectContaining({ fontFamily: "default", codeFontFamily: "default" }) as unknown }));
     resetCategory('chat');
-    expect(update).toHaveBeenLastCalledWith({ chat: expect.objectContaining({ lineSpacing: "normal" }) });
+    expect(update).toHaveBeenLastCalledWith({ chat: expect.objectContaining({ lineSpacing: "normal" }) as unknown });
   });
 });
 

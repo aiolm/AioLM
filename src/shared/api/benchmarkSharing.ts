@@ -1,4 +1,5 @@
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
+import { errorMessage } from "./errors.ts";
 import { parseServiceError } from "@aiolm/benchmark-contracts";
 import { HttpError } from "./http.ts";
 
@@ -101,10 +102,7 @@ export function normalizeNativeError(value: unknown): BenchmarkSharingError {
       }
     }
   }
-  const raw = value instanceof Error ? value.message
-    : value !== null && typeof value === "object" && !Array.isArray(value) && typeof (value as Record<string, unknown>).message === "string"
-      ? (value as Record<string, unknown>).message as string
-      : String(value);
+  const raw = errorMessage(value);
   const message = raw.length > 500 ? raw.slice(0, 500) : raw;
   if (/locked/i.test(message)) return new BenchmarkSharingError("vault-locked", message, true);
   if (/missing|not found|no credential/i.test(message)) return new BenchmarkSharingError("credential-missing", message, true);

@@ -1,9 +1,10 @@
 import type { ChatContentPart, ChatMessage } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
-import type { ChatCitation, DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
+import type { ChatCitation, DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes.ts";
+import type { DocumentChunk, RankedDocumentChunk } from "./chatTypes.ts";
 import { validMediaPreparation } from './mediaPreparationHistory.ts';
 
-export type { DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
+export type { DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
 
 function queryTerms(query: string): string[] {
   return Array.from(new Set((query.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []).slice(0, 32)));
@@ -133,14 +134,18 @@ function cosineSimilarity(left: number[], right: number[], rightNorms: Map<numbe
   let rightNorm = rightNorms.get(length);
   if (rightNorm === undefined) {
     rightNorm = 0;
-    for (let index = 0; index < length; index += 1) rightNorm += right[index] ** 2;
+    // The shared prefix length bounds both dense embedding arrays.
+    for (let index = 0; index < length; index += 1) rightNorm += right[index]! ** 2;
     rightNorms.set(length, rightNorm);
   }
   let dot = 0;
   let leftNorm = 0;
   for (let index = 0; index < length; index += 1) {
-    dot += left[index] * right[index];
-    leftNorm += left[index] ** 2;
+    // The shared prefix length bounds both dense embedding arrays.
+    const leftValue = left[index]!;
+    const rightValue = right[index]!;
+    dot += leftValue * rightValue;
+    leftNorm += leftValue ** 2;
   }
   return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
@@ -273,24 +278,26 @@ export function trimChatHistory(
   const turns: ChatMessage[][] = [];
   for (const message of rest) {
     if (message.role === "user") turns.push([message]);
-    else if (turns.length > 0) turns[turns.length - 1].push(message);
+    else turns.at(-1)?.push(message);
   }
   const kept: ChatMessage[] = [];
   let used = boundedSystem ? estimateMessageTokens(boundedSystem) : 0;
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
+    const firstMessage = turn?.[0];
+    if (!turn || !firstMessage) continue;
     const cost = estimateChatTokens(turn);
     if (kept.length > 0 && used + cost > budget) break;
     if (kept.length === 0 && used + cost > budget) {
-      kept.unshift(truncateMessage(turn[0], budget - used));
+      kept.unshift(truncateMessage(firstMessage, budget - used));
       break;
     }
     kept.unshift(...turn);
     used += cost;
   }
-  if (policy === "truncateMiddle" && turns.length > 1 && kept.length < rest.length) {
-    const latest = turns[turns.length - 1];
-    const first = turns[0];
+  const first = turns[0];
+  const latest = turns[turns.length - 1];
+  if (policy === "truncateMiddle" && turns.length > 1 && kept.length < rest.length && first && latest) {
     const candidate = [...first, ...latest];
     if (estimateChatTokens(candidate) + (boundedSystem ? estimateMessageTokens(boundedSystem) : 0) <= budget) {
       return { messages: boundedSystem ? [boundedSystem, ...candidate] : candidate, trimmed: true };

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
-import type { CommandEntry, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import type { CommandEntry, ConfirmedSyntax, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
+import { defined } from '../../testing/assertDefined';
 import PositionalLayout from './PositionalLayout';
 
 function slot(key: string, position: number): OptionSchemaDefinition {
@@ -78,7 +79,7 @@ describe('positional layout', () => {
         input: { positional: { role: 'user' } }, model: { positional: { role: 'binding', name: 'model' } },
         marker: { positional: { role: 'static', index: 3 } }, output: { positional: { role: 'user' } } } },
     });
-    const onSave = vi.fn();
+    const onSave = vi.fn<(options: Record<string, ConfirmedSyntax>) => void>();
     const view = render(<I18nProvider initialLocale="en"><PositionalLayout effective={saved} disabled={false} onSave={onSave} /></I18nProvider>);
     expect(document.body).not.toHaveTextContent(secret);
     expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent("Fixed launch argument 4: •••");
@@ -90,7 +91,7 @@ describe('positional layout', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Not mapped' }));
     // The exact saved role is unchanged by masking.
     fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
-    expect(onSave.mock.calls[0][0].marker).toEqual({ positional: { role: 'static', index: 3 } });
+    expect(defined(onSave.mock.calls[0])[0].marker).toEqual({ positional: { role: 'static', index: 3 } });
     view.unmount();
     // A sensitive slot newly drafted onto a token masks it from then on.
     const fresh = effectiveSchema([], slots, { entry: sensitiveEntry });
@@ -121,7 +122,7 @@ describe('positional layout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
     expect(onSave).toHaveBeenCalledWith({});
     expect(effective.entry?.prefix[3]).toBe(secret);
-    expect(effective.supplement?.options.marker.positional).toEqual({ role: 'static', index: 3 });
+    expect(defined(effective.supplement?.options.marker).positional).toEqual({ role: 'static', index: 3 });
   });
 
   it('explains a refused layout and offers no choice without a declared entry', () => {

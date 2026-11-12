@@ -125,7 +125,7 @@ describe('publication validation boundaries', () => {
     ['row count over the public schema limit', requestFixture(10001), 'Invalid public benchmark field: benchmark.measurements.rows'],
     ['an unknown wrapper key', { ...requestFixture(), unexpected: true }, 'Invalid public benchmark field: benchmark'],
   ])('rejects %s before emitting a body', (_name, value, error) => {
-    expect(() => createPublicationBody(value as BenchmarkPublicationRequest)).toThrow(error);
+    expect(() => createPublicationBody(value)).toThrow(error);
   });
 
   it('ignores a wrapper prototype serializer when freezing user bytes', () => {

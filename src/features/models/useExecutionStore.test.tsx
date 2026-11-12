@@ -1,12 +1,16 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
+import { IpcError } from '../../shared/api/ipcError';
 import type { ConfigPatch } from '../../shared/state/configSaveQueue';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { useExecutionStore } from './useExecutionStore';
 import { MODEL_EXECUTION_KEY, restoreExecution } from './modelExecutionState';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
+
+const match: { any: (value: unknown) => unknown } = expect;
 
 function savedProfileConfig(): AppConfig {
   const cfg = createTestStore({ active_model: 'a.gguf', gpu: { ...emptyGpuPlacement(), gpu_ids: ['0'] } }).cfg!;
@@ -33,18 +37,34 @@ function waitingStore(cfg: AppConfig) {
   const save = base.updateConfig;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  base.updateConfig = vi.fn(async patch => { await gate; return save(patch); });
+  base.updateConfig = vi.fn(async (patch: ConfigPatch<AppConfig>) => { await gate; return save(patch); });
   return { base, release, hook: renderHook(() => useExecutionStore(base)) };
 }
 
 describe('execution store', () => {
   beforeEach(() => localStorage.clear());
+  it('keeps the execution store and selection action stable until its inputs change', () => {
+    const base = createTestStore();
+    const { result, rerender } = renderHook(({ store }) => useExecutionStore(store), { initialProps: { store: base } });
+    const initial = result.current;
+    rerender({ store: base });
+    expect(result.current).toBe(initial);
+    expect(result.current.store).toBe(initial.store);
+    rerender({ store: { ...base } });
+    expect(result.current).toBe(initial);
+    const updated = { ...base, busy: true };
+    rerender({ store: updated });
+    expect(result.current.store.busy).toBe(true);
+    expect(result.current.store).not.toBe(initial.store);
+    expect(result.current.selectModel).toBe(initial.selectModel);
+  });
+
   it('keeps unrelated controls available during saves while start waits for persistence', async () => {
     const base = createTestStore();
     const save = base.updateConfig;
     let finish!: () => void;
     const gate = new Promise<void>(resolve => { finish = resolve; });
-    base.updateConfig = vi.fn(async patch => { await gate; return save(patch); });
+    base.updateConfig = vi.fn(async (patch: ConfigPatch<AppConfig>) => { await gate; return save(patch); });
     const busyStates: boolean[] = [];
     const hook = renderHook(() => {
       const execution = useExecutionStore(base);
@@ -71,7 +91,7 @@ describe('execution store', () => {
     const base = createTestStore({ active_model: 'a.gguf', settings_profiles: { ...emptyProfileLibrary(), revision: 1, legacy_imported: true } });
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.store.updateConfig({ models_dir: 'D:\\models' }); });
-    const patch = vi.mocked(base.updateConfig).mock.calls[0][0] as (fresh: AppConfig) => Partial<AppConfig>;
+    const patch = defined(vi.mocked(base.updateConfig).mock.calls[0])[0] as (fresh: AppConfig) => Partial<AppConfig>;
     expect(typeof patch).toBe('function');
     // A base-store conflict recovery re-expands after reloading: profiles must
     // chain onto the reloaded revision instead of the stale one.
@@ -91,7 +111,7 @@ describe('execution store', () => {
     patch.temperature = 0.9;
     await act(async () => { release(); await saving; });
     expect(base.cfg).toStrictEqual(expected.cfg);
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')].settings.temperature).toBe(0.9);
+    expect(defined(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')]).settings.temperature).toBe(0.9);
     expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
   });
   it('distinguishes an optional field cleared while the native save waits from an absent one', async () => {
@@ -105,7 +125,7 @@ describe('execution store', () => {
     await act(async () => { release(); await saving; });
     expect(base.cfg).toStrictEqual(expected.cfg);
     expect(base.cfg).toHaveProperty('gpu', undefined);
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')].settings).not.toHaveProperty('gpu');
+    expect(defined(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')]).settings).not.toHaveProperty('gpu');
     expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
   });
   it('re-evaluates a functional patch whose captured value changed while the native save waits', async () => {
@@ -128,12 +148,12 @@ describe('execution store', () => {
     const cfg = savedProfileConfig();
     const key = profileTargetKey('a.gguf');
     const edited = structuredClone(cfg);
-    edited.settings_profiles!.applied[key].system_prompt = 'Edited while saving';
+    defined(edited.settings_profiles!.applied[key]).system_prompt = 'Edited while saving';
     const expected = await saveNow(edited, { temperature: 0.3 });
     const { base, release, hook } = waitingStore(cfg);
     let saving!: Promise<AppConfig>;
     await act(async () => { saving = hook.result.current.store.updateConfig({ temperature: 0.3 }); });
-    base.getConfig()!.settings_profiles!.applied[key].system_prompt = 'Edited while saving';
+    defined(base.getConfig()!.settings_profiles!.applied[key]).system_prompt = 'Edited while saving';
     await act(async () => { release(); await saving; });
     expect(base.cfg).toStrictEqual(expected.cfg);
     expect(base.cfg!.settings_profiles!.applied[key]).toMatchObject({ profile_id: 'saved-profile', system_prompt: 'Edited while saving', settings: { temperature: 0.3 } });
@@ -156,7 +176,7 @@ describe('execution store', () => {
     expect(base.cfg!.sessions).toEqual([first, second]);
     const library = base.cfg!.settings_profiles!;
     expect(library.applied['session:second']).toMatchObject({ model: 'second.gguf', settings: { temperature: 0.6 } });
-    expect(library.entries.find(entry => entry.id === library.applied['session:second'].profile_id)).toMatchObject({ settings: { temperature: 0.6 } });
+    expect(library.entries.find(entry => entry.id === defined(library.applied['session:second']).profile_id)).toMatchObject({ settings: { temperature: 0.6 } });
   });
   it('expands against an array length changed in place on the same snapshot while the native save waits', async () => {
     const cfg = savedProfileConfig();
@@ -171,17 +191,17 @@ describe('execution store', () => {
     base.getConfig()!.lora_adapters.length = 1;
     await act(async () => { release(); await saving; });
     expect(base.cfg).toStrictEqual(expected.cfg);
-    expect(base.cfg!.settings_profiles!.applied[key].settings.lora_adapters).toHaveLength(1);
+    expect(defined(base.cfg!.settings_profiles!.applied[key]).settings.lora_adapters).toHaveLength(1);
   });
   it('re-expands the native save callback again after its snapshot changes in place', async () => {
     const base = createTestStore(savedProfileConfig());
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.3 }); });
-    const patch = vi.mocked(base.updateConfig).mock.calls[0][0] as (fresh: AppConfig) => Partial<AppConfig>;
+    const patch = defined(vi.mocked(base.updateConfig).mock.calls[0])[0] as (fresh: AppConfig) => Partial<AppConfig>;
     const live = base.cfg!;
     const revision = live.settings_profiles!.revision;
     live.temperature = 0.5;
-    live.settings_profiles!.applied[profileTargetKey('a.gguf')].settings.temperature = 0.5;
+    defined(live.settings_profiles!.applied[profileTargetKey('a.gguf')]).settings.temperature = 0.5;
     expect(patch(live)).toMatchObject({ temperature: 0.3, settings_profiles: { revision: revision + 1 } });
   });
   it('rejects a conflicting profile library before writing model memory or calling the native save', async () => {
@@ -236,9 +256,9 @@ describe('execution store', () => {
     base.updateConfig = vi.fn().mockRejectedValueOnce(new Error('disk full')).mockImplementation(save);
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await expect(hook.result.current.store.updateConfig({ active_model: 'b.gguf', temperature: 0.9 })).rejects.toThrow('disk full'); });
-    const memory = JSON.parse(localStorage.getItem(MODEL_EXECUTION_KEY)!).models;
-    expect(memory['a.gguf']).toMatchObject({ temperature: 0.3 });
-    expect(memory).not.toHaveProperty('b.gguf');
+    const memory: unknown = JSON.parse(localStorage.getItem(MODEL_EXECUTION_KEY)!);
+    expect(memory).toMatchObject({ models: { 'a.gguf': { temperature: 0.3 } } });
+    expect(memory).not.toHaveProperty(['models', 'b.gguf']);
     expect(base.cfg).toMatchObject({ active_model: 'a.gguf', temperature: 0.3 });
     expect(hook.result.current.store.actionError).toContain('disk full');
   });
@@ -255,7 +275,7 @@ describe('execution store', () => {
     await act(async () => { await expect(hook.result.current.store.updateConfig(failed)).rejects.toThrow('disk full'); });
     await act(async () => { await hook.result.current.store.start(); });
     expect(base.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'saved.gguf', temperature: 0.4, ngl: 8 }), false);
-    expect(base.cfg!.settings_profiles!.entries.find(entry => entry.id === profile.id)).toEqual(profile);
+    expect(base.cfg!.settings_profiles.entries.find(entry => entry.id === profile.id)).toEqual(profile);
   });
 
   it('launches a captured checked snapshot without waiting for a newer unrelated save', async () => {
@@ -282,13 +302,14 @@ describe('execution store', () => {
     let start!: Promise<unknown>;
     await act(async () => {
       save = hook.result.current.store.updateConfig({ ctx_size: 8192 });
-      start = hook.result.current.store.start(undefined, false, options).catch(cause => cause);
+      start = hook.result.current.store.start(undefined, false, options).catch((cause: unknown) => cause);
       await hook.result.current.store.stop(options?.operationId);
     });
     expect(base.start).not.toHaveBeenCalled();
     let outcome: unknown;
     await act(async () => { release(); await save; outcome = await start; });
-    expect(String(outcome)).toContain('server start cancelled');
+    expect(outcome).toBeInstanceOf(IpcError);
+    expect(outcome).toMatchObject({ kind: 'cancelled', message: 'server start cancelled' });
     expect(base.cfg?.ctx_size).toBe(8192);
     expect(base.start).not.toHaveBeenCalled();
   });
@@ -304,9 +325,9 @@ describe('execution store', () => {
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.store.start(); });
     expect(base.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'saved.gguf', temperature: 0.6 }), false);
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('saved.gguf')]).toMatchObject({ profile_id: profile.id, profile_revision: 2, system_prompt: 'Latest prompt' });
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey(other.model)]).toEqual(other);
-    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([profile]);
+    expect(base.cfg!.settings_profiles.applied[profileTargetKey('saved.gguf')]).toMatchObject({ profile_id: profile.id, profile_revision: 2, system_prompt: 'Latest prompt' });
+    expect(base.cfg!.settings_profiles.applied[profileTargetKey(other.model)]).toEqual(other);
+    expect(base.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([profile]);
   });
   it('serializes selections and makes explicit project configuration take precedence', async () => {
     const base = createTestStore({ active_model: 'a.gguf' });
@@ -338,7 +359,8 @@ describe('execution store', () => {
   it('preserves a successful native save when the final local cache write fails', async () => {
     const base = createTestStore({ active_model: 'a.gguf', settings_profiles: { ...emptyProfileLibrary(), revision: 1, legacy_imported: true } });
     const hook = renderHook(() => useExecutionStore(base));
-    const original = Storage.prototype.setItem;
+    const prototype: { setItem: (this: Storage, key: string, value: string) => void } = Storage.prototype;
+    const original = prototype.setItem;
     let writes = 0;
     const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
       writes += 1;
@@ -369,8 +391,8 @@ describe('execution store', () => {
     expect(base.cfg!.settings_profiles!.entries.find(entry => entry.id === 'source-profile')).toMatchObject({ settings: { temperature: 0.3 }, revision: 2 });
     await act(async () => { await hook.result.current.selectModel('b.gguf'); });
     expect(base.cfg?.settings_profiles?.revision).toBe(5);
-    expect(base.cfg!.settings_profiles!.applied[key].settings.temperature).toBe(0.3);
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('b.gguf')].model).toBe('b.gguf');
+    expect(defined(base.cfg!.settings_profiles!.applied[key]).settings.temperature).toBe(0.3);
+    expect(defined(base.cfg!.settings_profiles!.applied[profileTargetKey('b.gguf')]).model).toBe('b.gguf');
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 1.2 }); });
     await act(async () => { await hook.result.current.selectModel('a.gguf'); });
     expect(base.cfg?.temperature).toBe(0.3);
@@ -395,8 +417,8 @@ describe('execution store', () => {
     const before = structuredClone(source);
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.4, ngl: 17, mmproj: 'projector.gguf' }); });
-    const library = base.cfg!.settings_profiles!;
-    const applied = library.applied[key];
+    const library = base.cfg!.settings_profiles;
+    const applied = defined(library.applied[key]);
     const saved = library.entries.find(entry => entry.id === applied.profile_id)!;
     expect(saved).toMatchObject({ id: source.id, scope: 'global', system_prompt: 'Saved prompt',
       settings: { temperature: 0.4, ngl: 17, mmproj: 'projector.gguf' } });
@@ -405,8 +427,8 @@ describe('execution store', () => {
     expect(source).toEqual(before);
     expect(saved).not.toHaveProperty('source_id');
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.7 }); });
-    expect(base.cfg!.settings_profiles!.applied[key].profile_id).toBe(source.id);
-    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
+    expect(defined(base.cfg!.settings_profiles.applied[key]).profile_id).toBe(source.id);
+    expect(base.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
   });
   it('saves session execution changes in a named profile without accessing model memory', async () => {
     const definition = { id: 'saved', name: 'Saved', enabled: false, models: { primary_model: 'session.gguf', mmproj: '', draft_model: '' },
@@ -417,8 +439,8 @@ describe('execution store', () => {
     try {
       await act(async () => { await hook.result.current.store.updateConfig({ sessions: [{ ...definition, execution: { temperature: 0.7 } }] }); });
       const library = base.cfg!.settings_profiles!;
-      const application = library.applied['session:saved'];
-      expect(application).toMatchObject({ model: 'session.gguf', profile_id: expect.any(String), settings: { temperature: 0.7 } });
+      const application = defined(library.applied['session:saved']);
+      expect(application).toMatchObject({ model: 'session.gguf', profile_id: match.any(String), settings: { temperature: 0.7 } });
       expect(library.entries.find(entry => entry.id === application.profile_id)).toMatchObject({ settings: { temperature: 0.7 } });
       expect(write).not.toHaveBeenCalled();
     } finally { write.mockRestore(); }
@@ -430,9 +452,9 @@ describe('execution store', () => {
       applied: { 'model:': materializeProfileApplication(base.cfg!, '', source) } };
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.selectModel('first.gguf'); });
-    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([source]);
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('first.gguf')]).toMatchObject({ profile_id: source.id, profile_name: 'Default' });
-    expect(base.cfg!.settings_profiles!.applied).not.toHaveProperty('model:');
+    expect(base.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([source]);
+    expect(base.cfg!.settings_profiles.applied[profileTargetKey('first.gguf')]).toMatchObject({ profile_id: source.id, profile_name: 'Default' });
+    expect(base.cfg!.settings_profiles.applied).not.toHaveProperty('model:');
   });
   it('uses the designated default for a new model while preserving an existing target assignment', async () => {
     const base = createTestStore({ active_model: 'first.gguf' });
@@ -445,10 +467,10 @@ describe('execution store', () => {
         [profileTargetKey('saved.gguf')]: materializeProfileApplication(savedConfig, 'Saved prompt', savedProfile) } };
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.selectModel('new.gguf'); });
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('new.gguf')]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default prompt' });
+    expect(base.cfg!.settings_profiles.applied[profileTargetKey('new.gguf')]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default prompt' });
     expect(base.cfg!.temperature).toBe(0.6);
     await act(async () => { await hook.result.current.selectModel('saved.gguf'); });
-    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('saved.gguf')]).toMatchObject({ profile_id: savedProfile.id, system_prompt: 'Saved prompt' });
+    expect(base.cfg!.settings_profiles.applied[profileTargetKey('saved.gguf')]).toMatchObject({ profile_id: savedProfile.id, system_prompt: 'Saved prompt' });
     expect(base.cfg!.temperature).toBe(0.2);
   });
 });

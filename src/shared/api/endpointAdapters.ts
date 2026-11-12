@@ -92,7 +92,8 @@ export class NativeChatSseParser {
     const type = typeof event.type === "string" ? event.type : "";
     if (type === "error") {
       const error = event.error && typeof event.error === "object" ? event.error as Record<string, unknown> : {};
-      throw new Error(`Native endpoint error: ${String(error.message ?? "unknown error").slice(0, 500)}`);
+      const message = String(error.message);
+      throw new Error(`Native endpoint error: ${(error.message == null ? "unknown error" : message).slice(0, 500)}`);
     }
     if (type === "reasoning.delta" && typeof event.content === "string") {
       this.onDelta({ reasoning: event.content });
@@ -247,7 +248,9 @@ export function anthropicMessagesUrl(baseUrl: string): string {
 
 function dataUrlParts(value: string): { mediaType: string; data: string } | null {
   const match = value.match(/^data:([^;,]+);base64,(.+)$/);
-  return match ? { mediaType: match[1], data: match[2] } : null;
+  if (!match) return null;
+  const [, mediaType, data] = match;
+  return mediaType !== undefined && data !== undefined ? { mediaType, data } : null;
 }
 
 function toAnthropicContent(content: string | ChatContentPart[]): string | AnthropicContentBlock[] {
@@ -291,7 +294,7 @@ function toAnthropicMessage(message: ChatMessage): AnthropicMessage {
     for (const call of message.tool_calls) {
       let input: Record<string, unknown> = {};
       try {
-        const parsed = JSON.parse(call.function.arguments);
+        const parsed: unknown = JSON.parse(call.function.arguments);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) input = parsed as Record<string, unknown>;
       } catch {
         input = { raw_arguments: call.function.arguments };
@@ -492,7 +495,9 @@ export class AnthropicSseParser {
     if (!json || typeof json !== "object") return false;
     const event = json as Record<string, unknown>;
     if (event.type === "error") {
-      const error = event.error && typeof event.error === "object" ? JSON.stringify(event.error) : String(event.error ?? "unknown error");
+      const error = typeof event.error === "object" && event.error !== null ? JSON.stringify(event.error)
+        : typeof event.error === "string" ? event.error
+        : typeof event.error === "number" || typeof event.error === "boolean" ? String(event.error) : "unknown error";
       throw new Error(`Anthropic-compatible endpoint error: ${error.slice(0, 500)}`);
     }
     if (event.type === "message_start") {

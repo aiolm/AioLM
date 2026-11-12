@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTestStore, testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import type { AppConfig, SessionDefinition } from '../../shared/api/types';
 import { profileTargetKey, saveSettingsProfile } from '../../shared/config/settingsProfiles';
 import { defaultSessionDefinition } from '../../shared/runtime/sessionUtils';
@@ -23,7 +24,7 @@ describe('session profile preparation', () => {
     const target = id === 'default' ? { ...defaultSessionDefinition(config), id: 'default' } : definition;
     const key = profileTargetKey(target.models.primary_model, id);
     const library = config.settings_profiles!;
-    const application = library.applied[key];
+    const application = defined(library.applied[key]);
     const selected = library.entries.find(profile => profile.id === application.profile_id)!;
     const updated = saveSettingsProfile(selected, { ...config, ...selected.settings, active_model: target.models.primary_model,
       ctx_size: 16384, ngl: 9, mmproj: 'models/projector.gguf', runtime_defaults: [] }, 'Latest saved prompt');
@@ -70,7 +71,7 @@ describe('session profile preparation', () => {
     vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise((resolve, reject) => {
       save = () => {
         try { resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch)); }
-        catch (error) { reject(error); }
+        catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
       };
     }));
     const pending = prepareSessionProfile(store, definition);
@@ -87,6 +88,6 @@ describe('session profile preparation', () => {
     const created = { ...structuredClone(definition), id: 'new-session', name: 'New session' };
     await prepareSessionProfile(store, created);
     expect(store.cfg!.sessions!.find(item => item.id === created.id)).toMatchObject({ id: created.id, name: created.name, models: created.models });
-    expect(store.cfg!.settings_profiles!.applied[profileTargetKey(created.models.primary_model, created.id)].profile_id).toBeTruthy();
+    expect(defined(store.cfg!.settings_profiles!.applied[profileTargetKey(created.models.primary_model, created.id)]).profile_id).toBeTruthy();
   });
 });

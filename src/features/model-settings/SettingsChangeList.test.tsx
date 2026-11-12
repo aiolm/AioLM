@@ -5,6 +5,7 @@ import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOpti
 import SettingsChangeList, { changeCount } from './SettingsChangeList';
 import * as api from '../../shared/api';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 const runtimeOptions = parseRuntimeHelp([
@@ -48,8 +49,8 @@ describe('profile save change list', () => {
       'Additional runtime arguments · --jinja',
       'Additional runtime arguments · --mmap',
     ]);
-    expect(rows[0].querySelector('.settings-profile-change-before')).toHaveTextContent('None');
-    expect(rows[0].querySelector('.settings-profile-change-after')).toHaveTextContent('{}');
+    expect(defined(rows[0]).querySelector('.settings-profile-change-before')).toHaveTextContent('None');
+    expect(defined(rows[0]).querySelector('.settings-profile-change-after')).toHaveTextContent('{}');
     for (const row of rows) expect(row.querySelector('.settings-profile-change-arrow')).toHaveTextContent('→');
   });
 

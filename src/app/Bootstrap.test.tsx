@@ -5,13 +5,13 @@ import type { MigratedPath } from "../shared/storage/storageMigration";
 
 const migratedPaths: MigratedPath[] = [{ from: "C:/test/old-data", to: "C:/test/new-data" }];
 const migrate = vi.fn<(paths: MigratedPath[]) => Promise<void>>();
-const invoke = vi.fn<(command: string) => Promise<MigratedPath[]>>();
+const migrationPaths = vi.fn<() => Promise<MigratedPath[]>>();
 const moduleLoaded = vi.fn<(name: string) => void>();
 const appRendered = vi.fn();
 const loadPreferences = vi.fn();
 const applyTheme = vi.fn();
 const loadFont = vi.fn();
-const titleBarMounted = vi.fn();
+const titleBarMounted = vi.fn<() => void>();
 
 function deferred() {
   let resolve!: () => void;
@@ -26,8 +26,8 @@ let originalHtmlAttributes: Array<[string, string | null]>;
 beforeEach(() => {
   // Fresh mock factories make eager imports observable on every bootstrap attempt.
   vi.resetModules();
-  for (const mock of [migrate, invoke, moduleLoaded, appRendered, loadPreferences, applyTheme, loadFont, titleBarMounted]) mock.mockReset();
-  invoke.mockResolvedValue(migratedPaths);
+  for (const mock of [migrate, migrationPaths, moduleLoaded, appRendered, loadPreferences, applyTheme, loadFont, titleBarMounted]) mock.mockReset();
+  migrationPaths.mockResolvedValue(migratedPaths);
   loadFont.mockResolvedValue([]);
   loadPreferences.mockReturnValue({
     locale: "ko", theme: "dark", appearance: { density: "compact", reduceMotion: true },
@@ -37,7 +37,7 @@ beforeEach(() => {
   Object.defineProperty(document, "fonts", { configurable: true, value: { load: loadFont } });
   originalHtmlAttributes = ["lang", "data-density", "class"].map(name => [name, document.documentElement.getAttribute(name)]);
 
-  vi.doMock("@tauri-apps/api/core", () => ({ invoke }));
+  vi.doMock("../shared/api/desktop", () => ({ migrationPaths }));
   vi.doMock("../shared/storage/storageMigration", () => ({ migrateBrowserStorage: migrate }));
   vi.doMock("../shared/ui/InitialSurface", () => ({
     default: ({ children }: { children: ReactNode }) => children,
@@ -52,7 +52,7 @@ beforeEach(() => {
   }));
   vi.doMock("../shared/i18n/i18n", () => {
     moduleLoaded("i18n");
-    return { I18nProvider: ({ children, initialLocale }: { children: ReactNode; initialLocale: string }) => <div lang={initialLocale}>{children}</div> };
+    return { loadLocale: vi.fn(async () => undefined), I18nProvider: ({ children, initialLocale }: { children: ReactNode; initialLocale: string }) => <div lang={initialLocale}>{children}</div> };
   });
   vi.doMock("../shared/config/preferences", () => {
     moduleLoaded("preferences");
@@ -93,7 +93,7 @@ describe("Bootstrap migration boundary", () => {
     await renderBootstrap();
     await waitFor(() => expect(migrate).toHaveBeenCalledWith(migratedPaths));
 
-    expect(invoke).toHaveBeenCalledWith("migration_paths");
+    expect(migrationPaths).toHaveBeenCalledExactlyOnceWith();
     expect(screen.getByRole("status")).toHaveTextContent("Starting application");
     expectApplicationDeferred();
     expect(loadFont).not.toHaveBeenCalled();
@@ -126,7 +126,7 @@ describe("Bootstrap migration boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(migrate).toHaveBeenCalledTimes(2));
     expect(migrate).toHaveBeenLastCalledWith(migratedPaths);
-    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(migrationPaths).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Starting application");
     expectApplicationDeferred();

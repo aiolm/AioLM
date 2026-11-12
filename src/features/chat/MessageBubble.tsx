@@ -1,7 +1,7 @@
 import ModelName from '../../shared/ui/ModelName';
 import MediaPreview from './MediaPreview';
 import { memo } from "react";
-import type { ChatHistoryMessage } from "./chatHistory";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
@@ -16,7 +16,9 @@ import { chatReplyStateCopy } from "./chatRetryCopy";
 interface MessageBubbleProps {
   message: ChatHistoryMessage;
   index: number;
-  messageCount: number;
+  isLast: boolean;
+  /** The immutable placeholder identifies an append-only markdown stream. */
+  stream?: object;
   phase: ChatPhase;
   copied: boolean;
   compact: boolean;
@@ -34,15 +36,15 @@ interface MessageBubbleProps {
 // Named export (in addition to the memoized default) exists solely so tests can
 // verify the memoization contract itself, by re-wrapping this in `memo()` and
 // spying on calls — see MessageBubble.perf.test.tsx.
-export function MessageBubble({ message, index, messageCount, phase, copied, compact, locale, onCopy }: MessageBubbleProps) {
+export function MessageBubble({ message, index, isLast, stream, phase, copied, compact, locale, onCopy }: MessageBubbleProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
   const isUser = message.role === "user";
   const replyState = chatReplyStateCopy[locale];
   const withoutOutput = !message.content && !message.reasoning;
-  const activeReply = !isUser && index === messageCount - 1 && phase !== 'idle'
+  const activeReply = !isUser && isLast && phase !== 'idle'
     && !message.interrupted && !message.failed && !message.finishReason && !message.toolRound;
   return (
-    <div className={`chat-message-row flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`chat-message-row ${!stream && !activeReply ? "chat-message-completed " : ""}flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`chat-message ${compact ? "chat-message-compact " : ""}${isUser ? "chat-message-user" : "chat-message-assistant"}`}>
         <div className="min-w-0">
         {message.role === "assistant" && message.reasoning && (
@@ -51,14 +53,15 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             {/* The body collapses on click too, so a long trace can be put away
                 from wherever the reader's eye already is. Copying text out of it
                 still works: a click that ends a selection is not a toggle. */}
-            <div
-              className="chat-reasoning-body mt-1.5 whitespace-pre-wrap break-words"
+            <button
+              type="button"
+              className="chat-reasoning-body mt-1.5 block w-full select-text whitespace-pre-wrap break-words text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]"
               onClick={(event) => {
                 if (!window.getSelection()?.isCollapsed) return;
                 const details = event.currentTarget.closest("details");
                 if (details) details.open = false;
               }}
-            >{message.reasoning}</div>
+            >{message.reasoning}</button>
           </details>
         )}
         {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <MediaPreview locale={locale} key={image.ref ?? image.dataUrl} attachment={image} />)}</div> : null}
@@ -66,7 +69,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
         {/* Only the assistant's side is markdown. What the user typed is shown
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser
-          ? <ChatMarkdown source={message.content} />
+          ? <ChatMarkdown source={message.content} stream={stream} />
           : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (activeReply ? <span className="animate-pulse ui-color-faint" role="status">{text(phase)}</span> : "")}</div>}
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{withoutOutput ? replyState.stoppedEmpty : text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{withoutOutput ? replyState.failedEmpty : text("partialFailed")}</div>}

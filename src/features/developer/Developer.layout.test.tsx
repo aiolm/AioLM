@@ -11,7 +11,7 @@ vi.mock("../../shared/api/index", () => ({
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
 }));
 
 const store = {

@@ -33,7 +33,7 @@ function mount(props: Partial<ModelSettingsDialogProps> = {}, locale: Locale = '
   const onApply = props.onApply ?? vi.fn(async () => {});
   const onClose = props.onClose ?? vi.fn();
   let persisted = structuredClone(props.initialConfig ?? cfg);
-  const onProfileCommit = props.onProfileCommit ?? vi.fn(async (draft, edit, applyTarget) => {
+  const onProfileCommit = props.onProfileCommit ?? vi.fn<NonNullable<ModelSettingsDialogProps['onProfileCommit']>>(async (draft, edit, applyTarget) => {
     persisted = applyTarget ? { ...draft, settings_profiles: mergeProfileEditor(persisted, edit, 'default') } : { ...persisted, ...profileLibraryConfigPatch(persisted, edit) };
     return { config: persisted, application: appliedProfile(persisted)! };
   });

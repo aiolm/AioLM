@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { defined } from '../../testing/assertDefined';
 import { helpDefault, serverDefault } from './optionDefaults';
 import { describeServerOption, parseRuntimeHelp, SERVER_OPTIONS } from './serverOptions';
 import { tuningOptionMetadata } from '../../features/tuning/tuningOptionInfo';
@@ -51,10 +52,10 @@ describe('upstream default values and option identities', () => {
   });
   it('explains the load mode behind deprecated memory switches and excludes commands', () => {
     const options = parseRuntimeHelp('--mmap, --no-mmap        DEPRECATED: use --load-mode\n--load-mode MODE         model loading (default: auto)');
-    expect(serverDefault(options[0], options).value).toBe('--load-mode: auto');
-    expect(serverDefault(describeServerOption('--help')!, []).source).toBe('command');
-    expect(serverDefault(describeServerOption('--unknown N')!, []).source).toBe('unknown');
-    expect(serverDefault(describeServerOption('--tensor-split N')!, [])).toMatchObject({ source: 'reference', value: '0,0,…' });
-    expect(serverDefault(describeServerOption('--tensor-split N', 'split (default: auto)')!, [])).toMatchObject({ source: 'help', value: 'auto' });
+    expect(serverDefault(defined(options[0]), options).value).toBe('--load-mode: auto');
+    expect(serverDefault(defined(describeServerOption('--help')), []).source).toBe('command');
+    expect(serverDefault(defined(describeServerOption('--unknown N')), []).source).toBe('unknown');
+    expect(serverDefault(defined(describeServerOption('--tensor-split N')), [])).toMatchObject({ source: 'reference', value: '0,0,…' });
+    expect(serverDefault(defined(describeServerOption('--tensor-split N', 'split (default: auto)')), [])).toMatchObject({ source: 'help', value: 'auto' });
   });
 });

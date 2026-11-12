@@ -1,5 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { trackInitialRead } from "../ui/initialLayout.ts";
+import { toIpcError } from "./ipcError.ts";
 
 const layoutReads = new Set([
   "get_config", "server_status", "session_list", "list_models", "device_profile",
@@ -13,10 +15,21 @@ export type LayoutReadPhase = "initial" | "refresh";
 
 export function invoke<T>(command: string, args?: Record<string, unknown>, phase: LayoutReadPhase = "initial"): Promise<T> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
-  return phase !== "refresh" && layoutReads.has(command)
-    ? trackInitialRead(() => tauriInvoke<T>(command, args))
-    : tauriInvoke<T>(command, args);
+  const call = () => tauriInvoke<T>(command, args).catch((cause: unknown) => { throw toIpcError(cause); });
+  return phase !== "refresh" && layoutReads.has(command) ? trackInitialRead(call) : call();
 }
+
+/** Apply the same native guard to SDK operations that do not use invoke. */
+export function withNativeRuntime<T>(operation: () => Promise<T>): Promise<T> {
+  if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
+  return operation();
+}
+
+export function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
+  return withNativeRuntime(() => tauriListen<T>(event, handler));
+}
+
+export type { UnlistenFn } from "@tauri-apps/api/event";
 
 export function isNativeRuntimeAvailable(): boolean {
   return typeof window !== "undefined"

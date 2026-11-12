@@ -26,7 +26,7 @@ describe('pre-load resource estimates', () => {
 
   it('reuses unchanged settings while estimates and details update, and requests edited settings immediately', async () => {
     const stringify = vi.spyOn(JSON, 'stringify');
-    const settingsSerializations = () => stringify.mock.calls.filter(([value]) => value && typeof value === 'object'
+    const settingsSerializations = () => stringify.mock.calls.filter(([value]: [unknown, ...unknown[]]) => value && typeof value === 'object'
       && 'active_model' in value && value.active_model === cfg.active_model).length;
     try {
       const view = render(panel());

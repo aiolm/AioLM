@@ -98,8 +98,8 @@ export default function PersonalizationSettings({ editor, query, instructionSour
     <legend className="settings-subsection-title">{copy.application}</legend>
     <p id="settings-personalization-apply-description" className="settings-subsection-hint">{copy.applicationDesc}</p>
     <div className="settings-personalization-checks">
-      {sources.map(({ id, file }) => <label key={id} className="settings-personalization-check">
-        <input type="checkbox" checked={instructionSources[id]} onChange={event => onInstructionSourcesChange({ ...instructionSources, [id]: event.target.checked })} />
+      {sources.map(({ id, file }) => <label key={id} htmlFor={`settings-personalization-apply-${id}`} className="settings-personalization-check">
+        <input id={`settings-personalization-apply-${id}`} type="checkbox" checked={instructionSources[id]} onChange={event => onInstructionSourcesChange({ ...instructionSources, [id]: event.target.checked })} />
         <span><span>{id === "agents" ? copy.sourceAgents : copy.sourceAiolm}</span><code>{file}</code></span>
       </label>)}
     </div>
@@ -132,8 +132,8 @@ export default function PersonalizationSettings({ editor, query, instructionSour
         <div className="settings-personalization-choices">
           {sources.map(({ id, file }) => {
             const label = id === "agents" ? copy.sourceAgents : copy.sourceAiolm;
-            return <label key={id} className="settings-personalization-choice">
-              <input type="radio" name="settings-personalization-source" value={id} checked={source === id} onChange={() => setSource(id)} />
+            return <label key={id} htmlFor={`settings-personalization-source-${id}`} className="settings-personalization-choice">
+              <input id={`settings-personalization-source-${id}`} type="radio" name="settings-personalization-source" value={id} checked={source === id} onChange={() => setSource(id)} />
               <span><span className="settings-personalization-choice-name">{label}{isDirty(entries[id]) && <span className="settings-personalization-dirty" title={copy.unsaved}><span aria-hidden="true"> •</span><span className="sr-only">{`, ${copy.unsaved}`}</span></span>}</span><code>{file}</code></span>
             </label>;
           })}

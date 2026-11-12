@@ -11,6 +11,8 @@ import { settingMetadataCopy } from '../../shared/i18n/settingMetadataCopy';
 
 export const TuningOptionsContext = createContext<{ options: readonly ServerOption[]; verified: boolean }>({ options: SERVER_OPTIONS, verified: false });
 
+const settingText: (value: unknown) => string = String;
+
 function DefaultValue({ defaults, verified }: { defaults: OptionDefault; verified: boolean }) {
   const { locale } = useI18n();
   const copy = serverOptionsText[locale];
@@ -62,7 +64,7 @@ export default function TuningOptionMetadata({ fieldKey, inherited = false, valu
   // A field set back to the default is running the default, whether it got there
   // by being left alone or by being typed in again. The badge only knew the first
   // case, so restoring a value looked as though it had not taken.
-  const atDefault = inherited || (scalar !== undefined && value !== undefined && value !== null && String(scalar) === String(value));
+  const atDefault = inherited || (scalar !== undefined && value !== undefined && value !== null && String(scalar) === settingText(value));
   const signature = metadata.signature;
   return <div className="tuning-option-metadata" data-option-metadata={fieldKey}>
     <div className="tuning-option-summary">

@@ -1,10 +1,12 @@
 import { cfg, mount, numeric, openOptions } from '../../testing/modelSettingsDialog';
+import { defined } from '../../testing/assertDefined';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { rememberExecution } from '../models/modelExecutionState';
 import { captureProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { appliedProfile, SettingsDeliveryError } from './profileEditor';
+import { IpcError } from '../../shared/api/ipcError';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ORDER_KEY } from '../runtimes/optionOrder';
@@ -39,7 +41,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    const [draft, edit] = defined(vi.mocked(onProfileCommit).mock.calls[0]);
     expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: original.active_model, port: 9100 });
     expect(edit.application.system_prompt).toBe(instructions);
     expect(edit.library.entries.find(entry => entry.id === source.id)?.system_prompt).toBe(instructions);
@@ -262,9 +264,9 @@ describe('launch failure display', { timeout: 45000 }, () => {
     expect(within(alert).getByText(/llama_model_load/)).toBeInTheDocument();
   });
   it('shows a start failure that merely names cancellation and stays quiet when the start was stopped', async () => {
-    // Native preflight rejects with plain strings; a model folder may be named after a cancelled run.
+    // A model folder may name a cancelled run without cancelling the launch.
     const failure = 'model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))';
-    const onApply = vi.fn(async () => {}).mockRejectedValueOnce(failure).mockRejectedValueOnce('server start cancelled');
+    const onApply = vi.fn(async () => {}).mockRejectedValueOnce(new IpcError('not_found', failure)).mockRejectedValueOnce(new IpcError('cancelled', 'launch superseded'));
     const { onClose } = mount({ onApply });
     openOptions();
     const start = screen.getByRole('button', { name: 'Save profile & start' });

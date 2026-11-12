@@ -4,6 +4,7 @@ import { toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
 import { summarizePublicBenchmarkRows } from './aggregation';
 import type { LegacyPerformanceBenchmarkProvenance as PerformanceBenchmarkProvenance, LegacyPerformanceBenchmarkResult as PerformanceBenchmarkResult } from '../../api/types';
 import type { BenchmarkModelMetadata } from '@aiolm/benchmark-contracts';
+import { defined } from '../../../testing/assertDefined';
 
 const submissionId = '00000000-0000-4000-8000-000000000001';
 const sample = (provenance?: PerformanceBenchmarkProvenance) => ({
@@ -79,7 +80,7 @@ describe('public benchmark boundary', () => {
       expect(result.status).toBe(status);
     }
     const record = sample();
-    const failed: PerformanceBenchmarkResult = { ...record.result, rows: [{ ...record.result.rows[0], error: 'request failed' }] };
+    const failed: PerformanceBenchmarkResult = { ...record.result, rows: [{ ...defined(record.result.rows[0]), error: 'request failed' }] };
     expect(() => toPublicBenchmark({ ...record, result: failed }, submissionId)).toThrow('successful measurements');
     expect(() => toPublicBenchmark({ ...record, result: { ...record.result, rows: [] } }, submissionId)).toThrow();
   });
@@ -190,7 +191,7 @@ describe('public benchmark boundary', () => {
 
   it('copies only the public allowlist, including nested hardware and raw trials', () => {
     const source = sample(provenance());
-    Object.assign(source.result.provenance!.environment.execution.selected_gpus[0], { stable_id: 'private-gpu-id', secret: 'private-token' });
+    Object.assign(defined(source.result.provenance!.environment.execution.selected_gpus[0]), { stable_id: 'private-gpu-id', secret: 'private-token' });
     const result = toPublicBenchmark(source, submissionId);
     expect(JSON.stringify(result)).not.toMatch(/private|owner|fingerprint|stable_id|diagnostic/);
     expect(result.environment?.execution.selected_gpus.map(item => item.name)).toEqual(['GPU B']);
@@ -273,13 +274,13 @@ describe('public benchmark boundary', () => {
   it('drops paths, URLs, credentials and diagnostic newlines from description fields', () => {
     const p = provenance();
     p.environment.cpu.name = 'owner@example.test';
-    p.environment.installed_gpus[0].driver = 'C:\\private\\driver';
+    defined(p.environment.installed_gpus[0]).driver = 'C:\\private\\driver';
     const source = sample(p);
     source.result.runtime_version = 'version 1234\nbuild at /private/build';
     source.build = 'https://private.test';
     const result = toPublicBenchmark(source, submissionId);
     expect(result.runtime.version).toBeNull(); expect(result.runtime.build).toBeNull();
-    expect(result.environment?.cpu.name).toBeNull(); expect(result.environment?.installed_gpus[0].driver).toBeNull();
+    expect(result.environment?.cpu.name).toBeNull(); expect(defined(result.environment?.installed_gpus[0]).driver).toBeNull();
   });
 
   it('rejects unknown public fields, malformed identifiers, nonfinite metrics and inconsistent hashes', () => {
@@ -291,13 +292,13 @@ describe('public benchmark boundary', () => {
     expect(() => validatePublicBenchmark({ ...valid, constructor: 'private' })).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, submission_id: 'private-id' })).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, model: { status: 'sha256', sha256: null, size_bytes: 1 } })).toThrow();
-    valid.measurements.rows[0].tg_tps = Number.POSITIVE_INFINITY;
+    defined(valid.measurements.rows[0]).tg_tps = Number.POSITIVE_INFINITY;
     expect(() => validatePublicBenchmark(valid)).toThrow();
   });
 
   it('reuses identical metric aggregation for public rows without private trial identifiers', () => {
     const result = toPublicBenchmark(sample(), submissionId);
-    const base = { ...result.measurements.rows[0], failed: false, tg_tps: 100 };
+    const base = { ...defined(result.measurements.rows[0]), failed: false, tg_tps: 100 };
     const rows = summarizePublicBenchmarkRows([base, { ...base, concurrency: 2, tg_tps: 180 }, { ...base, repetition: 2, failed: true }]);
     expect(rows.find(row => row.concurrency === 2)?.speedup).toBe(1.8);
     expect(rows.find(row => row.error)?.samples).toBe(0);

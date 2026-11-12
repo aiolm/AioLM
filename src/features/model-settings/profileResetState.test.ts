@@ -5,6 +5,7 @@ import { MODEL_PROFILE_KEYS, profileSettingsSnapshot, settingsSnapshot, type Set
 import { RUNTIME_DEFAULT_KEYS } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { REQUEST_KEYS } from '../../shared/config/executionSettings';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
@@ -51,7 +52,7 @@ describe('full profile defaults', () => {
     const reset = resetProfileOptions(cfg, false, view);
     expect(reset.provider_options?.[provider]).toEqual({ model: 'native/model', future: 'keep', other_command: 3 });
     expect({ ...reset, provider_options: cfg.provider_options }).toEqual(cfg);
-    expect(cfg.provider_options[provider].workers).toBe(8);
+    expect(defined(cfg.provider_options[provider]).workers).toBe(8);
     expect(() => resetProfileOptions(cfg, false, { ...view, help_state: 'stale' })).toThrow();
     expect(() => resetProfileOptions(cfg, false)).toThrow();
   });

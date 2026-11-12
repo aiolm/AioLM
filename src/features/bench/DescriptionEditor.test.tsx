@@ -1,6 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render as renderView, screen } from '@testing-library/react';
+import type { ReactElement, ReactNode } from 'react';
+import { I18nProvider, loadLocale } from '../../shared/i18n/i18n';
 import { DescriptionEditor, DescriptionPreview } from './DescriptionEditor';
+import { defined } from '../../testing/assertDefined';
+
+const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
+const render = (ui: ReactElement) => renderView(ui, { wrapper: English });
 
 // These checks cover rendered content policy. Load the lazy renderer before
 // assertions so coverage instrumentation does not consume their DOM wait budget.
@@ -60,17 +66,36 @@ describe('description renderer policy', () => {
 describe('description field guidance', () => {
   it('connects visible labels, hints and errors without announcing every character count', () => {
     render(<DescriptionEditor value={'x'.repeat(4001)} onChange={() => undefined} label="Description" hint="Explain the setup" countLabel={(used, max) => `${used} / ${max}`} />);
-    const field = screen.getByRole('textbox', { name: 'Description' }) as HTMLTextAreaElement;
+    const field = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Description' });
     expect(field.labels?.[0]?.textContent).toContain('Description');
     const ids = field.getAttribute('aria-describedby')!.split(' ');
     expect(ids.map(id => document.getElementById(id)?.textContent)).toEqual(['Explain the setup', '4001 / 4000', 'Description exceeds 4000 characters.']);
-    expect(document.getElementById(ids[1])?.getAttribute('role')).toBeNull();
+    expect(document.getElementById(defined(ids[1]))?.getAttribute('role')).toBeNull();
   });
   it('keeps descriptions separate when two result editors are displayed', () => {
     render(<><DescriptionEditor value="" onChange={() => undefined} label="First" hint="First setup" countLabel={() => 'First count'} /><DescriptionEditor value="" onChange={() => undefined} label="Second" hint="Second setup" countLabel={() => 'Second count'} /></>);
     const fields = screen.getAllByRole('textbox');
-    expect(fields[0].id).not.toBe(fields[1].id);
-    expect(document.getElementById(fields[0].getAttribute('aria-describedby')!.split(' ')[0])?.textContent).toBe('First setup');
-    expect(document.getElementById(fields[1].getAttribute('aria-describedby')!.split(' ')[0])?.textContent).toBe('Second setup');
+    const first = defined(fields[0]);
+    const second = defined(fields[1]);
+    expect(first.id).not.toBe(second.id);
+    expect(document.getElementById(defined(defined(first.getAttribute('aria-describedby')).split(' ')[0]))?.textContent).toBe('First setup');
+    expect(document.getElementById(defined(defined(second.getAttribute('aria-describedby')).split(' ')[0]))?.textContent).toBe('Second setup');
+  });
+});
+
+describe('localized description guidance', () => {
+  it('renders the Korean empty preview without changing Markdown policy', async () => {
+    await loadLocale('ko');
+    renderView(<I18nProvider initialLocale="ko"><DescriptionPreview text="" /></I18nProvider>);
+    expect(await screen.findByText('설명이 없습니다.')).toBeInTheDocument();
+  });
+
+  it('localizes the limit error while keeping it associated with the field', async () => {
+    await loadLocale('ko');
+    renderView(<I18nProvider initialLocale="ko"><DescriptionEditor value={'x'.repeat(4001)} onChange={() => undefined} label="설명" hint="설정 안내" countLabel={(used, max) => `${used} / ${max}`} /></I18nProvider>);
+    const field = screen.getByRole('textbox', { name: '설명' });
+    const error = screen.getByRole('alert');
+    expect(error).toHaveTextContent('설명이 4000자를 초과했습니다.');
+    expect(field.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
   });
 });

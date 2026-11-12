@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelModelScan, listModels, type ModelScanResult } from '../../shared/api';
 import { invalidateModelCatalog, useModelCatalog } from './useModelCatalog';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api', () => ({ listModels: vi.fn(), cancelModelScan: vi.fn(async () => undefined) }));
 
@@ -33,10 +34,10 @@ describe('model catalog', () => {
       .mockResolvedValue({ models: [{ path: 'new/model.gguf', name: 'model.gguf', size_mb: 1, is_vision: false }], truncated: false });
     const { result, rerender } = renderHook(({ path }) => useModelCatalog(path), { initialProps: { path: 'old' } });
     rerender({ path: 'new' });
-    expect(cancelModelScan).toHaveBeenCalledWith(vi.mocked(listModels).mock.calls[0][1]);
+    expect(cancelModelScan).toHaveBeenCalledWith(defined(vi.mocked(listModels).mock.calls[0])[1]);
     await waitFor(() => expect(result.current.loading).toBe(false));
     await act(async () => { finishOld({ models: [], truncated: true }); });
-    expect(result.current.models[0].path).toBe('new/model.gguf');
+    expect(defined(result.current.models[0]).path).toBe('new/model.gguf');
     expect(result.current.truncated).toBe(false);
     const calls = vi.mocked(listModels).mock.calls.length;
     act(() => invalidateModelCatalog());

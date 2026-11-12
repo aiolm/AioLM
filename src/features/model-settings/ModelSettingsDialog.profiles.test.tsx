@@ -1,4 +1,5 @@
 import { cfg, mount, rawChat, numeric, openOptions } from '../../testing/modelSettingsDialog';
+import { defined } from '../../testing/assertDefined';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
@@ -10,6 +11,8 @@ import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ModelSettingsProvider, useModelSettings } from './ModelSettingsProvider';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { createTestStore } from '../../testing/appStore';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown; arrayContaining: (value: unknown[]) => unknown } = expect;
 
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
@@ -120,7 +123,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    const edit = vi.mocked(onProfileCommit).mock.calls[0][1];
+    const edit = defined(vi.mocked(onProfileCommit).mock.calls[0])[1];
     expect(edit.application.profile_id).toBe(copy.id);
     expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
     expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
@@ -222,7 +225,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
   });
 
   it('closes a completed save form when only delivery fails and keeps the saved profile available', async () => {
-    const onProfileCommit = vi.fn(async (draft, edit) => {
+    const onProfileCommit = vi.fn(async (draft: api.AppConfig, edit: Parameters<typeof mergeProfileEditor>[1]) => {
       const saved = { ...draft, settings_profiles: mergeProfileEditor(cfg, edit, 'default') };
       throw new SettingsDeliveryError('Synthetic delivery failure', saved, appliedProfile(saved)!);
     });
@@ -347,7 +350,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    const [draft, edit] = defined(vi.mocked(onProfileCommit).mock.calls[0]);
     expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model,
       request_timeout_seconds: 123, provider_options: { [provider]: {}, 'llama.cpp': { keep: 9 } } });
     expect(draft.provider_options).toEqual({ [provider]: {}, 'llama.cpp': { keep: 9 } });
@@ -378,7 +381,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onProfileCommit).not.toHaveBeenCalled();
     fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    const [draft, edit] = defined(vi.mocked(onProfileCommit).mock.calls[0]);
     expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model });
     expect(draft.provider_options?.[provider]).toEqual({});
     expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: 'Saved prompt' });
@@ -445,14 +448,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    const [draft, edit, applyTarget] = vi.mocked(onProfileCommit).mock.calls[0];
+    const [draft, edit, applyTarget] = defined(vi.mocked(onProfileCommit).mock.calls[0]);
     expect(draft).toMatchObject(resetProfileOptions(saved, false));
     expect(applyTarget).toBe(true);
     expect(edit.application.system_prompt).toBe('Saved prompt');
     expect(edit.application.profile_id).toBe(source.id);
     expect(edit.application.profile_name).toBe(source.name);
-    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: 'Saved prompt', settings: expect.objectContaining({ runtime_defaults: expect.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
-    const stored = edit.library.entries[0];
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([match.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: 'Saved prompt', settings: match.objectContaining({ runtime_defaults: match.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
+    const stored = defined(edit.library.entries[0]);
     expect(stored.settings).toEqual(edit.application.settings);
     expect(source.settings.ctx_size).toBe(12288);
     expect(source.system_prompt).toBe('Saved prompt');

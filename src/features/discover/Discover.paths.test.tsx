@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import { PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
 import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import DiscoverPanel from "./Discover";
@@ -11,12 +13,15 @@ import { rememberExecution } from '../models/modelExecutionState';
 
 import { MODEL_CATALOG_CHANGED } from "../model-settings/useModelCatalog";
 import { useModelDownloadTask } from "../../shared/state/modelDownloadTask";
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../shared/api/index")>(),
   onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(), hfInstalledFiles: vi.fn(),
   hfDownloadSnapshot: vi.fn(), hfInstalledSnapshots: vi.fn(), hfCancelDownload: vi.fn(async () => undefined),
+  hfPendingDownloads: vi.fn(async () => []),
 }));
 
 /** A repository tree with GGUF files and no root safetensors weights. */
@@ -54,7 +59,7 @@ describe("Discover path presentation", () => {
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     await clickDownload(`${projector ? "Download projector" : "Download"}: ${file}`);
     fireEvent.click(await screen.findByRole("button", { name: "Configure and run" }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" }, section: projector ? "adapters" : "model", config: expect.objectContaining(projector
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: "default" }, section: projector ? "adapters" : "model", config: match.objectContaining(projector
       ? { active_model: "models/current.gguf", mmproj: downloadedPath }
       : { active_model: downloadedPath }) }));
     expect(api.hfDownloadModel).toHaveBeenCalledOnce();
@@ -70,7 +75,7 @@ describe("Discover path presentation", () => {
     const store = createTestStore({ models_dir: raw });
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ id: "owner/model", author: "owner", downloads: 1, likes: 1, last_modified: "", tags: [], gated: false }]);
     vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([{ path: "model.Q4_K_M.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]));
-    vi.mocked(api.hfDownloadModel).mockRejectedValue(new Error(`Cannot write ${raw}`));
+    vi.mocked(api.hfDownloadModel).mockRejectedValue(new IpcError('internal', `Cannot write ${raw}`));
     const { container } = render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     expect(screen.getByText(display)).toHaveAttribute("title", display);
     await screen.findByRole("button", { name: "Search models" });
@@ -154,7 +159,7 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     // The settings editor receives the current execution setup and reports
     // compatibility there; the browsed format never chooses an engine.
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime', active_model: snapshot.path }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: 'llama.cpp', active_runtime: 'synthetic-llama-runtime', active_model: snapshot.path }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.cfg?.active_provider).toBe('llama.cpp');
   });
@@ -185,7 +190,7 @@ describe('Discover runtime journeys', () => {
     const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: provider, active_runtime: store.cfg?.active_runtime, active_model: snapshot.path }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: provider, active_runtime: store.cfg?.active_runtime, active_model: snapshot.path }) }));
     expect(api.hfModelFiles).toHaveBeenCalledWith(repo.id);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -210,7 +215,7 @@ describe('Discover runtime journeys', () => {
     expect(api.hfSearchModels).toHaveBeenCalledTimes(searches);
     expect(screen.getByRole('combobox', { name: 'Model format' })).toHaveTextContent('HF Safetensors');
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'mlx-vlm', active_runtime: 'another-runtime', active_model: snapshot.path }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: 'mlx-vlm', active_runtime: 'another-runtime', active_model: snapshot.path }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -253,6 +258,30 @@ describe('Discover runtime journeys', () => {
     expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
   });
 
+  it.each([
+    { snapshot: false, failure: new IpcError('cancelled', 'Transfer interrupted by request'), state: 'cancelled' },
+    { snapshot: true, failure: new IpcError('cancelled', 'Transfer interrupted by request'), state: 'cancelled' },
+    { snapshot: false, failure: new IpcError('internal', 'model download cancelled'), state: 'failed' },
+    { snapshot: true, failure: new IpcError('internal', 'model download cancelled'), state: 'failed' },
+  ])('classifies a resumed download by kind (snapshot: $snapshot, result: $state)', async ({ snapshot, failure, state }) => {
+    const entry: api.PendingDownload = {
+      id: 'pending-model', repo_id: repo.id, file_path: snapshot ? null : 'model.gguf', revision: 'a'.repeat(40),
+      snapshot, models_dir: 'models', include_companions: false, label: 'Interrupted model',
+      total: 1000, received: 400, updated_at: 0, files: [],
+    };
+    vi.mocked(api.hfPendingDownloads).mockResolvedValueOnce([entry]);
+    if (snapshot) vi.mocked(api.hfDownloadSnapshot).mockRejectedValueOnce(failure);
+    else vi.mocked(api.hfDownloadModel).mockRejectedValueOnce(failure);
+    const store = createTestStore();
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume: Interrupted model' }));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state));
+    if (state === 'failed') expect(screen.getByRole('alert')).toHaveTextContent(failure.message);
+    else expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
   it('shows received bytes without a false percentage until a positive transfer total arrives', async () => {
     let rejectDownload!: (cause: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_, reject) => { rejectDownload = reject; }));
@@ -264,7 +293,7 @@ describe('Discover runtime journeys', () => {
     render(<I18nProvider initialLocale="en"><DownloadHarness /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
     await clickDownload('Download complete model folder');
-    const report = vi.mocked(api.onModelDownloadProgress).mock.calls[0][0];
+    const report = defined(vi.mocked(api.onModelDownloadProgress).mock.calls[0])[0];
     act(() => report({ repo_id: 'owner/model', file_path: 'weights.safetensors', phase: 'downloading', received: 1024, total: 0 }));
     const progress = screen.getByRole('progressbar', { name: 'Download progress' });
     const card = within(progress.closest<HTMLElement>('[role="status"]')!);
@@ -278,7 +307,7 @@ describe('Discover runtime journeys', () => {
     expect(card.getByText('1.0 KiB of 4.0 KiB')).toBeVisible();
     fireEvent.click(card.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
-    await act(async () => rejectDownload(new Error('model download cancelled')));
+    await act(async () => rejectDownload(new IpcError('cancelled', 'model download cancelled')));
     expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
   });
 
@@ -303,7 +332,7 @@ describe('Discover runtime journeys', () => {
     expect(api.hfDownloadSnapshot).not.toHaveBeenCalled();
   });
 
-  it('classifies cancellation correctly and allows a verified retry without overlapping transfers', async () => {
+  it('classifies native cancellation independently of wording and allows a verified retry without overlapping transfers', async () => {
     let rejectDownload!: (error: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectDownload = reject; }));
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
@@ -315,13 +344,17 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
     expect(download).toBeDisabled();
-    await act(async () => rejectDownload(new Error('model download cancelled')));
+    await act(async () => rejectDownload(new IpcError('cancelled', 'Transfer interrupted by request')));
     expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
   });
 
-  it.each(['network failed', 'model download cancelled'])('clears a prior snapshot success notice before a retry ends with %s', async failure => {
+  it.each([
+    { failure: new IpcError('unavailable', 'network failed'), state: 'failed' },
+    { failure: new IpcError('cancelled', 'model download cancelled'), state: 'cancelled' },
+    { failure: new IpcError('internal', 'model download cancelled'), state: 'failed' },
+  ])('clears a prior snapshot success notice before a retry ends with $state', async ({ failure, state }) => {
     let rejectRetry!: (error: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValueOnce(snapshot)
       .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRetry = reject; }));
@@ -338,10 +371,10 @@ describe('Discover runtime journeys', () => {
     await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
-    await act(async () => rejectRetry(new Error(failure)));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(failure === 'model download cancelled' ? 'cancelled' : 'failed');
+    await act(async () => rejectRetry(failure));
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
     expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
-    if (failure !== 'model download cancelled') expect(screen.getByText(failure)).toBeVisible();
+    if (state === 'failed') expect(screen.getByText(failure.message)).toBeVisible();
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -371,7 +404,7 @@ describe('Discover runtime journeys', () => {
     await clickDownload('Download: model.gguf');
     await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith(...(include ? [repo.id, 'model.gguf', 'models', true] : [repo.id, 'model.gguf', 'models'])));
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime`, active_model: 'models/model.gguf' }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: provider, active_runtime: `synthetic-${provider}-runtime`, active_model: 'models/model.gguf' }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -403,10 +436,15 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     expect(api.hfDownloadModel).toHaveBeenCalledWith(repo.id, first, 'models');
     expect(await screen.findByRole('button', { name: 'Installed: model.gguf' })).toBeDisabled();
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: `models/${first}` }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: `models/${first}` }) }));
   });
 
-  it.each(['model download cancelled', 'network failed'])('keeps a partial split model retryable after %s', async (failure) => {
+  it.each([
+    { failure: new IpcError('cancelled', 'model download cancelled'), state: 'cancelled' },
+    { failure: new IpcError('cancelled', 'Transfer interrupted by request'), state: 'cancelled' },
+    { failure: new IpcError('unavailable', 'network failed'), state: 'failed' },
+    { failure: new IpcError('internal', 'model download cancelled'), state: 'failed' },
+  ])('keeps a partial split model retryable after $state', async ({ failure, state }) => {
     const settings = settingsContext(); vi.mocked(useModelSettings).mockReturnValue(settings);
     const first = 'model-00001-of-00002.gguf', second = 'model-00002-of-00002.gguf';
     vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([first, second].map(path => ({ path, size_bytes: 10, is_mmproj: false, download_url: '' }))));
@@ -414,9 +452,9 @@ describe('Discover runtime journeys', () => {
     vi.mocked(api.hfInstalledFiles).mockImplementation(async () => installed.map(entry => ({ ...entry })));
     vi.mocked(api.hfDownloadModel).mockImplementationOnce(async () => {
       installed.push({ path: first, local_path: `models/${first}`, size_bytes: 10, missing_shards: [second] });
-      throw new Error(failure);
+      throw failure;
     }).mockImplementationOnce(async () => {
-      installed[0].missing_shards = [];
+      defined(installed[0]).missing_shards = [];
       installed.push({ path: second, local_path: `models/${second}`, size_bytes: 10, missing_shards: [] });
       return { path: `models/${first}`, repo_id: repo.id, file_path: first, size_bytes: 20 };
     });
@@ -425,7 +463,7 @@ describe('Discover runtime journeys', () => {
     await clickDownload('Download: model.gguf');
     expect(await screen.findByText('Incomplete model · 1 of 2 files missing')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(failure === 'model download cancelled' ? 'cancelled' : 'failed');
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
     await clickDownload('Download: model.gguf');
     expect(await screen.findByRole('button', { name: 'Configure and run' })).toBeEnabled();
     expect(api.hfDownloadModel).toHaveBeenCalledTimes(2);
@@ -445,7 +483,7 @@ describe('Discover runtime journeys', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     // vLLM restores its own context option; the inactive llama.cpp context
     // field remains separate under the provider-specific profile allowlist.
-    await waitFor(() => expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal', ctx_size: 2048, provider_options: { vllm: { max_model_len: 8192 } } }) })));
+    await waitFor(() => expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: 'vllm', active_runtime: 'synthetic-vllm-metal', ctx_size: 2048, provider_options: { vllm: { max_model_len: 8192 } } }) })));
   });
 
   it('keeps successful downloads completed when a model started before fallback setup could run', async () => {

@@ -4,6 +4,8 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import { defaultPreferences } from "../../shared/config/preferences";
 import { isNativeRuntimeAvailable } from "../../shared/api/index";
 import { PERSONALIZATION_CHANGED_EVENT, readAgentsFile, saveAgentsFile, type AgentInstructionsFile, type PersonalizationSource } from "../../shared/api/personalization";
+import { defined } from "../../testing/assertDefined";
+import { IpcError } from "../../shared/api/ipcError";
 import SettingsPanel from "./Settings";
 
 vi.mock("../../shared/api/index", () => ({ isNativeRuntimeAvailable: vi.fn(() => true), getLaunchAtLogin: vi.fn(async () => false), setLaunchAtLogin: vi.fn() }));
@@ -36,7 +38,7 @@ const mount = (reset = vi.fn()) => {
   fireEvent.click(screen.getByRole("tab", { name: "Personalization" }));
   return reset;
 };
-const editor = () => screen.getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement;
+const editor = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Instructions" });
 const chooseSource = (name: RegExp) => fireEvent.click(screen.getByRole("radio", { name }));
 
 describe("personalization settings", () => {
@@ -83,7 +85,7 @@ describe("personalization settings", () => {
 
     await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
     expect(save).toHaveBeenLastCalledWith("aiolm", "Answer briefly.\n", null);
-    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ source: "aiolm" });
+    expect((defined(changed.mock.calls[0])[0] as CustomEvent).detail).toEqual({ source: "aiolm" });
     expect(screen.queryByText("This file does not exist yet. Saving creates it.")).not.toBeInTheDocument();
 
     fireEvent.change(editor(), { target: { value: "Answer briefly.\nCite files.\n" } });
@@ -95,7 +97,7 @@ describe("personalization settings", () => {
 
   it("keeps the draft after an external edit and reloads only after confirming the discard", async () => {
     read.mockResolvedValueOnce(file("agents", "original")).mockResolvedValueOnce(file("agents", "edited elsewhere", "agents-r2"));
-    save.mockRejectedValue("Save conflict: the file changed on disk");
+    save.mockRejectedValue(new IpcError("busy", "The file revision changed on disk"));
     const changed = vi.fn();
     window.addEventListener(PERSONALIZATION_CHANGED_EVENT, changed);
     mount();

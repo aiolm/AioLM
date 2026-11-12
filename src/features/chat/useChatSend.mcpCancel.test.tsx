@@ -2,9 +2,12 @@ import { useRef, useState } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import { createTestStore } from "../../testing/appStore";
-import { CHAT_WORKSPACE_CLEAR_EVENT, type ChatHistoryMessage } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { defined } from "../../testing/assertDefined";
+import { CHAT_WORKSPACE_CLEAR_EVENT } from "./chatHistory";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
 
@@ -19,7 +22,7 @@ vi.mock("../../shared/api/index", () => ({
     inFlight.set(callId, reject);
   })),
   mcpCancelToolCall: vi.fn(async (callId: string) => {
-    inFlight.get(callId)?.(new Error("MCP tool call cancelled"));
+    inFlight.get(callId)?.(new IpcError("cancelled", "MCP tool call cancelled"));
     inFlight.delete(callId);
   }),
 }));
@@ -60,9 +63,9 @@ async function startToolCall() {
   let approving!: Promise<void>;
   act(() => { approving = hook.result.current.approvePendingTool(); });
   await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
-  const callId = callMock.mock.calls[0][3];
+  const callId = defined(defined(callMock.mock.calls[0])[3]);
   expect(callId).toEqual(expect.any(String));
-  return { ...hook, approving, callId: callId! };
+  return { ...hook, approving, callId };
 }
 
 beforeEach(() => {
@@ -86,7 +89,7 @@ describe("MCP tool call cancellation", () => {
     expect(callMock).not.toHaveBeenCalled();
     await act(async () => { await result.current.approvePendingTool(); });
     expect(streamMock).toHaveBeenCalledTimes(2);
-    expect(streamMock.mock.calls[1][3].at(-1)).toEqual({
+    expect(defined(streamMock.mock.calls[1])[3].at(-1)).toEqual({
       role: "tool", tool_call_id: "call-1", name: "lookup", content: '{"text":"River-482: 31"}',
     });
     expect(observation).toEqual({ content: [{ type: "text", text: "River-482: 31" }] });
@@ -107,6 +110,32 @@ describe("MCP tool call cancellation", () => {
     expect(streamMock).toHaveBeenCalledOnce();
   });
 
+  it("handles native cancellation without a frontend Stop regardless of wording", async () => {
+    const { result, approving, callId } = await startToolCall();
+    await act(async () => {
+      inFlight.get(callId)?.(new IpcError("cancelled", "Synthetic operation superseded"));
+      await approving;
+    });
+    expect(result.current.toolCallInProgress).toBe(false);
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.error).toBeNull();
+    expect(result.current.msgs.at(-1)).toMatchObject({ toolRound: "cancelled" });
+    expect(streamMock).toHaveBeenCalledOnce();
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves native denial diagnostics with the existing failure copy", async () => {
+    const { result, approving, callId } = await startToolCall();
+    await act(async () => {
+      inFlight.get(callId)?.(new IpcError("denied", "Synthetic launch approval withheld"));
+      await approving;
+    });
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.error).toBe("MCP tool call failed: Synthetic launch approval withheld");
+    expect(result.current.msgs.at(-1)).toMatchObject({ toolRound: "failed" });
+    expect(streamMock).toHaveBeenCalledOnce();
+  });
+
   it("leaving the chat cancels the native call", async () => {
     const { unmount, approving, callId } = await startToolCall();
     unmount();
@@ -117,7 +146,7 @@ describe("MCP tool call cancellation", () => {
   it("clears the tool wait after native approval failure without requesting a follow-up", async () => {
     const { result, approving, callId } = await startToolCall();
     await act(async () => {
-      inFlight.get(callId)?.(new Error("MCP tool approval timed out"));
+      inFlight.get(callId)?.(new IpcError("timeout", "MCP tool approval timed out"));
       await approving;
     });
     expect(result.current.toolCallInProgress).toBe(false);
@@ -159,6 +188,6 @@ describe("MCP tool call cancellation", () => {
     await act(async () => { finishFollowup(); await approving; });
     act(() => result.current.stop());
     expect(cancelMock).not.toHaveBeenCalled();
-    expect(callMock.mock.calls[0][3]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(defined(callMock.mock.calls[0])[3]).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

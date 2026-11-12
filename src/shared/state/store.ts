@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../api/index";
+import { IpcError, isIpcErrorKind } from "../api/ipcError";
 import { createConfigSaveQueue, type ConfigPatch } from "./configSaveQueue";
 import { isLifecycleCancellation, lifecycleErrorMessage, nextPollDelay, shouldAutoStart, shouldPoll, withTimeout } from "../lib/serverLifecycle";
 import { normalizeAppConfig, normalizeConfigPatch } from "./storeConfig";
 import { withManualOverrides } from "../config/tuningDefaults";
 import { migrateProfileLibrary } from "../config/profileMigration";
 import { trackInitialRead } from "../ui/initialLayout";
+import { storedLocale } from "../i18n/i18nCatalog";
 
 export interface AppStore {
   cfg: api.AppConfig | null;
@@ -30,11 +32,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Backend save_config guard: a profile library must chain onto the saved revision. */
-const PROFILE_REVISION_CONFLICT = "reload before saving";
-
 function isProfileRevisionConflict(error: unknown): boolean {
-  return errorMessage(error).includes(PROFILE_REVISION_CONFLICT);
+  return isIpcErrorKind(error, "busy");
 }
 
 
@@ -214,7 +213,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
         // The backend owns the start deadline. A shorter UI timer would report a
         // failure while a large model is still loading; Stop cancels a hung start.
         const url = await api.startServer(current, { ...options, operationId });
-        if (generation !== statusGeneration.current) throw new Error("server start cancelled");
+        if (generation !== statusGeneration.current) throw new IpcError("cancelled", "server start cancelled");
         await refreshStatus();
         return url;
       } catch (error) {
@@ -223,8 +222,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
           setStatus({ state: "stopped" });
           setActionError(null);
         } else {
-          setStatus({ state: "failed", error: lifecycleErrorMessage("start", error) });
-          setActionError(lifecycleErrorMessage("start", error));
+          setStatus({ state: "failed", error: lifecycleErrorMessage("start", error, storedLocale()) });
+          setActionError(lifecycleErrorMessage("start", error, storedLocale()));
         }
         throw error;
       } finally {
@@ -250,7 +249,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       const owner = startOperation.current;
       try { await api.cancelLaunch(cancellationId, 'default'); }
       catch (cause) {
-        if (owner?.operationId === cancellationId && startOperation.current === owner) setActionError(lifecycleErrorMessage("stop", cause));
+        if (owner?.operationId === cancellationId && startOperation.current === owner) setActionError(lifecycleErrorMessage("stop", cause, storedLocale()));
         throw cause;
       }
       // Native cancellation is generation-scoped. An old task must not release
@@ -274,8 +273,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       if (generation === statusGeneration.current) setStatus({ state: "stopped" });
     } catch (error) {
       if (generation !== statusGeneration.current) throw error;
-      setStatus((current) => ({ ...current, state: "failed", error: lifecycleErrorMessage("stop", error) }));
-      setActionError(lifecycleErrorMessage("stop", error));
+      setStatus((current) => ({ ...current, state: "failed", error: lifecycleErrorMessage("stop", error, storedLocale()) }));
+      setActionError(lifecycleErrorMessage("stop", error, storedLocale()));
       throw error;
     } finally {
       if (generation === statusGeneration.current) {
@@ -302,11 +301,10 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     const schedule = () => {
       if (pollStopped.current || document.visibilityState === "hidden" || pollTimer.current !== null) return;
       const delay = nextPollDelay(options.pollIntervalMs ?? 1000, pollFailures.current);
-      pollTimer.current = window.setTimeout(async () => {
+      pollTimer.current = window.setTimeout(() => {
         pollTimer.current = null;
         if (pollStopped.current || document.visibilityState === "hidden") return;
-        await refreshStatus();
-        schedule();
+        void refreshStatus().then(schedule);
       }, delay);
     };
     void refreshStatus(); schedule();

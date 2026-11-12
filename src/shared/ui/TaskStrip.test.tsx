@@ -5,6 +5,7 @@ import { finishTask, getTaskSnapshot, registerTask, removeTask, TASK_CLEAR_DELAY
 import { ActivePanelContext } from "./PanelFeedback";
 import { LocalTaskCancelButton, TaskCancellationProvider } from "./TaskCancellation";
 import TaskStrip, { transferLabel } from "./TaskStrip";
+import { defined } from '../../testing/assertDefined';
 
 function clearTasks() {
   for (const task of getTaskSnapshot()) removeTask(task.id);
@@ -246,9 +247,9 @@ describe("task cancellation ownership", () => {
     expect(transfer).toMatch(/· 18s left$/);
     const left = (time: string) => `${time} left`;
     // Before a rate is known there is no countdown to show.
-    expect(transferLabel({ ...getTaskSnapshot()[0], speedBps: undefined }, left)).not.toContain("left");
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), speedBps: undefined }, left)).not.toContain("left");
     // A task with no byte counts shows no transfer line at all.
-    expect(transferLabel({ ...getTaskSnapshot()[0], received: undefined }, left)).toBeNull();
+    expect(transferLabel({ ...defined(getTaskSnapshot()[0], 'download task'), received: undefined }, left)).toBeNull();
   });
   it("keeps model launch progress and saved-settings recovery outside ordinary activity details", () => {
     const cancel = vi.fn();

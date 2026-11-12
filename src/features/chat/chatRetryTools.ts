@@ -1,5 +1,5 @@
 import type * as api from "../../shared/api/types";
-import type { ChatRetryTool } from "./chatHistory";
+import type { ChatRetryTool } from "../../shared/api/conversationTypes";
 import { mcpToolDefinition, type ChatMcpTool } from "./useChatMcpTools";
 
 /** Key order differs between the browser and the data folder's JSON; content does not. */

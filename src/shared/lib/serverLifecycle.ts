@@ -1,11 +1,14 @@
 import type { ServerState } from "../api/types.ts";
-import type { UnifiedKey } from "../i18n/i18nUnified.ts";
+import { isIpcErrorKind } from "../api/ipcError.ts";
+import { translate, type UnifiedKey } from "../i18n/i18nUnified.ts";
+import type { Locale } from "../i18n/i18nCatalog.ts";
 
 export type LifecycleErrorKind = "active-response" | "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
 
 export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
+  if (isIpcErrorKind(error, "busy")) return "active-response";
+  if (isIpcErrorKind(error, "timeout")) return "timeout";
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (/^finish or stop the active response(?: in session '[^']+')? before (?:loading a model|replacing this model|unloading this model)$/.test(text)) return "active-response";
   // Allocation failures often include model-loading frames and startup timeout
   // wrappers. Their concrete memory diagnosis takes precedence over that text.
   if (text.includes("out of memory") || /\boom\b|no available memory for (?:the )?cache blocks|(?:larger than|exceeds?) (?:the )?available (?:kv cache )?memory/.test(text)) return "memory";
@@ -20,27 +23,27 @@ export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
   return "unknown";
 }
 
-export function lifecycleErrorMessage(action: "start" | "stop", error: unknown): string {
+const LIFECYCLE_HINT_KEYS: Record<LifecycleErrorKind, UnifiedKey> = {
+  "active-response": "lifecycle.activeResponse",
+  timeout: "lifecycle.timeout",
+  port: "lifecycle.port",
+  executable: "lifecycle.executable",
+  model: "lifecycle.model",
+  memory: "lifecycle.memory",
+  unknown: "lifecycle.unknown",
+};
+
+export function lifecycleErrorMessage(action: "start" | "stop", error: unknown, locale: Locale): string {
   const kind = classifyLifecycleError(error);
   const detail = error instanceof Error ? error.message : String(error);
-  const prefix = action === "start" ? "Model load failed" : "Model unload failed";
-  const hint = {
-    "active-response": "Finish or stop the active response, then try again.",
-    timeout: "The operation timed out. Check the runtime log shown with this error and try again.",
-    port: "The configured port is already in use. Choose another port or stop the conflicting process.",
-    executable: "The runtime executable could not be found. Check the selected runtime installation.",
-    model: "The selected model could not be loaded. Check the model path and file integrity.",
-    memory: "There is not enough available memory or VRAM for this configuration.",
-    unknown: "Check the runtime log shown with this error and retry after correcting the issue.",
-  }[kind];
+  const prefix = translate(locale, action === "start" ? "lifecycle.startFailed" : "lifecycle.stopFailed");
+  const hint = translate(locale, LIFECYCLE_HINT_KEYS[kind]);
   return `${prefix}: ${hint}${detail ? ` (${detail})` : ""}`;
 }
 
-/** A user-requested stop of a load, which every native start and preflight path
- * reports with this exact text. A genuine failure can mention cancellation in a
- * path or an engine diagnostic and must still be reported. */
+/** A user-requested or superseded load, distinguished from engine diagnostics. */
 export function isLifecycleCancellation(error: unknown): boolean {
-  return (error instanceof Error ? error.message : String(error)) === "server start cancelled";
+  return isIpcErrorKind(error, "cancelled");
 }
 
 export function nextPollDelay(baseMs: number, failures: number): number {
@@ -77,7 +80,7 @@ export function isServerBusy(state: string): boolean {
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+    void promise.then(resolve, reject).finally(() => { clearTimeout(timer); });
   });
 }
 

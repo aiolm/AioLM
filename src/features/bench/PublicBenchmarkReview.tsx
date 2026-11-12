@@ -3,7 +3,7 @@ import { toPublicBenchmark, type PublicBenchmarkSubmission } from '../../shared/
 import { parseStoredPublicationBody } from '../../shared/contracts/benchmark/publication.ts';
 import { getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
-import type { PerformanceBenchmarkRecord } from './performanceRecords.ts';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory.ts';
 import type { benchmarkCopy } from './benchmarkCopy.ts';
 import { DescriptionEditor } from './DescriptionEditor.tsx';
 import { BenchmarkPublishPanel } from './BenchmarkPublishPanel.tsx';

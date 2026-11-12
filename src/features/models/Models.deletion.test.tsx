@@ -7,6 +7,7 @@ import type { AppStore } from '../../shared/state/store';
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import ModelsPanel from './Models';
 
 vi.mock('../../shared/api/index', async importOriginal => ({
@@ -106,7 +107,7 @@ async function selectBeta() {
   const select = screen.getByRole('button', { name: 'Configure & run: beta.gguf' });
   expect(select).toBeEnabled();
   fireEvent.click(select);
-  await waitFor(() => expect(JSON.parse(screen.getByTestId('saved-model-config').textContent!).active_model).toBe(beta));
+  await waitFor(() => expect(JSON.parse(screen.getByTestId('saved-model-config').textContent!)).toMatchObject({ active_model: beta }));
 }
 
 beforeEach(() => {
@@ -126,7 +127,7 @@ describe('model deletion and current saved selection', () => {
     const selected = f.saved();
     expect(selected).toEqual({ ...f.initial, active_model: beta });
     expect(f.initial.active_model).toBe(alpha);
-    await act(async () => { f.release(); await vi.mocked(api.deleteModel).mock.results[0].value; });
+    await act(async () => { f.release(); await defined(vi.mocked(api.deleteModel).mock.results[0]).value; });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
     expect(f.guardReads).toEqual([selected]);
     expect(f.removed.has(alpha)).toBe(true);
@@ -138,7 +139,7 @@ describe('model deletion and current saved selection', () => {
   it('retains the selected bound model when native entry refuses its deletion', async () => {
     const f = fixture(); render(<f.View />);
     await beginAlphaDeletion();
-    await act(async () => { f.release(); await vi.mocked(api.deleteModel).mock.results[0].value.catch(() => undefined); });
+    await act(async () => { f.release(); const result = defined(vi.mocked(api.deleteModel).mock.results[0]); if (result.type !== 'return') throw new Error('Expected deleteModel to return a promise'); await result.value.catch(() => undefined); });
     expect(await screen.findByText(new RegExp(bindingRefusal))).toBeVisible();
     expect(f.guardReads).toEqual([f.initial]);
     expect(f.removed.size).toBe(0);
@@ -149,7 +150,7 @@ describe('model deletion and current saved selection', () => {
   it('preserves an already saved different selection when deleting an unbound model', async () => {
     const f = fixture(beta); render(<f.View />);
     await beginAlphaDeletion();
-    await act(async () => { f.release(); await vi.mocked(api.deleteModel).mock.results[0].value; });
+    await act(async () => { f.release(); await defined(vi.mocked(api.deleteModel).mock.results[0]).value; });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
     expect(f.guardReads).toEqual([f.initial]);
     expect(f.removed.has(alpha)).toBe(true);
@@ -163,7 +164,7 @@ describe('model deletion and current saved selection', () => {
     await selectBeta();
     await waitFor(() => expect(f.writes).toHaveLength(1));
     const selected = f.saved();
-    await act(async () => { f.release(); await vi.mocked(api.deleteModel).mock.results[0].value.catch(() => undefined); });
+    await act(async () => { f.release(); const result = defined(vi.mocked(api.deleteModel).mock.results[0]); if (result.type !== 'return') throw new Error('Expected deleteModel to return a promise'); await result.value.catch(() => undefined); });
     expect(await screen.findByText(/Synthetic delete failed/)).toBeVisible();
     expect(f.guardReads).toEqual([selected]);
     expect(f.removed.size).toBe(0);
@@ -185,9 +186,9 @@ describe('model deletion and current saved selection', () => {
     await act(async () => { await held.started; });
     expect(f.saved()).toEqual(f.initial);
     fireEvent.click(screen.getByRole('button', { name: 'Configure & run: beta.gguf' }));
-    expect(JSON.parse(screen.getByTestId('saved-model-config').textContent!).active_model).toBe(alpha);
+    expect(JSON.parse(screen.getByTestId('saved-model-config').textContent!)).toMatchObject({ active_model: alpha });
 
-    await act(async () => { f.complete(); await vi.mocked(api.deleteModel).mock.results[0].value; });
+    await act(async () => { f.complete(); await defined(vi.mocked(api.deleteModel).mock.results[0]).value; });
     expect(f.removed.has(alpha)).toBe(true);
     await act(async () => { held.release(); });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
@@ -208,7 +209,7 @@ describe('model deletion and current saved selection', () => {
     await act(async () => { await held.started; });
     expect(f.saved()).toEqual(f.initial);
 
-    await act(async () => { f.complete(); await vi.mocked(api.deleteModel).mock.results[0].value; });
+    await act(async () => { f.complete(); await defined(vi.mocked(api.deleteModel).mock.results[0]).value; });
     await act(async () => { held.release(); });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
     expect(f.saved()).toEqual({ ...f.initial, active_model: '' });
@@ -340,7 +341,7 @@ describe('model deletion request ownership', () => {
       await waitFor(() => expect(f.writes).toHaveLength(1));
       const selected = { ...f.initial, active_model: beta };
       expect(f.saved()).toEqual(selected);
-      const request = f.requests[0];
+      const request = defined(f.requests[0]);
       await act(async () => { request.entry.resolve(); await request.guarded.promise; });
       expect(f.guardReads).toEqual([{ path: alpha, config: selected }]);
       await act(async () => { request.completion.resolve('success'); await request.native; });
@@ -357,7 +358,7 @@ describe('model deletion request ownership', () => {
     await withPendingDeletionFixture(async f => {
       await confirmPendingDeletion(alpha);
       await selectBeta();
-      const request = f.requests[0];
+      const request = defined(f.requests[0]);
       await act(async () => { request.entry.resolve(); await request.guarded.promise; });
       await confirmPendingDeletion(alpha);
       expect(api.deleteModel).toHaveBeenCalledTimes(1);
@@ -380,14 +381,14 @@ describe('model deletion request ownership', () => {
       await confirmPendingDeletion(alpha);
       await selectBeta();
       const selected = { ...f.initial, active_model: beta };
-      const first = f.requests[0];
+      const first = defined(f.requests[0]);
       await act(async () => { first.entry.resolve(); await first.guarded.promise; });
       await act(async () => { first.completion.resolve('failure'); await first.native.catch(() => undefined); });
       expect(await screen.findByText(/Synthetic pending delete failed/)).toBeVisible();
       await confirmPendingDeletion(alpha);
       expect(api.deleteModel).toHaveBeenCalledTimes(2);
       expect(f.requests.map(request => request.path)).toEqual([alpha, alpha]);
-      const retry = f.requests[1];
+      const retry = defined(f.requests[1]);
       await act(async () => { retry.entry.resolve(); await retry.guarded.promise; });
       await act(async () => { retry.completion.resolve('success'); await retry.native; });
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
@@ -408,12 +409,12 @@ describe('model deletion request ownership', () => {
       expect(f.guardReads).toEqual([]);
       const selected = { ...f.initial, active_model: beta };
       // Beta is still bound. Its independent request must refuse before success.
-      const bound = f.requests[1];
+      const bound = defined(f.requests[1]);
       await act(async () => { bound.entry.resolve(); await bound.native.catch(() => undefined); });
       expect(await screen.findByText(new RegExp(bindingRefusal))).toBeVisible();
       expect(f.guardReads).toEqual([{ path: beta, config: selected }]);
       expect(f.removed.size).toBe(0);
-      const first = f.requests[0];
+      const first = defined(f.requests[0]);
       await act(async () => { first.entry.resolve(); await first.guarded.promise; });
       await act(async () => { first.completion.resolve('success'); await first.native; });
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
@@ -427,7 +428,7 @@ describe('model deletion request ownership', () => {
   it('releases ownership after bound-model refusal so a later unbound retry can proceed', async () => {
     await withPendingDeletionFixture(async f => {
       await confirmPendingDeletion(alpha);
-      const first = f.requests[0];
+      const first = defined(f.requests[0]);
       await act(async () => { first.entry.resolve(); await first.native.catch(() => undefined); });
       expect(await screen.findByText(new RegExp(bindingRefusal))).toBeVisible();
       expect(f.guardReads).toEqual([{ path: alpha, config: f.initial }]);
@@ -436,7 +437,7 @@ describe('model deletion request ownership', () => {
       await confirmPendingDeletion(alpha);
       expect(api.deleteModel).toHaveBeenCalledTimes(2);
       await selectBeta();
-      const retry = f.requests[1];
+      const retry = defined(f.requests[1]);
       await act(async () => { retry.entry.resolve(); await retry.guarded.promise; });
       await act(async () => { retry.completion.resolve('success'); await retry.native; });
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());

@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as api from '../../shared/api/index';
+import { IpcError } from '../../shared/api/ipcError';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { getTaskSnapshot, registerTask, removeTask } from '../../shared/state/taskRegistry';
 import { useModelSettings, type ModelSettingsContext } from '../model-settings/ModelSettingsProvider';
 import DiscoverPanel from './Discover';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: vi.fn() }));
 vi.mock('../../shared/api/index', async importOriginal => ({
@@ -96,7 +100,7 @@ describe('selected Safetensors model bundles', () => {
     expect(store.start).not.toHaveBeenCalled();
     expect(row(display).getByRole('button', { name: `Installed: ${display}` })).toBeDisabled();
     fireEvent.click(configure);
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({
       active_model: installed.path, active_provider: 'llama.cpp', active_runtime: 'synthetic-runtime',
     }) }));
   });
@@ -104,37 +108,37 @@ describe('selected Safetensors model bundles', () => {
   it.each(['model-a.safetensors', 'model-b.safetensors'])('resolves %s to one installed index bundle before the refreshed lookup returns', async selected => {
     const members = ['model-a.safetensors', 'model-b.safetensors'];
     vi.mocked(api.hfModelFiles).mockResolvedValue({ ...inspection, safetensors_files: [
-      { path: members[0], size_bytes: 1024 }, { path: members[1], size_bytes: 2048 },
+      { path: defined(members[0]), size_bytes: 1024 }, { path: defined(members[1]), size_bytes: 2048 },
       { path: 'other.safetensors', size_bytes: 4096 },
     ] });
-    const installed = { ...artifact, path: 'models/stable-indexed', selected_file: members[0], selected_weight_files: members };
+    const installed = { ...artifact, path: 'models/stable-indexed', selected_file: defined(members[0]), selected_weight_files: members };
     vi.mocked(api.hfDownloadSnapshot).mockResolvedValue(installed);
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValueOnce([]).mockReturnValue(new Promise(() => {}));
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload(`Download: ${selected}`);
-    const configure = await screen.findByRole('button', { name: `Configure and run: ${members[0]}` });
-    expect(row(members[0]).getByRole('button', { name: `Installed: ${members[0]}` })).toBeDisabled();
-    expect(row(members[0]).getByText('3.0 KiB')).toBeVisible();
+    const configure = await screen.findByRole('button', { name: `Configure and run: ${defined(members[0])}` });
+    expect(row(defined(members[0])).getByRole('button', { name: `Installed: ${defined(members[0])}` })).toBeDisabled();
+    expect(row(defined(members[0])).getByText('3.0 KiB')).toBeVisible();
     expect(screen.queryByRole('button', { name: /Download: model-b/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Download: other.safetensors' })).toBeDisabled();
     fireEvent.click(configure);
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: installed.path }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: installed.path }) }));
     expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', selected);
   });
 
   it('groups an older noncanonical incomplete index selection into one retry without claiming unrelated weights', async () => {
     const members = ['model-a.safetensors', 'model-b.safetensors'];
     vi.mocked(api.hfModelFiles).mockResolvedValue({ ...inspection, safetensors_files: [
-      { path: members[0], size_bytes: 1024 }, { path: members[1], size_bytes: 2048 },
+      { path: defined(members[0]), size_bytes: 1024 }, { path: defined(members[1]), size_bytes: 2048 },
       { path: 'other.safetensors', size_bytes: 4096 },
     ] });
-    vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([{ ...artifact, selected_file: members[1],
+    vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([{ ...artifact, selected_file: defined(members[1]),
       selected_weight_files: members, incomplete: true, missing: ['model-a.safetensors'] }]);
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
-    await clickDownload(`Retry: ${members[0]}`);
-    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', members[0]);
+    await clickDownload(`Retry: ${defined(members[0])}`);
+    expect(api.hfDownloadSnapshot).toHaveBeenCalledExactlyOnceWith(repo.id, 'models', defined(members[0]));
     expect(screen.queryByRole('button', { name: /Retry: model-b/ })).not.toBeInTheDocument();
     expect(row('other.safetensors').queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
   });
@@ -147,14 +151,14 @@ describe('selected Safetensors model bundles', () => {
     vi.mocked(api.hfDownloadSnapshot).mockReturnValue(new Promise(resolve => { finish = resolve; }));
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
-    await clickDownload(`Download: ${members[1]}`);
+    await clickDownload(`Download: ${defined(members[1])}`);
     fireEvent.click(screen.getByRole('button', { name: /example\/other/ }));
     fireEvent.click(screen.getByRole('button', { name: /example\/variants/ }));
-    await screen.findByRole('button', { name: `Download: ${members[0]}` });
-    await act(async () => finish({ ...artifact, selected_file: members[0], selected_weight_files: members }));
+    await screen.findByRole('button', { name: `Download: ${defined(members[0])}` });
+    await act(async () => finish({ ...artifact, selected_file: defined(members[0]), selected_weight_files: members }));
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: `Download: ${members[0]}` })).toBeVisible();
-    expect(screen.getByRole('button', { name: `Download: ${members[1]}` })).toBeVisible();
+    expect(screen.getByRole('button', { name: `Download: ${defined(members[0])}` })).toBeVisible();
+    expect(screen.getByRole('button', { name: `Download: ${defined(members[1])}` })).toBeVisible();
   });
 
   it('isolates installed, incomplete and whole snapshot identities', async () => {
@@ -228,7 +232,7 @@ describe('selected Safetensors model bundles', () => {
     if (change === 'repository') fireEvent.click(screen.getByRole('button', { name: /example\/other/ }));
     else if (change === 'search') fireEvent.click(screen.getByRole('button', { name: 'Search models' }));
     else if (change === 'destination') { store.cfg!.models_dir = 'models/elsewhere'; view.rerender(page()); }
-    else act(() => registerTask({ id: 'model-download', kind: 'model-download', label: 'replacement', interruptible: true, cancel: replacementCancel }));
+    else await act(() => registerTask({ id: 'model-download', kind: 'model-download', label: 'replacement', interruptible: true, cancel: replacementCancel }));
     await act(async () => finish(artifact));
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
@@ -248,7 +252,8 @@ describe('selected Safetensors model bundles', () => {
     await clickDownload('Download: 4bit/model.safetensors');
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     installed = [{ ...artifact, incomplete: true, missing: ['tokenizer.json'] }];
-    await act(async () => reject(new Error('model download cancelled')));
+    await act(async () => reject(new IpcError('cancelled', 'Transfer interrupted by request')));
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe('cancelled');
     await waitFor(() => expect(row('4bit/model.safetensors').getByRole('button', { name: 'Retry: 4bit/model.safetensors' })).toBeEnabled());
     expect(row('4bit/model.safetensors').queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(row('8bit/model.safetensors').getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeEnabled();
@@ -258,20 +263,24 @@ describe('selected Safetensors model bundles', () => {
     expect(settings.open).not.toHaveBeenCalled();
   });
 
-  it.each(['network failed', 'model download cancelled'] as const)('leaves all model choices unconfigured after %s and retries the same selection', async failure => {
+  it.each([
+    { failure: new IpcError('unavailable', 'network failed'), state: 'failed' },
+    { failure: new IpcError('cancelled', 'model download cancelled'), state: 'cancelled' },
+    { failure: new IpcError('internal', 'model download cancelled'), state: 'failed' },
+  ])('leaves all model choices unconfigured after $state and retries the same selection', async ({ failure, state }) => {
     let reject!: (cause: Error) => void;
     vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
     const store = createTestStore();
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /example\/variants/ }));
     await clickDownload('Download: 4bit/model.safetensors');
-    if (failure === 'model download cancelled') {
+    if (state === 'cancelled') {
       fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
       await waitFor(() => expect(api.hfCancelDownload).toHaveBeenCalledOnce());
       expect(screen.getByRole('button', { name: 'Download: 8bit/model.safetensors' })).toBeDisabled();
     }
-    await act(async () => reject(new Error(failure)));
-    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(failure === 'network failed' ? 'failed' : 'cancelled');
+    await act(async () => reject(failure));
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(state);
     expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
     expect(store.updateConfig).not.toHaveBeenCalled();
     await clickDownload('Download: 4bit/model.safetensors');

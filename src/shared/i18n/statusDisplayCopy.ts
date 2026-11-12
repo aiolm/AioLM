@@ -29,7 +29,8 @@ export const statusDisplayCopy = {
 
 /** Keep future backend values visible instead of interpreting them as a known state. */
 function knownLabel(labels: Record<string, string>, value: string): string {
-  return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : value;
+  // An own key in this string-valued record has a label.
+  return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value]! : value;
 }
 
 export const pullRequestStateText = (state: string, locale: Locale): string => knownLabel(statusDisplayCopy[locale].pullRequests, state);

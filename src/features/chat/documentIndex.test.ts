@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { defined } from "../../testing/assertDefined";
 import { indexRecordForChunks, mergeCachedVectors } from "./documentIndex";
 import { splitDocumentChunks } from "./chatUtils";
-import type { DocumentAttachment } from "./chatTypes";
+import type { DocumentAttachment } from "../../shared/api/mediaTypes";
 
 describe("document vector cache lookup", () => {
   it("hashes a shared document once when resolving all 64 searchable chunks", () => {
@@ -20,21 +21,21 @@ describe("document vector cache lookup", () => {
   it("resolves requested offsets in order and retains the first vector at a duplicate offset", () => {
     const document = { name: "notes.md", path: "/documents/notes.md", text: "abcdef" };
     const chunks = splitDocumentChunks([document], 2);
-    const record = indexRecordForChunks("model", [chunks[1], chunks[0], chunks[1], chunks[2]], [[1], [2], [3], [4]]);
-    const resolved = mergeCachedVectors("model", [chunks[2], chunks[0], chunks[1], chunks[2]], [record]);
+    const record = indexRecordForChunks("model", [defined(chunks[1]), defined(chunks[0]), defined(chunks[1]), defined(chunks[2])], [[1], [2], [3], [4]]);
+    const resolved = mergeCachedVectors("model", [defined(chunks[2]), defined(chunks[0]), defined(chunks[1]), defined(chunks[2])], [record]);
 
     expect(resolved).toEqual([[4], [2], [1], [4]]);
     expect(resolved?.[0]).toBe(record.vectors[3]);
-    expect(mergeCachedVectors("model", [{ ...chunks[0], offset: 99 }], [record])).toBeNull();
+    expect(mergeCachedVectors("model", [{ ...defined(chunks[0]), offset: 99 }], [record])).toBeNull();
   });
 
   it("checks distinct document contents even when their paths match", () => {
     const document = { name: "notes.md", path: "/documents/notes.md", text: "abcdef" };
     const chunks = splitDocumentChunks([document], 2);
     const record = indexRecordForChunks("model", chunks, [[1], [2], [3]]);
-    const changed = { ...chunks[1], document: { ...document, text: "changed" } };
+    const changed = { ...defined(chunks[1]), document: { ...document, text: "changed" } };
 
-    expect(mergeCachedVectors("model", [chunks[0], changed], [record])).toBeNull();
+    expect(mergeCachedVectors("model", [defined(chunks[0]), changed], [record])).toBeNull();
   });
 
   it("invalidates cached vectors when the same attachment changes between lookups", () => {

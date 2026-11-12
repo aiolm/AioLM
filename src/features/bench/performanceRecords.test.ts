@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { LegacyPerformanceBenchmarkRow as PerformanceBenchmarkRow } from '../../shared/api/types.ts';
 import { benchmarkReport } from './benchmarkReport';
 import { performanceMarkdown } from './performanceMarkdown';
+import type { LegacyPerformanceBenchmarkRecord as PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory.ts';
+import { defined } from '../../testing/assertDefined';
 import {
   PERFORMANCE_HISTORY_KEY, performanceCsv, readPerformanceHistory, savePerformanceRecord,
-  summarizePerformanceRows, type LegacyPerformanceBenchmarkRecord as PerformanceBenchmarkRecord,
+  summarizePerformanceRows,
 } from './performanceRecords.ts';
 
 function row(overrides: Partial<PerformanceBenchmarkRow> = {}): PerformanceBenchmarkRow {
@@ -42,7 +44,7 @@ describe('performance benchmark aggregation', () => {
   it('preserves repeat samples, ignores replayed events, and uses sample deviation and peak RAM', () => {
     const first = row({ peak_memory_bytes: 1000, tg_tps: 80 });
     const second = row({ id: 'single-2', repetition: 2, peak_memory_bytes: 1500, tg_tps: 120 });
-    const [summary] = summarizePerformanceRows([first, first, second]);
+    const summary = defined(summarizePerformanceRows([first, first, second])[0]);
     expect(summary.samples).toBe(2);
     expect(summary.tg_tps).toBe(100);
     expect(summary.tg_stddev).toBeCloseTo(Math.sqrt(800));
@@ -55,17 +57,19 @@ describe('performance benchmark aggregation', () => {
       row(), row({ id: 'single-2', repetition: 2, tg_tps: null }),
       row({ id: 'failed', concurrency: 2, error: 'connection closed', tg_tps: 0 }),
     ]);
-    expect(summaries[0].tg_tps).toBeNull();
-    expect(summaries[0].tg_stddev).toBeNull();
-    expect(summaries[0].speedup).toBeNull();
-    expect(summaries[1].samples).toBe(0);
-    expect(summaries[1].tg_tps).toBeNull();
-    expect(summaries[1].speedup).toBeNull();
+    const single = defined(summaries[0]);
+    const failed = defined(summaries[1]);
+    expect(single.tg_tps).toBeNull();
+    expect(single.tg_stddev).toBeNull();
+    expect(single.speedup).toBeNull();
+    expect(failed.samples).toBe(0);
+    expect(failed.tg_tps).toBeNull();
+    expect(failed.speedup).toBeNull();
   });
 
   it('withholds cache-contaminated speedup comparisons', () => {
     const summaries = summarizePerformanceRows([row(), row({ id: 'cached', concurrency: 2, cached_tokens: 32, tg_tps: 180 })]);
-    expect(summaries[1].speedup).toBeNull();
+    expect(defined(summaries[1]).speedup).toBeNull();
   });
 });
 
@@ -81,9 +85,9 @@ describe('performance history and export', () => {
     }
     const saved = readPerformanceHistory();
     expect(saved).toHaveLength(22);
-    expect(saved[0].id).toBe('perf-21');
+    expect(defined(saved[0]).id).toBe('perf-21');
     expect(saved[saved.length - 1]?.id).toBe('perf-0');
-    savePerformanceRecord(saved[0]);
+    savePerformanceRecord(defined(saved[0]));
     expect(readPerformanceHistory()).toHaveLength(22);
     expect(localStorage.getItem('aiolm-benchmark-history.v1')).toBe('["legacy"]');
   });
@@ -138,7 +142,7 @@ describe('performance history and export', () => {
     expect(csv).not.toContain('"Cancelled"');
     expect(performanceMarkdown(cancelled, 'en')).toBe('');
     expect(csv).not.toMatch(/C:|private|models\/|cannot load|--ctx-size|run_id|effective_args|sha256|perf-1/);
-    for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(lines[0].split(',').length);
+    for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(defined(lines[0]).split(',').length);
     expect(csv).not.toContain('undefined');
     expect(csv).not.toContain('NaN');
   });
@@ -154,7 +158,7 @@ describe('performance history and export', () => {
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
     const visible = readPerformanceHistory();
     expect(visible).toHaveLength(1);
-    expect(visible[0].result.rows).toEqual([row()]);
+    expect(defined(visible[0]).result.rows).toEqual([row()]);
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(bytes);
     expect(benchmarkReport([cancelled, empty]).rows).toHaveLength(1);
     expect(performanceCsv([cancelled, empty])).not.toContain('16384');
@@ -183,7 +187,7 @@ describe('performance history and export', () => {
     const report = benchmarkReport([saved]);
     expect(report.rows).toHaveLength(3);
     const [single, batch, failure] = report.rows;
-    const value = (values: typeof single, key: string) => values[report.columns.findIndex(column => column.key === key)];
+    const value = (values: typeof single, key: string) => defined(values)[report.columns.findIndex(column => column.key === key)];
     expect(value(single, 'legacy.prompt_tokens')).toBe(1024);
     expect(value(single, 'samples')).toBe(2);
     expect(value(single, 'legacy.tg_tps')).toBe(100);

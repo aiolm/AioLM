@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, { createContext, useContext } from "react";
 import { normalizeDisplayText } from "../lib/displayPaths";
 import { createPortal } from "react-dom";
+import { useCustomSelectController } from "./useCustomSelectController";
 
 /** Keep overlays inside a modal's top layer while retaining viewport positioning. */
 export const OverlayContainerContext = createContext<HTMLElement | null>(null);
@@ -39,42 +40,6 @@ export interface CustomSelectProps<T extends string | number = string> {
   portalContainer?: HTMLElement | null;
 }
 
-interface DropdownPosition {
-  top: number;
-  left: number;
-  minWidth: number;
-  maxWidth: string;
-  maxHeight: number;
-  opensAbove: boolean;
-}
-
-const MENU_EDGE = 8;
-/** Longest line a menu grows to for options wider than their trigger. */
-const MENU_READABLE_WIDTH = "30rem";
-
-function associatedLabels(trigger: HTMLButtonElement | HTMLInputElement | null): HTMLLabelElement[] {
-  if (!trigger) return [];
-  const root = trigger.getRootNode();
-  if (!("querySelectorAll" in root)) return [];
-  const id = trigger.id;
-  // CSS selectors replace nulls and unpaired surrogates, so these rare IDs
-  // need the native lookup to retain their exact DOM value.
-  if (/[\u0000\ud800-\udfff]/u.test(id)) return Array.from(trigger.labels ?? []);
-  const escapedId = id.replace(/[\u0001-\u001f\u007f"\\\u{10000}-\u{10ffff}]/gu, character => `\\${character.codePointAt(0)!.toString(16)} `);
-  // Only explicit labels can be outside the control's ancestors. Keep their
-  // lookup selective rather than inspecting every label on every editor commit.
-  const labels = id
-    ? Array.from((root as ParentNode).querySelectorAll<HTMLLabelElement>(`label[for="${escapedId}"]`))
-    : [];
-  for (let parent = trigger.parentElement; parent; parent = parent.parentElement) {
-    if (parent.localName === "label" && !labels.includes(parent as HTMLLabelElement)) labels.push(parent as HTMLLabelElement);
-  }
-  // Native resolution retains duplicate-id, namespaced attribute and first
-  // labelable-child rules. Ancestor labels must rejoin explicit labels in tree order.
-  return labels.filter(label => label.control === trigger)
-    .sort((left, right) => left === right ? 0 : left.compareDocumentPosition(right) & 4 ? -1 : 1);
-}
-
 export function CustomSelect<T extends string | number = string>({
   id,
   name,
@@ -103,290 +68,14 @@ export function CustomSelect<T extends string | number = string>({
   const effectiveAriaLabel = ariaLabel ?? ariaLabelKebab;
   const effectiveAriaLabelledBy = ariaLabelledBy ?? ariaLabelledByKebab;
   const effectiveAriaDescribedBy = ariaDescribedBy ?? ariaDescribedByKebab;
-  const [isOpen, setIsOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const editable = !!onInputChange;
-  const normalizedQuery = query ? query.toLocaleLowerCase() : '';
-  const visibleOptions = editable && query
-    ? options.filter(option => normalizeDisplayText(option.label).toLocaleLowerCase().includes(normalizedQuery))
-    : options;
-  const open = isOpen && !disabled && visibleOptions.length > 0;
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement | HTMLInputElement>(null);
-  const menuRef = useRef<HTMLUListElement>(null);
-  const setTriggerRef = useCallback((element: HTMLButtonElement | HTMLInputElement | null) => {
-    triggerRef.current = element;
-  }, []);
-  const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
-  const menuMounted = menuPosition !== null;
-  const boundLabelsRef = useRef<HTMLLabelElement[]>([]);
-  const [labelName, setLabelName] = useState<string>();
-  const selected = options.find((opt) => opt.value === value) || options[0];
-  const generatedId = useId();
-  const listboxId = `${id ?? generatedId}-listbox`;
-  const selectedIndex = visibleOptions.findIndex((opt) => opt.value === value);
-  const canObserveResize = typeof ResizeObserver !== 'undefined';
-  const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
-  const typeaheadRef = useRef<{ query: string; timer: ReturnType<typeof setTimeout> | null }>({ query: "", timer: null });
-  const controlDisabled = () => disabled || !!triggerRef.current?.matches(':disabled');
-
-  useEffect(() => {
-    const buffer = typeaheadRef.current;
-    return () => { if (buffer.timer) clearTimeout(buffer.timer); };
-  }, []);
-
-  useEffect(() => { if (disabled) setIsOpen(false); }, [disabled]);
-
-  const focusFromLabel = useCallback((event: MouseEvent) => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    const target = event.target;
-    if (!(target instanceof Node) || trigger.contains(target)) return;
-    const element = target instanceof Element ? target : target.parentElement;
-    if (element?.closest("button, input, select, textarea, a[href], summary, [contenteditable='true']")) return;
-
-    // Labels retain their accessible name and focus behavior without forwarding
-    // a second activation to the dropdown button.
-    event.preventDefault();
-    if (!trigger.matches(':disabled')) trigger.focus();
-  }, []);
-
-  // This intentionally runs after every commit: associated labels can be replaced
-  // without changing the control props, so dependency-based binding misses them.
-  useLayoutEffect(() => {
-    const trigger = triggerRef.current;
-    const labels = associatedLabels(trigger);
-    const previousLabels = boundLabelsRef.current;
-    const labelsChanged = labels.length !== previousLabels.length || labels.some((label) => !previousLabels.includes(label));
-    if (labelsChanged) {
-      previousLabels.forEach((label) => {
-        if (!labels.includes(label)) label.removeEventListener("click", focusFromLabel);
-      });
-      labels.forEach((label) => {
-        if (!previousLabels.includes(label)) label.addEventListener("click", focusFromLabel);
-      });
-      boundLabelsRef.current = labels;
-    }
+  const {
+    open, editable, visibleOptions, selected, highlightedIndex, listboxId, labelName,
+    menuPosition, containerRef, menuRef, setTriggerRef, setHighlightedIndex,
+    handleKeyDown, handleOptionKeyDown, handleBlur, toggle, openEditable, changeInput, selectOption,
+  } = useCustomSelectController({
+    id, value, options, onChange, onInputChange, disabled, className, triggerClassName,
+    menuClassName, size, portalContainer, overlayContainer,
   });
-
-  useLayoutEffect(() => () => {
-    boundLabelsRef.current.forEach((label) => label.removeEventListener("click", focusFromLabel));
-    boundLabelsRef.current = [];
-  }, [focusFromLabel]);
-
-  const clampMenuLeft = useCallback((left: number) => {
-    const menu = menuRef.current;
-    if (!menu) return Math.max(MENU_EDGE, left);
-    return Math.max(MENU_EDGE, Math.min(Math.max(MENU_EDGE, left), window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width));
-  }, []);
-
-  const updateMenuPosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-
-    const rect = trigger.getBoundingClientRect();
-    const edge = MENU_EDGE;
-    const gap = 4;
-    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - edge - gap);
-    const spaceAbove = Math.max(0, rect.top - edge - gap);
-    const opensAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
-    const availableSpace = opensAbove ? spaceAbove : spaceBelow;
-    const maxHeight = Math.max(64, Math.min(240, availableSpace || 64));
-    const viewportWidth = Math.max(0, window.innerWidth - edge * 2);
-    const minWidth = Math.min(rect.width, viewportWidth);
-
-    const nextPosition: DropdownPosition = {
-      top: opensAbove ? rect.top - gap : rect.bottom + gap,
-      // Aligned with the trigger until the rendered width is known (see below).
-      left: clampMenuLeft(rect.left),
-      // A narrow trigger must not squeeze long options into a column a few
-      // characters wide: the menu grows to its longest option, up to a readable
-      // line length and never beyond the viewport.
-      minWidth,
-      maxWidth: `max(${minWidth}px, min(${viewportWidth}px, ${MENU_READABLE_WIDTH}))`,
-      maxHeight,
-      opensAbove,
-    };
-    setMenuPosition(previous => previous
-      && previous.top === nextPosition.top
-      && previous.left === nextPosition.left
-      && previous.minWidth === nextPosition.minWidth
-      && previous.maxWidth === nextPosition.maxWidth
-      && previous.maxHeight === nextPosition.maxHeight
-      && previous.opensAbove === nextPosition.opensAbove
-      ? previous
-      : nextPosition);
-  }, [clampMenuLeft]);
-
-  const alignMenuLeft = useCallback(() => {
-    const menu = menuRef.current;
-    if (!menu) return;
-    const leftLimit = window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width;
-    setMenuPosition(previous => {
-      if (!previous) return previous;
-      const left = Math.max(MENU_EDGE, Math.min(Math.max(MENU_EDGE, previous.left), leftLimit));
-      return left === previous.left ? previous : { ...previous, left };
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    updateMenuPosition();
-  }, [className, editable, menuClassName, open, overlayContainer, portalContainer, size, triggerClassName, updateMenuPosition, value]);
-
-  // The menu's width follows its options, so its far edge is only known once it
-  // is rendered: shift it toward the start just enough to stay inside the viewport.
-  useLayoutEffect(() => {
-    if (!open || !menuPosition || !canObserveResize) return;
-    alignMenuLeft();
-  }, [alignMenuLeft, canObserveResize, menuPosition, open]);
-
-  // Legacy WebViews without ResizeObserver need the original render-driven
-  // measurement path because mutable option arrays and CSS-only changes have no observer signal.
-  // This intentionally has no dependency list so same-reference option mutations are measured.
-  useLayoutEffect(() => {
-    if (!open || !menuPosition || canObserveResize) return;
-    updateMenuPosition();
-  });
-
-  useLayoutEffect(() => {
-    if (!open || !menuMounted || !canObserveResize) return;
-    const trigger = triggerRef.current;
-    const menu = menuRef.current;
-    if (!trigger || !menu) return;
-    const observer = new ResizeObserver(() => {
-      updateMenuPosition();
-    });
-    observer.observe(trigger);
-    observer.observe(menu);
-    return () => observer.disconnect();
-  }, [canObserveResize, menuMounted, open, updateMenuPosition]);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      const target = event.target as Node;
-      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setIsOpen(false);
-    }
-    if (open) {
-      document.addEventListener("pointerdown", handleClickOutside);
-      window.addEventListener("aiolm:navigate", closeMenu);
-    }
-    function closeMenu() { setIsOpen(false); }
-    return () => {
-      document.removeEventListener("pointerdown", handleClickOutside);
-      window.removeEventListener("aiolm:navigate", closeMenu);
-    };
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuPosition(null);
-      return;
-    }
-
-    // Keyboard navigation only moves the highlight while open; re-seed it from the
-    // committed value each time the listbox opens so a previous preview never leaks in.
-    setHighlightedIndex(visibleOptions.findIndex((opt) => opt.value === value));
-    // A portalled listbox is outside the native <label>, so it repeats the label's
-    // own text; a wrapping label's copy of the trigger (the selected value) is dropped.
-    setLabelName(associatedLabels(triggerRef.current).map((label) => {
-      const copy = label.cloneNode(true) as HTMLLabelElement;
-      copy.querySelectorAll(".app-custom-select-container").forEach((element) => element.remove());
-      return copy.textContent?.trim();
-    }).filter(Boolean).join(" ") || undefined);
-    const handleViewportChange = () => updateMenuPosition();
-    window.addEventListener("resize", handleViewportChange);
-    window.addEventListener("scroll", handleViewportChange, true);
-    return () => {
-      window.removeEventListener("resize", handleViewportChange);
-      window.removeEventListener("scroll", handleViewportChange, true);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, updateMenuPosition]);
-
-  useLayoutEffect(() => {
-    if (open && highlightedIndex >= 0) menuRef.current?.children[highlightedIndex]?.scrollIntoView?.({ block: 'nearest' });
-  }, [open, highlightedIndex]);
-
-  /** Finds the next enabled option at or after `from` (wrapping), matching `predicate`. */
-  const findEnabledOption = (from: number, step: number, predicate: (opt: CustomSelectOption<T>) => boolean) => {
-    for (let offset = 0; offset < visibleOptions.length; offset += 1) {
-      const index = ((from + step * offset) % visibleOptions.length + visibleOptions.length) % visibleOptions.length;
-      if (!visibleOptions[index].disabled && predicate(visibleOptions[index])) return index;
-    }
-    return -1;
-  };
-
-  const commitHighlighted = () => {
-    const option = visibleOptions[highlightedIndex];
-    if (option && !option.disabled && !controlDisabled()) onChange(option.value);
-    setQuery('');
-    setIsOpen(false);
-  };
-
-  const handleTypeahead = (char: string) => {
-    const buffer = typeaheadRef.current;
-    if (buffer.timer) clearTimeout(buffer.timer);
-    buffer.query = `${buffer.query}${char.toLowerCase()}`;
-    buffer.timer = setTimeout(() => { buffer.query = ""; }, 700);
-    const matches = (opt: CustomSelectOption<T>) => opt.label.toLocaleLowerCase().startsWith(buffer.query);
-    const searchFrom = open ? highlightedIndex + 1 : selectedIndex + 1;
-    let match = findEnabledOption(searchFrom, 1, matches);
-    // A repeated single letter (e.g. "d", "d") should still find something even if
-    // it only matches the option already active, so retry from the start once.
-    if (match === -1 && buffer.query.length > 1) match = findEnabledOption(0, 1, matches);
-    if (match === -1) return;
-    if (open) setHighlightedIndex(match);
-    else onChange(visibleOptions[match].value);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (controlDisabled() || e.nativeEvent.isComposing) return;
-    if (e.key === "Escape") {
-      if (open) { e.preventDefault(); e.stopPropagation(); }
-      setIsOpen(false);
-      return;
-    }
-    if (!open) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp" || (!editable && (e.key === "Enter" || e.key === " "))) {
-        e.preventDefault();
-        setQuery('');
-        setIsOpen(true);
-        return;
-      }
-      if (!editable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        handleTypeahead(e.key);
-      }
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const next = findEnabledOption(highlightedIndex + 1, 1, () => true);
-      if (next !== -1) setHighlightedIndex(next);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const prev = findEnabledOption(highlightedIndex - 1, -1, () => true);
-      if (prev !== -1) setHighlightedIndex(prev);
-    } else if (!editable && e.key === "Home") {
-      e.preventDefault();
-      const first = findEnabledOption(0, 1, () => true);
-      if (first !== -1) setHighlightedIndex(first);
-    } else if (!editable && e.key === "End") {
-      e.preventDefault();
-      const last = findEnabledOption(visibleOptions.length - 1, -1, () => true);
-      if (last !== -1) setHighlightedIndex(last);
-    } else if (e.key === "Enter" || (!editable && e.key === " ")) {
-      e.preventDefault();
-      commitHighlighted();
-    } else if (e.key === "Tab") {
-      setIsOpen(false);
-    } else if (!editable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      handleTypeahead(e.key);
-    }
-  };
 
   const accessibility = {
     id, role: 'combobox' as const, 'aria-haspopup': 'listbox' as const, 'aria-expanded': open,
@@ -398,12 +87,6 @@ export function CustomSelect<T extends string | number = string>({
     disabled,
   };
   const triggerClasses = `app-custom-select-trigger app-custom-select-trigger--${size} ${triggerClassName}`;
-  const toggle = () => {
-    if (controlDisabled()) return;
-    setQuery('');
-    setIsOpen(previous => !previous);
-    triggerRef.current?.focus();
-  };
   const chevron = <svg className={`app-custom-select-chevron ${open ? 'is-open' : ''}`}
     fill="none" viewBox="0 0 20 20" stroke="currentColor" aria-hidden="true" focusable="false">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="m6 8 4 4 4-4" />
@@ -413,30 +96,23 @@ export function CustomSelect<T extends string | number = string>({
     <div
       ref={containerRef}
       className={`app-custom-select-container relative inline-block text-left ${className}`}
-      onKeyDown={handleKeyDown}
-      onBlur={event => {
-        if (!containerRef.current?.contains(event.relatedTarget) && !menuRef.current?.contains(event.relatedTarget)) setIsOpen(false);
-      }}
+      onBlur={handleBlur}
     >
       {name && <input type="hidden" name={name} value={value} disabled={disabled} />}
       {editable ? <div className="app-custom-select-editable">
         <input {...accessibility} ref={setTriggerRef}
+          onKeyDown={handleKeyDown}
           className={`${triggerClasses} app-custom-select-input`} aria-autocomplete="list" autoComplete="off"
           value={normalizeDisplayText(String(value))} placeholder={placeholder} spellCheck={spellCheck}
-          onClick={() => { if (!controlDisabled()) { setQuery(''); setIsOpen(true); } }}
-          onChange={event => {
-            const next = event.target.value;
-            onInputChange?.(next);
-            setQuery(next);
-            setHighlightedIndex(-1);
-            setIsOpen(true);
-          }} />
+          onClick={openEditable}
+          onChange={event => changeInput(event.target.value)} />
         <button type="button" className="app-custom-select-toggle" disabled={disabled} tabIndex={-1} aria-hidden="true"
           onMouseDown={event => event.preventDefault()} onClick={toggle}>{chevron}</button>
       </div> : <button
         {...accessibility}
         ref={setTriggerRef}
         type="button"
+        onKeyDown={handleKeyDown}
         title={selected?.title ? normalizeDisplayText(selected.title) : undefined}
         onClick={toggle}
         className={triggerClasses}
@@ -471,13 +147,8 @@ export function CustomSelect<T extends string | number = string>({
                 aria-disabled={opt.disabled}
                 onMouseDown={event => event.preventDefault()}
                 onMouseEnter={() => setHighlightedIndex(index)}
-                onClick={() => {
-                  if (opt.disabled || controlDisabled()) return;
-                  onChange(opt.value);
-                  setQuery('');
-                  setIsOpen(false);
-                  triggerRef.current?.focus();
-                }}
+                onKeyDown={handleOptionKeyDown}
+                onClick={() => selectOption(opt)}
                 className={`app-custom-dropdown-item ${isSelected ? "is-selected" : ""} ${isHighlighted ? "is-highlighted" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
               >
                 <span className="app-custom-select-label flex items-center gap-2">

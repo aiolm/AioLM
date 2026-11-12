@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { hfCheckModelUpdates, hfUpdateModel, type ModelUpdateStatus } from '../../shared/api/models';
 import { hfCancelDownload } from '../../shared/api/commands';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from '../../shared/state/modelDownloadTask';
 import { finishTask, getTaskSnapshot, registerTask, subscribeTasks } from '../../shared/state/taskRegistry';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
@@ -93,7 +94,7 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
       if (ownsTask()) finishTask(MODEL_DOWNLOAD_TASK_ID, 'completed');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const cancelled = message === 'model download cancelled';
+      const cancelled = isIpcErrorKind(error, 'cancelled');
       if (ownsTask()) finishTask(MODEL_DOWNLOAD_TASK_ID, cancelled ? 'cancelled' : 'failed', message);
       if (!cancelled && !superseded && !ownOrigin.disposed && origin.current === ownOrigin
         && context.current.active && context.current.catalog === current.catalog && context.current.directory === current.directory) {

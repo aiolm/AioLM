@@ -100,12 +100,15 @@ export function effectiveArguments(args: readonly string[]): string[] | null {
   if (!args.length) return null;
   const published: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const [name] = args[index].split('=', 1);
+    // The loop bound proves this token exists; split always returns its first field.
+    const token = args[index]!;
+    const name = token.split('=', 1)[0]!;
     // Keep contiguous values together, including private multi-value options.
     // A value that looks like an option keeps the existing flag boundary.
     const start = index;
-    if (isOption(args[start])) {
-      while (index + 1 < args.length && !isOption(args[index + 1])) index += 1;
+    if (isOption(token)) {
+      // The next-token bound proves the indexed value exists.
+      while (index + 1 < args.length && !isOption(args[index + 1]!)) index += 1;
     }
     if (PRIVATE_OPTIONS.has(name) || SECRET_OPTION.test(name.replace(/^--?/, ''))) continue;
     const group = args.slice(start, index + 1);

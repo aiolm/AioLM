@@ -119,7 +119,7 @@ export default function DiagnosticDetails({ summary, detail, id }: { summary: st
       <details id={`${baseId}-diagnostic`} className="app-diagnostic-disclosure">
         <summary className="app-diagnostic-toggle">{copy.showDetails}</summary>
         <div className="app-diagnostic-content">
-          <pre id={`${baseId}-diagnostic-full`} tabIndex={0} aria-label={copy.fullDiagnostic} className="app-diagnostic-full"><code>{displayDetail}</code></pre>
+          <pre id={`${baseId}-diagnostic-full`} role="region" tabIndex={0} aria-label={copy.fullDiagnostic} className="app-diagnostic-full"><code>{displayDetail}</code></pre>
           <div className="app-diagnostic-actions">
             <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void copyFull()} aria-describedby={`${baseId}-diagnostic-feedback`}>
               <StableLabel value={status === "copied" ? copy.copied : copy.copy} labels={[copy.copy, copy.copied, copy.copyFailed]} />

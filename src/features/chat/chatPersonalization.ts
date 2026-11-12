@@ -154,6 +154,7 @@ export function findSkillReferences(text: string): string[] {
   const pattern = /(^|[^\p{L}\p{M}\p{N}_$\\])\$(\p{L}(?:[\p{L}\p{M}\p{N}_.:-]{0,62}[\p{L}\p{M}\p{N}_])?)(?=$|[\s.,;:!?)\]}"'。、，．！？：；）」』】〉》])/gmu;
   for (const match of prose.matchAll(pattern)) {
     const name = match[2];
+    if (name === undefined) continue;
     if (name === name.toUpperCase() && /\p{Lu}/u.test(name)) continue;
     const key = name.toLowerCase();
     if (seenNames?.has(key)) continue;

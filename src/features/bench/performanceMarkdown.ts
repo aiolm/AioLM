@@ -2,7 +2,7 @@ import type { Locale } from '../../shared/i18n/i18n';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { benchmarkCopy } from './benchmarkCopy';
 import { benchmarkReport } from './benchmarkReport';
-import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 
 const notes: Record<Locale, string> = {
   en: 'Serving time and bytes are client-observed; token/cache counts are engine-reported. Method @2 requires the exact selected output-token count for every request; @1 records retain cap semantics and may have unknown counters. Statistics are per-metric medians, minima, maxima and observed sample counts. Legacy columns retain historical token measurements. Model revisions describe source snapshots, not weight integrity.',
@@ -14,17 +14,18 @@ const ESCAPES: Record<string, string> = { '\\': '\\\\', '`': '\\`', '*': '\\*', 
 
 /** Inert table/heading text without truncating the frozen data, including public settings. */
 function markdownText(value: string): string {
-  return normalizeDisplayText(value).replace(/[\r\n\p{Cc}\p{Cf}]/gu, ' ').replace(/[\\`*[\]|&<>]/g, char => ESCAPES[char]);
+  return normalizeDisplayText(value).replace(/[\r\n\p{Cc}\p{Cf}]/gu, ' ').replace(/[\\`*[\]|&<>]/g, char => ESCAPES[char] ?? char);
 }
 
 /** Exactly the same frozen identity and aggregate cells as CSV and XLSX, with Markdown escaping. */
 export function performanceMarkdown(record: PerformanceBenchmarkRecord, locale: Locale): string {
   const copy = benchmarkCopy(locale);
   const report = benchmarkReport([record], locale);
-  if (!report.rows.length) return '';
-  const text = (value: string | number | null) => value == null ? copy.unavailable : markdownText(String(value));
+  const [firstRow] = report.rows;
+  if (!firstRow) return '';
+  const text = (value: string | number | null | undefined) => value == null ? copy.unavailable : markdownText(String(value));
   return [
-    `# ${copy.title} · ${text(report.rows[0][0]) || copy.unavailable}`,
+    `# ${copy.title} · ${text(firstRow[0]) || copy.unavailable}`,
     '',
     `| ${report.columns.map(column => markdownText(column.label)).join(' | ')} |`,
     `| ${report.columns.map(column => column.numFmt ? '---:' : '---').join(' | ')} |`,

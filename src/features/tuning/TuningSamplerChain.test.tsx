@@ -48,6 +48,9 @@ describe('sampler chain ordering', () => {
     const changed = vi.fn();
     const { rerender } = render(wrap(<TuningSamplerChain value={['top_k', ' custom_sampler ', 'top_k']} onChange={changed} />));
     expect(chainOrder()).toEqual(['top_k', 'custom_sampler']);
+    fireEvent.click(screen.getByRole('button', { name: 'Move custom_sampler earlier' }));
+    expect(chainOrder()).toEqual(['custom_sampler', 'top_k']);
+    changed.mockClear();
     rerender(wrap(<TuningSamplerChain value={['temperature', 'custom_sampler']} onChange={changed} />));
     expect(chainOrder()).toEqual(['temperature', 'custom_sampler']);
     expect(changed).not.toHaveBeenCalled();

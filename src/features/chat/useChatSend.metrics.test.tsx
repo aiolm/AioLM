@@ -1,12 +1,13 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
 import { defaultPreferences } from "../../shared/config/preferences";
 import { sessionHasActivity } from "../../shared/state/sessionActivity";
 import { createTestStore } from "../../testing/appStore";
-import type { ChatHistoryMessage } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { defined } from "../../testing/assertDefined";
+import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
 
@@ -36,7 +37,8 @@ function setup(overrides: Partial<Options> = {}) {
       attachments, setAttachments, documents, setDocuments, atBottomRef,
       mcpDefinitions: [], mcpEntryByFunctionName: new Map(), ...overrides,
     });
-    return { ...send, msgs, phase, store };
+    const streamingDraft = useSyncExternalStore(send.streamingDraftStore.subscribe, send.streamingDraftStore.getSnapshot, send.streamingDraftStore.getSnapshot);
+    return { ...send, streamingDraft, msgs, phase, store };
   });
 }
 
@@ -291,7 +293,7 @@ describe("request-scoped response metrics", () => {
       expect.objectContaining({ role: "user" }),
       expect.objectContaining({ role: "assistant", content: "", reasoning: "", interrupted: true }),
     ]);
-    const metrics = result.current.msgs[1].metrics;
+    const metrics = defined(result.current.msgs[1]).metrics;
     expect(metrics?.pp).toMatchObject({ tokens: 100, durationMs: 300 });
     expect(metrics?.tg.tokens).toBeUndefined();
     expect(result.current.streamingDraft).toBeNull();

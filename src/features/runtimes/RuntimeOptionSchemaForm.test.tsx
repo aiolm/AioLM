@@ -1,12 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import RuntimeOptionSchemaForm, { SchemaOptionField } from './RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm from './RuntimeOptionSchemaForm';
+import { SchemaOptionField } from './SchemaOptionField';
 import { maskImportReview, maskPreview } from './optionPresentation';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import type { OptionSchema } from '../../shared/api/runtimeHelp';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => {
   const actual = await origin<typeof import('../../shared/api/runtimeHelp')>();
@@ -418,7 +420,7 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     expect(onChange).toHaveBeenLastCalledWith({ pair: { spelling: '-P', occurrences: [['a b', '한글'], ['changed', 'y']] } });
     fireEvent.click(screen.getByRole('button', { name: 'Add occurrence' }));
     expect(onChange).toHaveBeenLastCalledWith({ pair: { spelling: '-P', occurrences: [['a b', '한글'], ['x', 'y'], ['', '']] } });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove occurrence' })[0]);
+    fireEvent.click(defined(screen.getAllByRole('button', { name: 'Remove occurrence' })[0]));
     expect(onChange).toHaveBeenLastCalledWith({ pair: { spelling: '-P', occurrences: [['x', 'y']] } });
   });
 
@@ -558,7 +560,7 @@ describe('saved command-line order and confirmed syntax in the form', () => {
   it('removes an occurrence together with its saved position', () => {
     const onChange = vi.fn();
     render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([alpha(), textOption('beta')])} values={ordered} scope={[]} onChange={onChange} /></I18nProvider>);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove occurrence' })[0]);
+    fireEvent.click(defined(screen.getAllByRole('button', { name: 'Remove occurrence' })[0]));
     expect(onChange).toHaveBeenLastCalledWith({ alpha: { spelling: '-a', occurrences: [['3']] }, beta: '2',
       '@option_order': { version: 1, occurrences: [{ key: 'beta' }, { key: 'alpha', spelling: '-a' }] } });
   });

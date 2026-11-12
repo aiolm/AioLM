@@ -14,7 +14,7 @@ export function helpDefault(description: string): string | null {
       const char = text[end];
       if (quote) { if (char === quote && text[end - 1] !== '\\') quote = ''; continue; }
       // Apostrophes in words such as "model's" are not string delimiters.
-      if ((char === '"' || char === "'" || char === '`') && (end === start || /[\s(=,]/.test(text[end - 1]))) { quote = char; continue; }
+      if ((char === '"' || char === "'" || char === '`') && (end === start || /[\s(=,]/.test(text.charAt(end - 1)))) { quote = char; continue; }
       if (char === '(') depth++;
       if (char === ')') { if (!depth) break; depth--; }
     }
@@ -22,9 +22,9 @@ export function helpDefault(description: string): string | null {
     return value || '""';
   }
   const choice = description.match(/(?:^|\n)\s*-\s+([\w+-]+)\s+\(default\)/i);
-  if (choice) return choice[1];
+  if (choice) return choice[1]!; // The matched alternative always captures the choice.
   const prose = text.match(/\bdefaults? to (.+?)(?:\.(?:\s|$)|$)/i);
-  if (prose) return prose[1];
+  if (prose) return prose[1]!; // A successful match includes the required value capture.
   if (/use model default if unspecified/i.test(text)) return 'model';
   return null;
 }

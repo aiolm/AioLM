@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../../shared/i18n/i18n';
+import { defined } from '../../testing/assertDefined';
 import ChatComposer from './ChatComposer';
 import MessageBubble from './MessageBubble';
 
@@ -18,7 +19,7 @@ describe('chat path presentation', () => {
       refreshMcpTools={vi.fn()} mcpDefinitions={[]}
       pendingToolCall={{ serverId: 'files', serverName: 'Files', toolName: 'read', argumentsValue,
         call: { id: 'call-1', type: 'function', function: { name: 'read', arguments: JSON.stringify(argumentsValue) } } }}
-      toolCallInProgress={false} onApproveTool={() => approved(argumentsValue)} onRejectTool={vi.fn()}
+      toolCallInProgress={false} onApproveTool={() => { approved(argumentsValue); }} onRejectTool={vi.fn()}
       attachments={[{ name: raw, dataUrl: 'data:image/png;base64,AA==' }]} onRemoveAttachment={vi.fn()} attachmentStatus="ready"
       documents={[{ name: raw, path: raw, text: 'Notes' }]} onRemoveDocument={removeDocument}
       input="" setInput={vi.fn()} onKeyDown={vi.fn()} disabled={false} phase="idle"
@@ -32,7 +33,7 @@ describe('chat path presentation', () => {
     expect(approved).toHaveBeenCalledWith({ path: raw });
     expect(screen.getByRole('img')).toHaveAttribute('alt', display);
     const removeButtons = screen.getAllByRole('button', { name: `removeAttachment: ${display}` });
-    fireEvent.click(removeButtons[1]);
+    fireEvent.click(defined(removeButtons[1]));
     expect(removeDocument).toHaveBeenCalledWith(raw);
   });
 
@@ -44,10 +45,10 @@ describe('chat path presentation', () => {
       documents: [{ name: raw, path: raw, text: 'Notes' }],
       images: [{ name: raw, dataUrl: 'data:image/png;base64,AA==' }],
     };
-    render(<MessageBubble message={message} index={0} messageCount={1} phase="idle" copied={false} compact={false} locale="en" onCopy={vi.fn()} />);
+    render(<MessageBubble message={message} index={0} isLast phase="idle" copied={false} compact={false} locale="en" onCopy={vi.fn()} />);
     expect(screen.getByText(`Document · ${display}`)).toBeInTheDocument();
     expect(screen.getByRole('img')).toHaveAttribute('alt', display);
     expect(screen.getByText(message.content)).toBeInTheDocument();
-    expect(message.documents[0].path).toBe(raw);
+    expect(defined(message.documents[0]).path).toBe(raw);
   });
 });

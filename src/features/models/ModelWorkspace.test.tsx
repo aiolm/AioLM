@@ -8,6 +8,8 @@ import { rememberExecution, MODEL_EXECUTION_KEY } from './modelExecutionState';
 import ModelWorkspace from './ModelWorkspace';
 import { notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
+
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock('../../shared/api/index', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api/index')>(),
@@ -82,7 +84,7 @@ describe('model management and settings', () => {
     mount(base);
     const stored = vi.spyOn(Storage.prototype, 'setItem');
     fireEvent.click(await findModelButton('b.gguf'));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'b.gguf' }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: 'default' }, config: match.objectContaining({ active_model: 'b.gguf' }) }));
     expect(base.cfg?.active_model).toBe('a.gguf');
     expect(base.start).not.toHaveBeenCalled(); expect(base.stop).not.toHaveBeenCalled(); expect(base.updateConfig).not.toHaveBeenCalled();
     expect(stored).not.toHaveBeenCalled(); stored.mockRestore();
@@ -91,7 +93,7 @@ describe('model management and settings', () => {
     const base = createTestStore({ active_provider: 'custom.example', active_runtime: 'selected-build', active_model: '' });
     mount(base);
     fireEvent.click(await findModelButton('b.gguf'));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'custom.example', active_runtime: 'selected-build', active_model: 'b.gguf' }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_provider: 'custom.example', active_runtime: 'selected-build', active_model: 'b.gguf' }) }));
     expect(base.updateConfig).not.toHaveBeenCalled();
   });
   it('previews remembered settings without altering model memory', async () => {
@@ -100,7 +102,7 @@ describe('model management and settings', () => {
     const saved = localStorage.getItem(MODEL_EXECUTION_KEY);
     mount(base);
     fireEvent.click(await findModelButton('b.gguf'));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: 'b.gguf', ctx_size: 8192, temperature: 0.25 }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: 'b.gguf', ctx_size: 8192, temperature: 0.25 }) }));
     expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(saved);
     expect(base.cfg?.ctx_size).toBe(4096);
   });
@@ -114,7 +116,7 @@ describe('model management and settings', () => {
     const selected = await findModelButton('Example.gguf');
     expect(selected).toHaveAttribute('title', path);
     fireEvent.click(selected);
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: path }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ config: match.objectContaining({ active_model: path }) }));
     expect(base.cfg?.active_model).toBe(path);
   });
   it('keeps missing-shard models unavailable for configuration', async () => {
@@ -126,7 +128,7 @@ describe('model management and settings', () => {
   it('opens settings from the model list without a duplicate setup panel', async () => {
     mount();
     fireEvent.click(await findModelButton('a.gguf'));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'a.gguf' }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: 'default' }, config: match.objectContaining({ active_model: 'a.gguf' }) }));
     expect(screen.queryByRole('spinbutton', { name: /Context size/ })).not.toBeInTheDocument();
   });
   it('lists a loaded model outside the scanned folder with its own controls above the library', async () => {
@@ -159,6 +161,6 @@ describe('model management and settings', () => {
   it('allows choosing a library model when no model is configured', async () => {
     mount(createTestStore({ active_model: '' }));
     fireEvent.click(await findModelButton('b.gguf'));
-    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'b.gguf' }) }));
+    expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: 'default' }, config: match.objectContaining({ active_model: 'b.gguf' }) }));
   });
 });

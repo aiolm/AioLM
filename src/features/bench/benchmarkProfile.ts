@@ -86,8 +86,8 @@ export async function benchmarkSettingsProfile(source: BenchmarkProfileSource, i
     const matches = effective.schema.options.filter(option => option.target === recorded.target
       && option.scope.length === recorded.scope.length && option.scope.every((part, index) => part === recorded.scope[index])
       && effective.benchmark_names[option.key] === recorded.name);
-    if (recorded.value === null || matches.length !== 1) { omitted = true; continue; }
-    const option = matches[0];
+    const [option] = matches;
+    if (recorded.value === null || matches.length !== 1 || !option) { omitted = true; continue; }
     if (option.scope.length > effective.scope.length || option.scope.some((part, index) => part !== effective.scope[index]) || supported(option.benchmark_public) !== true
       || supported(option.sensitive) === true || supported(option.local_path) === true
       || supported(option.unit) !== recorded.unit || supported(option.benchmark_role) !== recorded.role
@@ -111,7 +111,7 @@ export async function benchmarkSettingsProfile(source: BenchmarkProfileSource, i
       // Resolver issue arrays identify incompatible values. IPC/runtime errors
       // remain errors in the confirmation, with an explicit retry.
       if (!Array.isArray(cause)) throw cause;
-      const invalid = new Set(cause.map(issue => issue && typeof issue === 'object' && 'key' in issue ? String(issue.key) : ''));
+      const invalid = new Set(cause.map((issue: unknown) => issue && typeof issue === 'object' && 'key' in issue ? String(issue.key) : ''));
       const retained = accepted.filter(candidate => !invalid.has(candidate.option.key));
       accepted = retained.length === accepted.length || invalid.has('') ? [] : retained;
       omitted = true;

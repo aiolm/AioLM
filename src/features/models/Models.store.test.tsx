@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import type { AppConfig } from "../../shared/api/types";
@@ -7,6 +7,7 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import "../../styles/app.css";
 import ModelsPanel from "./Models";
 import * as api from "../../shared/api/index";
+import { defined } from "../../testing/assertDefined";
 
 vi.mock("../../shared/api/index", () => ({
   PROVIDERS: ['llama.cpp', 'vllm', 'mlx-vlm'],
@@ -21,7 +22,11 @@ vi.mock("../../shared/api/index", () => ({
   unloadModel: vi.fn(),
 }));
 
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = {
+  listModels: api.listModels as Mock,
+  deleteModel: api.deleteModel as Mock,
+  pickModelsDir: api.pickModelsDir as Mock,
+};
 
 const baseCfg = {
   config_version: 1,
@@ -108,8 +113,10 @@ describe("Model library configuration and file operations", () => {
     const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
     fireEvent.click(await screen.findByRole("button", { name: "Select legacy.gguf" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
-    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: cfg.ctx_size });
-    const saved = await save.mock.results[0].value;
+    await expect(defined(save.mock.results[0]).value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: cfg.ctx_size });
+    const result = defined(save.mock.results[0]);
+    if (result.type !== 'return') throw new Error('Expected config save to return a promise');
+    const saved = await result.value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
     expect(screen.getByRole("button", { name: "Select legacy.gguf" })).not.toHaveAttribute("aria-current");
     localStorage.clear();
@@ -140,8 +147,10 @@ describe("Model library configuration and file operations", () => {
     const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
     fireEvent.click(await screen.findByRole("button", { name: "Select selectable.gguf" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
-    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: cfg.active_backend, active_build: cfg.active_build });
-    const saved = await save.mock.results[0].value;
+    await expect(defined(save.mock.results[0]).value).resolves.toMatchObject({ active_model: model.path, active_backend: cfg.active_backend, active_build: cfg.active_build });
+    const result = defined(save.mock.results[0]);
+    if (result.type !== 'return') throw new Error('Expected config save to return a promise');
+    const saved = await result.value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
     expect(screen.getByRole("button", { name: "Select selectable.gguf" })).not.toHaveAttribute("aria-current");
     expect(screen.queryByText(/active runtime backend and build must be selected together/)).not.toBeInTheDocument();

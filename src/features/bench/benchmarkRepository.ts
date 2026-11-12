@@ -1,15 +1,9 @@
-import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
-import { deletePerformanceRecord, inspectLegacyPerformanceHistory, readPerformanceHistory, savePerformanceRecord, type PerformanceBenchmarkRecord } from './performanceRecords.ts';
+import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
+import { benchmarkHistoryDelete, benchmarkHistoryImport, benchmarkHistoryList, type BenchmarkHistoryPage, type PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory.ts';
+import { deletePerformanceRecord, inspectLegacyPerformanceHistory, readPerformanceHistory, savePerformanceRecord } from './performanceRecords.ts';
 import { reconcileAcceptedBenchmarks } from '../../shared/sharing/benchmarkOutbox.ts';
 import { takeBenchmarkMaintenanceWarnings } from '../../shared/sharing/desktopBenchmarkStorage.ts';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
-
-export interface BenchmarkHistoryPage {
-  records: PerformanceBenchmarkRecord[];
-  total: number;
-  next_offset: number | null;
-  warnings?: string[];
-}
 
 export interface BenchmarkHistoryStore {
   list(offset: number, limit: number): Promise<BenchmarkHistoryPage>;
@@ -17,8 +11,8 @@ export interface BenchmarkHistoryStore {
 }
 
 const nativeStore: BenchmarkHistoryStore = {
-  list: (offset, limit) => invoke('benchmark_history_list', { offset, limit }),
-  import: records => invoke('benchmark_history_import', { records }),
+  list: benchmarkHistoryList,
+  import: benchmarkHistoryImport,
 };
 
 const visiblePage = (page: BenchmarkHistoryPage): BenchmarkHistoryPage => ({ ...page, records: visibleBenchmarkRecords(page.records) });
@@ -57,7 +51,7 @@ export function rememberBenchmarkResult(record: PerformanceBenchmarkRecord): Pro
 
 /** Native deletion also prevents legacy migration from restoring the removed run. */
 export async function deleteBenchmarkHistoryRecord(runId: string): Promise<void> {
-  if (isNativeRuntimeAvailable()) await invoke('benchmark_history_delete', { runId });
+  if (isNativeRuntimeAvailable()) await benchmarkHistoryDelete(runId);
   else deletePerformanceRecord(runId);
 }
 

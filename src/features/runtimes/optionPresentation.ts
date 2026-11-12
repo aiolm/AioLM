@@ -87,8 +87,7 @@ export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, v
     }
     const rows = [...(readStored(values[option.key])?.rows ?? []), ...imported.plan.filter(item => item.key === option.key).map(item => [...item.values])];
     for (const words of [imported.managed, imported.unrecognized]) {
-      for (let index = 0; index < words.length; index += 1) {
-        const token = words[index];
+      for (const [index, token] of words.entries()) {
         const equals = token.indexOf('=');
         const name = equals < 0 ? token : token.slice(0, equals);
         if (!option.spellings.some(spelling => spelling.flag === name)) continue;

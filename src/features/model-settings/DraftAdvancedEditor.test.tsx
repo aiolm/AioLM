@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nProvider, useI18n, type Locale } from '../../shared/i18n/i18n';
 import { describeServerOption } from '../../shared/config/serverOptions';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import DraftAdvancedEditor from './DraftAdvancedEditor';
 import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 import { advancedSettingsHelp } from './advancedSettingsHelp';
@@ -60,7 +61,7 @@ describe('exclusive option editing', () => {
     expect(screen.queryByLabelText('Extra request JSON')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue(original);
-    expect(JSON.parse((screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement).value)).toEqual({ min_p: 0.4 });
+    expect(JSON.parse((screen.getByLabelText<HTMLTextAreaElement>('Extra request JSON')).value)).toEqual({ min_p: 0.4 });
   });
 
   function SynchronizedEditor() {
@@ -83,7 +84,7 @@ describe('exclusive option editing', () => {
   it('refreshes edited request JSON from external changes and preserves the newer values on the next edit', () => {
     render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
-    const chat = screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement;
+    const chat = screen.getByLabelText<HTMLTextAreaElement>('Extra request JSON');
     const formatted = '{ "min_p": 0.1, "top_p": 0.9 }';
     fireEvent.change(chat, { target: { value: formatted } });
     chat.focus();
@@ -97,14 +98,14 @@ describe('exclusive option editing', () => {
     fireEvent.change(chat, { target: { value: chat.value.replace(/\}$/, ', "top_k": 40 }') } });
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.guided }));
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
-    expect(JSON.parse((screen.getByLabelText('Extra request JSON') as HTMLTextAreaElement).value))
+    expect(JSON.parse((screen.getByLabelText<HTMLTextAreaElement>('Extra request JSON')).value))
       .toEqual({ min_p: 0.2, top_p: 0.9, top_k: 40 });
   });
 
   it('refreshes edited raw arguments without resetting their formatting for unrelated updates', () => {
     render(<I18nProvider initialLocale="en"><SynchronizedEditor /></I18nProvider>);
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
-    const args = screen.getByLabelText('Extra server arguments (one per line)') as HTMLTextAreaElement;
+    const args = screen.getByLabelText<HTMLTextAreaElement>('Extra server arguments (one per line)');
     const formatted = '--custom-mode edited\n\n--custom-pair one two';
     fireEvent.change(args, { target: { value: formatted } });
     fireEvent.click(screen.getByRole('button', { name: 'Update unrelated setting' }));
@@ -226,7 +227,7 @@ describe('advanced settings explanations', () => {
 
   it('keeps custom runtime options explained when help text is absent', () => {
     mount();
-    const missing = serverOptionDescription(options[3], 'en');
+    const missing = serverOptionDescription(defined(options[3]), 'en');
     const description = screen.getByText(missing);
     expect(description).toBeVisible();
     fireEvent.click(description.closest('.model-settings-option')!.querySelector('summary')!);
@@ -238,9 +239,9 @@ describe('advanced settings explanations', () => {
   it.each<Locale>(['ko', 'ja', 'zh'])('routes localized known and unregistered help to their controls in %s', locale => {
     mount(locale);
     fireEvent.click(screen.getByText('--mlock', { selector: 'summary code' }).closest('summary')!);
-    expect(screen.getByRole('switch', { name: /^--mlock\b/ })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(options[1], locale)));
+    expect(screen.getByRole('switch', { name: /^--mlock\b/ })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(defined(options[1]), locale)));
     fireEvent.click(screen.getByText('--custom-mode', { selector: 'summary code' }).closest('summary')!);
-    expect(screen.getByRole('textbox', { name: '--custom-mode' })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(options[2], locale)));
+    expect(screen.getByRole('textbox', { name: '--custom-mode' })).toHaveAccessibleDescription(expect.stringContaining(serverOptionDescription(defined(options[2]), locale)));
   });
 
   it('updates explanation language immediately without resetting edited values', () => {
@@ -253,7 +254,7 @@ describe('advanced settings explanations', () => {
     expect(screen.queryByText('Keep model weights in RAM.')).not.toBeInTheDocument();
     expect(screen.getByLabelText('추가 요청 JSON')).toHaveValue('{"min_p":0.15}');
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.ko.guided }));
-    expect(screen.getByText(serverOptionDescription(options[1], 'ko'))).toBeVisible();
+    expect(screen.getByText(serverOptionDescription(defined(options[1]), 'ko'))).toBeVisible();
   });
 
   it('prompts for the value alone and suggests the modes --load-mode documents in prose', () => {
@@ -302,7 +303,7 @@ describe('advanced settings explanations', () => {
   it('shows a saved flag and its value on one raw line and splits an edited line back into argv', () => {
     const { onChange, onInvalid } = mount('en', false, ['--jinja', '--load-mode', 'none']);
     fireEvent.click(screen.getByRole('button', { name: controlChoiceCopy.en.direct }));
-    const [args] = screen.getAllByRole('textbox');
+    const args = defined(screen.getAllByRole('textbox')[0]);
     expect(args).toHaveValue('--jinja\n--load-mode none');
     // Everything after the flag is one value, so a path keeps its spaces.
     fireEvent.change(args, { target: { value: String.raw`--load-mode mmap` + '\n--custom-mode C:\\My Models\\x' } });

@@ -1,6 +1,6 @@
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import Badge from "../../shared/ui/Badge";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
 import { useTuningId } from './TuningIdScope';
 import { tuningHelp } from '../../shared/i18n/tuningHelp';
@@ -70,23 +70,22 @@ export default function TuningSamplerChain({
   const help = tuningHelp[locale];
   const id = useTuningId();
   const source = value ?? samplers ?? EMPTY_SAMPLER_CHAIN;
-  const [draft, setDraft] = useState<string[]>(() => normalizeSamplerChain(source));
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const normalizedSource = normalizeSamplerChain(source);
+  const [localDraft, setLocalDraft] = useState<{ source: readonly string[]; value: string[] } | null>(null);
+  const [drag, setDrag] = useState<{ source: readonly string[]; index: number } | null>(null);
   const [selectedToAdd, setSelectedToAdd] = useState("");
-  const previousControlledValue = useRef<readonly string[] | null>(null);
-
-  useEffect(() => {
-    const next = normalizeSamplerChain(value ?? samplers ?? EMPTY_SAMPLER_CHAIN);
-    const controlledValueChanged = previousControlledValue.current === null || !sameValues(previousControlledValue.current, next);
-    previousControlledValue.current = next;
-    setDraft((current) => sameValues(current, next) ? current : next);
-    // A controlled replacement can reorder or remove the item held by the pointer.
-    if (controlledValueChanged) setDraggedIndex(null);
-  }, [samplers, value]);
+  const draftIsCurrent = localDraft !== null && localDraft.source === source;
+  const dragIsCurrent = drag !== null && sameValues(drag.source, normalizedSource);
+  // Controlled replacements supersede optimistic edits and invalidate a held chip
+  // before a drop can use the old ordering.
+  if (localDraft && !draftIsCurrent) setLocalDraft(null);
+  if (drag && !dragIsCurrent) setDrag(null);
+  const draft = draftIsCurrent ? localDraft.value : normalizedSource;
+  const draggedIndex = dragIsCurrent ? drag.index : null;
 
   const publish = (next: readonly string[]) => {
     const normalized = normalizeSamplerChain(next);
-    setDraft(normalized);
+    setLocalDraft({ source, value: normalized });
     onChange?.(normalized);
     onReorder?.(normalized);
     onSamplersChange?.(normalized);
@@ -95,26 +94,30 @@ export default function TuningSamplerChain({
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
     if (disabled || target < 0 || target >= draft.length) return;
+    const current = draft[index];
+    const destination = draft[target];
+    if (current === undefined || destination === undefined) return;
     const next = [...draft];
-    [next[index], next[target]] = [next[target], next[index]];
+    next[index] = destination;
+    next[target] = current;
     publish(next);
   };
 
   const drop = (targetIndex: number) => {
     if (disabled || draggedIndex === null || draggedIndex === targetIndex) return;
     if (draggedIndex < 0 || draggedIndex >= draft.length || targetIndex < 0 || targetIndex >= draft.length) {
-      setDraggedIndex(null);
+      setDrag(null);
       return;
     }
     const next = [...draft];
     const [item] = next.splice(draggedIndex, 1);
     if (item === undefined) {
-      setDraggedIndex(null);
+      setDrag(null);
       return;
     }
     next.splice(targetIndex, 0, item);
     publish(next);
-    setDraggedIndex(null);
+    setDrag(null);
   };
 
   const availableOptions = options.filter((option) => !draft.includes(option));
@@ -133,6 +136,7 @@ export default function TuningSamplerChain({
 
       {draft.length > 0 ? (
         <ol className="tuning-sampler-chain__list" role="list" aria-label={t("extra.samplerChainTitle")} aria-describedby={`${id}-sampler-chain-hint`}>
+          {/* Explicit list roles preserve Safari VoiceOver semantics with list-style: none and grid layout. */}
           {draft.map((sampler, index) => (
             <li
               key={sampler}
@@ -140,10 +144,10 @@ export default function TuningSamplerChain({
               aria-label={sampler}
               className={`tuning-sampler-chip app-list-row ${draggedIndex === index ? "is-dragging" : ""}`}
               draggable={!disabled}
-              onDragStart={() => setDraggedIndex(index)}
+              onDragStart={() => setDrag({ source: normalizedSource, index })}
               onDragOver={(event) => event.preventDefault()}
               onDrop={() => drop(index)}
-              onDragEnd={() => setDraggedIndex(null)}
+              onDragEnd={() => setDrag(null)}
               data-sampler={sampler}
               data-testid={`sampler-chip-${sampler}`}
             >

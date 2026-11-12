@@ -3,9 +3,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { sessionHasActivity } from '../../shared/state/sessionActivity';
-import type { ChatHistoryMessage } from './chatHistory';
-import type { DocumentAttachment, ImageAttachment } from './chatUtils';
+import type { ChatHistoryMessage } from '../../shared/api/conversationTypes'
+import type { DocumentAttachment, ImageAttachment } from '../../shared/api/mediaTypes'
 import { useChatSend } from './useChatSend';
 import type { ChatPhase } from './chatSendTypes';
 
@@ -96,7 +97,7 @@ describe('chat turn lifecycle', () => {
       .mockResolvedValueOnce('Next answer');
     const { result } = setup();
     await act(async () => { await result.current.send(); });
-    const originalHistory = structuredClone(vi.mocked(api.chatStream).mock.calls[0][3]);
+    const originalHistory = structuredClone(defined(vi.mocked(api.chatStream).mock.calls[0])[3]);
     expect(result.current.failedRef.current?.text).toBe('Original question');
 
     const draft = 'A different question for the next turn';
@@ -108,7 +109,7 @@ describe('chat turn lifecycle', () => {
     await act(async () => { await result.current.send(true); });
 
     expect(api.chatStream).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(api.chatStream).mock.calls[1][3]).toEqual(originalHistory);
+    expect(defined(vi.mocked(api.chatStream).mock.calls[1])[3]).toEqual(originalHistory);
     expect(result.current.msgs.filter(message => message.role === 'user')).toEqual([
       expect.objectContaining({ content: 'Original question', images: [] }),
     ]);
@@ -121,7 +122,7 @@ describe('chat turn lifecycle', () => {
     expect(result.current.input).toBe('');
     expect(result.current.attachments).toEqual([]);
     expect(result.current.msgs.filter(message => message.role === 'user')).toHaveLength(2);
-    expect(vi.mocked(api.chatStream).mock.calls[2][3].at(-1)).toMatchObject({
+    expect(defined(vi.mocked(api.chatStream).mock.calls[2])[3].at(-1)).toMatchObject({
       role: 'user',
       content: [
         { type: 'text', text: draft },

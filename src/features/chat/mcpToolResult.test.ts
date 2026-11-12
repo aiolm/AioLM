@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { defined } from '../../testing/assertDefined';
 import { serializeMcpToolResult } from './mcpToolResult';
 
 describe('model-facing MCP text observations', () => {
@@ -7,7 +8,7 @@ describe('model-facing MCP text observations', () => {
     for (const isError of [undefined, false, true]) {
       const result = { content: [{ type: 'text', text: 'Line one\n"quoted" value: 47' }], ...(isError === undefined ? {} : { isError }) };
       const original = structuredClone(result);
-      expect(JSON.parse(serializeMcpToolResult(result))).toEqual({ text: result.content[0].text, ...(isError === undefined ? {} : { isError }) });
+      expect(JSON.parse(serializeMcpToolResult(result))).toEqual({ text: defined(result.content[0]).text, ...(isError === undefined ? {} : { isError }) });
       expect(result).toEqual(original);
     }
   });

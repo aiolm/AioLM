@@ -3,18 +3,20 @@ import { render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { translate } from '../../shared/i18n/i18nUnified';
+import { defined } from '../../testing/assertDefined';
 import ChatComposer from './ChatComposer';
 import MessageBubble from './MessageBubble';
-import { defaultChatWorkspace, loadChatWorkspace, saveChatWorkspace } from './chatHistory';
+import { loadChatWorkspace, saveChatWorkspace } from './chatHistory';
+import { defaultChatWorkspace } from './chatWorkspace';
 
 it('keeps the output limit notice with the saved partial answer after reloading', () => {
   const workspace = defaultChatWorkspace(100);
-  workspace.threads[0].messages = [{ role: 'assistant', content: 'Partial answer', finishReason: 'length' }];
+  defined(workspace.threads[0]).messages = [{ role: 'assistant', content: 'Partial answer', finishReason: 'length' }];
   let raw = '';
   const storage = { getItem: () => raw, setItem: (_key: string, value: string) => { raw = value; } };
   saveChatWorkspace(workspace, storage);
-  const message = loadChatWorkspace(storage).threads[0].messages[0];
-  render(<MessageBubble message={message} index={0} messageCount={1} phase="idle" copied={false} compact={false} locale="ko" onCopy={vi.fn()} />);
+  const message = defined(defined(loadChatWorkspace(storage).threads[0]).messages[0]);
+  render(<MessageBubble message={message} index={0} isLast phase="idle" copied={false} compact={false} locale="ko" onCopy={vi.fn()} />);
   expect(screen.getByText(/출력 토큰 한도에 도달/)).toBeVisible();
   expect(screen.getByText('Partial answer')).toBeVisible();
   expect(screen.getByRole('button', { name: '복사' })).toBeEnabled();

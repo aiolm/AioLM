@@ -5,10 +5,12 @@ import * as api from "../../shared/api/index";
 import { getChatPersonalization, readSkill, type ChatPersonalization, type ChatSkill } from "../../shared/api/personalization";
 import { notifyCompletion } from "../../shared/lib/notifications";
 import { createTestStore } from "../../testing/appStore";
-import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { defined } from "../../testing/assertDefined";
+import type { ChatHistoryMessage, ChatThread } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
+import type { ChatMcpTool } from "./useChatMcpTools";
 
 vi.mock("../../shared/api/index", () => ({
   chatStream: vi.fn(),
@@ -43,7 +45,7 @@ function context(overrides: Partial<ChatPersonalization> = {}): ChatPersonalizat
   };
 }
 
-const thread: ChatThread = { id: "t1", title: "Project chat", systemPrompt: "PROJECT-PROMPT", messages: [], createdAt: 1, updatedAt: 1 } as unknown as ChatThread;
+const thread: ChatThread = { id: "t1", title: "Project chat", systemPrompt: "PROJECT-PROMPT", messages: [], createdAt: 1, updatedAt: 1 };
 
 function setup(options: { input?: string; selected?: string[]; ctxSize?: number; withMcp?: boolean; engine?: Parameters<typeof useChatSend>[0]["engine"] } = {}) {
   const store = createTestStore(options.ctxSize ? { ctx_size: options.ctxSize } : {});
@@ -62,7 +64,7 @@ function setup(options: { input?: string; selected?: string[]; ctxSize?: number;
       attachments, setAttachments, documents, setDocuments, atBottomRef,
       mcpEntryByFunctionName: options.withMcp
         ? new Map([["catalog__lookup", { serverId: "catalog", serverName: "Catalog", tool: { name: "lookup", input_schema: { type: "object" } } }]])
-        : new Map(),
+        : new Map<string, ChatMcpTool>(),
       mcpDefinitions: options.withMcp ? [{ type: "function", function: { name: "catalog__lookup", parameters: { type: "object" } } }] : [],
       selectedSkillIds: options.selected ?? [], onSkillsAccepted: accepted,
     });
@@ -85,8 +87,13 @@ function callsTool(name: string, args: string) {
   });
 }
 
-const requestMessages = (call: number) => streamMock.mock.calls[call][3];
-const systemText = (call: number) => String(requestMessages(call)[0].content);
+const requestMessages = (call: number) => defined(streamMock.mock.calls[call])[3];
+function textContent(content: api.ChatMessage["content"]): string {
+  expect(typeof content).toBe("string");
+  if (typeof content !== "string") throw new Error("Expected text content");
+  return content;
+}
+const systemText = (call: number) => textContent(defined(requestMessages(call)[0]).content);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -109,7 +116,7 @@ describe("chat personalization", () => {
     expect(system.indexOf("AIOLM-RULE")).toBeLessThan(system.indexOf("PROJECT-PROMPT"));
     expect(system).toContain("id: aiolm:pdf");
     expect(system).not.toContain("BODY-OF");
-    expect(streamMock.mock.calls[0][4].tools?.map((tool) => tool.function.name)).toEqual(["aiolm_read_skill"]);
+    expect(defined(streamMock.mock.calls[0])[4].tools?.map((tool) => tool.function.name)).toEqual(["aiolm_read_skill"]);
     expect(JSON.stringify(result.current.msgs)).not.toContain("AGENTS-RULE");
     expect(thread.systemPrompt).toBe("PROJECT-PROMPT");
   });
@@ -120,7 +127,7 @@ describe("chat personalization", () => {
     const { result } = setup();
     await act(async () => { await result.current.send(); });
     expect(systemText(0)).toBe("PROJECT-PROMPT");
-    expect(streamMock.mock.calls[0][4].tools).toEqual([]);
+    expect(defined(streamMock.mock.calls[0])[4].tools).toEqual([]);
   });
 
   it("leaves the automatic skill catalog out for a runtime without tool calls but keeps chosen skills", async () => {
@@ -130,7 +137,7 @@ describe("chat personalization", () => {
     answers("Done");
     const { result } = setup({ input: "Use $pdf", engine });
     await act(async () => { await result.current.send(); });
-    expect(streamMock.mock.calls[0][4].tools).toEqual([]);
+    expect(defined(streamMock.mock.calls[0])[4].tools).toEqual([]);
     expect(systemText(0)).not.toContain("aiolm_read_skill");
     expect(systemText(0)).not.toContain("id: agents:review");
     expect(systemText(0)).toContain("BODY-OF-aiolm:pdf");
@@ -185,7 +192,7 @@ describe("chat personalization", () => {
     expect(readMock.mock.calls).toEqual([["agents:review"]]);
     const followup = requestMessages(1);
     expect(followup.at(-1)).toMatchObject({ role: "tool", name: "aiolm_read_skill", tool_call_id: "call-1" });
-    expect(String(followup.at(-1)!.content)).toContain("BODY-OF-agents:review");
+    expect(textContent(followup.at(-1)!.content)).toContain("BODY-OF-agents:review");
     expect(followup[0]).toEqual(requestMessages(0)[0]);
     expect(result.current.msgs.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.current.msgs.at(-1)).toMatchObject({ content: "Reviewed" });
@@ -199,7 +206,7 @@ describe("chat personalization", () => {
     await act(async () => { await result.current.send(); });
     expect(result.current.pendingToolCall).toMatchObject({ toolName: "lookup" });
     expect(streamMock).toHaveBeenCalledOnce();
-    expect(streamMock.mock.calls[0][4].tools?.map((tool) => tool.function.name)).toEqual(["catalog__lookup", "aiolm_read_skill"]);
+    expect(defined(streamMock.mock.calls[0])[4].tools?.map((tool) => tool.function.name)).toEqual(["catalog__lookup", "aiolm_read_skill"]);
   });
 
   it.each([
@@ -213,7 +220,7 @@ describe("chat personalization", () => {
     const { result } = setup();
     await act(async () => { await result.current.send(); });
     expect(readMock).not.toHaveBeenCalled();
-    expect(String(requestMessages(1).at(-1)!.content)).toMatch(/^Error: /);
+    expect(textContent(requestMessages(1).at(-1)!.content)).toMatch(/^Error: /);
     expect(result.current.msgs.at(-1)).toMatchObject({ content: "Recovered" });
   });
 
@@ -262,7 +269,7 @@ describe("chat personalization", () => {
     await act(async () => { await result.current.send(true); });
     expect(streamMock).toHaveBeenCalledTimes(3);
     expect(requestMessages(2)).toEqual(failedHistory);
-    expect(String(requestMessages(2).at(-1)!.content)).toContain("BODY-OF-aiolm:pdf");
+    expect(textContent(requestMessages(2).at(-1)!.content)).toContain("BODY-OF-aiolm:pdf");
     expect(loadMock).toHaveBeenCalledOnce();
     expect(readMock).toHaveBeenCalledOnce();
     expect(result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Summarize the PDF"], ["assistant", "Summary"]]);

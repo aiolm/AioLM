@@ -177,24 +177,6 @@ export function buildPhaseLabelKey(phase: string): BuildPhaseLabelKey | "buildPh
   return BUILD_PHASE_LABELS[phase as keyof typeof BUILD_PHASE_LABELS] ?? "buildPhaseWorking";
 }
 
-/**
- * The exact message the backend returns when an install stops because the user
- * asked it to. See `install_pr_with` / `install_with` in `runtime.rs`.
- */
-const INSTALL_CANCELLED = "runtime install cancelled";
-
-/**
- * Did this install stop because the user cancelled it, or because it failed?
- *
- * Matching any message containing "cancel" also swallows a real build failure
- * whose CMake log tail happens to mention a cancelled operation — and a
- * swallowed failure shows as a four-second flash instead of an error the user
- * can read and act on. Match the backend's own sentinel instead.
- */
-export function isInstallCancellation(message: string): boolean {
-  return message.toLowerCase().includes(INSTALL_CANCELLED);
-}
-
 export type RuntimeRowAction = "cancel" | "install" | "none";
 
 /**

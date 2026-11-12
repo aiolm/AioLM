@@ -1,24 +1,28 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { chatText } from "../../shared/i18n/chatI18n";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT, sessionConfig } from "../../shared/runtime/sessionUtils";
 import { sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
-import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatRetrySnapshot } from "./chatHistory";
+import { loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
+import { createChatThread } from "./chatWorkspace";
+import type { ChatRetrySnapshot } from "../../shared/api/conversationTypes";
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
-vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return ({
+vi.mock("../../shared/api/index", () => { const readImageData = vi.fn<typeof api.readImageData>(); return ({
   isNativeRuntimeAvailable: vi.fn(() => false),
   pickAttachment: vi.fn(),
   readDocumentText: vi.fn(),
@@ -35,14 +39,14 @@ vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return 
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
   sessionStop: vi.fn(async () => undefined),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
   // The public API listener is independent of chat; nothing here may reach it.
   apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
 }); });
 
-const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as { [K in keyof typeof api]: Mock };
 
 const cfg = {
   config_version: 1,
@@ -211,7 +215,7 @@ describe("ChatPanel unified attachments", () => {
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
     expect(mocked.mcpCallTool).not.toHaveBeenCalled();
     expect(mocked.chatStream).not.toHaveBeenCalled();
-    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+    expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
   });
 
   it.each([
@@ -223,7 +227,7 @@ describe("ChatPanel unified attachments", () => {
     render(createElement(I18nProvider, { initialLocale: locale, children: createElement(ChatPanel, { store }) }));
     const heading = await screen.findByRole('heading', { name: title });
     expect(heading).toHaveAttribute('title', title);
-    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe('New conversation');
 
     fireEvent.click(screen.getByText(copy.conversationSettings));
     const titleInput = screen.getByLabelText(copy.title);
@@ -238,7 +242,7 @@ describe("ChatPanel unified attachments", () => {
     expect(dialog).toHaveTextContent(title);
     expect(dialog).not.toHaveTextContent('New conversation');
     fireEvent(dialog, new Event('cancel', { cancelable: true }));
-    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe('New conversation');
 
     fireEvent.change(search, { target: { value: '' } });
     fireEvent.change(titleInput, { target: { value: 'Synthetic custom title' } });
@@ -248,7 +252,7 @@ describe("ChatPanel unified attachments", () => {
     fireEvent.click(screen.getByRole('button', { name: copy.send }));
     await screen.findByText('Synthetic reply', { exact: true });
     expect(screen.getByRole('heading', { name: 'Synthetic custom title' })).toBeInTheDocument();
-    await waitFor(() => expect(loadChatWorkspace().threads[0].title).toBe('Synthetic custom title'));
+    await waitFor(() => expect(defined(loadChatWorkspace().threads[0]).title).toBe('Synthetic custom title'));
   });
 
   it("preserves an unsent message and document when reselecting the current conversation", async () => {
@@ -296,7 +300,7 @@ describe("ChatPanel unified attachments", () => {
     respondWithText('ORBIT-73');
     await sendMessage('What is the acceptance code?');
     await screen.findByText('ORBIT-73', { exact: true });
-    const messages = mocked.chatStream.mock.calls.at(-1)![3];
+    const messages: unknown = defined(mocked.chatStream.mock.calls.at(-1))[3];
     if (prompt) expect(JSON.stringify(messages)).toContain(prompt);
     expect(JSON.stringify(messages)).toContain('Acceptance code ORBIT-73.');
   });
@@ -312,7 +316,7 @@ describe("ChatPanel unified attachments", () => {
     respondWithText("Ready");
     await sendMessage("Hello");
     await screen.findByText("Ready", { exact: true });
-    expect(mocked.chatStream.mock.calls[0][2]).toBe(model);
+    expect(defined(mocked.chatStream.mock.calls[0])[2]).toBe(model);
   });
 
   it("chats through the model's own session URL and key while the API server is stopped", async () => {
@@ -323,7 +327,7 @@ describe("ChatPanel unified attachments", () => {
     await sendMessage("Hello");
     await screen.findByText("Ready", { exact: true });
 
-    expect(mocked.chatStream.mock.calls[0].slice(0, 2)).toEqual(["http://127.0.0.1:49152/v1", "session-key"]);
+    expect(defined(mocked.chatStream.mock.calls[0]).slice(0, 2)).toEqual(["http://127.0.0.1:49152/v1", "session-key"]);
     expect(mocked.apiServerStatus).not.toHaveBeenCalled();
     expect(mocked.startApiServer).not.toHaveBeenCalled();
     expect(mocked.stopApiServer).not.toHaveBeenCalled();
@@ -715,7 +719,7 @@ describe("ChatPanel document context warning", () => {
     mutableConfig.chat_options.max_tokens = 8;
     await act(async () => release());
     await screen.findByText("Original settings");
-    expect(mocked.chatStream.mock.calls[0][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
+    expect(defined(mocked.chatStream.mock.calls[0])[4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
     expect(sessionHasActivity("default")).toBe(false);
   });
 
@@ -745,7 +749,7 @@ describe("ChatPanel document context warning", () => {
     expect(heading.textContent).toMatch(/^Synthetic long conversation prefix\./);
     expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
     expect(heading.textContent).toMatch(/…$/);
-    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe(title);
 
     fireEvent.click(screen.getByText(chatText.en.conversationSettings));
     expect(screen.getByLabelText(chatText.en.title)).toHaveValue(title);
@@ -757,15 +761,15 @@ describe("ChatPanel document context warning", () => {
     expect(preview.textContent).toMatch(/^Synthetic long conversation prefix\./);
     expect(preview.textContent!.length).toBeLessThanOrEqual(1025);
     expect(preview.textContent).toMatch(/…$/);
-    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe(title);
     first.unmount();
 
     renderPanel();
     heading = await screen.findByRole('heading', { name: title });
     expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
     expect(heading).toHaveAttribute('title', title);
-    expect(loadChatWorkspace().threads[0].title).toBe(title);
-    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe(title);
+    expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
   });
 
   it('bounds the combined conversation and project heading while retaining both full labels', async () => {
@@ -780,7 +784,7 @@ describe("ChatPanel document context warning", () => {
     expect(heading).toHaveAttribute('title', fullHeading);
     expect(heading.textContent).toMatch(/^Synthetic conversation prefix\./);
     expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
-    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    expect(defined(loadChatWorkspace().threads[0]).title).toBe(title);
   });
 
   it("locks the composer while preparing a request and lets Stop cancel before generation", async () => {
@@ -913,10 +917,11 @@ describe("ChatPanel document context warning", () => {
     await screen.findByText("The second answer.");
     expect(screen.getByText("The first answer.")).toBeInTheDocument();
     await waitFor(() => {
-      const saved = JSON.parse(localStorage.getItem("aiolm.chat-workspace.v2") ?? "null");
-      expect(saved.threads[0].messages.map((message: { content: string }) => message.content)).toEqual([
-        "First question.", "The first answer.", "Second question.", "The second answer.",
-      ]);
+      const saved: unknown = JSON.parse(localStorage.getItem("aiolm.chat-workspace.v2") ?? "null");
+      expect(saved).toMatchObject({ threads: [{ messages: [
+        { content: "First question." }, { content: "The first answer." },
+        { content: "Second question." }, { content: "The second answer." },
+      ] }] });
     });
   });
 
@@ -928,7 +933,7 @@ describe("ChatPanel document context warning", () => {
     expect(mocked.mcpListServers).not.toHaveBeenCalled();
     const load = screen.getAllByRole("button", { name: "Load MCP tools" });
     expect(load).toHaveLength(1);
-    fireEvent.click(load[0]);
+    fireEvent.click(defined(load[0]));
     await screen.findByRole('checkbox', { name: /Test Server/ });
     expect(mocked.mcpListServers).toHaveBeenCalledOnce();
     expect(mocked.mcpListTools).toHaveBeenCalledWith("srv1");
@@ -964,7 +969,7 @@ describe("ChatPanel document context warning", () => {
     await screen.findByText("Final answer after the tool call.");
     await waitFor(() => expect(mocked.mcpCallTool).toHaveBeenCalledTimes(1));
     await findTruncationWarning();
-    expect(mocked.chatStream.mock.calls[1][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
+    expect(defined(mocked.chatStream.mock.calls[1])[4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
     expect(sessionHasActivity("default")).toBe(false);
     expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "default");
   });
@@ -1030,11 +1035,11 @@ describe('ChatPanel retry recovery', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
     await screen.findByText('Recovered synthetic answer');
     expect(mocked.chatStream).toHaveBeenCalledOnce();
-    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
-    expect(mocked.chatStream.mock.calls[0][1]).toBe('test-key');
-    await waitFor(() => expect(loadChatWorkspace().threads[0].messages.map(message => [message.role, message.content]))
+    expect(defined(mocked.chatStream.mock.calls[0])[3]).toEqual(savedRequest);
+    expect(defined(mocked.chatStream.mock.calls[0])[1]).toBe('test-key');
+    await waitFor(() => expect(defined(loadChatWorkspace().threads[0]).messages.map(message => [message.role, message.content]))
       .toEqual([['user', 'Saved synthetic question'], ['assistant', 'Recovered synthetic answer']]));
-    expect(loadChatWorkspace().threads[0].messages[1].retry).toBeUndefined();
+    expect(defined(defined(loadChatWorkspace().threads[0]).messages[1]).retry).toBeUndefined();
     expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
   });
 
@@ -1045,7 +1050,7 @@ describe('ChatPanel retry recovery', () => {
     await screen.findByRole('heading', { name: thread.title });
     expect(await screen.findByText(/saved without the exact original request/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
-    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+    expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
     expect(mocked.chatStream).not.toHaveBeenCalled();
   });
 
@@ -1065,7 +1070,7 @@ describe('ChatPanel retry recovery', () => {
     respondWithText('Answer for the interrupted conversation');
     fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
     await screen.findByText('Answer for the interrupted conversation');
-    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+    expect(defined(mocked.chatStream.mock.calls[0])[3]).toEqual(savedRequest);
 
     fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
     fireEvent.click(screen.getByRole('button', { name: complete.title }));
@@ -1079,7 +1084,7 @@ describe('ChatPanel retry recovery', () => {
     mocked.mcpListTools.mockResolvedValue([{ name: 'test_tool', description: 'A test tool.', input_schema: { type: 'object', properties: {} } }]);
     let cancelCall!: (error: Error) => void;
     mocked.mcpCallTool.mockImplementation(() => new Promise((_resolve, reject) => { cancelCall = reject; }));
-    mocked.mcpCancelToolCall.mockImplementation(async () => cancelCall(new Error('MCP tool call cancelled')));
+    mocked.mcpCancelToolCall.mockImplementation(async () => cancelCall(new IpcError('cancelled', 'MCP tool call cancelled')));
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Load MCP tools' }));
     await screen.findByRole('checkbox', { name: /Test Server/ });
@@ -1101,7 +1106,7 @@ describe('ChatPanel retry recovery', () => {
     respondWithText('Answer after retrying');
     fireEvent.click(retry);
     await screen.findByText('Answer after retrying');
-    expect(mocked.chatStream.mock.calls[1][3]).toEqual(mocked.chatStream.mock.calls[0][3]);
+    expect(defined(mocked.chatStream.mock.calls[1])[3]).toEqual(defined(mocked.chatStream.mock.calls[0])[3]);
     expect(mocked.mcpCallTool).toHaveBeenCalledOnce();
   });
 });
@@ -1140,7 +1145,7 @@ describe('ChatPanel recovery of replies without output and non-chat sessions', (
     respondWithText('Answer after the empty stop');
     fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
     await screen.findByText('Answer after the empty stop');
-    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+    expect(defined(mocked.chatStream.mock.calls[0])[3]).toEqual(savedRequest);
   });
 
   it('restores a stopped MCP round reported without a tool_calls finish reason as incomplete, and never retries it without the tools an earlier version did not save', async () => {
@@ -1154,8 +1159,8 @@ describe('ChatPanel recovery of replies without output and non-chat sessions', (
     expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
     expect(mocked.chatStream).not.toHaveBeenCalled();
     expect(mocked.mcpCallTool).not.toHaveBeenCalled();
-    expect(loadChatWorkspace().threads[0].messages[1]).toMatchObject({ toolRound: 'cancelled' });
-    expect(loadChatWorkspace().threads[0].messages[1].finishReason).toBeUndefined();
+    expect(defined(defined(loadChatWorkspace().threads[0]).messages[1])).toMatchObject({ toolRound: 'cancelled' });
+    expect(defined(defined(loadChatWorkspace().threads[0]).messages[1]).finishReason).toBeUndefined();
   });
 
   it.each([
@@ -1210,7 +1215,7 @@ describe('saved names for running chat targets', () => {
     let rejectStart!: (cause: Error) => void;
     if (stage === 'preparation') {
       const update = target.updateConfig;
-      target.updateConfig = vi.fn(async patch => {
+      target.updateConfig = vi.fn<typeof update>(async patch => {
         const result = await update(patch);
         await new Promise<void>(resolve => { completePreparation = resolve; });
         return result;
@@ -1229,12 +1234,12 @@ describe('saved names for running chat targets', () => {
     await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
     await act(async () => {
       if (stage === 'preparation') completePreparation();
-      else rejectStart(new Error('server start cancelled'));
+      else rejectStart(new IpcError('cancelled', 'Synthetic operation superseded'));
     });
     await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled'));
     expect(screen.getByText('Cancelled')).toBeInTheDocument();
     expect(screen.queryByText('Request failed')).not.toBeInTheDocument();
-    expect(screen.queryByText('server start cancelled')).not.toBeInTheDocument();
+    expect(screen.queryByText('Synthetic operation superseded')).not.toBeInTheDocument();
     expect(target.start).not.toHaveBeenCalled();
     if (stage === 'preparation') expect(mocked.sessionStart).not.toHaveBeenCalled();
   });

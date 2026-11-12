@@ -17,8 +17,7 @@ const win = {
 async function renderTitleBar() {
   vi.resetModules();
   vi.doMock("../shared/api/transport", () => ({ isNativeRuntimeAvailable: () => native }));
-  vi.doMock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => win }));
-  vi.doMock("@tauri-apps/api/core", () => ({ invoke: (command: string, args?: { theme: "light" | "dark" | null }) => command === "window_theme" ? nativeTheme(args!.theme) : frameMode() }));
+  vi.doMock("../shared/api/desktop", () => ({ frameWindow: async () => ({ window: win, chrome: await frameMode(), setTheme: nativeTheme }) }));
   const { default: TitleBar } = await import("./TitleBar");
   return render(<TitleBar />);
 }
@@ -148,13 +147,12 @@ describe("TitleBar", () => {
     }
   });
 
-  it("reports a failed native theme update and still applies a later selection", async () => {
-    const failure = new Error("Portal read failed");
+  it.each([new Error("Portal read failed"), { message: "Portal read failed" }])("reports a failed native theme update and still applies a later selection (%j)", async failure => {
     const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
     nativeTheme.mockRejectedValueOnce(failure);
     try {
       await renderTitleBar();
-      await waitFor(() => expect(reported).toHaveBeenCalledWith("Native window appearance could not be synchronized", failure));
+      await waitFor(() => expect(reported).toHaveBeenCalledWith("Native window appearance could not be synchronized", failure.message));
       await act(async () => { document.documentElement.dataset.theme = "dark"; });
       await waitFor(() => expect(nativeTheme).toHaveBeenLastCalledWith("dark"));
     } finally {

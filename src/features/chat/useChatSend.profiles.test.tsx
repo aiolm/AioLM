@@ -5,9 +5,11 @@ import * as api from '../../shared/api/index';
 import { buildChatRequestBody } from '../../shared/api/chat';
 import { emptyProfileLibrary, profileTargetKey, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { requestProfileFromApplication } from '../model-settings/profileEditor';
-import { createChatThread, type ChatHistoryMessage } from './chatHistory';
-import type { DocumentAttachment, ImageAttachment } from './chatUtils';
+import { createChatThread } from './chatWorkspace';
+import type { ChatHistoryMessage } from '../../shared/api/conversationTypes';
+import type { DocumentAttachment, ImageAttachment } from '../../shared/api/mediaTypes';
 import { useChatSend } from './useChatSend';
 import type { ChatPhase } from './chatSendTypes';
 
@@ -41,7 +43,7 @@ function setup(overrides: Partial<Options> = {}) {
   });
 }
 function systemPrompt() {
-  return vi.mocked(api.chatStream).mock.calls[0][3].find(message => message.role === 'system')?.content;
+  return defined(vi.mocked(api.chatStream).mock.calls[0])[3].find(message => message.role === 'system')?.content;
 }
 
 describe('chat profile application', () => {
@@ -52,12 +54,12 @@ describe('chat profile application', () => {
     vi.mocked(api.chatStream).mockRejectedValueOnce(new Error('synthetic interruption'));
     const { result } = setup({ activeThread: { ...createChatThread(), mediaBeforeText: true }, msgs: messages, attachments: [image] });
     await act(async () => { await result.current.send(); });
-    const initial = structuredClone(vi.mocked(api.chatStream).mock.calls[0][3]);
+    const initial = structuredClone(defined(vi.mocked(api.chatStream).mock.calls[0])[3]);
     for (const message of initial.filter(item => item.role === 'user')) {
-      expect(message.content).toEqual([{ type: 'image_url', image_url: { url: image.dataUrl } }, { type: 'text', text: expect.any(String) }]);
+      expect(message.content).toEqual([{ type: 'image_url', image_url: { url: image.dataUrl } }, { type: 'text', text: expect.any(String) as unknown }]);
     }
     await act(async () => { await result.current.send(true); });
-    expect(vi.mocked(api.chatStream).mock.calls[1][3]).toEqual(initial);
+    expect(defined(vi.mocked(api.chatStream).mock.calls[1])[3]).toEqual(initial);
   });
   it('inherits the copied target prompt for a new conversation while later profile edits stay separate', async () => {
     const { result } = setup();
@@ -89,7 +91,7 @@ describe('chat profile application', () => {
     const { result } = setup({ modelProfile: null, activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
     await act(async () => { await result.current.send(); });
     expect(systemPrompt()).toBeUndefined();
-    expect(vi.mocked(api.chatStream).mock.calls[0][3]).toEqual([{ role: 'user', content: 'Hello' }]);
+    expect(defined(vi.mocked(api.chatStream).mock.calls[0])[3]).toEqual([{ role: 'user', content: 'Hello' }]);
   });
   it('keeps explicit profile instructions when automatic guidance is disabled', async () => {
     const { result } = setup({ activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
@@ -108,7 +110,7 @@ describe('chat profile application', () => {
       modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {} };
     const { result } = setup({ effectiveConfig: { ...cfg, active_provider: 'vllm', provider_options: { vllm: options } }, engine });
     await act(async () => { await result.current.send(); });
-    const [, , model, messages, sampling] = vi.mocked(api.chatStream).mock.calls[0];
+    const [, , model, messages, sampling] = defined(vi.mocked(api.chatStream).mock.calls[0]);
     const body = buildChatRequestBody(model, messages, sampling);
     expect(body.max_tokens).toBeGreaterThan(0);
     expect(body.max_tokens).toBeLessThan(128);

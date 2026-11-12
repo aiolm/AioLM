@@ -7,6 +7,7 @@ import type { ApiServerStatus, ServerStatus } from "../../shared/api/types";
 import type { ViewId } from "../../shared/types/navigation";
 import { ActivePanelContext } from "../../shared/ui/PanelFeedback";
 import { createTestStore } from "../../testing/appStore";
+import { defined } from "../../testing/assertDefined";
 import * as api from "../../shared/api/index";
 import DeveloperPanel from "./Developer";
 
@@ -16,7 +17,7 @@ vi.mock("../../shared/api/index", () => ({
   stopApiServer: vi.fn(),
   localModels: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
   // Model lifecycle commands: nothing on the API screen may reach any of them.
   startServer: vi.fn(),
   stopServer: vi.fn(),
@@ -175,7 +176,7 @@ describe("connection format", () => {
     const copyExample = screen.getByRole("button", { name: "Copy example" });
     fireEvent.click(copyExample);
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
-    const copied = String(writeText.mock.calls[0][0]);
+    const copied = String(defined(writeText.mock.calls[0])[0]);
     expect(copied).toContain("<LOCAL_API_KEY>");
     expect(copied).toContain(`${API_URL}/chat/completions`);
     expect(copied).not.toContain(SECRET);
@@ -276,7 +277,7 @@ describe("hidden API page", () => {
     // Coming back reads the real state again instead of trusting a stale one.
     view.rerender(panel(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-    expect(vi.mocked(api.apiServerStatus).mock.calls.length).toBe(before[0] + 1);
+    expect(vi.mocked(api.apiServerStatus).mock.calls.length).toBe(defined(before[0]) + 1);
     expect(screen.getByRole("button", { name: "Stop API" })).toBeEnabled();
   });
 

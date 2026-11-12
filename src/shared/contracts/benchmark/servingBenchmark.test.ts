@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { publicModelSource, toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
 import { localBenchmarkProfileSource, publicBenchmarkProfileSource, validateBenchmarkProfileSource } from './configuration';
 import { summarizeServingPoints } from './aggregation';
-import { PERFORMANCE_HISTORY_KEY, isPerformanceRecord, readPerformanceHistory, recordedBenchmarkModelLabel, savePerformanceRecord, type ServingPerformanceBenchmarkRecord } from '../../../features/bench/performanceRecords';
+import type { ServingPerformanceBenchmarkRecord } from '../../api/benchmarkHistory';
+import { PERFORMANCE_HISTORY_KEY, isPerformanceRecord, readPerformanceHistory, recordedBenchmarkModelLabel, savePerformanceRecord } from '../../../features/bench/performanceRecords';
+import { defined } from '../../../testing/assertDefined';
 
 const submission = '00000000-0000-4000-8000-000000000025';
 function serving(): ServingPerformanceBenchmarkRecord {
@@ -72,26 +74,26 @@ describe('frozen serving benchmark snapshots', () => {
       { target: 'request', scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null },
       { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
     ];
-    Object.assign(record.result.rows[0], {
+    Object.assign(defined(record.result.rows[0]), {
       max_output_tokens: 204800, concurrency: 2, reported_completion_tokens: 409600,
       reported_completion_tokens_by_request: [204800, 204800], usage_status: 'partial',
       finish_reasons: ['length', 'stop'],
     });
     expect(isPerformanceRecord(record)).toBe(true);
     const published = toPublicBenchmark(record, submission);
-    expect(summarizeServingPoints(published.measurements.rows)[0].reported_tokens_per_second?.median).toBe(2048000);
+    expect(defined(summarizeServingPoints(published.measurements.rows)[0]).reported_tokens_per_second?.median).toBe(2048000);
     expect(validatePublicBenchmark(published)).toBe(published);
     record.result.status = 'partial';
     record.request.max_output_tokens = provenance.workload.max_output_tokens = 131072;
-    provenance.execution.settings[1].value = 131072;
-    Object.assign(record.result.rows[0], {
+    defined(provenance.execution.settings[1]).value = 131072;
+    Object.assign(defined(record.result.rows[0]), {
       max_output_tokens: 131072, reported_completion_tokens: 262144, reported_completion_tokens_by_request: [65536, 196608],
     });
     expect(isPerformanceRecord(record)).toBe(false);
-    record.result.rows[0].reported_completion_tokens_by_request = [131072, 131071];
-    record.result.rows[0].reported_completion_tokens = 262143;
+    defined(record.result.rows[0]).reported_completion_tokens_by_request = [131072, 131071];
+    defined(record.result.rows[0]).reported_completion_tokens = 262143;
     expect(isPerformanceRecord(record)).toBe(false);
-    delete record.result.rows[0].reported_completion_tokens_by_request;
+    delete defined(record.result.rows[0]).reported_completion_tokens_by_request;
     expect(isPerformanceRecord(record)).toBe(false);
   });
 
@@ -115,7 +117,7 @@ describe('frozen serving benchmark snapshots', () => {
     localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
     const replayed = readPerformanceHistory();
     expect(replayed).toEqual([record]);
-    expect(summarizeServingPoints(replayed[0].result.rows as typeof record.result.rows)).toEqual([
+    expect(summarizeServingPoints(defined(replayed[0]).result.rows as typeof record.result.rows)).toEqual([
       expect.objectContaining({ input_bytes: 4096, samples: 1, output_bytes_per_second: { median: 60, min: 60, max: 60, samples: 1 },
         reported_tokens_per_second: null }),
     ]);
@@ -135,10 +137,10 @@ describe('frozen serving benchmark snapshots', () => {
     expect(readPerformanceHistory()).toEqual([record]);
     expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(bytes);
     for (const mutate of [
-      (r: ServingPerformanceBenchmarkRecord) => { r.result.rows[0].output_bytes = 99; },
-      (r: ServingPerformanceBenchmarkRecord) => { r.result.rows[0].reported_completion_tokens = Number.MAX_SAFE_INTEGER + 1; },
-      (r: ServingPerformanceBenchmarkRecord) => { r.result.rows[0].input_bytes = 16384; },
-      (r: ServingPerformanceBenchmarkRecord) => { r.result.rows.push(structuredClone(r.result.rows[0])); },
+      (r: ServingPerformanceBenchmarkRecord) => { defined(r.result.rows[0]).output_bytes = 99; },
+      (r: ServingPerformanceBenchmarkRecord) => { defined(r.result.rows[0]).reported_completion_tokens = Number.MAX_SAFE_INTEGER + 1; },
+      (r: ServingPerformanceBenchmarkRecord) => { defined(r.result.rows[0]).input_bytes = 16384; },
+      (r: ServingPerformanceBenchmarkRecord) => { r.result.rows.push(structuredClone(defined(r.result.rows[0]))); },
       (r: ServingPerformanceBenchmarkRecord) => { r.result.provenance!.runtime.name = '/private/runtime'; },
     ]) {
       const damaged = serving(); mutate(damaged);

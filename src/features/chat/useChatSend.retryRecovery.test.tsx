@@ -2,12 +2,16 @@ import { useRef, useState } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import { getChatPersonalization } from "../../shared/api/personalization";
 import { createTestStore } from "../../testing/appStore";
-import { loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type ChatThread } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { defined } from "../../testing/assertDefined";
+import { loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
+import type { ChatHistoryMessage, ChatThread } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
+import type { ChatMcpTool } from "./useChatMcpTools";
 
 // The native call settles only when cancelled or failed, the way the backend
 // answers a Stop that lands during the native approval prompt or the tool RPC.
@@ -21,7 +25,7 @@ vi.mock("../../shared/api/index", () => ({
     inFlight.set(callId, reject);
   })),
   mcpCancelToolCall: vi.fn(async (callId: string) => {
-    inFlight.get(callId)?.(new Error("MCP tool call cancelled"));
+    inFlight.get(callId)?.(new IpcError("cancelled", "MCP tool call cancelled"));
     inFlight.delete(callId);
   }),
 }));
@@ -59,7 +63,7 @@ function setup(options: { initial?: ChatHistoryMessage[]; input?: string; images
       baseUrl: session.baseUrl, apiKey: session.apiKey, model: "model.gguf",
       activeThread: thread, msgs, setMsgs, input, setInput, phase, setPhase,
       attachments, setAttachments, documents, setDocuments, atBottomRef,
-      mcpEntryByFunctionName: session.tools ? new Map([["catalog__lookup", lookupEntry]]) : new Map(),
+      mcpEntryByFunctionName: session.tools ? new Map([["catalog__lookup", lookupEntry]]) : new Map<string, ChatMcpTool>(),
       mcpDefinitions: session.tools ? [lookupDefinition] : [],
     });
     return { ...send, msgs, phase, input, setInput, setMsgs };
@@ -91,7 +95,7 @@ function answers(text: string) {
 function reloaded(messages: ChatHistoryMessage[]): ChatHistoryMessage[] {
   const thread: ChatThread = { id: "saved", title: "Saved", systemPrompt: "", messages, createdAt: 1, updatedAt: 1 };
   saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
-  return loadChatWorkspace().threads[0].messages;
+  return defined(loadChatWorkspace().threads[0]).messages;
 }
 
 beforeEach(() => {
@@ -114,7 +118,7 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     act(() => { sending = first.result.current.send(); });
     await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
     await act(async () => { first.result.current.stop(); await sending; });
-    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const originalRequest = structuredClone(defined(streamMock.mock.calls[0])[3]);
     expect(first.result.current.msgs.at(-1)).toMatchObject({ role: "assistant", reasoning: "Synthetic reasoning", interrupted: true });
 
     // Restart: only what the conversation saved is left.
@@ -129,7 +133,7 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     answers("Recovered answer");
     await act(async () => { await next.result.current.send(true); });
     expect(streamMock).toHaveBeenCalledTimes(2);
-    const [url, key, , history, sampling] = streamMock.mock.calls[1];
+    const [url, key, , history, sampling] = defined(streamMock.mock.calls[1]);
     expect(history).toEqual(originalRequest);
     expect(JSON.stringify(history)).toContain(PIXEL);
     expect(JSON.stringify(history)).toContain("Synthetic document context");
@@ -150,16 +154,16 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     act(() => { sending = first.result.current.send(); });
     await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
     await act(async () => { first.result.current.stop(); await sending; });
-    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const originalRequest = structuredClone(defined(streamMock.mock.calls[0])[3]);
     const restored = reloaded(first.result.current.msgs);
     first.unmount();
-    expect(restored[0].content.length).toBeLessThan(longQuestion.length);
+    expect(defined(restored[0]).content.length).toBeLessThan(longQuestion.length);
 
     const next = setup({ initial: restored, input: "" });
     answers("Long answer");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
-    expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", restored[0].content], ["assistant", "Long answer"]]);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
+    expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", defined(restored[0]).content], ["assistant", "Long answer"]]);
   });
 
   it("never rereads local instructions for a saved turn, and explains why it cannot retry it exactly", async () => {
@@ -208,7 +212,7 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     const restored = reloaded(first.result.current.msgs);
     first.unmount();
 
-    personalizationMock.mockRejectedValueOnce(new Error("synthetic preparation failure"));
+    personalizationMock.mockRejectedValueOnce(new IpcError("internal", "synthetic preparation failure"));
     const next = setup({ initial: restored, input: "A newer question" });
     await act(async () => { await next.result.current.send(); });
     expect(next.result.current.error).toContain("synthetic preparation failure");
@@ -246,10 +250,10 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     let approving!: Promise<void>;
     act(() => { approving = hook.result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
-    const callId = callMock.mock.calls[0][3]!;
+    const callId = defined(defined(callMock.mock.calls[0])[3]);
     await act(async () => { hook.result.current.stop(); await approving; });
     expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);
-    return { ...hook, callId, originalRequest: structuredClone(streamMock.mock.calls[0][3]) };
+    return { ...hook, callId, originalRequest: structuredClone(defined(streamMock.mock.calls[0])[3]) };
   }
 
   it("offers Retry that regenerates the original request and requires a fresh approval for any new tool call", async () => {
@@ -262,7 +266,7 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     requestsLookup("call-2");
     await act(async () => { await result.current.send(true); });
     expect(streamMock).toHaveBeenCalledTimes(2);
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
     // The cancelled call is never resumed: nothing runs until the new request is approved again.
     expect(callMock).toHaveBeenCalledOnce();
     expect(result.current.pendingToolCall?.call.id).toBe("call-2");
@@ -272,7 +276,7 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     let approving!: Promise<void>;
     act(() => { approving = result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledTimes(2));
-    expect(callMock.mock.calls[1][3]).not.toBe(callId);
+    expect(defined(callMock.mock.calls[1])[3]).not.toBe(callId);
     await act(async () => { result.current.stop(); await approving; });
   });
 
@@ -287,8 +291,8 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     expect(next.result.current.canRetry).toBe(true);
     answers("Answer without the tool");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
-    expect(streamMock.mock.calls[1][1]).toBe("current-session-key");
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[1]).toBe("current-session-key");
     expect(callMock).toHaveBeenCalledOnce();
     expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Answer without the tool"]]);
   });
@@ -301,7 +305,7 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     act(() => { approving = result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
     await act(async () => {
-      inFlight.get(callMock.mock.calls[0][3]!)?.(new Error("MCP tool approval timed out"));
+      inFlight.get(defined(defined(callMock.mock.calls[0])[3]))?.(new IpcError("timeout", "MCP tool approval timed out"));
       await approving;
     });
     expect(result.current.error).toContain("MCP tool approval timed out");
@@ -331,7 +335,7 @@ describe("Recovery when an issued request produced no output", () => {
     waitsForStop();
     const first = setup();
     await stopFirstRequest(first);
-    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const originalRequest = structuredClone(defined(streamMock.mock.calls[0])[3]);
     const reply = first.result.current.msgs.at(-1)!;
     expect(first.result.current.msgs).toHaveLength(2);
     expect(reply).toMatchObject({ role: "assistant", content: "", reasoning: "", interrupted: true });
@@ -348,9 +352,9 @@ describe("Recovery when an issued request produced no output", () => {
     expect(next.result.current.canRetry).toBe(true);
     answers("Answer after an empty stop");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
-    expect(streamMock.mock.calls[1][1]).toBe("current-session-key");
-    expect(streamMock.mock.calls[1][4].tools).toEqual([lookupDefinition]);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[1]).toBe("current-session-key");
+    expect(defined(streamMock.mock.calls[1])[4].tools).toEqual([lookupDefinition]);
     expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Answer after an empty stop"]]);
   });
 
@@ -361,7 +365,7 @@ describe("Recovery when an issued request produced no output", () => {
     expect(first.result.current.error).toBe("HTTP 503: synthetic engine unavailable");
     expect(first.result.current.msgs.at(-1)).toMatchObject({ role: "assistant", content: "", failed: true });
     expect(first.result.current.msgs.at(-1)?.interrupted).toBeFalsy();
-    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const originalRequest = structuredClone(defined(streamMock.mock.calls[0])[3]);
 
     const restored = reloaded(first.result.current.msgs);
     first.unmount();
@@ -369,7 +373,7 @@ describe("Recovery when an issued request produced no output", () => {
     expect(next.result.current.canRetry).toBe(true);
     answers("Recovered after an error");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
     expect(next.result.current.msgs).toHaveLength(2);
     expect(next.result.current.msgs.at(-1)).toMatchObject({ content: "Recovered after an error" });
     expect(next.result.current.msgs.at(-1)?.failed).toBeUndefined();
@@ -486,10 +490,10 @@ describe("MCP rounds whose runtime reported no tool_calls finish reason", () => 
     let approving!: Promise<void>;
     act(() => { approving = result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
-    const callId = callMock.mock.calls[0][3]!;
+    const callId = defined(defined(callMock.mock.calls[0])[3]);
     await act(async () => {
       if (ending === "cancelled") result.current.stop();
-      else inFlight.get(callId)?.(new Error("MCP tool approval timed out"));
+      else inFlight.get(callId)?.(new IpcError("timeout", "MCP tool approval timed out"));
       await approving;
     });
     const reply = result.current.msgs.at(-1)!;

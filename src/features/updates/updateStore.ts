@@ -1,18 +1,4 @@
-export interface AppUpdateInfo {
-  current_version: string;
-  latest_version: string | null;
-  available: boolean;
-  can_install: boolean;
-  release_url: string | null;
-  published_at: string | null;
-  notes: string | null;
-}
-
-export interface AppUpdateProgress {
-  phase: "downloading" | "verifying" | "installing";
-  downloaded: number;
-  total: number | null;
-}
+import type { AppUpdateInfo, AppUpdateProgress } from '../../shared/api/appUpdates';
 
 export interface UpdateState {
   phase: "idle" | "checking" | "checked" | "error" | "installer-started" | AppUpdateProgress["phase"];

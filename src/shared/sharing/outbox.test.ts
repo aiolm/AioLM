@@ -4,6 +4,7 @@ import { HttpError } from "../api/http.ts";
 import type { LegacyPublicBenchmarkSubmission, PublicBenchmarkSubmission } from "../contracts/benchmark/publicBenchmark.ts";
 import { createBenchmarkOutbox, type BenchmarkLocalSource, type BenchmarkOutboxStore, type MeasurementActivity, type QueuedBenchmark, type SelectedEntryTransport } from "./outbox.ts";
 import { createIndexedDbOutbox } from "./indexedDbOutbox.ts";
+import { defined } from "../../testing/assertDefined.ts";
 
 const payload = (): LegacyPublicBenchmarkSubmission => ({
   schema_version: 1, submission_id: "00000000-0000-4000-8000-000000000001", app_version: "0.1.9", method: null,
@@ -95,8 +96,8 @@ describe("reviewed benchmark outbox", () => {
     f.rows.set(row.id, { ...row, state: "sending", leaseToken: "expired", leaseUntil: 500, nextAttemptAt: 0 });
     await second.dispatchSelected(firstId, transport(submit));
     expect(submit).toHaveBeenCalledTimes(2);
-    expect(submit.mock.calls[1][0]).toMatchObject({ id: firstId, payload: payload() });
-    expect(submit.mock.calls[1][0].requestBody).toBeUndefined();
+    expect(defined(submit.mock.calls[1])[0]).toMatchObject({ id: firstId, payload: payload() });
+    expect(defined(submit.mock.calls[1])[0].requestBody).toBeUndefined();
   });
 
   it("waits for Retry-After and never retries a permanent rejection without a request", async () => {
@@ -171,8 +172,8 @@ describe("reviewed benchmark outbox", () => {
     const submit = vi.fn(transport().submitSnapshot);
     expect(await queue.dispatchSelected(firstId, transport(submit))).toBe(1);
     expect(submit).toHaveBeenCalledOnce();
-    const sentBody = submit.mock.calls[0][0].requestBody!;
-    expect(JSON.parse(sentBody).benchmark).toEqual(payload());
+    const sentBody = defined(defined(submit.mock.calls[0])[0].requestBody);
+    expect(JSON.parse(sentBody)).toHaveProperty('benchmark', payload());
     expect(sentBody).not.toContain("local-run");
     expect(f.rows.get(firstId)).toMatchObject({ state: "sent", attempts: 1, source: { runId: "local-run-1" }, receipt: { id: "run-1" } });
     expect(f.rows.get(firstId)?.localAcknowledgedAt).toBeUndefined();
@@ -356,8 +357,8 @@ describe("reviewed benchmark outbox", () => {
     const submit = vi.fn(transport().submitSnapshot);
     expect(await f.queue.dispatchSelected(secondId, transport(submit))).toBe(1);
     expect(submit).toHaveBeenCalledOnce();
-    expect(submit.mock.calls[0][0]).toMatchObject({ id: secondId, payload: benchmarkFor(secondId) });
-    expect(submit.mock.calls[0][0].requestBody).toBeUndefined();
+    expect(defined(submit.mock.calls[0])[0]).toMatchObject({ id: secondId, payload: benchmarkFor(secondId) });
+    expect(defined(submit.mock.calls[0])[0].requestBody).toBeUndefined();
     expect(f.rows.get(firstId)).toMatchObject({ state: "pending", attempts: 0 });
     expect(f.rows.get(secondId)).toMatchObject({ state: "sent", receipt: { id: "run-1", submission_id: secondId } });
   });

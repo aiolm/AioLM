@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import ExternalRuntimeRegistration from './ExternalRuntimeRegistration';
+import { IpcError } from '../../shared/api/ipcError';
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -42,16 +43,31 @@ describe('external engine registration', () => {
     expect(api.runtimeAdapterRegister).not.toHaveBeenCalled();
   });
   it('cancels a pending probe without losing the chosen manifest', async () => {
-    let fail!: (error: string) => void;
+    let fail!: (error: IpcError) => void;
     vi.mocked(api.runtimeAdapterRegister).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     const { selected } = mount();
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '/synthetic/runtime.json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(api.rtCancel).toHaveBeenCalledOnce());
-    await act(async () => fail('runtime probe cancelled'));
+    await act(async () => fail(new IpcError('cancelled', 'Probe stopped at your request')));
     expect(selected).not.toHaveBeenCalled();
     expect(screen.getByRole('textbox')).toHaveValue('/synthetic/runtime.json');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+  it.each([
+    new IpcError('cancelled', 'No probe result will be published'),
+    new IpcError('internal', 'runtime probe cancelled'),
+    new Error('runtime probe cancelled'),
+  ])('classifies an unrequested probe rejection by kind, not wording: %s', async cause => {
+    vi.mocked(api.runtimeAdapterRegister).mockRejectedValueOnce(cause);
+    const { selected, busy } = mount();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/synthetic/runtime.json' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
+    await waitFor(() => expect(busy).toHaveBeenLastCalledWith(false));
+    expect(selected).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox')).toHaveValue('/synthetic/runtime.json');
+    if (cause instanceof IpcError && cause.kind === 'cancelled') expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    else expect(screen.getByRole('alert')).toHaveTextContent(cause.message);
   });
 });

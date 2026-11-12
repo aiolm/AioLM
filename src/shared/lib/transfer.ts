@@ -12,8 +12,9 @@ export function estimateDownloadSpeed(
 ): number | null {
   if (samples.length < 2) return null;
   const latest = samples[samples.length - 1];
-  const cutoff = latest.at - windowMs;
   let earliest = samples[0];
+  if (!latest || !earliest) return null;
+  const cutoff = latest.at - windowMs;
   for (const sample of samples) {
     if (sample.at >= cutoff) {
       earliest = sample;

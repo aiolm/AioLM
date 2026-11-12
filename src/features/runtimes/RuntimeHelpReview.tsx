@@ -23,6 +23,7 @@ import RuntimeArgumentList from './RuntimeArgumentList';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
+import { isIpcErrorKind } from '../../shared/api/ipcError';
 import { sensitiveStaticIndices } from './sensitiveEntryTokens';
 
 /** Discover, review and accept the selected runtime's help. Help runs only on
@@ -60,11 +61,12 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const recheckButton = useRef<HTMLButtonElement>(null);
   const retryFocus = useRef<string | null>(null);
   const targetBinding = `${cfg.active_provider}:${cfg.active_runtime}:${cfg.active_backend}:${cfg.active_build}`;
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
   useEffect(() => {
     let active = true;
     setTarget(null); setFound(null); setError(''); setBusy(false); setAccepting(false); setRequest(null);
     setTargetLoading(true);
-    void runtimeHelpTarget(cfg).then(next => {
+    void runtimeHelpTarget(cfgRef.current).then(next => {
       if (!active) return;
       setTarget(next);
       setExtra(next.request.args.slice(next.prefix.length));
@@ -81,8 +83,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       finishTask(taskId, 'cancelled');
     };
     // The target depends only on the selected runtime identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, targetAttempt]);
+  }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, targetAttempt, taskId]);
   useEffect(() => {
     if (target && !targetLoading && retryFocus.current === targetBinding) {
       retryFocus.current = null;
@@ -119,7 +120,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       const message = cause instanceof Error ? cause.message : String(cause);
       // Captured stderr may itself mention cancellation; only the owned user
       // request or the native cancellation result makes this task cancelled.
-      const cancelled = cancelRequested.current || message === 'help discovery cancelled';
+      const cancelled = cancelRequested.current || isIpcErrorKind(cause, 'cancelled');
       if (!cancelled) setError(message);
       finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
     } finally {
@@ -152,7 +153,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const secretPrefix = sensitiveStaticIndices(effective);
   if (draftPrefixSecrets) {
     for (const index of draftPrefixSecrets) {
-      if (Number.isInteger(index) && (index as number) >= 0) secretPrefix.add(index as number);
+      if (Number.isInteger(index) && index >= 0) secretPrefix.add(index);
     }
   }
   const commandTokens = target

@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
+
+const match: { objectContaining: (value: Record<string, unknown>) => unknown } = expect;
 // Each file keeps isolated mocks and the original semantic journeys.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -130,7 +132,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
       [save, () => rect(300 - outer.scrollTop, 32)],
       [back, () => rect(380, 36)],
     ]);
-    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const prototype: { getBoundingClientRect: (this: HTMLElement) => DOMRect } = HTMLElement.prototype;
+    const originalRect = prototype.getBoundingClientRect;
     HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) { return at.get(this)?.() ?? originalRect.call(this); };
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
@@ -309,7 +312,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saveAs = screen.getByRole('button', { name: 'Save as new' });
     await waitFor(() => expect(saveAs).toBeEnabled());
     expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
-      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+      provider_options: match.objectContaining({ 'llama.cpp': match.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
     }));
     const checksBeforeBlur = check.mock.calls.length;
     // A real pointer activation blurs the input between mouse down and click.
@@ -324,7 +327,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({
-      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+      provider_options: match.objectContaining({ 'llama.cpp': match.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
     }), expect.anything(), true);
   });
   it.each(['vllm', 'mlx-vlm'] as const)('keeps an unedited %s profile clean and blocks saving while its option check is pending', async provider => {

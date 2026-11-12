@@ -1,7 +1,9 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { clearChatWorkspace, dropLegacyChatWorkspace, loadChatWorkspace, saveChatWorkspace, type ChatWorkspace } from "../features/chat/chatHistory";
+import { clearChatWorkspace, dropLegacyChatWorkspace, loadChatWorkspace, saveChatWorkspace } from "../features/chat/chatHistory";
+import type { ChatWorkspace } from "../shared/api/conversationTypes";
 import { indexRecordsForChunks, removeDocumentVectorsForPaths } from "../features/chat/documentIndex";
 import { defaultPreferences, savePreferences, shouldConfirmDestructive } from "../shared/config/preferences";
+import { defined } from './assertDefined';
 
 const LEGACY_KEY = "aiolm.chat-workspace.v1";
 const CURRENT_KEY = "aiolm.chat-workspace.v2";
@@ -32,9 +34,9 @@ describe("conversation deletion leaves nothing behind", () => {
 
   it("no longer falls back to legacy data once it has been dropped", () => {
     localStorage.setItem(LEGACY_KEY, JSON.stringify(workspace("a", "old")));
-    expect(loadChatWorkspace().threads[0].title).toBe("old");
+    expect(defined(loadChatWorkspace().threads[0], 'loaded thread').title).toBe("old");
     dropLegacyChatWorkspace();
-    expect(loadChatWorkspace().threads[0].title).not.toBe("old");
+    expect(defined(loadChatWorkspace().threads[0], 'fresh thread').title).not.toBe("old");
   });
 
   it("clears every stored copy of the workspace", async () => {
@@ -46,7 +48,7 @@ describe("conversation deletion leaves nothing behind", () => {
 
     expect(localStorage.getItem(CURRENT_KEY)).toBeNull();
     expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
-    expect(fresh.threads[0].messages).toEqual([]);
+    expect(defined(fresh.threads[0], 'fresh thread').messages).toEqual([]);
   });
 
   it("reports a retained legacy copy while still erasing the other conversation and document stores", async () => {
@@ -55,7 +57,7 @@ describe("conversation deletion leaves nothing behind", () => {
     localStorage.setItem(LEGACY_KEY, legacy);
     const documentKey = INDEX_PREFIX + "synthetic";
     localStorage.setItem(documentKey, "Synthetic document text");
-    const remove = Storage.prototype.removeItem;
+    const remove = Object.getOwnPropertyDescriptor(Storage.prototype, "removeItem")!.value as Storage["removeItem"];
     const failure = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (this: Storage, key: string) {
       if (key === LEGACY_KEY) throw new Error("Synthetic legacy deletion failure");
       remove.call(this, key);

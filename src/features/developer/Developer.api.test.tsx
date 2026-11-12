@@ -17,7 +17,7 @@ vi.mock("../../shared/api/index", () => ({
   stopApiServer: vi.fn(),
   localModels: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
-  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
   // Model lifecycle commands: the API page must never reach any of them.
   startServer: vi.fn(),
   stopServer: vi.fn(),

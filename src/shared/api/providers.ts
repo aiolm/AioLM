@@ -1,4 +1,4 @@
-import { invoke } from './transport.ts';
+import { invoke, listen, type UnlistenFn } from './transport.ts';
 import { modelDisplayName } from '../lib/displayPaths.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 import type { CommandSyntax } from './runtimeHelp.ts';
@@ -111,9 +111,12 @@ export const providerRuntimeOptions = async (providerId: ProviderId, runtimeId: 
     if (optionSchemaPublishers.get(key) === publisher) optionSchemaPublishers.delete(key);
   }
 };
-export const providerInstall = (providerId: ProviderId, python?: string) => invoke('provider_install', { providerId, python: python ?? null });
-export const providerRegister = (providerId: ProviderId, python: string) => invoke('provider_register', { providerId, python });
+export const providerInstall = (providerId: ProviderId, python?: string): Promise<PortableRuntimeManifest> => invoke<PortableRuntimeManifest>('provider_install', { providerId, python: python ?? null });
+export const providerRegister = (providerId: ProviderId, python: string): Promise<PortableRuntimeManifest> => invoke<PortableRuntimeManifest>('provider_register', { providerId, python });
 export const providerRemove = async (providerId: ProviderId, runtimeId: string) => { await invoke<void>('provider_remove', { providerId, runtimeId }); invalidateRuntimeOptionSchema(`${providerId}/${runtimeId}`); };
+export interface ProviderInstallProgress { provider: ProviderId; id: string; phase: string; line: string }
+export const onProviderInstallProgress = (callback: (progress: ProviderInstallProgress) => void): Promise<UnlistenFn> =>
+  listen<ProviderInstallProgress>('provider-install-progress', event => callback(event.payload));
 /** Portable bundle export result. Identities stay provider-scoped: `provider`
  * plus `runtime_id`, never the native llama `(backend, build)` vocabulary. */
 export interface PortableExportInfo {

@@ -13,7 +13,7 @@ export function modelIconName(model: string): string {
   // Directory names must not override the family of a local model file.
   const parts = model.replace(/\\/g, "/").split("/").filter(Boolean);
   const name = modelDisplayName(model);
-  const owner = parts.length === 2 && !/\.gguf$/i.test(name) ? parts[0] : "";
+  const owner = parts.length === 2 && !/\.gguf$/i.test(name) ? parts[0] ?? "" : "";
   return families.find(([pattern]) => pattern.test(name))?.[1]
     ?? families.find(([pattern]) => pattern.test(owner))?.[1]
     ?? "huggingface";

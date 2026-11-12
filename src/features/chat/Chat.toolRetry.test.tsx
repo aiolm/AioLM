@@ -3,10 +3,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { createTestStore } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import { buildMcpFunctionNames } from '../mcp/mcpUtils';
 import { projectFromConfig, setActiveProjectId, writeProjects } from '../projects/projectStore';
 import ChatPanel from './Chat';
-import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type ChatThread } from './chatHistory';
+import { loadChatWorkspace, saveChatWorkspace } from './chatHistory';
+import { createChatThread } from './chatWorkspace';
+import type { ChatHistoryMessage, ChatThread } from '../../shared/api/conversationTypes';
 import { mcpToolDefinition } from './useChatMcpTools';
 import { chatText } from '../../shared/i18n/chatI18n';
 import { PanelFeedbackActivity, PanelFeedbackOutlet, PanelFeedbackProvider } from '../../shared/ui/PanelFeedback';
@@ -15,7 +18,7 @@ vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: ()
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => false,
   sessionList: vi.fn(async () => []),
-  normalizeSessionList: (value: unknown) => Array.isArray(value) ? value : [],
+  normalizeSessionList: (value: unknown): unknown[] => Array.isArray(value) ? value : [],
   serverActivity: vi.fn(async () => undefined),
   readDocumentBinding: vi.fn(),
   mcpListServers: vi.fn(),
@@ -30,7 +33,7 @@ const streamMock = vi.mocked(api.chatStream);
 const server = { id: 'fixture', name: 'Synthetic tools', enabled: true, command: 'synthetic', args: [] };
 const slowLookup: api.McpTool = { name: 'slow_lookup', description: 'Synthetic slow archive lookup', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } };
 const otherLookup: api.McpTool = { name: 'other_lookup', description: 'Unrelated synthetic tool', input_schema: { type: 'object', properties: {} } };
-const functionName = buildMcpFunctionNames([{ serverId: 'fixture', toolName: 'slow_lookup' }])[0];
+const functionName = defined(buildMcpFunctionNames([{ serverId: 'fixture', toolName: 'slow_lookup' }])[0]);
 const definition = mcpToolDefinition({ serverId: 'fixture', serverName: 'Synthetic tools', tool: slowLookup }, functionName);
 const question = 'Use the lookup tool for synthetic-key.';
 const savedRequest: api.ChatMessage[] = [{ role: 'system', content: 'Synthetic system prompt' }, { role: 'user', content: question }];
@@ -85,7 +88,7 @@ it('after a restart, offers to reload the tools a saved tool turn used instead o
   expect(await log.findByText(/Retry needs the MCP tools offered with this reply \(Synthetic tools · slow_lookup\), and they are not loaded/)).toBeInTheDocument();
   expect(log.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
   expect(streamMock).not.toHaveBeenCalled();
-  expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
 
   fireEvent.click(log.getByRole('button', { name: 'Reload MCP tools for Retry' }));
   const retry = await log.findByRole('button', { name: 'Retry last message' });
@@ -98,8 +101,8 @@ it('after a restart, offers to reload the tools a saved tool turn used instead o
   fireEvent.click(retry);
   const approve = await screen.findByRole('button', { name: 'Approve once' });
   expect(streamMock).toHaveBeenCalledOnce();
-  expect(streamMock.mock.calls[0][3]).toEqual(savedRequest);
-  expect(streamMock.mock.calls[0][4].tools).toEqual([definition]);
+  expect(defined(streamMock.mock.calls[0])[3]).toEqual(savedRequest);
+  expect(defined(streamMock.mock.calls[0])[4].tools).toEqual([definition]);
   expect(api.mcpCallTool).not.toHaveBeenCalled();
 
   vi.mocked(api.mcpCallTool).mockResolvedValueOnce({ content: [{ type: 'text', text: 'synthetic-key: amber-0000' }] });
@@ -107,7 +110,7 @@ it('after a restart, offers to reload the tools a saved tool turn used instead o
   fireEvent.click(approve);
   expect(await log.findByText('The archive answered amber-0000.')).toBeInTheDocument();
   expect(api.mcpCallTool).toHaveBeenCalledExactlyOnceWith('fixture', 'slow_lookup', { key: 'synthetic-key' }, expect.any(String));
-  expect(streamMock.mock.calls[1][3].at(-1)).toEqual({ role: 'tool', tool_call_id: 'call-retry', name: functionName, content: '{"text":"synthetic-key: amber-0000"}' });
+  expect(defined(streamMock.mock.calls[1])[3].at(-1)).toEqual({ role: 'tool', tool_call_id: 'call-retry', name: functionName, content: '{"text":"synthetic-key: amber-0000"}' });
 });
 
 it.each(['approve', 'reject'] as const)('keeps a pending tool turn with its conversation while browsing another, then lets the owner %s it', async decision => {
@@ -189,7 +192,7 @@ it.each([
   expect(await log.findByText(/MCP tools offered with this reply \(Synthetic tools · slow_lookup\) are no longer offered/)).toBeInTheDocument();
   expect(log.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
   expect(streamMock).not.toHaveBeenCalled();
-  expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
 });
 
 it('does not restore a tool whose definition changed since the reply, and explains why', async () => {
@@ -200,7 +203,7 @@ it('does not restore a tool whose definition changed since the reply, and explai
   expect(screen.getByRole('checkbox', { name: 'Synthetic tools · slow_lookup' })).not.toBeChecked();
   expect(log.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
   expect(streamMock).not.toHaveBeenCalled();
-  expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  expect(defined(loadChatWorkspace().threads[0]).messages).toEqual(thread.messages);
 });
 
 /** Holds the next discovery of the fixture server's tools until the test answers it. */
@@ -274,6 +277,6 @@ it("keeps a restored tool selection when the conversation's project defaults sel
   answers('Answer with the restored tool offered.');
   fireEvent.click(await log.findByRole('button', { name: 'Retry last message' }));
   expect(await log.findByText('Answer with the restored tool offered.')).toBeInTheDocument();
-  expect(streamMock.mock.calls[0][4].tools).toEqual([definition]);
+  expect(defined(streamMock.mock.calls[0])[4].tools).toEqual([definition]);
   expect(screen.getByRole('checkbox', { name: 'Synthetic tools · slow_lookup' })).toBeChecked();
 });

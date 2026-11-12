@@ -14,8 +14,9 @@ const DEVICE_FIELDS = new Set(['gpu_ids', 'main_gpu', 'draft_gpu_id']);
  */
 export function gpuDisplayName(id: string, devices: readonly GpuDevice[]): string {
   const index = devices.findIndex(device => device.stable_id === id);
-  if (index >= 0) {
-    const name = normalizeDisplayText(devices[index].name);
+  const device = devices[index];
+  if (device) {
+    const name = normalizeDisplayText(device.name);
     return id.startsWith('runtime:') ? name : `GPU ${index} · ${name}`;
   }
   return id.match(/^runtime:[^:]+:(.+)$/)?.[1] ?? id;

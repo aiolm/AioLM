@@ -68,11 +68,15 @@ export function runtimeGpuDevices(backend: string, lines: string[]): GpuDevice[]
   const seen = new Set<string>();
   return lines.flatMap((line) => {
     const match = line.trim().match(new RegExp(`^(${prefix}\\d+):\\s*(.+)$`));
-    if (!match || seen.has(match[1])) return [];
-    seen.add(match[1]);
-    const appleMetal = backend === "metal" && /\bApple\b/i.test(match[2]);
+    if (!match) return [];
+    // Both capture groups are mandatory in a successful match.
+    const id = match[1]!;
+    const name = match[2]!;
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const appleMetal = backend === "metal" && /\bApple\b/i.test(name);
     const vendor = backend === "rocm" ? "amd" : backend === "cuda" ? "nvidia" : backend === "sycl" ? "intel" : appleMetal ? "apple" : "unknown";
-    return [{ name: `${match[1]} · ${match[2]}`, stable_id: `runtime:${backend}:${match[1]}`, vendor, integrated: appleMetal } as GpuDevice];
+    return [{ name: `${id} · ${name}`, stable_id: `runtime:${backend}:${id}`, vendor, integrated: appleMetal }];
   });
 }
 

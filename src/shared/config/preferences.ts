@@ -115,5 +115,5 @@ export function importPreferences(raw: string): AppPreferences {
   if (!parsed || typeof parsed !== "object") throw new Error("Invalid settings export.");
   const envelope = parsed as { schemaVersion?: unknown; preferences?: unknown };
   if (envelope.schemaVersion !== 1 || !envelope.preferences || typeof envelope.preferences !== "object") throw new Error("Unsupported settings export format.");
-  return validatePreferences(envelope.preferences as Partial<AppPreferences>);
+  return validatePreferences(envelope.preferences);
 }

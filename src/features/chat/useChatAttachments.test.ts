@@ -1,8 +1,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
+import { IpcError } from '../../shared/api/ipcError';
 import type { ImageAttachment } from './chatTypes';
 import { useChatAttachments } from './useChatAttachments';
+import { loadLocale } from '../../shared/i18n/i18nUnified';
+import { defined } from '../../testing/assertDefined';
 
 vi.mock('../../shared/api/index', () => ({ pickAttachment: vi.fn(), readDocumentText: vi.fn(), importMedia: vi.fn(),
   claimAttachmentDrop: vi.fn(), discardAttachmentDrop: vi.fn(async () => undefined) }));
@@ -22,6 +25,42 @@ function setup() {
 beforeEach(() => vi.resetAllMocks());
 
 describe('composer attachment ownership', () => {
+  it('localizes attachment validation and its error prefix in Korean', async () => {
+    await loadLocale('ko');
+    vi.mocked(api.pickAttachment).mockResolvedValue('/synthetic/speech.wav');
+    const setError = vi.fn();
+    const { result } = renderHook(() => useChatAttachments({ visionReady: false, locale: 'ko', setError }));
+    await act(async () => { await result.current.addAttachment(); });
+    expect(setError).toHaveBeenLastCalledWith('파일 첨부 실패: 실행 중인 모델은 오디오 입력을 지원하지 않습니다. 로컬 음성 전사 세션을 선택하면 출처가 표시된 텍스트로 전사 내용을 삽입합니다.');
+    expect(api.importMedia).not.toHaveBeenCalled();
+    act(() => result.current.addDroppedAttachments('invalid', 0));
+    expect(setError).toHaveBeenLastCalledWith('파일 첨부 실패: 네이티브 파일 드롭의 파일 수가 올바르지 않습니다. 파일을 다시 선택하세요.');
+  });
+
+  it('restores attachment state quietly when a native drop is cancelled regardless of wording', async () => {
+    vi.mocked(api.claimAttachmentDrop).mockRejectedValueOnce(new IpcError('cancelled', 'Synthetic operation superseded'));
+    const { result, setError } = setup();
+    const document = { name: 'kept.md', path: '/synthetic/kept.md', text: 'Existing context' };
+    act(() => { result.current.setDocuments([document]); });
+    act(() => result.current.addDroppedAttachments('retired-drop', 2));
+    await waitFor(() => expect(api.discardAttachmentDrop).toHaveBeenCalledWith('retired-drop'));
+    expect(result.current.documents).toEqual([document]);
+    expect(result.current.attachmentStatus).toBe('idle');
+    expect(api.claimAttachmentDrop).toHaveBeenCalledOnce();
+    expect(api.readDocumentText).not.toHaveBeenCalled();
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  it('preserves native denial diagnostics rather than mistaking cancellation wording for cancellation', async () => {
+    vi.mocked(api.pickAttachment).mockResolvedValue('/synthetic/notes.md');
+    vi.mocked(api.readDocumentText).mockRejectedValueOnce(new IpcError('denied', 'Access to cancelled-notes.md was refused'));
+    const { result, setError } = setup();
+    await act(async () => { await result.current.addAttachment(); });
+    expect(result.current.documents).toEqual([]);
+    expect(result.current.attachmentStatus).toBe('failed');
+    expect(setError).toHaveBeenLastCalledWith('File attachment failed: Access to cancelled-notes.md was refused');
+  });
+
   it('claims mixed native files in order only after each preceding import commits', async () => {
     const first = deferred<string>();
     vi.mocked(api.claimAttachmentDrop).mockResolvedValueOnce('/synthetic/한글 문서.md')
@@ -35,7 +74,7 @@ describe('composer attachment ownership', () => {
     await act(async () => { first.resolve('Unicode document'); });
     await waitFor(() => expect(result.current.documents).toHaveLength(2));
     expect(result.current.documents.map(item => item.name)).toEqual(['한글 문서.md', 'last.md']);
-    expect(result.current.attachments[0].ref).toBe('synthetic-image');
+    expect(defined(result.current.attachments[0]).ref).toBe('synthetic-image');
     expect(api.claimAttachmentDrop).toHaveBeenCalledTimes(3);
     expect(api.discardAttachmentDrop).toHaveBeenCalledWith('native-batch');
     expect(api.pickAttachment).not.toHaveBeenCalled();
@@ -224,7 +263,7 @@ describe('composer attachment ownership', () => {
     act(() => result.current.clearComposerAttachments());
     act(() => { newAdding = result.current.addAttachment(); });
     await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledTimes(2));
-    await act(async () => { oldRead.reject(new Error('Old file was removed')); await oldAdding; });
+    await act(async () => { oldRead.reject(new IpcError('not_found', 'Old file was removed')); await oldAdding; });
     expect(result.current.attachmentStatus).toBe('reading');
     expect(setError).not.toHaveBeenCalled();
     await act(async () => { newRead.resolve('New conversation context'); await newAdding; });
@@ -241,7 +280,7 @@ describe('composer attachment ownership', () => {
     act(() => { adding = result.current.addAttachment(); });
     await waitFor(() => expect(api.readDocumentText).toHaveBeenCalledOnce());
     unmount();
-    await act(async () => { read.reject(new Error('File unavailable')); await adding; });
+    await act(async () => { read.reject(new IpcError('internal', 'File unavailable')); await adding; });
     expect(setError).not.toHaveBeenCalled();
   });
 });

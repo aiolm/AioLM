@@ -34,7 +34,7 @@ export function isTensorSplitFailure(message: string): boolean {
 
 /** Quoted model paths are shortened to their shard-grouped file name. */
 function shortenQuotedPaths(line: string): string {
-  return line.replace(/'([^'\n]{1,400})'/g, (_, path) => `'${modelDisplayName(path)}'`);
+  return line.replace(/'([^'\n]{1,400})'/g, (_, path: string) => `'${modelDisplayName(path)}'`);
 }
 
 /** The single most representative error line of a server log, without timestamps or levels. */
@@ -48,7 +48,11 @@ function firstErrorLine(cleaned: string): string | null {
     const line = raw.trim();
     if (!line) continue;
     const match = line.match(/^(?:\d+(?:\.\d+)*\s+)?([A-Za-z])\s+(.*)$/);
-    if (match && (match[1] === 'E' || /^error\b/i.test(match[2]))) return shorten(match[2]);
+    if (match) {
+      // Both capture groups participate in every match.
+      const message = match[2]!;
+      if (match[1] === 'E' || /^error\b/i.test(message)) return shorten(message);
+    }
     // Argument-parser errors print before logging starts, with no timestamp.
     if (fallback === null && /^(error|failed)\b/i.test(line)) fallback = shorten(line);
   }
@@ -75,6 +79,7 @@ export function describeLaunchFailure(text: string, locale: 'en' | 'ko' | 'ja' |
     return { summary: tensorHint[locale].trim(), detail: cleaned };
   }
   const representative = firstErrorLine(cleaned);
-  const summary = representative ?? launchFailed[locale].replace('{code}', exit[1]);
+  // The matched exit format always contains the code capture.
+  const summary = representative ?? launchFailed[locale].replace('{code}', exit[1]!);
   return { summary, detail: cleaned };
 }

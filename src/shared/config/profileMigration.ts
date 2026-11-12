@@ -40,8 +40,8 @@ function optionalString(value: unknown, source: string): string | undefined {
   return value === undefined ? undefined : string(value, source);
 }
 function strings(value: unknown, source: string): string[] {
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) invalid(source);
-  return [...value] as string[];
+  if (!Array.isArray(value) || !value.every((item: unknown): item is string => typeof item === 'string')) invalid(source);
+  return [...value];
 }
 function selections(value: unknown, source: string): Record<string, string> {
   return value === undefined ? {} : Object.fromEntries(Object.entries(record(value, source)).map(([path, id]) => [path, string(id, source)]));
@@ -58,8 +58,8 @@ function promoteLegacyArgs(raw: RecordValue, source: string): RecordValue {
   if (raw.server_args === undefined) return mapped;
   const args = strings(raw.server_args, `${source}.server_args`);
   for (let index = 0; index < args.length; index++) {
-    const argument = args[index];
-    const name = argument.trim().split('=', 1)[0];
+    const argument = args[index]!; // The loop bounds prove this validated argv entry exists.
+    const name = argument.trim().split('=', 1)[0]!; // split always has a first item.
     const canonical = canonicalServerOptionName(argument);
     if (!canonical) continue;
     const field = tuningCatalog.find(entry => entry.args.includes(name) || entry.args.includes(canonical));
@@ -113,7 +113,7 @@ function validateSettings(value: RecordValue, source: string, provider: Provider
       }
     } else string(field, `${source}.${key}`);
   }
-  return profileSettingsSnapshot({ ...value, active_provider: provider } as Partial<AppConfig>);
+  return profileSettingsSnapshot({ ...value, active_provider: provider });
 }
 
 function legacyId(kind: string, id: string, index: number): string {

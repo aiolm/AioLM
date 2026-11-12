@@ -149,7 +149,7 @@ describe('workspace provider fallback profile integration', () => {
     expect.soft(dialog.queryByRole('button', { name: /^Recovered profile/ })).not.toBeInTheDocument();
     fireEvent.click(dialog.getByRole('button', { name: 'Use this profile and adjust options' }));
     fireEvent.click(dialog.getByRole('tab', { name: 'Performance & memory' }));
-    expect.soft(await dialog.findByLabelText(/^--max-model-len/)).toHaveValue(String(expectedConfig.provider_options!.vllm!.max_model_len));
+    expect.soft(await dialog.findByLabelText(/^--max-model-len/)).toHaveValue(String(expectedConfig.provider_options.vllm.max_model_len));
     fireEvent.click(dialog.getByRole('tab', { name: 'Generation' }));
     expect.soft(dialog.getByRole('textbox', { name: 'Default system prompt' })).toHaveValue(expected.system_prompt);
     expect(store.cfg).toEqual(before);
@@ -165,7 +165,7 @@ describe('workspace provider fallback profile integration', () => {
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
     expect.soft(store.cfg).toMatchObject({ active_provider: 'vllm', active_model: TARGET,
       active_runtime: 'selected-vllm-runtime', request_timeout_seconds: expectedConfig.request_timeout_seconds,
-      provider_options: { vllm: { max_model_len: expectedConfig.provider_options!.vllm!.max_model_len } } });
+      provider_options: { vllm: { max_model_len: expectedConfig.provider_options.vllm.max_model_len } } });
     expect.soft(store.cfg!.settings_profiles!.applied[profileTargetKey(TARGET, 'default', 'vllm')]).toMatchObject({
       provider: 'vllm', model: TARGET, profile_id: expected.id, system_prompt: expected.system_prompt,
     });

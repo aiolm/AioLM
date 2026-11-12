@@ -21,7 +21,7 @@ export function readStored(stored: unknown): StoredOption | undefined {
     const candidate = stored as { occurrences?: unknown; spelling?: unknown };
     if (Array.isArray(candidate.occurrences)) {
       return {
-        rows: candidate.occurrences.map(row => (Array.isArray(row) ? [...row] : [row])),
+        rows: candidate.occurrences.map((row: unknown): unknown[] => (Array.isArray(row) ? [...(row as unknown[])] : [row])),
         spelling: typeof candidate.spelling === 'string' ? candidate.spelling : null,
       };
     }
@@ -33,7 +33,8 @@ export function readStored(stored: unknown): StoredOption | undefined {
  * scalar so older readers keep working; anything else keeps every row. */
 export function writeStored(rows: unknown[][], spelling: string | null): unknown {
   if (rows.length === 0) return undefined;
-  if (!spelling && rows.length === 1 && rows[0].length === 1) return rows[0][0];
+  const [first] = rows;
+  if (!spelling && rows.length === 1 && first?.length === 1) return first[0];
   return { spelling, occurrences: rows };
 }
 
@@ -225,10 +226,12 @@ export function editOption(schema: OptionSchema, values: Record<string, unknown>
     const index = map.indexOf(seen);
     seen += 1;
     if (index < 0) continue;
-    result.push({ key, spelling: sharedChanged ? stored?.spelling ?? null : item.spelling, values: rows[index] });
+    const row = rows[index];
+    if (!row) return values;
+    result.push({ key, spelling: sharedChanged ? stored?.spelling ?? null : item.spelling, values: row });
     last = result.length - 1;
   }
-  const added = map.flatMap((origin, index) => (origin === null ? [{ key, spelling: stored?.spelling ?? null, values: rows[index] }] : []));
+  const added = rows.flatMap((row, index) => (map[index] === null ? [{ key, spelling: stored?.spelling ?? null, values: row }] : []));
   result.splice(last < 0 ? result.length : last + 1, 0, ...added);
   return writePlan(schema, values, result);
 }
@@ -253,7 +256,10 @@ export function moveOccurrence(schema: OptionSchema, values: Record<string, unkn
   const plan = expandPlan(schema, values, state.order);
   const target = index + offset;
   if (index < 0 || target < 0 || index >= plan.length || target >= plan.length) return values;
-  [plan[index], plan[target]] = [plan[target], plan[index]];
+  const source = plan[index];
+  const destination = plan[target];
+  if (!source || !destination) return values;
+  [plan[index], plan[target]] = [destination, source];
   return writePlan(schema, values, plan);
 }
 

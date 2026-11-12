@@ -2,10 +2,13 @@ import { useRef, useState } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
+import { IpcError } from "../../shared/api/ipcError";
 import { getChatPersonalization } from "../../shared/api/personalization";
 import { createTestStore } from "../../testing/appStore";
-import { loadChatWorkspace, saveChatWorkspace, type ChatHistoryMessage, type ChatThread } from "./chatHistory";
-import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import { defined } from "../../testing/assertDefined";
+import { loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
+import type { ChatHistoryMessage, ChatThread } from "../../shared/api/conversationTypes";
+import type { DocumentAttachment, ImageAttachment } from "../../shared/api/mediaTypes";
 import { mcpToolDefinition, type ChatMcpTool } from "./useChatMcpTools";
 import { useChatSend } from "./useChatSend";
 import type { ChatPhase } from "./chatSendTypes";
@@ -22,7 +25,7 @@ vi.mock("../../shared/api/index", () => ({
     inFlight.set(callId, { resolve, reject });
   })),
   mcpCancelToolCall: vi.fn(async (callId: string) => {
-    inFlight.get(callId)?.reject(new Error("MCP tool call cancelled"));
+    inFlight.get(callId)?.reject(new IpcError("cancelled", "MCP tool call cancelled"));
     inFlight.delete(callId);
   }),
 }));
@@ -49,7 +52,7 @@ function selection(tools: Tools): { entries: Map<string, ChatMcpTool>; definitio
   const chosen = tools === "none" ? [] : tools === "lookup" ? [lookup] : tools === "changed"
     ? [{ ...lookup, tool: { ...lookup.tool, description: "Synthetic lookup, new wording" } }] : [lookup, extra];
   const names = chosen.map((entry) => `${entry.serverId}__${entry.tool.name}`);
-  return { entries: new Map(chosen.map((entry, index) => [names[index], entry])), definitions: chosen.map((entry, index) => mcpToolDefinition(entry, names[index])) };
+  return { entries: new Map(chosen.map((entry, index) => [defined(names[index]), entry])), definitions: chosen.map((entry, index) => mcpToolDefinition(entry, defined(names[index]))) };
 }
 
 function setup(options: { initial?: ChatHistoryMessage[]; tools?: Tools } = {}) {
@@ -92,7 +95,7 @@ function answers(text: string) {
 function reloaded(messages: ChatHistoryMessage[]): ChatHistoryMessage[] {
   const thread: ChatThread = { id: "saved", title: "Saved", systemPrompt: "", messages, createdAt: 1, updatedAt: 1 };
   saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
-  return loadChatWorkspace().threads[0].messages;
+  return defined(loadChatWorkspace().threads[0]).messages;
 }
 
 /** Sends with only the lookup tool selected, approves its call, and stops it while it runs. */
@@ -105,7 +108,7 @@ async function cancelledToolTurn() {
   await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
   await act(async () => { hook.result.current.stop(); await approving; });
   expect(hook.result.current.msgs.at(-1)).toMatchObject({ role: "assistant", finishReason: "tool_calls", toolRound: "cancelled" });
-  return { ...hook, originalRequest: structuredClone(streamMock.mock.calls[0][3]) };
+  return { ...hook, originalRequest: structuredClone(defined(streamMock.mock.calls[0])[3]) };
 }
 
 beforeEach(() => {
@@ -156,7 +159,7 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     requestsLookup("call-2");
     await act(async () => { await next.result.current.send(true); });
     expect(streamMock).toHaveBeenCalledTimes(2);
-    const [, key, , history, sampling] = streamMock.mock.calls[1];
+    const [, key, , history, sampling] = defined(streamMock.mock.calls[1]);
     expect(history).toEqual(first.originalRequest);
     expect(key).toBe("live-session-key");
     expect(sampling.tools).toEqual([lookupDefinition]);
@@ -181,14 +184,14 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     let approving!: Promise<void>;
     act(() => { approving = next.result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledTimes(2));
-    expect(callMock.mock.calls[1].slice(0, 3)).toEqual(["catalog", "lookup", { key: "synthetic-key" }]);
-    await act(async () => { inFlight.get(callMock.mock.calls[1][3]!)?.resolve({ content: [{ type: "text", text: "synthetic-key: amber" }] }); await approving; });
+    expect(defined(callMock.mock.calls[1]).slice(0, 3)).toEqual(["catalog", "lookup", { key: "synthetic-key" }]);
+    await act(async () => { inFlight.get(defined(defined(callMock.mock.calls[1])[3]))?.resolve({ content: [{ type: "text", text: "synthetic-key: amber" }] }); await approving; });
     expect(streamMock).toHaveBeenCalledTimes(3);
-    expect(streamMock.mock.calls[2][3].slice(-2)).toEqual([
+    expect(defined(streamMock.mock.calls[2])[3].slice(-2)).toEqual([
       { role: "assistant", content: "", tool_calls: [expect.objectContaining({ id: "call-2" })] },
       { role: "tool", tool_call_id: "call-2", name: "catalog__lookup", content: "{\"text\":\"synthetic-key: amber\"}" },
     ]);
-    expect(streamMock.mock.calls[2][4].tools).toEqual([lookupDefinition]);
+    expect(defined(streamMock.mock.calls[2])[4].tools).toEqual([lookupDefinition]);
     expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question for the lookup tool"], ["assistant", "Synthetic answer from the tool"]]);
     expect(next.result.current.msgs.at(-1)?.retry).toBeUndefined();
   });
@@ -204,7 +207,7 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     act(() => { approving = next.result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledTimes(2));
     await act(async () => { next.result.current.stop(); await approving; });
-    expect(vi.mocked(api.mcpCancelToolCall)).toHaveBeenLastCalledWith(callMock.mock.calls[1][3]);
+    expect(vi.mocked(api.mcpCancelToolCall)).toHaveBeenLastCalledWith(defined(callMock.mock.calls[1])[3]);
     expect(streamMock).toHaveBeenCalledTimes(2);
     expect(next.result.current.msgs.at(-1)).toMatchObject({ toolRound: "cancelled", retry: { tools: [expect.objectContaining({ toolName: "lookup" })] } });
     expect(next.result.current.canRetry).toBe(true);
@@ -222,8 +225,8 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     expect(result.current.canRetry).toBe(true);
     answers("Answer with the tool offered again");
     await act(async () => { await result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
-    expect(streamMock.mock.calls[1][4].tools).toEqual([lookupDefinition]);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[4].tools).toEqual([lookupDefinition]);
   });
 
   it("retries a failed tool follow-up, whose request carries the tool result, only with the same tools", async () => {
@@ -234,9 +237,9 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     let approving!: Promise<void>;
     act(() => { approving = first.result.current.approvePendingTool(); });
     await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
-    await act(async () => { inFlight.get(callMock.mock.calls[0][3]!)?.resolve({ content: "synthetic result" }); await approving; });
+    await act(async () => { inFlight.get(defined(defined(callMock.mock.calls[0])[3]))?.resolve({ content: "synthetic result" }); await approving; });
     expect(first.result.current.error).toBe("HTTP 500: synthetic follow-up failure");
-    const followupRequest = structuredClone(streamMock.mock.calls[1][3]);
+    const followupRequest = structuredClone(defined(streamMock.mock.calls[1])[3]);
     expect(followupRequest.at(-1)).toMatchObject({ role: "tool", tool_call_id: "call-1" });
     const restored = reloaded(first.result.current.msgs);
     first.unmount();
@@ -251,8 +254,8 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     next.rerender({ tools: "lookup" });
     answers("Recovered follow-up");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[2][3]).toEqual(followupRequest);
-    expect(streamMock.mock.calls[2][4].tools).toEqual([lookupDefinition]);
+    expect(defined(streamMock.mock.calls[2])[3]).toEqual(followupRequest);
+    expect(defined(streamMock.mock.calls[2])[4].tools).toEqual([lookupDefinition]);
     expect(callMock).toHaveBeenCalledOnce();
   });
 
@@ -269,7 +272,7 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     act(() => { sending = first.result.current.send(); });
     await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
     await act(async () => { first.result.current.stop(); await sending; });
-    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const originalRequest = structuredClone(defined(streamMock.mock.calls[0])[3]);
     const reply = first.result.current.msgs.at(-1)!;
     expect(reply).toMatchObject({ role: "assistant", interrupted: true, reasoning: reasoning ?? "" });
     expect(reply.finishReason).toBeUndefined();
@@ -298,8 +301,8 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     next.rerender({ tools: "lookup-and-extra" });
     requestsLookup("call-after-restore");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
-    expect(streamMock.mock.calls[1][4].tools).toEqual([lookupDefinition]);
+    expect(defined(streamMock.mock.calls[1])[3]).toEqual(originalRequest);
+    expect(defined(streamMock.mock.calls[1])[4].tools).toEqual([lookupDefinition]);
     expect(next.result.current.pendingToolCall).toMatchObject({ serverId: "catalog", toolName: "lookup" });
     expect(callMock).not.toHaveBeenCalled();
   });
@@ -321,7 +324,7 @@ describe("D17: Retry of a saved MCP tool turn needs the tools it was offered", (
     expect(next.result.current.canRetry).toBe(true);
     answers("Plain answer");
     await act(async () => { await next.result.current.send(true); });
-    expect(streamMock.mock.calls[1][4].tools).toEqual([]);
+    expect(defined(streamMock.mock.calls[1])[4].tools).toEqual([]);
   });
 
   it("still saves no snapshot, and so no tool definitions, for a tool turn that used local instructions", async () => {

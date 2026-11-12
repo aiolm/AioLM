@@ -1,4 +1,7 @@
 import { StrictMode, useEffect, useState, type ReactNode } from "react";
+import { migrationPaths } from "../shared/api/desktop";
+import { errorMessage } from "../shared/api/errors";
+import { isNativeRuntimeAvailable } from "../shared/api/transport";
 import { normalizeDisplayText } from "../shared/lib/displayPaths";
 import { migrateBrowserStorage, type MigratedPath } from "../shared/storage/storageMigration";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
@@ -24,13 +27,10 @@ export default function Bootstrap() {
     let cancelled = false;
     const start = async () => {
       let paths: MigratedPath[] = [];
-      if ("__TAURI_INTERNALS__" in window) {
-        const { invoke } = await import("@tauri-apps/api/core");
-        paths = await invoke<MigratedPath[]>("migration_paths");
-      }
+      if (isNativeRuntimeAvailable()) paths = await migrationPaths();
       await migrateBrowserStorage(paths);
 
-      const [{ default: App }, { default: ErrorBoundary }, { I18nProvider }, { loadPreferences }, { applyTheme }] = await Promise.all([
+      const [{ default: App }, { default: ErrorBoundary }, { I18nProvider, loadLocale }, { loadPreferences }, { applyTheme }] = await Promise.all([
         import("./App"),
         import("../shared/ui/ErrorBoundary"),
         import("../shared/i18n/i18n"),
@@ -39,6 +39,7 @@ export default function Bootstrap() {
         document.fonts.load('14px "Pretendard Variable"'),
       ]);
       const preferences = loadPreferences();
+      await loadLocale(preferences.locale);
       applyTheme(preferences.theme);
       document.documentElement.lang = preferences.locale;
       document.documentElement.dataset.density = preferences.appearance.density;
@@ -56,7 +57,7 @@ export default function Bootstrap() {
       }
     };
     void start().catch(cause => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!cancelled) setError(errorMessage(cause));
     });
     return () => { cancelled = true; };
   }, [attempt]);

@@ -3,13 +3,14 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { parseRuntimeHelp } from '../../shared/config/serverOptions';
 import { testConfig } from '../../testing/appStore';
+import { defined } from '../../testing/assertDefined';
 import TuningDefaultField, { TuningDefaultsContext } from './TuningDefaultField';
 import TuningOptionMetadata, { TuningOptionsContext, ServerOptionDefault } from './TuningOptionMetadata';
 
 describe('visible setting defaults', () => {
   it('explains genuine automatic defaults while preserving the llama.cpp option value', () => {
     const options = parseRuntimeHelp("--flash-attn [on|off|auto]          attention (default: 'auto')");
-    render(<I18nProvider initialLocale="ko"><ServerOptionDefault option={options[0]} options={options} verified /></I18nProvider>);
+    render(<I18nProvider initialLocale="ko"><ServerOptionDefault option={defined(options[0])} options={options} verified /></I18nProvider>);
     expect(screen.getByText("'auto'")).toBeVisible();
     expect(screen.getByText('자동 선택 · 실제 값은 실행 환경에 따라 결정됩니다.')).toBeVisible();
   });
@@ -71,7 +72,7 @@ describe('visible setting defaults', () => {
   });
   it('shows the default even when a full-catalog entry is collapsed', () => {
     const options = parseRuntimeHelp('--cache-ram N          cache (default: 8192, -1 = unlimited)');
-    render(<I18nProvider initialLocale="ko"><details><summary>{options[0].signature}<ServerOptionDefault option={options[0]} options={options} verified /></summary><input /></details></I18nProvider>);
+    render(<I18nProvider initialLocale="ko"><details><summary>{defined(options[0]).signature}<ServerOptionDefault option={defined(options[0])} options={options} verified /></summary><input /></details></I18nProvider>);
     expect(within(document.querySelector('summary')!).getByText('8192, -1 = 제한 없음')).toBeVisible();
     expect(screen.getByText('선택한 런타임 기준')).toBeVisible();
   });

@@ -11,6 +11,7 @@ let textarea: HTMLTextAreaElement;
 let hit: Element | null;
 const unlisten = vi.fn();
 const originalHitTest = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+const hitTest = vi.fn(() => hit);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -22,7 +23,7 @@ beforeEach(() => {
   document.body.append(target);
   hit = textarea;
   vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ left: 10, top: 20, right: 310, bottom: 120, width: 300, height: 100 } as DOMRect);
-  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: vi.fn(() => hit) });
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: hitTest });
   vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(2);
 });
 afterEach(() => {
@@ -50,7 +51,7 @@ describe('native composer file drops', () => {
     textarea.focus();
     act(() => notify(notice()));
     expect(onDrop).toHaveBeenCalledWith('native-token', 2);
-    expect(document.elementFromPoint).toHaveBeenCalledWith(50, 50);
+    expect(hitTest).toHaveBeenCalledWith(50, 50);
     expect(textarea.value).toBe('Preserved draft');
     expect(document.activeElement).toBe(textarea);
     expect(discardAttachmentDrop).not.toHaveBeenCalled();

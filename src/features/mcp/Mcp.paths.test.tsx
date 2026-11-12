@@ -77,7 +77,7 @@ describe("MCP path presentation", () => {
     render(<I18nProvider initialLocale="en"><McpPanel store={createTestStore()} /></I18nProvider>);
     await screen.findByText("No MCP servers configured");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Spaced executable" } });
-    const input = screen.getByLabelText("Executable / command") as HTMLInputElement;
+    const input = screen.getByLabelText<HTMLInputElement>("Executable / command");
     const executable = String.raw`C:\Program Files\MCP Server\server.exe`;
     for (const [index, character] of [...executable].entries()) {
       fireEvent.change(input, { target: { value: input.value + character } });
@@ -114,7 +114,7 @@ describe("MCP path presentation", () => {
     fireEvent.click(screen.getByText("Required input format (JSON Schema)", { selector: "summary" }));
     expect(screen.getByLabelText("Required input format (JSON Schema)").textContent).toContain(JSON.stringify(displayDocument));
     fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: JSON.stringify({ path: rawDocument }) } });
-    expect(JSON.parse((screen.getByLabelText("JSON arguments") as HTMLTextAreaElement).value)).toEqual({ path: displayDocument });
+    expect(JSON.parse(screen.getByLabelText<HTMLTextAreaElement>("JSON arguments").value)).toEqual({ path: displayDocument });
     fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Approve and run once" }));
