@@ -220,6 +220,35 @@ pub fn child_environment() -> Vec<(OsString, OsString)> {
     ])
 }
 
+/// Whether an engine command entry is a host value `child_environment` passed
+/// through unchanged: the app session's PATH, temp directory or device
+/// selection rather than something the engine registration declares. A
+/// runtime's own PATH or an adapter literal differs from the host value and
+/// is not one. LC_ALL is excluded because help capture sets it explicitly.
+pub fn is_host_passthrough(
+    name: &str,
+    value: &str,
+    host: impl Fn(&str) -> Option<OsString>,
+) -> bool {
+    let inherited = [
+        BASE_ENVIRONMENT,
+        PLATFORM_ENVIRONMENT,
+        RUNTIME_DEVICE_ENVIRONMENT,
+    ]
+    .iter()
+    .flat_map(|group| group.iter())
+    .any(|known| {
+        if cfg!(windows) {
+            known.eq_ignore_ascii_case(name)
+        } else {
+            *known == name
+        }
+    });
+    inherited
+        && !name.eq_ignore_ascii_case("LC_ALL")
+        && host(name).is_some_and(|host| host == OsStr::new(value))
+}
+
 /// Environment names that can make a staged runtime appear healthy only
 /// because the build machine happens to have an SDK on its PATH. The actual
 /// installed runtime must resolve its redistributable libraries from the

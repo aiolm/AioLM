@@ -170,7 +170,6 @@ export default {
     "serverRunningHint": "请先卸载模型。",
     "gatewaysDescription": "将使用其他API格式的应用连接到已加载的模型。请求格式在本机转换，仅接受此电脑（127.0.0.1）的连接。",
     "localApi": "本地 API",
-    "loadedModels": "已加载模型",
     "apiIndependentHint": "此状态变化时，API 会继续运行。",
     "apiRunning": "API 运行中",
     "apiStopped": "API 已停止",

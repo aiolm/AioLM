@@ -239,18 +239,8 @@ export function useLoadedModelsController({ store, poll, refresh }: LoadedModels
       if (unload) await api.sessionUnload(id);
       else await api.sessionStop(id);
       notifySessionStatusChanged();
-      if (id === DEFAULT_SESSION_ID) await store.refreshStatus();
     } catch (error) {
-      if (id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
-        try {
-          await store.stop();
-          notifySessionStatusChanged();
-        } catch (fallbackError) {
-          setFailure(errorText(fallbackError));
-        }
-      } else {
-        setFailure(errorText(error));
-      }
+      setFailure(errorText(error));
     } finally {
       setBusyId(null);
       await refresh();

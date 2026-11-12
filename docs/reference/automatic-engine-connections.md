@@ -58,6 +58,11 @@ For an AioLM-managed connection, model settings show options from the selected
 engine command's own help. Existing connections discover this help when their
 settings are first opened. The executable and connection files must still match
 their recorded hashes; later changes do not silently replace reviewed help.
+Host environment values the engine command inherits unchanged from AioLM
+(PATH, temp directory, GPU selection) are not part of that identity, so starting
+AioLM from another shell or after an installer edits PATH keeps reviewed help
+current. Help reviewed by an earlier AioLM version needs **Recheck options**
+once after updating.
 Simple option controls use responsive columns; JSON, token lists, local paths,
 repeated and multi-value editors retain full width. Use these controls or
 **Import command** for documented options. Command import, preview, order,
@@ -74,6 +79,10 @@ The visible background launch task shows the model and current stage with
 indeterminate progress, not a guessed percentage. Closing is not cancellation:
 use **Cancel** to stop that launch. A later failure retains its details and
 **Review saved model settings** reopens the saved configuration for correction.
+A new launch of the same target replaces the previous failed row. When the
+engine exits before serving, the failure names its exit status; on Windows a
+missing, mismatched or damaged DLL is named as the cause, for example after
+security software quarantines one of the engine's files.
 
 Starting an unchanged, previously verified automatic model does not first load
 and unload a throwaway verification process. Changed launch options are checked

@@ -68,7 +68,7 @@
 .app-panel-host > .app-page-scroll { height: 100%; }
 .app-feedback-layer { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 12px var(--ui-canvas-padding) 0; flex-shrink: 0; }
 .app-feedback-layer:empty { display: none; }
-.app-task-strip { display: flex; align-items: start; gap: 16px; margin: 12px var(--ui-canvas-padding) 0; padding: 10px 14px; background: var(--ui-panel-raised); border: 1px solid transparent; border-radius: var(--ui-radius-panel); max-height: 200px; overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
+.app-task-strip { display: flex; align-items: start; gap: 16px; margin: 12px var(--ui-canvas-padding) 0; padding: 10px 14px; background: var(--ui-panel-raised); border: 1px solid transparent; border-radius: var(--ui-radius-panel); max-height: min(200px, 28dvh); overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
 .app-task-strip__heading { display: flex; gap: 8px; align-items: center; min-height: 28px; }
 /* One task per row. Rows share their columns (name, state, progress,
    transfer or detail, action) through subgrid, so several tasks line up. */
@@ -76,10 +76,12 @@
 .app-task-strip__item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; min-height: 28px; padding-block: 3px; }
 .app-task-strip__item + .app-task-strip__item { border-top: 1px solid var(--ui-border); }
 /* Names, states and transfer figures stay on their row; the full text is in
-   the tooltip. A failure reason wraps within its column so it can be read
-   without hovering, and a long diagnostic keeps its own disclosure. */
+   the tooltip. A failure reason wraps within its column for three lines, so a
+   short window keeps room for the workspace below; the tooltip and the
+   reopened settings hold the rest, and a long diagnostic keeps its own
+   disclosure. */
 .app-task-strip__label, .app-task-strip__status, .app-task-strip__transfer { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-task-strip__detail { min-width: 0; overflow-wrap: anywhere; }
+.app-task-strip__detail { min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .app-task-strip__label { font-weight: 600; color: var(--ui-ink); }
 .app-task-strip__status, .app-task-strip__transfer, .app-task-strip__detail { color: var(--ui-muted); }
 .app-task-strip__item--failed .app-task-strip__status, .app-task-strip__item--crashed .app-task-strip__status { color: var(--ui-danger); }

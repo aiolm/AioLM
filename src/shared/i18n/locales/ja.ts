@@ -170,7 +170,6 @@ export default {
     "serverRunningHint": "先にモデルをアンロードしてください。",
     "gatewaysDescription": "他のAPI形式を使うアプリを読み込み済みモデルに接続します。リクエストはローカルで変換され、このコンピューター（127.0.0.1）からのみ接続できます。",
     "localApi": "ローカルAPI",
-    "loadedModels": "読み込み済みモデル",
     "apiIndependentHint": "この状態が変わってもAPIは動作し続けます。",
     "apiRunning": "API実行中",
     "apiStopped": "API停止中",

@@ -84,7 +84,7 @@ function ChatMessageLog({
     >
       <div className="chat-message-content">
       {showsEmptyState && (
-        <div className="mt-10">
+        <div className="chat-blocked-state">
           <EmptyState
             icon={isFailed ? (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 7v5M10 13.5h.01" strokeLinecap="round" /></svg>

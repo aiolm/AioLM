@@ -14,7 +14,7 @@ Fixed-output benchmarks (`openai-chat-serving@2`) require an engine that can con
 - In-app GGUF and HF/MLX safetensors downloads, with per-model weight selection, required loading files, a local model library and safe deletion
 - Managed llama.cpp runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO), portable runtime archives and llama.cpp PR builds with provenance review
 - Settings profiles per engine, resource estimates before loading, and multimodal inputs where the model and engine support them
-- Loaded-model management with start/stop, settings and runtime logs in the model library
+- Model session management with start/stop, settings and runtime logs from the header, Chat and the library's saved sessions
 - Streaming chat with local conversations, projects, document search and MCP tools
 - Personal AGENTS.md instructions and local skills, edited in **Settings → Personalization**
 - A local API server for OpenAI- and Anthropic-compatible clients

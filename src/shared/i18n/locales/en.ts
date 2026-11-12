@@ -194,7 +194,6 @@ export default {
     "apiDescription": "Connect OpenAI-compatible and Anthropic clients to the local API. It runs independently of models, and the key is never included in snippets.",
     "gatewaysDescription": "Connect apps that use other API formats to the loaded model. Requests are translated locally, and connections are accepted only from this computer (127.0.0.1).",
     "localApi": "Local API",
-    "loadedModels": "Loaded models",
     "apiIndependentHint": "The API keeps running when this changes.",
     "apiRunning": "API running",
     "apiStopped": "API stopped",

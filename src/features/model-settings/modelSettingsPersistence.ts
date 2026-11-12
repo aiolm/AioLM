@@ -11,7 +11,7 @@ import { isLifecycleCancellation } from '../../shared/lib/serverLifecycle';
 import { notifySessionStatusChanged, sessionConfig } from '../../shared/runtime/sessionUtils';
 import { anySessionActivity, sessionHasActivity } from '../../shared/state/sessionActivity';
 import type { AppStore } from '../../shared/state/store';
-import { finishTask, getTaskSnapshot, registerTask, updateTask } from '../../shared/state/taskRegistry';
+import { finishTask, getTaskSnapshot, registerTask, removeTask, updateTask } from '../../shared/state/taskRegistry';
 import { type ModelSettingsRequest } from './modelSettingsContext';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { launchModelSettings } from './modelSettingsLaunch';
@@ -131,6 +131,11 @@ export function createProfilePersistence(options: ProfilePersistenceOptions) {
         return owner.cancellation;
       },
     } : undefined;
+    // A new launch replaces the settled result of the previous one for this
+    // target, so repeated attempts do not stack rows above the workspace.
+    if (owner) for (const task of getTaskSnapshot()) {
+      if (task.kind === 'model-launch' && task.targetId === id && task.state !== 'running' && task.state !== 'cancelling') removeTask(task.id);
+    }
     const taskId = owner ? registerTask({
       id: owner.id, kind: 'model-launch', targetId: id,
       label: `${targetLabel} · ${modelDisplayName(draft.active_model)}`,

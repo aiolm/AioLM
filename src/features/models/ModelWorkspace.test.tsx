@@ -131,12 +131,12 @@ describe('model management and settings', () => {
     expect(settings.open).toHaveBeenCalledWith(match.objectContaining({ target: { kind: 'default' }, config: match.objectContaining({ active_model: 'a.gguf' }) }));
     expect(screen.queryByRole('spinbutton', { name: /Context size/ })).not.toBeInTheDocument();
   });
-  it('lists a loaded model outside the scanned folder with its own controls above the library', async () => {
+  it('lists a running named session outside the scanned folder with its own controls in saved sessions', async () => {
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
     vi.mocked(api.sessionList).mockResolvedValue([{ id: 'work', name: 'Work', state: 'running', model: '/synthetic/elsewhere/outside.gguf' }]);
     mount(createTestStore({ active_model: '' }));
-    const loaded = within(await screen.findByRole('group', { name: 'Loaded models' }));
-    const row = within(loaded.getByRole('article', { name: 'Work' }));
+    fireEvent.click(screen.getByText('Saved sessions', { selector: 'summary > span' }));
+    const row = within(within(await screen.findByRole('group', { name: 'Saved sessions' })).getByRole('article', { name: 'Work' }));
     expect(row.getByText('outside.gguf')).toBeInTheDocument();
     expect(row.getByRole('button', { name: 'Stop session' })).toBeEnabled();
     // The library itself still lists only the scanned folder.

@@ -57,6 +57,7 @@ pub use download::download_verified;
 pub use download::file_sha256;
 pub use environment::child_environment;
 pub use environment::child_environment_for_runtime;
+pub use environment::is_host_passthrough;
 pub use github::catalog_supports;
 pub use github::clear_api_cache;
 pub use github::companion_asset_name;

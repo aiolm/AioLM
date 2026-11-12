@@ -41,10 +41,11 @@ function statusCopy(state: api.SessionStatus["state"], t: ReturnType<typeof useI
   return label === "stopping" ? t("status.working") : t("ui.sessionStopped");
 }
 /**
- * Loaded, loading and failed models — the default target and every named
- * session, including sessions that are not saved and models outside the
- * scanned folder — with their own stop, unload, cancel and retry actions.
- * Saved-session creation and editing stay in a collapsed secondary area.
+ * Named sessions in the model library: saved ones, the one being edited and
+ * any unsaved session that is loading, loaded or failed, each with its own
+ * load, stop, cancel, unload and failure details. The default target is
+ * controlled from the header and the conversation, so the library does not
+ * repeat it as a separate loaded-model list.
  *
  * Status comes from the library's single detailed session subscription, which
  * pauses while the page is hidden; this component adds no polling of its own.
@@ -66,57 +67,15 @@ export default function LoadedModels(props: LoadedModelsProps) {
     <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} /><ModelName model={model} empty={t("ui.sessionNoModel")} /></span></span>;
   const rowName = (definition: api.SessionDefinition) => normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
 
-  // A stopped default with nothing reported is not a resource; named sessions
-  // appear while loading, loaded, stopping or failed, saved or not.
-  const liveDefinitions = allDefinitions.filter(definition => rowFor(definition).state !== "stopped");
-  const savedDefinitions = allDefinitions.filter(definition => definition.id !== DEFAULT_SESSION_ID
-    && (definitionsById.has(definition.id) || editing?.id === definition.id));
+  // Saved sessions, the one being edited, and a named session that is live
+  // without being saved, so every loaded or failed named session keeps its
+  // controls here.
+  const sessionDefinitions = allDefinitions.filter(definition => definition.id !== DEFAULT_SESSION_ID
+    && (definitionsById.has(definition.id) || editing?.id === definition.id || rowFor(definition).state !== "stopped"));
 
   return (
-    <section className="loaded-models" aria-labelledby="loaded-models-heading" data-testid="loaded-models">
-      <div className="models-list-heading"><h2 id="loaded-models-heading">{t("ui.loadedModels")}</h2><span className="models-list-count">{liveDefinitions.length}</span></div>
+    <section className="loaded-models" aria-label={copy.saved} data-testid="loaded-models">
       {(notice || failure) && <FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner>}
-      {liveDefinitions.length === 0
-        ? <p className="loaded-models-empty">{copy.empty}</p>
-        : <div className="app-card app-card--tight sessions-list" role="group" aria-label={t("ui.loadedModels")}>
-          {liveDefinitions.map((definition) => {
-            const { status, state, rowDefinition, model, runtimeConfig } = rowFor(definition);
-            const name = rowName(definition);
-            const failed = state === "failed" || state === "crashed";
-            return (
-              <article key={definition.id} className="app-list-row session-entry" aria-label={name}>
-                <div className="session-entry-main">
-                  <div className="session-entry-name">{rowSummary(name, model)}</div>
-                  <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
-                  <span className="session-entry-runtime"><RuntimeSelectionLabel config={runtimeConfig} /></span>
-                  <div className="session-entry-actions">
-                    {settingsButton(definition)}
-                    {lifecycleButton(definition, state, rowDefinition)}
-                  </div>
-                </div>
-                {(status?.error || failed && status?.log_tail) && <FeedbackBanner tone="error" className="session-entry-error"><RuntimeFailureDetails error={status.error} log={failed ? status.log_tail : undefined} /></FeedbackBanner>}
-                <details className="session-entry-disclosure">
-                  <summary>{copy.details}</summary>
-                  <div className="session-entry-details">
-                    <ModelBadges mode="detail" model={model} localPath={model} />
-                    <div className="session-entry-diagnostics text-xs ui-color-muted">
-                      {status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status) || "—" })}</span>}
-                      {status?.pid && <span>{t("ui.sessionPidLabel", { pid: status.pid })}</span>}
-                      {status?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: status.active_requests })}</span>}
-                    </div>
-                    {!failed && <pre tabIndex={0} role="region" aria-label={t("ui.diagnosticsTitle")} className="session-entry-log">{normalizeDisplayText(status?.log_tail || t("ui.noDiagnostics"))}</pre>}
-                    {definition.id !== DEFAULT_SESSION_ID && state === "running" && <div className="flex flex-wrap items-center gap-2">
-                      <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>
-                    </div>}
-                  </div>
-                </details>
-              </article>
-            );
-          })}
-        </div>}
-
-      {/* Advanced: saved sessions with their own engine, profile and GPU
-          assignment. Collapsed so the loaded models above stay the main view. */}
       <details className="loaded-models-saved">
         <summary><span>{copy.saved}</span> <span className="models-list-count">{definitions.length}</span></summary>
         <div className="loaded-models-saved-content">
@@ -124,13 +83,14 @@ export default function LoadedModels(props: LoadedModelsProps) {
             <p className="text-xs ui-color-muted">{t("ui.sessionsIntro")}</p>
             <button type="button" className="app-button app-button--secondary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
           </div>
-          {savedDefinitions.length === 0
+          {sessionDefinitions.length === 0
             ? <EmptyState title={copy.savedEmpty} description={t("ui.sessionEmpty")} />
             : <div className="app-card app-card--tight sessions-list" role="group" aria-label={copy.saved}>
-              {savedDefinitions.map((definition) => {
-                const { state, rowDefinition, model, runtimeConfig } = rowFor(definition);
+              {sessionDefinitions.map((definition) => {
+                const { status, state, rowDefinition, model, runtimeConfig } = rowFor(definition);
                 const expanded = detailsOpen && selectedId === definition.id;
                 const name = rowName(definition);
+                const failed = state === "failed" || state === "crashed";
                 return (
                   <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={name}>
                     <div className="session-entry-main">
@@ -142,18 +102,24 @@ export default function LoadedModels(props: LoadedModelsProps) {
                       <span className="session-entry-runtime"><RuntimeSelectionLabel config={runtimeConfig} /></span>
                       <div className="session-entry-actions">
                         {settingsButton(definition)}
-                        {/* Lifecycle actions for a session that is loading, loaded or
-                            failed live in the loaded list above, once per session. */}
-                        {state === "stopped" && lifecycleButton(definition, state, rowDefinition)}
+                        {lifecycleButton(definition, state, rowDefinition)}
                       </div>
                     </div>
+                    {(status?.error || failed && status?.log_tail) && <FeedbackBanner tone="error" className="session-entry-error"><RuntimeFailureDetails error={status.error} log={failed ? status.log_tail : undefined} /></FeedbackBanner>}
                     {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
                       <ModelBadges mode="detail" model={model} localPath={model} />
+                      {status && state !== "stopped" && <div className="session-entry-diagnostics text-xs ui-color-muted">
+                        <span>{t("ui.sessionPortLabel", { port: sessionPort(status) || "—" })}</span>
+                        {status.pid && <span>{t("ui.sessionPidLabel", { pid: status.pid })}</span>}
+                        {status.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: status.active_requests })}</span>}
+                      </div>}
+                      {!failed && state !== "stopped" && <pre tabIndex={0} role="region" aria-label={t("ui.diagnosticsTitle")} className="session-entry-log">{normalizeDisplayText(status?.log_tail || t("ui.noDiagnostics"))}</pre>}
                       <div className="grid gap-3 app-form-grid">
                         <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>
+                        {state === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
                         <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>
                       </div>
                     </div>}

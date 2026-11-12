@@ -1028,8 +1028,10 @@ async fn upstream(
             let url = format!("http://127.0.0.1:{port}/v1");
             let deadline = Instant::now() + Duration::from_secs(MANAGED_READY_SECS);
             loop {
-                if child.try_wait()?.is_some() {
-                    return Err(crate::error::AppError::unavailable("discovered entry point exited before serving a model API; see the engine diagnostics"));
+                if let Some(status) = child.try_wait()? {
+                    return Err(crate::error::AppError::unavailable(engine_exit_message(
+                        status.code(),
+                    )));
                 }
                 if let Ok(info) = probe::inspect_endpoint(&url, None).await {
                     if !child.owns_listener(port) {
@@ -1054,6 +1056,28 @@ async fn upstream(
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
+    }
+}
+
+/// Why the managed engine ended before serving. A Windows loader failure ends
+/// the process before it writes anything, so its status is the only evidence.
+fn engine_exit_message(code: Option<i32>) -> String {
+    let status = match code {
+        // NTSTATUS values are negative as i32; Windows tools print them in hex.
+        Some(code) if code < 0 => format!("status {:#010X}", code as u32),
+        Some(code) => format!("status {code}"),
+        None => "a signal".into(),
+    };
+    let cause = match code.map(|code| code as u32) {
+        Some(0xC000_0135) => Some("a DLL the engine needs was not found; check that its folder is complete and that security software did not quarantine one of its files"),
+        Some(0xC000_0139) => Some("a DLL the engine loaded lacks a required entry point; its DLLs do not match each other"),
+        Some(0xC000_007B) => Some("the engine or one of its DLLs is damaged or built for another architecture"),
+        Some(0xC000_0142) => Some("a DLL the engine needs failed to initialize"),
+        _ => None,
+    };
+    match cause {
+        Some(cause) => format!("discovered entry point exited with {status} before serving a model API: {cause}"),
+        None => format!("discovered entry point exited with {status} before serving a model API; see the engine diagnostics"),
     }
 }
 
@@ -1210,6 +1234,21 @@ pub async fn run_internal(args: &[String]) -> Result<(), crate::error::AppError>
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn engine_exit_names_windows_loader_failures_and_keeps_other_statuses() {
+        let missing_dll = engine_exit_message(Some(0xC000_0135_u32 as i32));
+        assert!(missing_dll.contains("status 0xC0000135"), "{missing_dll}");
+        assert!(
+            missing_dll.contains("DLL the engine needs was not found"),
+            "{missing_dll}"
+        );
+        assert_eq!(
+            engine_exit_message(Some(3)),
+            "discovered entry point exited with status 3 before serving a model API; see the engine diagnostics"
+        );
+        assert!(engine_exit_message(None).contains("with a signal"));
+    }
 
     #[tokio::test]
     async fn cancelled_inspection_does_not_revalidate_a_stale_process() {

@@ -2,10 +2,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import * as api from "../../shared/api/index";
 import { IpcError, isIpcErrorKind } from "../../shared/api/ipcError";
 import { useI18n } from "../../shared/i18n/i18n";
-import {
-DEFAULT_SESSION_ID,
-notifySessionStatusChanged
-} from "../../shared/runtime/sessionUtils";
+import { notifySessionStatusChanged } from "../../shared/runtime/sessionUtils";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import type { AppStore } from "../../shared/state/store";
 import { finishTask, getTaskSnapshot, registerTask } from "../../shared/state/taskRegistry";
@@ -27,11 +24,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isMissingSessionFacade(error: unknown): boolean {
-  if (error instanceof IpcError) return false;
-  const message = errorText(error).toLowerCase();
-  return message.includes("unknown command") || message.includes("command not found") || message.includes("session_start") && message.includes("not found");
-}
 export async function loadSession(definition: api.SessionDefinition, { store, cfg, t, stopExisting, editing, hasUnsavedChanges, currentEdit, currentSelection, currentLoad, setBusyId, setLoadingId, setNotice, setFailure, updateStatus, setEditing, refresh }: SessionLoadOptions) {
     if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
       setFailure(t("ui.sessionActiveResponseLoad"));
@@ -94,16 +86,6 @@ export async function loadSession(definition: api.SessionDefinition, { store, cf
       if (cancelled) {
         setNotice(t("ui.taskCancelled"));
         finishTask(taskId, "cancelled");
-      } else if (runnableDefinition.id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
-        try {
-          await store.start(launchConfig);
-          notifySessionStatusChanged();
-          finishTask(taskId, "completed");
-        } catch (fallbackError) {
-          const message = errorText(fallbackError);
-          setFailure(message);
-          finishTask(taskId, "failed", message);
-        }
       } else {
         setFailure(message);
         finishTask(taskId, "failed", message);

@@ -655,6 +655,26 @@ describe('model launch preparation', () => {
     expect(mocks.cancelLaunch).not.toHaveBeenCalled();
   });
 
+  it('replaces the previous failed launch row when the same target is launched again', async () => {
+    const store = createTestStore();
+    const launch = async (message: string) => {
+      const preflight = deferred<AppConfig>();
+      mocks.preflightLaunch.mockReturnValueOnce(preflight.promise);
+      const dialog = await open(store, { target: { kind: 'default' } });
+      let result!: Promise<unknown>;
+      act(() => { result = apply(dialog, dialog.initialConfig, 'start').catch((cause: unknown) => cause); });
+      await act(async () => { await result; });
+      await act(async () => { preflight.reject(new Error(message)); await result; });
+      await waitFor(() => expect(getTaskSnapshot().some(task => task.detail === message)).toBe(true));
+    };
+    await launch('First synthetic launch failure');
+    await launch('Second synthetic launch failure');
+    expect(getTaskSnapshot().filter(task => task.kind === 'model-launch')).toEqual([expect.objectContaining({
+      targetId: 'default', state: 'failed', detail: 'Second synthetic launch failure',
+    })]);
+    expect(screen.queryByText('First synthetic launch failure')).not.toBeInTheDocument();
+  });
+
   it('keeps a closed preflight cancellable from the global task', async () => {
     const store = createTestStore();
     const preflight = deferred<AppConfig>();

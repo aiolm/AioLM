@@ -67,8 +67,9 @@ impl Encoding {
     }
 }
 
-/// The adapter resolves the complete child environment. Clearing inherited env
-/// makes the fingerprint describe what was actually passed, including locale.
+/// The adapter resolves the complete child environment. The fingerprint covers
+/// what the command sets itself, including locale; host values it passes
+/// through unchanged are excluded (see `identity_with_host`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HelpCommand {
@@ -139,6 +140,19 @@ impl HelpCommand {
     }
 
     pub fn identity(&self, cancel: &AtomicBool) -> Result<Identity, crate::error::AppError> {
+        self.identity_with_host(cancel, |name| std::env::var_os(name))
+    }
+
+    /// `host` reads the app process environment. Host values passed through
+    /// unchanged (PATH, TEMP, device selection) describe the session the app
+    /// was started from, which changes with the shell, a PATH edit by an
+    /// installer or a rebuilt development binary; hashing them made reviewed
+    /// help stale and blocked launch although the engine was unchanged.
+    pub(crate) fn identity_with_host(
+        &self,
+        cancel: &AtomicBool,
+        host: impl Fn(&str) -> Option<std::ffi::OsString>,
+    ) -> Result<Identity, crate::error::AppError> {
         // Windows Command implicitly runs batch files through cmd.exe. Require
         // a real executable/interpreter so our argv boundary stays shell-free.
         if cfg!(windows)
@@ -247,10 +261,15 @@ impl HelpCommand {
                 entry.insert(sha256(&path, cancel)?);
             }
         }
+        let environment = self
+            .environment
+            .iter()
+            .filter(|(name, value)| !crate::runtime::is_host_passthrough(name, value, &host))
+            .collect::<BTreeMap<_, _>>();
         let identity = serde_json::json!({
             "program":program,"sha256":executable_sha256,"artifacts":artifacts_sha256,
             "artifact_paths":artifact_paths,
-            "working_directory":working_directory,"args":self.args,"environment":self.environment,
+            "working_directory":working_directory,"args":self.args,"environment":environment,
             "runtime_version":self.runtime_version,"scope":self.scope,"encoding":self.encoding,
             "output_limit":self.output_limit,"timeout_ms":self.timeout_ms,"parser":PARSER_VERSION,
             "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
@@ -868,6 +887,64 @@ mod tests {
             original.identity(&cancel).unwrap().fingerprint
         );
         assert!(!serde_json::to_string(&first).unwrap().contains("LC_ALL"));
+    }
+
+    #[test]
+    fn fingerprint_ignores_the_host_session_but_not_values_the_command_sets() {
+        let cancel = AtomicBool::new(false);
+        let host = |path: &'static str| {
+            move |name: &str| (name == "PATH").then(|| std::ffi::OsString::from(path))
+        };
+        let mut first_session = command("normal");
+        first_session
+            .environment
+            .insert("PATH".into(), "/synthetic/shell-one".into());
+        let mut second_session = first_session.clone();
+        second_session
+            .environment
+            .insert("PATH".into(), "/synthetic/shell-two".into());
+        let reviewed = first_session
+            .identity_with_host(&cancel, host("/synthetic/shell-one"))
+            .unwrap();
+        // The same engine started from another shell or after a PATH edit.
+        assert_eq!(
+            reviewed.fingerprint,
+            second_session
+                .identity_with_host(&cancel, host("/synthetic/shell-two"))
+                .unwrap()
+                .fingerprint
+        );
+        // A runtime that sets its own PATH is still identified by it.
+        let mut own_path = first_session.clone();
+        own_path
+            .environment
+            .insert("PATH".into(), "/synthetic/runtime".into());
+        assert_ne!(
+            reviewed.fingerprint,
+            own_path
+                .identity_with_host(&cancel, host("/synthetic/shell-one"))
+                .unwrap()
+                .fingerprint
+        );
+        // The explicit help locale stays part of the identity even when each
+        // session's host happens to use the same value.
+        let locale_host = |locale: &'static str| {
+            move |name: &str| (name == "LC_ALL").then(|| std::ffi::OsString::from(locale))
+        };
+        let mut other_locale = first_session.clone();
+        other_locale
+            .environment
+            .insert("LC_ALL".into(), "C.UTF-8".into());
+        assert_ne!(
+            first_session
+                .identity_with_host(&cancel, locale_host("C"))
+                .unwrap()
+                .fingerprint,
+            other_locale
+                .identity_with_host(&cancel, locale_host("C.UTF-8"))
+                .unwrap()
+                .fingerprint
+        );
     }
 
     #[cfg(unix)]

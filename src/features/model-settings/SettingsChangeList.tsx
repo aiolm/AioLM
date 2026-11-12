@@ -58,7 +58,10 @@ export default function SettingsChangeList({ saved, current, savedPrompt, curren
   const copy = profileControlCopy[locale];
   const render = valueRenderer(locale);
   const schema = useProfileRuntimeSchema(runtimeConfig, !!runtimeConfig && providerOf(runtimeConfig) !== 'llama.cpp');
-  const view = schema.view && !['stale', 'unchecked'].includes(schema.view.help_state) ? schema.view : undefined;
+  // Stale or unchecked help still describes the options the editor offered
+  // and which of them are secret, so a value entered there reads as itself;
+  // only options no reviewed help describes stay hidden as unverified.
+  const view = schema.view;
   const mask = profileValueMask(view, saved.provider_options?.[schema.provider] ?? {}, current.provider_options?.[schema.provider] ?? {});
   const installedRuntimes = useInstalledRuntimes(providerOf(current) === 'llama.cpp' || providerOf(saved) === 'llama.cpp');
   const renderChange = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0 ? '{}' : render(value);

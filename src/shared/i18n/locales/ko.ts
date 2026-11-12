@@ -195,7 +195,6 @@ export default {
     "apiDescription": "OpenAI 호환 및 Anthropic 클라이언트를 로컬 API에 연결합니다. API는 모델과 독립적으로 실행되며 키는 예제 코드에 포함되지 않습니다.",
     "gatewaysDescription": "다른 API 형식을 사용하는 앱을 로드된 모델에 연결합니다. 요청 형식은 이 컴퓨터에서 변환하며, 이 컴퓨터(127.0.0.1)에서만 연결할 수 있습니다.",
     "localApi": "로컬 API",
-    "loadedModels": "로드된 모델",
     "apiIndependentHint": "이 상태가 바뀌어도 API는 계속 실행됩니다.",
     "apiRunning": "API 실행 중",
     "apiStopped": "API 중지됨",

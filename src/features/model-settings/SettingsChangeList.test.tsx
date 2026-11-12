@@ -122,4 +122,20 @@ describe('profile save change list', () => {
     for (const value of ['OLD-PRIVATE', 'NEW-PRIVATE', 'OLD-RETIRED', 'NEW-RETIRED']) expect(container).not.toHaveTextContent(value);
     expect(changeCount(saved, current, '', '')).toBe(4);
   });
+  it('shows a value entered for an option that stale help describes, still masking its secrets', async () => {
+    const provider = 'custom.review';
+    const credential = schemaOption({ key: 'credential', flag: '--credential', target: 'launch', group: 'engine', kind: { type: 'text' } });
+    credential.sensitive = { certainty: 'documented', value: true };
+    vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [credential,
+      schemaOption({ key: 'draft_model', flag: '--draft-model', target: 'launch', group: 'engine', kind: { type: 'text' } }),
+    ], { help_state: 'stale' }));
+    const runtimeConfig = { ...testConfig, active_provider: provider, active_runtime: 'build' } satisfies api.AppConfig;
+    const saved = { active_provider: provider, provider_options: { [provider]: { credential: 'OLD-PRIVATE' } } } as const;
+    const current = { active_provider: provider, provider_options: { [provider]: { credential: 'NEW-PRIVATE', draft_model: 'draft-synthetic.gguf' } } } as const;
+    const { container } = render(<I18nProvider initialLocale="en"><SettingsChangeList saved={saved} current={current}
+      savedPrompt="" currentPrompt="" runtimeOptions={[]} runtimeVerified={false} runtimeConfig={runtimeConfig} /></I18nProvider>);
+    expect(await screen.findByText('draft-synthetic.gguf')).toBeVisible();
+    for (const value of ['OLD-PRIVATE', 'NEW-PRIVATE']) expect(container).not.toHaveTextContent(value);
+    expect(container).not.toHaveTextContent('Needs a compatibility check');
+  });
 });
