@@ -283,7 +283,8 @@ fn approval_journey_child() {
             // The selected route also enforces host compatibility before the
             // approval boundary. Exercise it where these engine kinds run.
             if (provider == ProviderId::Vllm && cfg!(target_os = "linux"))
-                || (provider == ProviderId::MlxVlm && cfg!(target_os = "macos"))
+                || (provider == ProviderId::MlxVlm
+                    && cfg!(all(target_os = "macos", target_arch = "aarch64")))
             {
                 denied(answer(&[false], runtime_help_discover_selected(cfg, request)).await);
             }
