@@ -705,24 +705,72 @@ async fn write_installer<W: tokio::io::AsyncWrite + Unpin>(
     Ok(received)
 }
 
-/// A fresh private directory in the application's home. The installer keeps
-/// running after this process exits, so the directory is removed only when
-/// the update fails before the installer is launched.
+/// A fresh private directory under `<home>/updates`. The installer keeps
+/// running after this process exits, so the directory is removed here only
+/// when the update fails before launch; later starts reclaim it through
+/// [`purge_stale_update_directories`].
 fn update_directory() -> Result<PathBuf, AppError> {
     update_directory_in(&crate::home::resolve_aiolm_home()?)
 }
 
-fn update_directory_in(home: &Path) -> Result<PathBuf, AppError> {
-    let directory = home.join(format!("aiolm-update-{}", uuid::Uuid::new_v4().simple()));
+const UPDATES_DIRECTORY: &str = "updates";
+/// A launched installer may still be running (or relaunching the app) shortly
+/// after startup, so only staging older than this is reclaimed.
+const STALE_UPDATE_AGE: Duration = Duration::from_secs(60 * 60);
+
+fn private_directory_builder() -> std::fs::DirBuilder {
     let builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     let mut builder = builder;
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder
+}
+
+fn update_directory_in(home: &Path) -> Result<PathBuf, AppError> {
+    let root = home.join(UPDATES_DIRECTORY);
+    let mut root_builder = private_directory_builder();
+    root_builder.recursive(true);
+    root_builder
+        .create(&root)
+        .map_err(|error| AppError::io("could not create the update download directory", &error))?;
+    let directory = root.join(uuid::Uuid::new_v4().simple().to_string());
+    private_directory_builder()
         .create(&directory)
         .map_err(|error| AppError::io("could not create the update download directory", &error))?;
     Ok(directory)
+}
+
+/// Remove installer staging left by earlier successful updates. Entries that
+/// are recent, still in use (Windows keeps a running installer locked) or
+/// unreadable are kept and retried on a later start.
+pub fn purge_stale_update_directories() {
+    if let Ok(home) = crate::home::resolve_aiolm_home() {
+        purge_stale_update_directories_in(&home, STALE_UPDATE_AGE, std::time::SystemTime::now());
+    }
+}
+
+fn purge_stale_update_directories_in(
+    home: &Path,
+    older_than: Duration,
+    now: std::time::SystemTime,
+) {
+    let Ok(entries) = std::fs::read_dir(home.join(UPDATES_DIRECTORY)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= older_than);
+        if stale && metadata.is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 struct InstallGuard {
@@ -1516,7 +1564,10 @@ mod tests {
         let home = std::env::temp_dir().join(format!("aiolm-update-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&home).unwrap();
         let directory = update_directory_in(&home).unwrap();
-        assert_eq!(directory.parent(), Some(home.as_path()));
+        assert_eq!(
+            directory.parent(),
+            Some(home.join(UPDATES_DIRECTORY).as_path())
+        );
         let path = directory.join("synthetic-installer");
         let file = create_installer_file(&path).unwrap();
         #[cfg(unix)]
@@ -1530,6 +1581,29 @@ mod tests {
         }
         drop(file);
         assert!(create_installer_file(&path).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn startup_purge_reclaims_only_stale_update_staging() {
+        let home = std::env::temp_dir().join(format!("aiolm-update-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let finished = update_directory_in(&home).unwrap();
+        std::fs::write(finished.join("synthetic-installer"), b"installer").unwrap();
+        let unrelated = home.join("config.json");
+        std::fs::write(&unrelated, b"{}").unwrap();
+        let now = std::time::SystemTime::now();
+        // A just-launched installer may still be running: keep recent staging.
+        purge_stale_update_directories_in(&home, Duration::from_secs(3600), now);
+        assert!(finished.exists());
+        // Staging from an earlier start is removed; other home data is not.
+        purge_stale_update_directories_in(
+            &home,
+            Duration::from_secs(3600),
+            now + Duration::from_secs(7200),
+        );
+        assert!(!finished.exists());
+        assert!(unrelated.exists());
         std::fs::remove_dir_all(home).unwrap();
     }
 

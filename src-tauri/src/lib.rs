@@ -420,6 +420,9 @@ pub fn run() {
             return;
         }
     }
+    // Installers from earlier successful updates outlive the process that
+    // launched them; reclaim their staging once no installer can be using it.
+    std::thread::spawn(app_update::purge_stale_update_directories);
     // A fresh installation has no model folder yet. Create the one the default
     // configuration points at before the window exists, so the first scan the
     // frontend runs already finds a real (empty) folder rather than a path that
