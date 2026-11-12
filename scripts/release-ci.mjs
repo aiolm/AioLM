@@ -14,13 +14,25 @@ export const BUILD_INPUT_FILES = [
   "src-tauri/tauri.conf.json", "src-tauri/tauri-package.conf.json", "src-tauri/tauri-cli-build.conf.json",
   "scripts/build-path-remap.mjs", "scripts/build-cli.mjs", "scripts/package-tauri.mjs",
 ];
+/**
+ * @typedef {{formatVersion: number, sourceSha: string, runner: {os: string, arch: string}, benchmarkOriginSha256: string, rustcVersion: string, sourceInputs: {path: string, sha256: string}[]}} BuildInput
+ * @typedef {{id: number, head_sha: string, head_branch: string, event: string, path: string, status: string, conclusion: string | null, html_url: string}} CIRun
+ * @typedef {(command: string, args: string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => {status: number | null, stdout: string, error?: Error}} IdentitySpawn
+ * @typedef {Record<string, string>} ReleaseArguments
+ */
+/** @param {import("node:crypto").BinaryLike} value */
 const digest = value => createHash("sha256").update(value).digest("hex");
+/** @type {(condition: unknown, message: string) => asserts condition} */
 const failUnless = (condition, message) => { if (!condition) throw new Error(message); };
+/** @param {unknown} value @returns {value is string} */
 const isSha = value => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+/** @param {unknown} value @returns {value is string} */
 const isDigest = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+/** @param {unknown} value @param {string[]} keys */
 const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
   && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
 
+/** @param {BuildInput} input @param {string} sha */
 export function validateBuildInput(input, sha) {
   failUnless(exactKeys(input, ["formatVersion", "sourceSha", "runner", "benchmarkOriginSha256", "rustcVersion", "sourceInputs"])
     && input.formatVersion === INPUT_VERSION, "Unknown or incomplete build-input manifest");
@@ -34,8 +46,10 @@ export function validateBuildInput(input, sha) {
   return input;
 }
 
+/** @param {{sha: string, root?: string, env?: NodeJS.ProcessEnv, spawn?: IdentitySpawn}} options */
 export function recordBuildInputs({ sha, root = ROOT, env = process.env, spawn = spawnSync }) {
   failUnless(isSha(sha), "Invalid release commit");
+  /** @param {string} name @param {string[]} args */
   const readCommand = (name, args) => {
     const result = spawn(name, args, { cwd: root, env, encoding: "utf8" });
     failUnless(!result.error && result.status === 0, `Cannot record ${name} identity`);
@@ -50,15 +64,17 @@ export function recordBuildInputs({ sha, root = ROOT, env = process.env, spawn =
     rustcVersion: readCommand("rustc", ["--version"]),
     sourceInputs: BUILD_INPUT_FILES.map(path => ({ path, sha256: digest(readFileSync(join(root, path))) })),
   };
-  return validateBuildInput(input, sha);
+  return validateBuildInput(/** @type {BuildInput} */ (input), sha);
 }
 
+/** @param {string | undefined} directory @param {string} sha @param {string[]} targets */
 function inputDirectory(directory, sha, targets = TARGETS) {
   failUnless(typeof directory === "string" && directory.length > 0, "Build-input directory is required");
   const stat = lstatSync(directory);
   failUnless(stat.isDirectory() && !stat.isSymbolicLink(), "Build-input root must be a regular directory");
   const entries = readdirSync(directory);
   failUnless(entries.length === targets.length, `Expected exactly ${targets.length} build-input artifacts`);
+  /** @type {Map<string, BuildInput>} */
   const inputs = new Map();
   for (const entry of entries) {
     const artifact = join(directory, entry);
@@ -78,8 +94,10 @@ function inputDirectory(directory, sha, targets = TARGETS) {
   return inputs;
 }
 
-const sharedInputs = input => [input.benchmarkOriginSha256, input.rustcVersion, input.sourceInputs.map(file => [file.path, file.sha256])];
+/** @param {BuildInput | undefined} input */
+const sharedInputs = input => [/** @type {BuildInput} */ (input).benchmarkOriginSha256, /** @type {BuildInput} */ (input).rustcVersion, /** @type {BuildInput} */ (input).sourceInputs.map(file => [file.path, file.sha256])];
 
+/** @param {string | undefined} ciDirectory @param {string | undefined} defaultDirectory @param {string} sha */
 export function verifyDefaultFeatureInputs(ciDirectory, defaultDirectory, sha) {
   const ci = inputDirectory(ciDirectory, sha);
   const defaults = inputDirectory(defaultDirectory, sha, DEFAULT_TARGETS);
@@ -90,6 +108,7 @@ export function verifyDefaultFeatureInputs(ciDirectory, defaultDirectory, sha) {
   return DEFAULT_TARGETS;
 }
 
+/** @param {string | undefined} ciDirectory @param {string | undefined} packageDirectory @param {string} sha */
 export function verifyBuildInputs(ciDirectory, packageDirectory, sha) {
   const ci = inputDirectory(ciDirectory, sha);
   const packages = inputDirectory(packageDirectory, sha);
@@ -103,16 +122,18 @@ export function verifyBuildInputs(ciDirectory, packageDirectory, sha) {
   return TARGETS.map(target => packages.get(target));
 }
 
+/** @param {string} version @returns {[string, string, string, string, string, string, string, string, string]} */
 export function releaseAssets(version) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid release version");
-  return [
+  return /** @type {[string, string, string, string, string, string, string, string, string]} */ ([
     `AioLM_${version}_x64-setup.exe`, `AioLM_${version}_x64_en-US.msi`,
     `AioLM_${version}_amd64.deb`, `AioLM_${version}_amd64.AppImage`,
     `AioLM_${version}_aarch64.dmg`, `AioLM_${version}_x64.dmg`,
     "install.ps1", "install.sh", "register-linux-desktop.py",
-  ].sort();
+  ].sort());
 }
 
+/** @param {CIRun} run @param {string} sha */
 export function assertMainCI(run, sha) {
   if (run.head_sha !== sha || run.head_branch !== "main" || run.event !== "push"
     || run.path !== ".github/workflows/ci.yml") throw new Error("CI does not verify this main release commit");
@@ -122,11 +143,13 @@ export function assertMainCI(run, sha) {
   return run;
 }
 
+/** @param {CIRun[]} runs @param {string} sha */
 export function matchingMainCI(runs, sha) {
   return runs.filter(run => run.head_sha === sha && run.head_branch === "main" && run.event === "push"
     && run.path === ".github/workflows/ci.yml").sort((a, b) => b.id - a.id)[0];
 }
 
+/** @param {string} directory @param {string} version @param {string} sha @param {CIRun} ciRun @param {{ciInputs?: string, packageInputs?: string}} options */
 export function prepareAssets(directory, version, sha, ciRun, { ciInputs, packageInputs } = {}) {
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("Invalid release commit");
   assertMainCI(ciRun, sha);
@@ -144,6 +167,7 @@ export function prepareAssets(directory, version, sha, ciRun, { ciInputs, packag
   return { version, sha, ci_run_id: ciRun.id, ci_url: ciRun.html_url, build_inputs: buildInputs, assets: records };
 }
 
+/** @param {{sha: string, getRuns: () => Promise<CIRun[]>, delay?: (ms: number) => Promise<unknown>, timeoutMs?: number, now?: () => number}} options */
 export async function waitForMainCI({ sha, getRuns, delay = ms => new Promise(done => setTimeout(done, ms)), timeoutMs = 3_600_000, now = Date.now }) {
   const deadline = now() + timeoutMs;
   while (now() < deadline) {
@@ -154,27 +178,30 @@ export async function waitForMainCI({ sha, getRuns, delay = ms => new Promise(do
   throw new Error("Timed out waiting for the same main commit's CI");
 }
 
+/** @param {string | undefined} command @param {string[]} args @returns {ReleaseArguments} */
 export function parseReleaseArguments(command, args) {
-  const required = {
+  const required = /** @type {Record<string, string[]>} */ ({
     wait: ["sha", "output"],
     "record-inputs": ["sha", "output"],
     "verify-default-inputs": ["sha", "ci-inputs", "default-inputs"],
     "prepare-assets": ["sha", "directory", "version", "ci-run-id", "ci-inputs", "package-inputs"],
-  }[command];
+  })[/** @type {string} */ (command)];
   failUnless(Array.isArray(required), "Expected wait, record-inputs, verify-default-inputs or prepare-assets");
+  /** @type {ReleaseArguments} */
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index]?.slice(2);
-    failUnless(args[index]?.startsWith("--") && required.includes(key) && typeof args[index + 1] === "string"
-      && args[index + 1].length > 0 && !args[index + 1].startsWith("--"), "Unknown or incomplete release argument");
+    const value = args[index + 1];
+    failUnless(args[index]?.startsWith("--") && key !== undefined && required.includes(key) && typeof value === "string"
+      && value.length > 0 && !value.startsWith("--"), "Unknown or incomplete release argument");
     failUnless(!Object.hasOwn(options, key), "Duplicate release argument");
-    options[key] = args[index + 1];
+    options[key] = value;
   }
   failUnless(required.every(key => Object.hasOwn(options, key)), "Missing required release argument");
   failUnless(isSha(options.sha), "Invalid release source commit");
   if (command === "prepare-assets") {
-    releaseAssets(options.version);
-    failUnless(/^[1-9][0-9]*$/.test(options["ci-run-id"]), "Invalid CI run ID");
+    releaseAssets(/** @type {string} */ (options.version));
+    failUnless(/^[1-9][0-9]*$/.test(/** @type {string} */ (options["ci-run-id"])), "Invalid CI run ID");
   }
   return options;
 }
@@ -182,13 +209,13 @@ export function parseReleaseArguments(command, args) {
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   const options = parseReleaseArguments(command, args);
-  const sha = options.sha;
+  const sha = /** @type {string} */ (options.sha);
   const repository = process.env.GITHUB_REPOSITORY;
   if (!/^[0-9a-f]{40}$/.test(sha ?? "") || !/^[\w.-]+\/[\w.-]+$/.test(repository ?? "")) throw new Error("Invalid release source");
   if (command === "record-inputs") {
     const input = recordBuildInputs({ sha });
-    mkdirSync(dirname(resolve(options.output)), { recursive: true });
-    writeFileSync(options.output, JSON.stringify(input, null, 2) + "\n", { flag: "wx" });
+    mkdirSync(dirname(resolve(/** @type {string} */ (options.output))), { recursive: true });
+    writeFileSync(/** @type {string} */ (options.output), JSON.stringify(input, null, 2) + "\n", { flag: "wx" });
     process.stdout.write(`Recorded build inputs for ${input.runner.os}/${input.runner.arch} at ${sha}\n`);
     return;
   }
@@ -197,6 +224,7 @@ async function main() {
     process.stdout.write(`Default and all-feature verification inputs match for ${targets.join(", ")} at ${sha}\n`);
     return;
   }
+  /** @param {string} endpoint */
   const api = async endpoint => {
     const token = process.env.GH_TOKEN;
     if (!token) throw new Error("GitHub read token is required");
@@ -209,15 +237,15 @@ async function main() {
   };
   if (command === "wait") {
     const run = await waitForMainCI({ sha, getRuns: async () => (await api(`actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=${sha}&per_page=30`)).workflow_runs });
-    writeFileSync(options.output, JSON.stringify(run, null, 2) + "\n");
+    writeFileSync(/** @type {string} */ (options.output), JSON.stringify(run, null, 2) + "\n");
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `run_id=${run.id}\nurl=${run.html_url}\n`);
     process.stdout.write(`Main CI passed for ${sha}: ${run.html_url}\n`);
   } else if (command === "prepare-assets") {
     const ciRun = await api(`actions/runs/${options["ci-run-id"]}`);
-    const result = prepareAssets(options.directory, options.version, sha, ciRun, {
+    const result = prepareAssets(/** @type {string} */ (options.directory), /** @type {string} */ (options.version), sha, ciRun, {
       ciInputs: options["ci-inputs"], packageInputs: options["package-inputs"],
     });
-    const summary = `## Ready for release approval\n\nCommit: \`${sha}\`\n\n[All main CI checks passed](${result.ci_url}). All four platform builds and native installer checks passed.\n\n| Asset | Bytes | SHA-256 |\n|---|---:|---|\n${result.assets.map(asset => `| ${asset.name} | ${asset.bytes} | \`${asset.sha256}\` |`).join("\n")}\n\nThe nine payloads and LF checksums.txt are ready. Publication uses the existing release-publish approval. Assets remain unsigned; macOS is ad-hoc signed and not notarized. Dedicated engine/device checks, SmolVLM F09, overall Linux acceptance and original v0.3.1-to-v0.3.2 update/UI checks remain open.\n`;
+    const summary = `## Ready for release approval\n\nCommit: \`${sha}\`\n\n[All main CI checks passed](${result.ci_url}). All four platform builds and native installer checks passed.\n\n| Asset | Bytes | SHA-256 |\n|---|---:|---|\n${result.assets.map(asset => `| ${asset.name} | ${asset.bytes} | \`${asset.sha256}\` |`).join("\n")}\n\nThe nine payloads and LF checksums.txt are ready. Publication uses the existing release-publish approval. Assets remain unsigned; macOS is ad-hoc signed and not notarized. Dedicated engine/device checks, SmolVLM F09, overall Linux acceptance and cross-version update/UI checks remain open.\n`;
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
     process.stdout.write(`Prepared ${result.assets.length} payloads and checksums for ${sha}\n`);
   } else throw new Error("Expected wait, record-inputs or prepare-assets");

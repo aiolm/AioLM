@@ -10,23 +10,42 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = 2;
 const INPUTS = ["vitest.config.ts", "vitest.ci.config.ts", "vitest.setup.ts", "scripts/frontend-ci.mjs", "package.json", "package-lock.json"];
+/**
+ * @typedef {{path: string, tests: string[]}} InventoryFile
+ * @typedef {{file: string, name: string}} CollectedTest
+ * @typedef {{path: string, sha256?: string}} SourceFile
+ * @typedef {{formatVersion: number, sourceSha: string, shardCount: number, files: SourceFile[], assignments: string[][], inputs?: SourceFile[]}} Plan
+ * @typedef {{formatVersion: number, sourceSha: string, planSha256: string, index: number, shardCount: number, files: InventoryFile[]}} Cases
+ * @typedef {{formatVersion: number, sourceSha: string, planSha256: string, index: number, shardCount: number, exitCode: number, casesSha256?: string, blobSha256?: string | null, resultsSha256?: string | null}} ShardRecord
+ * @typedef {{name: string, status: string, startTime?: number, endTime?: number, assertionResults: {fullName: string, ancestorTitles: string[], title: string, status: string}[]}} FileReport
+ * @typedef {{success: boolean, numFailedTests: number, numFailedTestSuites: number, numTotalTests: number, numPassedTests: number, testResults: FileReport[]}} Report
+ * @typedef {Record<string, string | undefined>} Options
+ */
+/** @param {import("node:crypto").BinaryLike} value */
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+/** @template T @param {string} path @returns {T} */
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
+/** @param {string} path @param {unknown} value */
 const writeJson = (path, value) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(value, null, 2) + "\n"); };
+/** @param {unknown} condition @param {string} message @returns {asserts condition} */
 function requireThat(condition, message) { if (!condition) throw new Error(message); }
 
+/** @param {string} path */
 export function testPath(path, root = ROOT) {
   const candidate = isAbsolute(path) ? relative(root, path) : path;
   const normalized = candidate.split(sep).join("/");
-  requireThat(/^src\/.+\.test\.(?:ts|tsx)$/.test(normalized) && normalized.split("/").every((part) => part && part !== "." && part !== ".."), `Unexpected test path: ${path}`);
+  requireThat(/^(?:src|tests)\/.+\.test\.(?:ts|tsx)$/.test(normalized) && normalized.split("/").every((part) => part && part !== "." && part !== ".."), `Unexpected test path: ${path}`);
   return normalized;
 }
 
+/** @param {unknown} actual @param {unknown} expected @param {string} label */
 function same(actual, expected, label) {
   requireThat(JSON.stringify(actual) === JSON.stringify(expected), `${label} does not match the collected test inventory`);
 }
 
+/** @param {CollectedTest[]} tests */
 export function inventory(tests, root = ROOT) {
+  /** @type {Map<string, string[]>} */
   const files = new Map();
   for (const test of tests) {
     requireThat(typeof test.name === "string" && test.name.length > 0, "Missing collected test name");
@@ -41,15 +60,18 @@ export function inventory(tests, root = ROOT) {
   return [...files].sort(([a], [b]) => a.localeCompare(b)).map(([path, names]) => ({ path, tests: names.sort() }));
 }
 
+/** @param {SourceFile[]} files @param {number} count @param {Record<string, number | undefined>} timings @param {Record<string, number | undefined>} sizes */
 export function assignFiles(files, count, timings = {}, sizes = {}) {
   requireThat(Number.isInteger(count) && count > 0 && count <= files.length, "Invalid frontend shard count");
-  const prior = Object.values(timings).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
-  const fallback = prior.length ? prior[Math.floor(prior.length / 2)] : 1;
-  const weight = (file) => Number.isFinite(timings[file]) && timings[file] > 0 ? timings[file] : prior.length ? fallback : Math.max(1, sizes[file] ?? 1);
+  const prior = /** @type {number[]} */ (Object.values(timings).filter((value) => Number.isFinite(value) && /** @type {number} */ (value) > 0)).sort((a, b) => a - b);
+  const fallback = prior.length ? /** @type {number} */ (prior[Math.floor(prior.length / 2)]) : 1;
+  /** @param {string} file */
+  const weight = (file) => Number.isFinite(timings[file]) && /** @type {number} */ (timings[file]) > 0 ? /** @type {number} */ (timings[file]) : prior.length ? fallback : Math.max(1, sizes[file] ?? 1);
   const ordered = [...files].sort((a, b) => weight(b.path) - weight(a.path) || a.path.localeCompare(b.path));
+  /** @type {{weight: number, files: string[]}[]} */
   const bins = Array.from({ length: count }, () => ({ weight: 0, files: [] }));
   for (const file of ordered) {
-    const target = bins.reduce((best, bin) => bin.weight < best.weight ? bin : best, bins[0]);
+    const target = bins.reduce((best, bin) => bin.weight < best.weight ? bin : best, /** @type {{weight: number, files: string[]}} */ (bins[0]));
     target.files.push(file.path);
     target.weight += weight(file.path);
   }
@@ -65,6 +87,7 @@ function sourceSha() {
   return sha;
 }
 
+/** @param {string[]} args @param {NodeJS.ProcessEnv} env */
 function runVitest(args, env = {}) {
   const cli = join(dirname(fileURLToPath(import.meta.resolve("vitest/package.json"))), "vitest.mjs");
   const result = spawnSync(process.execPath, [cli, ...args], { cwd: ROOT, env: { ...process.env, ...env }, stdio: "inherit" });
@@ -72,6 +95,7 @@ function runVitest(args, env = {}) {
   return result.status ?? 1;
 }
 
+/** @param {string} output @param {{config?: string, env?: NodeJS.ProcessEnv}} options */
 function collect(output, { config = "vitest.config.ts", env = {} } = {}) {
   mkdirSync(dirname(output), { recursive: true });
   const code = runVitest(["list", "--config", config, "--json", output], env);
@@ -79,31 +103,36 @@ function collect(output, { config = "vitest.config.ts", env = {} } = {}) {
   return inventory(json(output));
 }
 
+/** @param {string} output */
 function discoverFiles(output) {
   mkdirSync(dirname(output), { recursive: true });
   // Global planning applies the real globs without importing test modules or
   // constructing their DOM environments. Each shard collects its own cases.
   const code = runVitest(["list", "--config", "vitest.config.ts", "--filesOnly", "--json", output]);
   requireThat(code === 0, "Frontend source file discovery failed");
-  const files = json(output).map((entry) => testPath(entry.file)).sort();
+  const files = /** @type {{file: string}[]} */ (json(output)).map((entry) => testPath(entry.file)).sort();
   requireThat(files.length > 0 && new Set(files).size === files.length, "Empty or duplicate frontend source file inventory");
   return files.map((path) => ({ path }));
 }
 
+/** @param {Plan} plan @param {string} output */
 function checkSourceFiles(plan, output) {
   same(discoverFiles(output).map((entry) => entry.path), plan.files.map((entry) => entry.path).sort(), "Current source file inventory");
 }
 
+/** @param {import("node:crypto").BinaryLike} bytes @param {unknown} expected */
 export function verifyPlanDigest(bytes, expected) {
   requireThat(typeof expected === "string" && /^[a-f0-9]{64}$/i.test(expected), "Expected frontend plan digest must be 64 hexadecimal characters");
   requireThat(hash(bytes) === expected.toLowerCase(), "Frontend plan does not match the trusted producer digest");
 }
 
+/** @param {import("node:crypto").BinaryLike} bytes @param {unknown} expected */
 export function verifyCaseDigest(bytes, expected) {
   requireThat(typeof expected === "string" && /^[a-f0-9]{64}$/i.test(expected), "Expected frontend case digest must be 64 hexadecimal characters");
   requireThat(hash(bytes) === expected.toLowerCase(), "Frontend cases do not match the trusted producer digest");
 }
 
+/** @param {string | undefined} runnerOs @param {string} digest */
 export function planOutputEntry(runnerOs, digest) {
   const key = runnerOs === "Linux" ? "linux_plan" : runnerOs === "Windows" ? "windows_plan" : undefined;
   requireThat(key, "Frontend plan output requires a Linux or Windows runner");
@@ -111,6 +140,7 @@ export function planOutputEntry(runnerOs, digest) {
   return `${key}=${digest}\n`;
 }
 
+/** @param {string | undefined} runnerOs @param {number} index @param {string} digest */
 export function casesOutputEntry(runnerOs, index, digest) {
   const key = runnerOs === "Linux" ? "linux" : runnerOs === "Windows" ? "windows" : undefined;
   requireThat(key, "Frontend cases output requires a Linux or Windows runner");
@@ -119,8 +149,9 @@ export function casesOutputEntry(runnerOs, index, digest) {
   return `${key}_${index}_cases=${digest}\n`;
 }
 
+/** @param {string | undefined} value @param {number} count @returns {Record<string, string>} */
 export function expectedCaseDigests(value, count) {
-  const digests = JSON.parse(value);
+  const digests = JSON.parse(/** @type {string} */ (value));
   requireThat(digests && typeof digests === "object" && !Array.isArray(digests), "Expected frontend case digests must be an index map");
   same(Object.keys(digests).sort(), Array.from({ length: count }, (_, index) => String(index + 1)).sort(), "Trusted case digest indices");
   for (const digest of Object.values(digests)) {
@@ -129,6 +160,7 @@ export function expectedCaseDigests(value, count) {
   return digests;
 }
 
+/** @param {SourceFile[]} files */
 function stamp(files) {
   return {
     files: files.map((file) => ({ ...file, sha256: hash(readFileSync(resolve(ROOT, file.path))) })),
@@ -136,6 +168,7 @@ function stamp(files) {
   };
 }
 
+/** @param {Plan} plan */
 export function validateAssignments(plan) {
   requireThat(plan.formatVersion === VERSION, "Unknown frontend plan version");
   requireThat(Array.isArray(plan.files) && Array.isArray(plan.assignments) && plan.assignments.length === plan.shardCount, "Invalid frontend plan");
@@ -149,6 +182,7 @@ export function validateAssignments(plan) {
   same(assigned, expected, "Shard file assignments");
 }
 
+/** @param {Plan} plan */
 function validateCheckout(plan) {
   validateAssignments(plan);
   same(plan.sourceSha, sourceSha(), "Plan source SHA");
@@ -157,6 +191,7 @@ function validateCheckout(plan) {
   same(current.inputs, plan.inputs, "Frontend configuration hashes");
 }
 
+/** @param {Report} report */
 export function reportInventory(report, root = ROOT) {
   requireThat(report.success === true && report.numFailedTests === 0 && report.numFailedTestSuites === 0, "Frontend shard contains failed tests or suites");
   requireThat(Array.isArray(report.testResults), "Missing frontend test results");
@@ -180,6 +215,7 @@ export function reportInventory(report, root = ROOT) {
   return inventory(tests, root);
 }
 
+/** @param {Plan} plan @param {number} index @param {Cases} cases @param {string} planDigest */
 export function verifyCases(plan, index, cases, planDigest) {
   const assigned = plan.assignments[index - 1];
   requireThat(Array.isArray(assigned), "Unknown frontend shard index");
@@ -197,20 +233,23 @@ export function verifyCases(plan, index, cases, planDigest) {
   return files;
 }
 
+/** @param {Cases} cases @param {Report} report */
 export function verifyReport(cases, report, root = ROOT) {
   same(reportInventory(report, root), cases.files, `Shard ${cases.index} tests`);
 }
 
+/** @param {string} path */
 function checkedOutput(path) {
   const output = resolve(ROOT, path);
   requireThat(output.startsWith(resolve(ROOT, "tmp") + sep), "Frontend reports must be under repository tmp/");
   return output;
 }
 
+/** @param {Options} options */
 function makePlan(options) {
   const output = checkedOutput(options.output ?? "tmp/frontend-ci/plan.json");
   const discovered = discoverFiles(join(dirname(output), "source-files.json"));
-  const timings = options.timings && existsSync(options.timings) ? json(options.timings).files : {};
+  const timings = options.timings && existsSync(options.timings) ? /** @type {{files: Record<string, number>}} */ (json(options.timings)).files : {};
   const count = Number(options.shards ?? 2);
   const sizes = Object.fromEntries(discovered.map((file) => [file.path, readFileSync(resolve(ROOT, file.path)).length]));
   const plan = { formatVersion: VERSION, sourceSha: sourceSha(), shardCount: count, ...stamp(discovered), assignments: assignFiles(discovered, count, timings, sizes) };
@@ -223,11 +262,12 @@ function makePlan(options) {
   console.log(`Planned ${discovered.length} files in ${count} disjoint shards without importing tests.`);
 }
 
+/** @param {Options} options */
 function runShard(options) {
   requireThat(options.plan && options.index, "Shard requires --plan and --index");
   const planPath = resolve(ROOT, options.plan);
   const planBytes = readFileSync(planPath);
-  const plan = JSON.parse(planBytes);
+  const plan = /** @type {Plan} */ (JSON.parse(planBytes.toString()));
   validateCheckout(plan);
   const index = Number(options.index);
   requireThat(Number.isInteger(index) && index >= 1 && index <= plan.shardCount, "Unknown frontend shard index");
@@ -265,6 +305,7 @@ function runShard(options) {
   return 0;
 }
 
+/** @param {Plan} plan @param {ShardRecord[]} records @param {string} planDigest */
 export function verifyRecords(plan, records, planDigest) {
   requireThat(records.length === plan.shardCount, "Missing or extra frontend shard reports");
   const seen = new Set();
@@ -276,12 +317,13 @@ export function verifyRecords(plan, records, planDigest) {
   }
 }
 
+/** @param {Options} options */
 function merge(options) {
   requireThat(options.plan && options.input, "Merge requires --plan and --input");
   const planBytes = readFileSync(resolve(ROOT, options.plan));
   const trustedPlan = Object.hasOwn(options, "expected-plan-sha");
   if (trustedPlan) verifyPlanDigest(planBytes, options["expected-plan-sha"]);
-  const plan = JSON.parse(planBytes);
+  const plan = /** @type {Plan} */ (JSON.parse(planBytes.toString()));
   validateCheckout(plan);
   requireThat(trustedPlan === Object.hasOwn(options, "expected-cases-shas"), "Trusted merge requires both plan and all case producer digests");
   const trustedCases = trustedPlan ? expectedCaseDigests(options["expected-cases-shas"], plan.shardCount) : undefined;
@@ -294,16 +336,16 @@ function merge(options) {
   const directories = readdirSync(input).map((name) => join(input, name));
   requireThat(directories.every((path) => lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink()
     && existsSync(join(path, "record.json"))), "Unexpected frontend shard report entry");
-  const records = directories.map((path) => json(join(path, "record.json")));
+  const records = directories.map((path) => /** @type {ShardRecord} */ (json(join(path, "record.json"))));
   verifyRecords(plan, records, hash(planBytes));
   const cases = directories.map((path, position) => {
-    const record = records[position];
+    const record = /** @type {ShardRecord} */ (records[position]);
     const file = join(path, "cases.json");
     requireThat(lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink(), "Invalid frontend case inventory file");
     const bytes = readFileSync(file);
     requireThat(hash(bytes) === record.casesSha256, "Changed frontend case inventory");
-    if (trustedPlan) verifyCaseDigest(bytes, trustedCases[String(record.index)]);
-    const collected = JSON.parse(bytes);
+    if (trustedPlan) verifyCaseDigest(bytes, trustedCases?.[String(record.index)]);
+    const collected = /** @type {Cases} */ (JSON.parse(bytes.toString()));
     verifyCases(plan, record.index, collected, hash(planBytes));
     return collected;
   });
@@ -319,12 +361,12 @@ function merge(options) {
   const blobs = join(output, "blobs");
   mkdirSync(blobs);
   directories.forEach((path, position) => {
-    const record = records[position];
-    for (const [name, expected] of [["blob.json", record.blobSha256], ["results.json", record.resultsSha256]]) {
+    const record = /** @type {ShardRecord} */ (records[position]);
+    for (const [name, expected] of /** @type {[string, string | null | undefined][]} */ ([["blob.json", record.blobSha256], ["results.json", record.resultsSha256]])) {
       const file = join(path, name);
       requireThat(lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink() && hash(readFileSync(file)) === expected, `Changed frontend report: ${name}`);
     }
-    verifyReport(cases[position], json(join(path, "results.json")));
+    verifyReport(/** @type {Cases} */ (cases[position]), json(join(path, "results.json")));
     copyFileSync(join(path, "blob.json"), join(blobs, `shard-${record.index}.json`));
   });
   const results = join(output, "results.json");
@@ -332,21 +374,23 @@ function merge(options) {
   if (code !== 0) return code;
   // Validate actual blob contents after merge as well as the JSON reports.
   // This prevents a stale or different blob from hiding behind valid metadata.
-  const report = json(results);
+  const report = /** @type {Report} */ (json(results));
   same(reportInventory(report), current, "Merged blob test inventory");
-  const times = Object.fromEntries(report.testResults.map((file) => [testPath(file.name), Math.max(1, file.endTime - file.startTime)]));
+  const times = Object.fromEntries(report.testResults.map((file) => [testPath(file.name), Math.max(1, /** @type {number} */ (file.endTime) - /** @type {number} */ (file.startTime))]));
   writeJson(join(output, "timings.json"), { formatVersion: VERSION, files: times });
   console.log(`All ${plan.shardCount} frontend shards, exact test inventory, and aggregate coverage passed.`);
   return 0;
 }
 
+/** @param {string[]} args */
 function parseOptions(args) {
+  /** @type {Options} */
   const options = {};
   while (args.length) {
     const key = args.shift();
     requireThat(/^--(?:plan|index|output|input|shards|timings|expected-plan-sha|expected-cases-shas)$/.test(key ?? "") && args.length > 0, `Unknown or incomplete argument: ${key}`);
-    requireThat(!Object.hasOwn(options, key.slice(2)), `Repeated argument: ${key}`);
-    options[key.slice(2)] = args.shift();
+    requireThat(!Object.hasOwn(options, /** @type {string} */ (key).slice(2)), `Repeated argument: ${key}`);
+    options[/** @type {string} */ (key).slice(2)] = args.shift();
   }
   return options;
 }

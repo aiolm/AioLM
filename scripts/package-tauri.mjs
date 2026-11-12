@@ -13,6 +13,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { provisionAppImageRuntime, readVerifiedRuntime, verifyBundledAppImages } from "./appimage-runtime/runtime.mjs";
 import { releaseBuildEnv } from "./build-path-remap.mjs";
 
+/**
+ * @typedef {{status: number | null, error?: Error}} PackagingResult
+ * @typedef {{cwd: string, env: NodeJS.ProcessEnv, stdio: "inherit"}} PackagingSpawnOptions
+ * @typedef {(command: string, args: string[], options: PackagingSpawnOptions) => PackagingResult} PackagingSpawn
+ * @typedef {{root: string, platform: string, env: NodeJS.ProcessEnv, provisionRuntime?: typeof provisionAppImageRuntime}} PackagingEnvironmentOptions
+ */
+
+/** @param {string} platform */
 export function bundleTargets(platform) {
   switch (platform) {
     case "win32": return "nsis,msi";
@@ -22,6 +30,7 @@ export function bundleTargets(platform) {
   }
 }
 
+/** @param {string} platform */
 export function packagingArgs(platform, stage = "build") {
   const targets = bundleTargets(platform);
   const common = ["--config", "src-tauri/tauri-package.conf.json", "--features", "tauri/custom-protocol"];
@@ -38,17 +47,23 @@ export function packagingArgs(platform, stage = "build") {
  * The packaging environment. Linux AppImages embed the pinned, repaired type2
  * runtime (scripts/appimage-runtime) through linuxdeploy-plugin-appimage's
  * LDAI_RUNTIME_FILE; other hosts build no AppImage and are left unchanged.
+ * @param {string} platform
+ * @param {NodeJS.ProcessEnv} env
+ * @param {(env: NodeJS.ProcessEnv) => string} provisionRuntime
+ * @returns {NodeJS.ProcessEnv}
  */
 export function packagingEnv(platform, env, provisionRuntime) {
   return platform === "linux" ? { ...env, LDAI_RUNTIME_FILE: provisionRuntime(env) } : env;
 }
 
+/** @param {PackagingEnvironmentOptions} options */
 export function preparePackagingEnv({ root, platform, env, provisionRuntime = provisionAppImageRuntime }) {
   bundleTargets(platform);
   const targetDirectory = resolve(root, env.CARGO_TARGET_DIR ?? ".codex-target");
   return packagingEnv(platform, env, (base) => provisionRuntime({ env: base, cacheRoot: join(targetDirectory, "appimage-runtime") }));
 }
 
+/** @param {string} root @param {string} platform @param {NodeJS.ProcessEnv} env */
 function verifyExecutables(root, platform, env) {
   const directory = resolve(root, env.CARGO_TARGET_DIR ?? ".codex-target", "release");
   for (const name of ["aiolm", "aiolm-cli"]) {
@@ -59,6 +74,7 @@ function verifyExecutables(root, platform, env) {
   }
 }
 
+/** @param {{root: string, platform?: string, env?: NodeJS.ProcessEnv, spawn?: PackagingSpawn, provisionRuntime?: typeof provisionAppImageRuntime, readRuntime?: typeof readVerifiedRuntime, verifyImages?: typeof verifyBundledAppImages, cli?: string}} options */
 export function runPackaging({
   root,
   platform = process.platform,

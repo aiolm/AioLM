@@ -29,16 +29,24 @@ const appEnv = {
   XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"),
   XDG_CACHE_HOME: join(home, "cache"), AIOLM_HOME: join(home, "aiolm"),
 };
-let pid, session, port, installedLauncher = false;
+/** @type {number | undefined} */
+let pid;
+/** @type {string | undefined} */
+let session;
+/** @type {number | undefined} */
+let port;
+let installedLauncher = false;
 
+/** @param {string} program @param {string[]} args @param {import("node:child_process").SpawnSyncOptions} [options] @returns {string} */
 function run(program, args, options = {}) {
   const result = spawnSync(program, args, { encoding: "utf8", timeout: 60_000, ...options });
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${program} ${args.join(" ")}: ${result.stderr}\n${result.stdout}`);
-  return result.stdout;
+  return /** @type {string} */ (result.stdout);
 }
 const alive = () => spawnSync("/bin/kill", ["-0", String(pid)]).status === 0;
 const appLog = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+/** @param {() => unknown | Promise<unknown>} check @param {string} description @param {number} [timeout] */
 async function waitFor(check, description, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   let lastError;
@@ -48,6 +56,7 @@ async function waitFor(check, description, timeout = 30_000) {
   }
   throw new Error(`${description}: ${lastError ?? "timed out"}\n${appLog().slice(-4000)}`);
 }
+/** @param {string} method @param {string} path @param {unknown} [data] */
 async function request(method, path, data) {
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     method, headers: { "content-type": "application/json" },
@@ -57,12 +66,15 @@ async function request(method, path, data) {
   assert.ok(response.ok && !result.value?.error, JSON.stringify(result));
   return result.value;
 }
+/** @param {string} code @param {unknown[]} [args] */
 const script = (code, args = []) => request("POST", `/session/${session}/execute/sync`, { script: code, args });
 // IPC failures are returned as data so the assertion can show the app's message.
+/** @param {string} command @param {Record<string, unknown>} args */
 const invoke = (command, args) => request("POST", `/session/${session}/execute/async`, {
   script: "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value => done({ result: value }), error => done({ failure: String(error) }));",
   args: [command, args],
 });
+/** @param {string} selector */
 async function click(selector) {
   await waitFor(() => script("const e = document.querySelector(arguments[0]); return !!e && !e.disabled && !e.closest('[inert], [hidden]') && getComputedStyle(e).visibility === 'visible' && e.getBoundingClientRect().width > 0;", [selector]), selector);
   const found = await request("POST", `/session/${session}/element`, { using: "css selector", value: selector });
@@ -76,8 +88,10 @@ function appPids() {
 }
 // `open` hands its own environment to the app. Use launchd's defaults, which
 // are what Finder, the Dock and Login Items provide, not this runner's shell.
+/** @type {NodeJS.ProcessEnv} */
 const launchdEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
 for (const key of ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"]) if (process.env[key]) launchdEnv[key] = process.env[key];
+/** @param {string[]} [args] */
 const openApp = (args = []) => run("/usr/bin/open", ["-a", bundle, ...args], { env: launchdEnv });
 
 try {
@@ -121,8 +135,8 @@ createInterface({ input: process.stdin }).on("line", line => {
   console.log(`launchd user PATH override: ${spawnSync("/bin/launchctl", ["getenv", "PATH"], { encoding: "utf8" }).stdout.trim() || "(none)"}`);
 
   const reservation = createServer();
-  await new Promise((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", resolve); });
-  port = reservation.address().port;
+  await new Promise((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", () => resolve(undefined)); });
+  port = /** @type {import("node:net").AddressInfo} */ (reservation.address()).port;
   await new Promise(resolve => reservation.close(resolve));
   assert.deepEqual(appPids(), [], "no test app may already run");
   openApp(["--stdout", log, "--stderr", log,

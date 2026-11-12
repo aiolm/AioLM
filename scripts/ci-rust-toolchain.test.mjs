@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,21 +7,36 @@ import { installedRustToolchains, isolateCiRustToolchain, pinnedRustRelease, rus
 
 const PIN = "1.2.3";
 const HOST = "x86_64-unknown-linux-gnu";
+/** @param {string} host */
 const selected = host => `${PIN}-${host}`;
 const verbose = (host = HOST, pin = PIN, hash = "a".repeat(40)) => [
   `rustc ${pin} (${hash.slice(0, 9)} 2026-01-01)`, "binary: rustc", `commit-hash: ${hash}`,
   "commit-date: 2026-01-01", `host: ${host}`, `release: ${pin}`, "LLVM version: 21.0.0", "",
 ].join("\n");
 
+/**
+ * @typedef {import("./ci-rust-toolchain.mjs").CommandOptions} CommandOptions
+ * @typedef {{
+ *   installed: string[], active: string, identity: string,
+ *   calls: [string, string[], CommandOptions][], removed: string[],
+ *   activeOutput?: string, listOverride?: string, keepUninstalled?: boolean,
+ *   commandFailure?: (program: string, args: string[]) => boolean,
+ *   afterRemoval?: (state: FixtureState) => void
+ * }} FixtureState
+ * @param {import("node:test").TestContext} t
+ * @param {Partial<FixtureState> & { host?: string }} [options]
+ */
 function fixture(t, { host = HOST, installed, ...overrides } = {}) {
   const root = mkdtempSync(join(tmpdir(), "aiolm-ci-rust-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, "rust-toolchain.toml"), `[toolchain]\nchannel = "${PIN}"\ncomponents = ["rustfmt", "clippy"]\n`);
+  /** @type {FixtureState} */
   const state = {
     installed: installed ?? [selected(host), `stable-${host}`, `1.3.0-${host}`],
     active: selected(host), identity: verbose(host), calls: [], removed: [], ...overrides,
   };
   const env = { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", RUNNER_OS: "Linux", RUNNER_ARCH: "X64" };
+  /** @type {import("./ci-rust-toolchain.mjs").CommandRunner} */
   const spawn = (program, args, options) => {
     state.calls.push([program, args, options]);
     assert.equal(options.shell, false);
@@ -34,7 +49,7 @@ function fixture(t, { host = HOST, installed, ...overrides } = {}) {
     else if (program === "rustup" && args.join(" ") === "toolchain list --quiet") stdout = state.listOverride ?? state.installed.join("\n") + "\n";
     else if (program === "rustup" && args[0] === "toolchain" && args[1] === "uninstall" && args.length === 3) {
       assert.notEqual(args[2], selected(host), "the selected compiler must never be removed");
-      state.removed.push(args[2]);
+      state.removed.push(/** @type {string} */ (args[2]));
       if (!state.keepUninstalled) state.installed = state.installed.filter(name => name !== args[2]);
       state.afterRemoval?.(state);
       stdout = "";
@@ -135,6 +150,7 @@ test("failed commands stop without reporting raw private output", t => {
   for (const failOn of ["-vV", "show active-toolchain", "toolchain list --quiet", `toolchain uninstall 1.3.0-${HOST}`]) {
     const f = fixture(t, { commandFailure: (_, args) => args.join(" ") === failOn });
     assert.throws(() => isolateCiRustToolchain(f), error => {
+      assert.ok(error instanceof Error);
       assert.equal(error.message, "Rust toolchain command failed");
       assert.ok(!error.message.includes("synthetic-private-output"));
       return true;
@@ -152,13 +168,27 @@ test("failed commands stop without reporting raw private output", t => {
 test("post-isolation list, active selection and full compiler identity must stay exact", t => {
   const remaining = fixture(t, { keepUninstalled: true });
   assert.throws(() => isolateCiRustToolchain(remaining), /remain after isolation/);
-  for (const afterRemoval of [
+  for (const afterRemoval of /** @type {((state: FixtureState) => void)[]} */ ([
     state => { state.active = `stable-${HOST}`; },
     state => { state.identity = verbose(HOST, PIN, "b".repeat(40)); },
     state => { state.identity = verbose().replace("LLVM version: 21.0.0", "LLVM version: 22.0.0"); },
-  ]) {
+  ])) {
     const f = fixture(t, { afterRemoval });
     assert.throws(() => isolateCiRustToolchain(f), /Active Rust toolchain|compiler changed/);
     assert.ok(!f.state.removed.includes(selected(HOST)));
   }
+});
+
+test("every workflow Rust installer uses the manifest's exact release", () => {
+  const root = new URL("../", import.meta.url);
+  const pin = pinnedRustRelease(readFileSync(new URL("rust-toolchain.toml", root), "utf8"));
+  let installers = 0;
+  for (const file of readdirSync(new URL(".github/workflows/", root)).filter(file => /\.ya?ml$/.test(file))) {
+    const source = readFileSync(new URL(`.github/workflows/${file}`, root), "utf8").replace(/\r\n/g, "\n");
+    for (const block of source.split(/^ {6}- /m).filter(block => /uses: dtolnay\/rust-toolchain@/.test(block))) {
+      installers += 1;
+      assert.equal(block.match(/^ {10}toolchain: "?([^"\n]+)"?$/m)?.[1], pin, `${file} must match rust-toolchain.toml`);
+    }
+  }
+  assert.ok(installers > 0);
 });

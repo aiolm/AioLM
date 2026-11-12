@@ -17,6 +17,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: linux-desktop-acceptance-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   desktop:
     runs-on: ubuntu-24.04

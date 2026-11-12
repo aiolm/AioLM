@@ -10,6 +10,18 @@ import time
 import urllib.request
 
 
+def wait_until(predicate, message, timeout=15):
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value:
+            return value
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(message)
+        time.sleep(min(.1, remaining))
+
+
 def main():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     assert os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
@@ -89,28 +101,33 @@ def main():
         config = invoke('get_config')
         config['close_to_tray'] = True
         invoke('save_config', {'cfg': config})
-        time.sleep(1)
-        items = dbus('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
-                     'org.freedesktop.DBus.Properties', 'Get',
-                     GLib.Variant('(ss)', ('org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems')))[0]
-        menu = None
-        for item in items:
-            dest, _, suffix = item.partition('/')
-            dest = dest.rstrip('@')
-            path = '/' + suffix if suffix else '/StatusNotifierItem'
-            props = dbus(dest, path, 'org.freedesktop.DBus.Properties', 'GetAll', GLib.Variant('(s)', ('org.kde.StatusNotifierItem',)))[0]
-            if 'aiolm' in str(props.get('Id', '')).lower():
-                menu = props['Menu']
-                break
-        assert menu, 'Plasma did not register AioLM'
+
+        def registered_tray():
+            try:
+                items = dbus('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
+                             'org.freedesktop.DBus.Properties', 'Get',
+                             GLib.Variant('(ss)', ('org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems')))[0]
+                for item in items:
+                    dest, _, suffix = item.partition('/')
+                    dest = dest.rstrip('@')
+                    path = '/' + suffix if suffix else '/StatusNotifierItem'
+                    props = dbus(dest, path, 'org.freedesktop.DBus.Properties', 'GetAll',
+                                 GLib.Variant('(s)', ('org.kde.StatusNotifierItem',)))[0]
+                    if 'aiolm' in str(props.get('Id', '')).lower() and props.get('Menu'):
+                        return dest, props['Menu']
+            except GLib.Error:
+                pass
+            return None
+
+        dest, menu = wait_until(registered_tray, 'Plasma did not register AioLM')
         layout = dbus(dest, menu, 'com.canonical.dbusmenu', 'GetLayout', GLib.Variant('(iias)', (0, -1, [])))
         labels = {node[1]['label']: node[0] for node in layout[1][2] if 'label' in node[1]}
         invoke('plugin:window|close', {'label': 'main'})
         assert invoke('plugin:window|is_visible', {'label': 'main'}) is False
         dbus(dest, menu, 'com.canonical.dbusmenu', 'Event',
              GLib.Variant('(isvu)', (labels['Show AioLM'], 'clicked', GLib.Variant('i', 0), 0)))
-        time.sleep(.2)
-        assert invoke('plugin:window|is_visible', {'label': 'main'}) is True
+        wait_until(lambda: invoke('plugin:window|is_visible', {'label': 'main'}) is True,
+                   'tray Show did not restore the window')
         import base64
         (evidence / 'plasma-app.png').write_bytes(base64.b64decode(request('GET', f'/session/{session}/screenshot')))
         dbus(dest, menu, 'com.canonical.dbusmenu', 'Event',

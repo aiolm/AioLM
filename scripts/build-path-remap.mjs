@@ -41,6 +41,7 @@ const C_RELEASE_DEFINE = "-DNDEBUG";
 // variant present rather than to the plain name alone.
 const C_FLAG_VARIABLES = ["CFLAGS", "CXXFLAGS"];
 
+/** @param {NodeJS.ProcessEnv} env */
 function remappedDirectories(env) {
   const home = homedir();
   return [
@@ -73,6 +74,7 @@ export function remapFlags(env = process.env) {
   );
 }
 
+/** @param {string | undefined} value @param {string} flag */
 function appendFlag(value, flag) {
   return value && value.trim() !== "" ? `${value} ${flag}` : flag;
 }

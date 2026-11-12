@@ -1,0 +1,129 @@
+// @vitest-environment node
+import { test } from "vitest";
+import assert from "node:assert/strict";
+import type { AppConfig } from "../../src/shared/api/types.ts";
+import {
+  activeProjectId,
+  deleteProject,
+  exportProject,
+  importProject,
+  projectConfigPatch,
+  projectFromConfig,
+  readProjects,
+  setActiveProjectId,
+  upsertProject,
+  writeProjects,
+} from "../../src/features/projects/projectStore.ts";
+import { defined } from "../../src/testing/assertDefined.ts";
+
+test("project store contracts", async () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => void values.set(key, value),
+    removeItem: (key: string) => void values.delete(key),
+  } as Storage;
+
+  const config = {
+    config_version: 6,
+    models_dir: "C:/models",
+    port: 8080,
+    ngl: 32,
+    ctx_size: 8192,
+    batch_size: 2048,
+    ubatch_size: 512,
+    keep: 0,
+    cache_type_k: "f16",
+    cache_type_v: "f16",
+    flash_attn: "on",
+    n_cpu_moe: 0,
+    threads: 8,
+    temperature: 0.7,
+    top_p: 0.9,
+    top_k: 40,
+    spec_type: "none",
+    spec_draft_n_max: 3,
+    spec_draft_n_min: 0,
+    spec_draft_p_min: 0,
+    spec_draft_p_split: 0.1,
+    spec_draft_ngl: "auto",
+    spec_draft_device: "",
+    spec_draft_model: "",
+    reasoning: "auto",
+    reasoning_format: "auto",
+    reasoning_effort: "default",
+    reasoning_budget: -1,
+    reasoning_budget_message: "",
+    reasoning_preserve: "auto",
+    server_args: ["--jinja"],
+    chat_options: { min_p: 0.05 },
+    mmproj: "",
+    active_model: "C:/models/code.gguf",
+    active_backend: "vulkan",
+    active_build: "b10603",
+    iters: 5,
+    parallel: 1,
+    request_timeout_seconds: 600,
+    sleep_idle_seconds: 0,
+    lora_adapters: [],
+  } as AppConfig;
+
+  const project = projectFromConfig("Code review", "Review code carefully.", config, [{ name: "rules.md", path: "C:/rules.md" }], ["local:read_file"], "A reusable coding workspace", 100);
+  let projects = upsertProject(project, []);
+  writeProjects(projects, storage);
+  assert.equal(defined(readProjects(storage)[0]).name, "Code review");
+  assert.equal(projectConfigPatch(defined(readProjects(storage)[0])).active_model, "C:/models/code.gguf");
+  assert.equal(activeProjectId(storage), null);
+  setActiveProjectId(project.id, storage);
+  assert.equal(activeProjectId(storage), project.id);
+
+  const exported = exportProject(project);
+  assert.match(exported, /aiolm\.project\.v1/);
+  assert.doesNotMatch(exported, /api[_-]?key|password|token|secret/i);
+  const secretProject = projectFromConfig(
+    "Secret-free export",
+    "Review code carefully.",
+    {
+      ...config,
+      server_args: ["--api-key", "secret-value", "--api-key=inline-secret", "--jinja"],
+      chat_options: { headers: { authorization: "secret-value" }, min_p: 0.05 },
+    },
+    [],
+    [],
+    "",
+    200,
+  );
+  const secretExport = exportProject(secretProject);
+  assert.match(secretExport, /\[REDACTED\]/);
+  assert.doesNotMatch(secretExport, /secret-value|inline-secret/i);
+  assert.match(secretExport, /--api-key=\[REDACTED\]/);
+  const budgetProject = projectFromConfig('Generation budgets', '', {
+    ...config,
+    chat_options: { max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+      access_token: 'synthetic-credential', token: 'synthetic-credential' },
+  });
+  const budgetExport = exportProject(budgetProject);
+  assert.deepEqual(importProject(budgetExport).config.chat_options, {
+    max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+    access_token: '[REDACTED]', token: '[REDACTED]',
+  });
+  assert.doesNotMatch(budgetExport, /synthetic-credential/);
+  const imported = importProject(exported, readProjects(storage));
+  projects = upsertProject(imported, readProjects(storage));
+  assert.equal(projects.length, 2);
+  assert.equal(defined(projects[0]).name, 'Code review (2)');
+  assert.deepEqual(projects[1], project);
+  assert.equal(defined(projects[0]).systemPrompt, "Review code carefully.");
+  assert.deepEqual(defined(projects[0]).toolIds, ["local:read_file"]);
+  assert.equal(deleteProject(project.id, projects).length, 1);
+  assert.equal(deleteProject(imported.id, projects).length, 1);
+  const externalProject = projectFromConfig('External engine', '', {
+    ...config, active_provider: 'custom.personal', active_runtime: 'local-build',
+    provider_options: { 'custom.personal': { temperature: 0.25 } },
+  });
+  const externalImport = importProject(exportProject(externalProject));
+  assert.equal(externalImport.config.active_provider, 'custom.personal');
+  assert.equal(externalImport.config.active_runtime, 'local-build');
+  assert.deepEqual(externalImport.config.provider_options, { 'custom.personal': { temperature: 0.25 } });
+  assert.throws(() => projectFromConfig('Invalid engine', '', { ...config, active_provider: 'unregistered-invalid-id' } as unknown as AppConfig), /Unknown inference engine/);
+});

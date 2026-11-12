@@ -19,8 +19,8 @@ for (const line of help.split('\n')) {
   const row = line.match(/^\| `(.+?)` \| (.*) \|$/);
   if (!row) continue;
   options.push({
-    signature: row[1].replaceAll('\\|', '|'),
-    description: row[2].replaceAll(/<br\s*\/?\s*>/g, '\n').replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1').replaceAll('\\|', '|'),
+    signature: /** @type {string} */ (row[1]).replaceAll('\\|', '|'),
+    description: /** @type {string} */ (row[2]).replaceAll(/<br\s*\/?\s*>/g, '\n').replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1').replaceAll('\\|', '|'),
     group,
   });
 }

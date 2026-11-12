@@ -4,15 +4,17 @@ import { URL } from 'node:url';
 // Browser-only benchmark imports cannot call native IPC. Keep their flag/key
 // projection synchronized with the authoritative launch schema.
 const source = fs.readFileSync(new URL('../src-tauri/src/providers/options.rs', import.meta.url), 'utf8');
+/** @type {Record<string, {key: string | undefined, flag: string | undefined, kind: string}[]>} */
 const output = {};
+/** @type {Record<string, (string | undefined)[]>} */
 const requestOutput = {};
-for (const [provider, name] of [['vllm', 'VLLM_OPTIONS'], ['mlx-vlm', 'MLX_VLM_OPTIONS']]) {
+for (const [provider, name] of /** @type {[string, string][]} */ ([['vllm', 'VLLM_OPTIONS'], ['mlx-vlm', 'MLX_VLM_OPTIONS']])) {
   const section = source.slice(source.indexOf(`pub const ${name}`));
   const end = section.indexOf('\n];');
   if (end < 0) throw new Error(`Missing option schema ${name}`);
   output[provider] = [...section.slice(0, end).matchAll(/launch\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*OptionKind::(\w+)/g)]
-    .filter(([, , , kind]) => !['Path', 'Json'].includes(kind))
-    .map(([, key, flag, kind]) => ({key, flag, kind: kind.toLowerCase()}));
+    .filter((match) => !['Path', 'Json'].includes(/** @type {string} */ (match[3])))
+    .map((match) => ({key: match[1], flag: match[2], kind: /** @type {string} */ (match[3]).toLowerCase()}));
   if (!output[provider].length) throw new Error(`Empty option schema ${name}`);
   requestOutput[provider] = [...section.slice(0, end).matchAll(/request\(\s*"([^"]+)"\s*,/g)].map(([, key]) => key);
   if (!requestOutput[provider].length) throw new Error(`Empty request schema ${name}`);

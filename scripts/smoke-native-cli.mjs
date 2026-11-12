@@ -26,12 +26,14 @@ Object.assign(env, {
   XDG_CACHE_HOME: join(home, "cache"),
   AIOLM_HOME: join(home, "aiolm"),
 });
+/** @param {...string} args */
 const fail = (...args) => {
   const result = spawnSync(executable, args, { env, encoding: "utf8", timeout: 30_000, windowsHide: true });
   if (result.error) throw result.error;
   assert.equal(result.status, 1, `${args.join(" ")} should fail: ${result.stdout}`);
   return JSON.parse(result.stdout).error;
 };
+/** @param {...string} args */
 const run = (...args) => {
   const result = spawnSync(executable, args, { env, encoding: "utf8", timeout: 30_000, windowsHide: true });
   if (result.error) throw result.error;
@@ -129,7 +131,7 @@ try {
   writeFileSync(join(external, "model.safetensors"), Buffer.alloc(16));
   writeFileSync(join(models, "synthetic.gguf"), Buffer.from("GGUF"));
   assert.equal(run("config", "set", "models_dir", models).ok, true);
-  assert.ok(run("models", "list").models.some((model) => model.path.includes("snapshots")), "snapshot is listed");
+  assert.ok(run("models", "list").models.some((/** @type {{ path: string }} */ model) => model.path.includes("snapshots")), "snapshot is listed");
   assert.equal(run("config", "set", "active_model", snapshot).ok, true);
   assert.match(fail("models", "delete", snapshot), /select another/);
   assert.ok(existsSync(join(snapshot, "model.safetensors")), "a selected snapshot is preserved");

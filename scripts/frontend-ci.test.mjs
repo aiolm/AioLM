@@ -11,19 +11,23 @@ import { assignFiles, casesOutputEntry, expectedCaseDigests, inventory, planOutp
 
 const sha = "a".repeat(40);
 const digest = "b".repeat(64);
+/** @type {[import("./frontend-ci.mjs").InventoryFile, import("./frontend-ci.mjs").InventoryFile]} */
 const files = [
   { path: "src/one.test.ts", tests: ["same parameter", "same parameter", "suite > keeps data"] },
   { path: "src/two.test.tsx", tests: ["suite > cancel"] },
 ];
 const plan = { formatVersion: 2, sourceSha: sha, shardCount: 2, files: files.map(({ path }) => ({ path })), assignments: [[files[0].path], [files[1].path]] };
+/** @param {number} index @param {Partial<import("./frontend-ci.mjs").ShardRecord>} overrides */
 const record = (index, overrides = {}) => ({ formatVersion: 2, sourceSha: sha, planSha256: digest, index, shardCount: 2, exitCode: 0, ...overrides });
-const cases = (index, overrides = {}) => ({ formatVersion: 2, sourceSha: sha, planSha256: digest, index, shardCount: 2, files: [files[index - 1]], ...overrides });
+/** @param {number} index @param {Partial<import("./frontend-ci.mjs").Cases>} overrides */
+const cases = (index, overrides = {}) => ({ formatVersion: 2, sourceSha: sha, planSha256: digest, index, shardCount: 2, files: [/** @type {import("./frontend-ci.mjs").InventoryFile} */ (files[index - 1])], ...overrides });
+/** @param {string} path @param {string[]} names @returns {import("./frontend-ci.mjs").Report & {testResults: [import("./frontend-ci.mjs").FileReport & {assertionResults: [import("./frontend-ci.mjs").FileReport["assertionResults"][number], ...import("./frontend-ci.mjs").FileReport["assertionResults"]]}]}} */
 const report = (path, names) => ({
   success: true, numFailedTests: 0, numFailedTestSuites: 0, numTotalTests: names.length, numPassedTests: names.length,
-  testResults: [{ name: path, status: "passed", assertionResults: names.map((name) => {
+  testResults: [{ name: path, status: "passed", assertionResults: /** @type {[import("./frontend-ci.mjs").FileReport["assertionResults"][number], ...import("./frontend-ci.mjs").FileReport["assertionResults"]]} */ (names.map((name) => {
     const parts = name.split(" > ");
-    return { fullName: parts.join(" "), ancestorTitles: parts.slice(0, -1), title: parts.at(-1), status: "passed" };
-  }) }],
+    return { fullName: parts.join(" "), ancestorTitles: parts.slice(0, -1), title: /** @type {string} */ (parts.at(-1)), status: "passed" };
+  })) }],
 });
 
 test("weighted planning puts long files on separate runners and retains every file", () => {
@@ -52,7 +56,7 @@ test("source and shard provenance cannot be replaced by a successful status", ()
 test("parameterized names retain exact multiplicity and all original assertions must pass", () => {
   assert.doesNotThrow(() => verifyReport(cases(1), report(files[0].path, files[0].tests)));
   assert.throws(() => verifyReport(cases(1), report(files[0].path, files[0].tests.slice(1))), /inventory/);
-  assert.throws(() => verifyReport(cases(1), report(files[0].path, [...files[0].tests, files[0].tests[0]])), /inventory/);
+  assert.throws(() => verifyReport(cases(1), report(files[0].path, [...files[0].tests, /** @type {string} */ (files[0].tests[0])])), /inventory/);
   const failed = report(files[0].path, files[0].tests);
   failed.testResults[0].assertionResults[0].status = "pending";
   assert.throws(() => verifyReport(cases(1), failed), /did not pass/);
@@ -97,6 +101,8 @@ test("trusted merge requires every independently produced case digest", () => {
 
 test("collection normalizes runner paths and retains repeated named cases", () => {
   assert.deepEqual(inventory([{ file: "/synthetic/src/a.test.ts", name: "parameter" }, { file: "/synthetic/src/a.test.ts", name: "parameter" }], "/synthetic"), [{ path: "src/a.test.ts", tests: ["parameter", "parameter"] }]);
+  assert.equal(testPath("tests/direct/config.test.ts"), "tests/direct/config.test.ts");
+  assert.throws(() => testPath("tests/../escape.test.ts"), /Unexpected/);
   assert.throws(() => testPath("src/../../escape.test.ts"), /Unexpected/);
   assert.throws(() => testPath("src/../escape.test.ts"), /Unexpected/);
   assert.throws(() => testPath("/other/src/a.test.ts", "/synthetic"), /Unexpected/);
@@ -136,12 +142,14 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   writeFileSync(join(fixture, "src/math.ts"), "export function add(a: number, b: number) { return a + b; }\nexport function unused() { return 0; }\n");
   writeFileSync(join(fixture, "src/one.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; if (process.env.AIOLM_FRONTEND_COLLECTION_BLOCKED) throw new Error('Test module recollection is blocked'); it.each([1, 2])('same parameter', n => expect(add(n, 1)).toBe(n + 1)); if (process.env.AIOLM_FRONTEND_UNHANDLED_PROBE) it('preserves a failing unhandled rejection', () => { void Promise.reject(new Error('Unhandled frontend contract rejection')); expect(add(1, 1)).toBe(2); });\n");
   writeFileSync(join(fixture, "src/two.test.ts"), "import { it, expect } from 'vitest'; import { add } from './math'; it('second file', () => expect(add(2, 3)).toBe(5));\n");
+  /** @param {string[]} args @param {NodeJS.ProcessEnv} env */
   const runWithEnv = (args, env = {}) => {
     const result = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), ...args], {
       cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false", ...env }, encoding: "utf8", timeout: 30_000,
     });
     assert.equal(result.status, 0, JSON.stringify({ command: args, stdout: result.stdout, stderr: result.stderr, signal: result.signal, error: result.error?.message }));
   };
+  /** @param {...string} args */
   const run = (...args) => runWithEnv(args);
   const sourceSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
   const runnerOs = process.platform === "win32" ? "Windows" : "Linux";
@@ -151,18 +159,19 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   runWithEnv(["plan", "--shards", "2", "--output", "tmp/plan.json"], { GITHUB_ACTIONS: "true", GITHUB_SHA: sourceSha, RUNNER_OS: runnerOs, GITHUB_OUTPUT: githubOutput, AIOLM_FRONTEND_COLLECTION_BLOCKED: "1" });
   const planDigest = createHash("sha256").update(readFileSync(join(fixture, "tmp/plan.json"))).digest("hex");
   assert.equal(readFileSync(githubOutput, "utf8"), planOutputEntry(runnerOs, planDigest));
-  const actualPlan = JSON.parse(readFileSync(join(fixture, "tmp/plan.json"), "utf8"));
+  const actualPlan = /** @type {import("./frontend-ci.mjs").Plan} */ (JSON.parse(readFileSync(join(fixture, "tmp/plan.json"), "utf8")));
   assert.ok(actualPlan.files.every((file) => !Object.hasOwn(file, "tests")));
+  /** @type {Record<number, string>} */
   const caseDigests = {};
-  for (const [index, directory] of [[1, "one"], [2, "two"]]) {
-    const ownsBlocked = actualPlan.assignments[index - 1].includes("src/one.test.ts");
+  for (const [index, directory] of /** @type {[number, string][]} */ ([[1, "one"], [2, "two"]])) {
+    const ownsBlocked = /** @type {string[]} */ (actualPlan.assignments[index - 1]).includes("src/one.test.ts");
     const caseOutput = join(fixture, `tmp/case-output-${index}`);
     runWithEnv(["shard", "--plan", "tmp/plan.json", "--index", String(index), "--output", `tmp/shards/${directory}`], {
       GITHUB_ACTIONS: "true", GITHUB_SHA: sourceSha, RUNNER_OS: runnerOs, GITHUB_OUTPUT: caseOutput,
       ...(ownsBlocked ? {} : { AIOLM_FRONTEND_COLLECTION_BLOCKED: "1" }),
     });
     caseDigests[index] = createHash("sha256").update(readFileSync(join(fixture, `tmp/shards/${directory}/cases.json`))).digest("hex");
-    assert.equal(readFileSync(caseOutput, "utf8"), casesOutputEntry(runnerOs, index, caseDigests[index]));
+    assert.equal(readFileSync(caseOutput, "utf8"), casesOutputEntry(runnerOs, index, /** @type {string} */ (caseDigests[index])));
   }
   run("merge", "--plan", "tmp/plan.json", "--input", "tmp/shards");
   const merged = JSON.parse(readFileSync(join(fixture, "tmp/frontend-ci/merged/results.json"), "utf8"));
@@ -174,6 +183,7 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   runWithEnv(["merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/trusted-merge", ...trustedArguments], { AIOLM_FRONTEND_COLLECTION_BLOCKED: "1" });
   const trusted = JSON.parse(readFileSync(join(fixture, "tmp/trusted-merge/results.json"), "utf8"));
   assert.equal(trusted.numPassedTests, 3);
+  /** @param {string[]} args @param {RegExp} pattern */
   const reject = (args, pattern) => {
     const result = spawnSync(process.execPath, [join(fixture, "scripts/frontend-ci.mjs"), ...args], {
       cwd: fixture, env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 30_000,
@@ -188,10 +198,10 @@ export default defineConfig({ cacheDir: 'tmp/vite', test: { environment: 'node',
   const recordPath = join(fixture, "tmp/shards/one/record.json");
   const originalCases = readFileSync(casesPath);
   const originalRecord = readFileSync(recordPath);
-  const forged = JSON.parse(originalCases);
+  const forged = JSON.parse(originalCases.toString());
   forged.files[0].tests.pop();
   writeFileSync(casesPath, JSON.stringify(forged));
-  const forgedRecord = JSON.parse(originalRecord);
+  const forgedRecord = JSON.parse(originalRecord.toString());
   forgedRecord.casesSha256 = createHash("sha256").update(readFileSync(casesPath)).digest("hex");
   writeFileSync(recordPath, JSON.stringify(forgedRecord));
   reject(["merge", "--plan", "tmp/plan.json", "--input", "tmp/shards", "--output", "tmp/forged-case-digests", ...trustedArguments], /trusted producer digest/);

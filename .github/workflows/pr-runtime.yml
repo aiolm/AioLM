@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pr-runtime-${{ inputs.pull_request }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build PR ${{ inputs.pull_request }} (${{ inputs.backend }})
@@ -303,10 +307,10 @@ jobs:
           path: release-assets
 
       - name: Publish PR runtime release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: pr-runtime-${{ inputs.pull_request }}
-          target_commitish: main
+          target_commitish: ${{ github.ref_name }}
           name: llama.cpp PR ${{ inputs.pull_request }} runtime
           body: |
             Prebuilt aiolm runtime for llama.cpp PR #${{ inputs.pull_request }}.
@@ -315,6 +319,7 @@ jobs:
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
+          overwrite_files: false
           files: |
             release-assets/*.zip
             release-assets/*.zip.sha256

@@ -10,17 +10,20 @@ assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "never install on 
 assert.ok(process.env.RUNNER_TEMP);
 const root = mkdtempSync(join(process.env.RUNNER_TEMP, "aiolm-install-"));
 const bundle = resolve(".codex-target/release/bundle");
+/** @param {string} executable @param {string[]} args @param {(number | null)[]} [accepted] */
 function run(executable, args, accepted = [0]) {
   const result = spawnSync(executable, args, { encoding: "utf8", timeout: 180_000, windowsHide: true });
   if (result.error) throw result.error;
   assert.ok(accepted.includes(result.status), `${executable}: ${result.status}\n${result.stdout}\n${result.stderr}`);
   return result.stdout;
 }
+/** @param {string} directory @param {string} suffix */
 function packageFile(directory, suffix) {
   const files = readdirSync(join(bundle, directory)).filter(name => name.endsWith(suffix));
   assert.equal(files.length, 1, `expected one ${suffix} package`);
-  return join(bundle, directory, files[0]);
+  return join(bundle, directory, /** @type {string} */ (files[0]));
 }
+/** @param {string} directory */
 function installedCli(directory) {
   const extension = process.platform === "win32" ? ".exe" : "";
   assert.ok(existsSync(join(directory, `aiolm${extension}`)), `installed desktop binary is missing in ${directory}`);

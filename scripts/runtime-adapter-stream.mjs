@@ -1,9 +1,23 @@
 /* global TextDecoder, AbortController, setTimeout, clearTimeout */
 import { SseParser } from '../src/shared/api/sse.ts';
 
+/**
+ * @typedef {import('../src/shared/api/sse.ts').StreamUsage} StreamUsage
+ * @typedef {{content: string, reasoningChars: number, usage?: StreamUsage, streamAbortedAfterOutput?: boolean, streamAbortedAfterContent?: boolean, cancelledOn?: string}} AdapterStreamResult
+ */
+
 /** A reasoning token is generation output, but never a final answer. */
+/**
+ * @param {{body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array> | null}} response
+ * @param {{controller: AbortController, cancel?: boolean}} options
+ * @returns {Promise<AdapterStreamResult>}
+ */
 export async function readRuntimeAdapterStream(response, { controller, cancel = false }) {
-  let content = '', reasoningChars = 0, usage, finishReason, abortRequested = false;
+  let content = '', reasoningChars = 0, abortRequested = false;
+  /** @type {StreamUsage | undefined} */
+  let usage;
+  /** @type {string | undefined} */
+  let finishReason;
   const parser = new SseParser(delta => {
     content += delta.content ?? '';
     reasoningChars += delta.reasoning?.length ?? 0;
@@ -12,7 +26,8 @@ export async function readRuntimeAdapterStream(response, { controller, cancel = 
   });
   const decoder = new TextDecoder();
   try {
-    for await (const chunk of response.body) {
+    // Fetch bodies and the test fixture both expose the async iterator at runtime.
+    for await (const chunk of /** @type {AsyncIterable<Uint8Array>} */ (response.body)) {
       parser.push(decoder.decode(chunk, { stream: true }));
       if (cancel && (content || reasoningChars)) {
         if (parser.isFinished() || finishReason !== undefined) throw new Error('Stream completed before cancellation could be exercised');
@@ -22,7 +37,7 @@ export async function readRuntimeAdapterStream(response, { controller, cancel = 
       }
     }
   } catch (error) {
-    if (!abortRequested || error?.name !== 'AbortError') throw error;
+    if (!abortRequested || error === null || typeof error !== 'object' || !('name' in error) || error.name !== 'AbortError') throw error;
   }
   if (abortRequested) return {
     content, reasoningChars, usage,
@@ -37,19 +52,28 @@ export async function readRuntimeAdapterStream(response, { controller, cancel = 
 }
 
 /** Exact protocol acceptance is shared by every external engine. */
+/**
+ * @param {{content: string, usage?: {prompt_tokens?: number, completion_tokens?: number}}} result
+ * @param {string} expectedAnswer
+ */
 export function validateRuntimeAdapterCompletion({ content, usage }, expectedAnswer) {
   if (content.trim() !== expectedAnswer) throw new Error('The final answer did not exactly match the expected answer');
-  if (!Number.isSafeInteger(usage?.prompt_tokens) || usage.prompt_tokens <= 0
-      || !Number.isSafeInteger(usage?.completion_tokens) || usage.completion_tokens <= 0) {
+  if (typeof usage?.prompt_tokens !== 'number' || !Number.isSafeInteger(usage.prompt_tokens) || usage.prompt_tokens <= 0
+      || typeof usage?.completion_tokens !== 'number' || !Number.isSafeInteger(usage.completion_tokens) || usage.completion_tokens <= 0) {
     throw new Error('Authoritative tokenizer usage was not supplied');
   }
   return { content, usage, answerExact: true };
 }
 
 /** Cancellation recovery must not be disguised by a server restart. */
+/**
+ * @param {{state?: string, pid?: number}} before
+ * @param {{state?: string, pid?: number}} afterCancel
+ * @param {{state?: string, pid?: number}} afterFollowup
+ */
 export function validateRuntimeAdapterRecovery(before, afterCancel, afterFollowup) {
   if (![before, afterCancel, afterFollowup].every(status => status.state === 'running'
-      && Number.isSafeInteger(status.pid) && status.pid > 0 && status.pid === before.pid)) {
+      && typeof status.pid === 'number' && Number.isSafeInteger(status.pid) && status.pid > 0 && status.pid === before.pid)) {
     throw new Error('Cancellation and follow-up must preserve the same running server process');
   }
   return true;
@@ -57,15 +81,22 @@ export function validateRuntimeAdapterRecovery(before, afterCancel, afterFollowu
 
 export const DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS = 120000;
 
+/** @param {unknown} value */
 export function validateRuntimeAdapterRequestTimeout(value) {
   const timeoutMs = typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : value;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
+  if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
     throw new Error('--request-timeout-ms must be an integer from 1 to 600000');
   }
   return timeoutMs;
 }
 
 /** Keep the deadline active until both response headers and the whole SSE body settle. */
+/**
+ * @template T
+ * @param {(controller: AbortController) => Promise<T>} operation
+ * @param {number} [timeoutMs]
+ * @returns {Promise<T>}
+ */
 export async function withRuntimeAdapterRequestDeadline(operation, timeoutMs = DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS) {
   const deadlineMs = validateRuntimeAdapterRequestTimeout(timeoutMs);
   const controller = new AbortController();

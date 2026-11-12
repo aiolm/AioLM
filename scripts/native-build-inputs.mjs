@@ -17,8 +17,24 @@ const MAX_GENERATED_BYTES = 16_777_216;
 const TOTAL_GENERATED_BYTES = 33_554_432;
 
 class Unavailable extends Error {}
+/** @param {string} reason @returns {never} */
 const unavailable = reason => { throw new Unavailable(reason); };
 
+/**
+ * @overload
+ * @param {string} path
+ * @param {number} maxBytes
+ * @param {true} [bytes]
+ * @returns {{ content: Buffer, mtime: bigint, size: number }}
+ */
+/**
+ * @overload
+ * @param {string} path
+ * @param {number} maxBytes
+ * @param {false} bytes
+ * @returns {{ content: null, mtime: bigint, size: number }}
+ */
+/** @param {string} path @param {number} maxBytes @param {boolean} [bytes] */
 function regular(path, maxBytes, bytes = true) {
   if (realpathSync(path) !== resolve(path) || !lstatSync(path).isFile()) unavailable("unsafe-input-file");
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -40,24 +56,27 @@ function regular(path, maxBytes, bytes = true) {
   } finally { closeSync(fd); }
 }
 
-/** Rust make dep-info supports escaped spaces, punctuation and continuations. */
+/** Rust make dep-info supports escaped spaces, punctuation and continuations.
+ * @param {string} text
+ */
 export function rustDependencyPaths(text) {
+  /** @type {string[]} */
   const paths = [];
   for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     let colon = -1, wordStart = 0;
     for (let index = 0; index < line.length; index += 1) {
-      if (/\s/.test(line[index])) wordStart = index + 1;
+      if (/\s/.test(/** @type {string} */ (line[index]))) wordStart = index + 1;
       if (line[index] === "\\" && /[\s#:\\$]/.test(line[index + 1] ?? "")) { index += 1; continue; }
       if (line[index] !== ":") continue;
-      if (index === wordStart + 1 && /[A-Za-z]/.test(line[wordStart]) && /[/\\]/.test(line[index + 1] ?? "")) continue;
+      if (index === wordStart + 1 && /[A-Za-z]/.test(/** @type {string} */ (line[wordStart])) && /[/\\]/.test(line[index + 1] ?? "")) continue;
       colon = index; break;
     }
     if (colon < 0) continue;
     let word = "";
     const finish = () => { if (word) paths.push(word); word = ""; };
     for (let index = colon + 1; index < line.length; index += 1) {
-      const character = line[index];
+      const character = /** @type {string} */ (line[index]);
       if (character === "#") break;
       if (character === "\\" && /[\s#:\\$]/.test(line[index + 1] ?? "")) { word += line[++index]; continue; }
       if (character === "$" && line[index + 1] === "$") { word += "$"; index += 1; continue; }
@@ -68,26 +87,39 @@ export function rustDependencyPaths(text) {
   return [...new Set(paths)];
 }
 
+/** @param {string} text @param {string} key @returns {string} */
 function integerId(text, key) {
   const values = [...text.matchAll(new RegExp(`"${key}"\\s*:\\s*(0|[1-9][0-9]{0,19})\\s*(?=,|})`, "g"))];
   if (values.length !== 1) unavailable("invalid-library-fingerprint");
-  return values[0][1];
+  return /** @type {RegExpExecArray & [string, string]} */ (values[0])[1];
 }
 
+/** @param {string} root */
 function gitSource(root) {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", timeout: 10_000, maxBuffer: 65_536, stdio: ["ignore", "pipe", "pipe"], shell: false });
   if (result.error || result.status !== 0 || !SHA.test(result.stdout.trim())) throw new Error("Cannot verify native observation source");
   return result.stdout.trim();
 }
 
+/**
+ * @typedef {{ id: string, features: string[], profileId: string, compilerId: string, configId: string, compileKind: string, invocationNs: string }} NativeUnit
+ * @typedef {{ path: string, sizeBytes: number, sha256: string, mtimeNs: string, newerThanInvocation: boolean, deltaNs: string }} GeneratedInput
+ * @typedef {{ formatVersion: number, sourceSha: string | undefined, phase: string | undefined } & (
+ *   { status: "observed", unit: NativeUnit, generatedInputs: GeneratedInput[], reason?: never } |
+ *   { status: "unavailable", reason: string, unitIds?: string[] }
+ * )} NativeObservation
+ * @param {{ root?: string, targetDirectory?: string, sourceSha?: string, phase?: string, readSource?: (root: string) => string }} options
+ * @returns {NativeObservation}
+ */
 export function observeNativeBuildInputs({ root = ROOT, targetDirectory = resolve(root, process.env.CARGO_TARGET_DIR ?? ".codex-target"), sourceSha, phase, readSource = gitSource }) {
-  if (!SHA.test(sourceSha ?? "") || !["before", "after"].includes(phase)) throw new Error("Invalid native observation arguments");
+  if (!SHA.test(sourceSha ?? "") || !["before", "after"].includes(phase ?? "")) throw new Error("Invalid native observation arguments");
   if (readSource(root) !== sourceSha) throw new Error("Native observation source does not match checkout");
   const base = { formatVersion: 1, sourceSha, phase };
   try {
     const target = resolve(targetDirectory);
     if (realpathSync(target) !== target || !lstatSync(target).isDirectory()) unavailable("unsafe-target-directory");
     const fingerprint = join(target, "debug", ".fingerprint");
+    /** @type {NativeUnit[]} */
     const candidates = [];
     const entries = readdirSync(fingerprint);
     if (entries.length > 10_000) unavailable("too-many-fingerprint-entries");
@@ -108,14 +140,15 @@ export function observeNativeBuildInputs({ root = ROOT, targetDirectory = resolv
         remainingFingerprintBytes -= value.size;
         text = value.content.toString("utf8");
       }
-      catch (error) { if (error.code === "ENOENT") continue; throw error; }
-      const metadata = JSON.parse(text);
-      const features = JSON.parse(metadata.features);
+      catch (error) { if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue; throw error; }
+      const metadata = /** @type {unknown} */ (JSON.parse(text));
+      const featureData = typeof metadata === "object" && metadata !== null && "features" in metadata ? metadata.features : undefined;
+      const features = /** @type {unknown} */ (JSON.parse(String(featureData)));
       if (!Array.isArray(features) || JSON.stringify([...features].sort()) !== JSON.stringify(FEATURES)) continue;
-      candidates.push({ id: UNIT.exec(name)[1], features: [...FEATURES], profileId: integerId(text, "profile"), compilerId: integerId(text, "rustc"), configId: integerId(text, "config"), compileKind: integerId(text, "compile_kind"), invocationNs: regular(join(folder, "invoked.timestamp"), 65_536, false).mtime.toString() });
+      candidates.push({ id: /** @type {RegExpExecArray & [string, string]} */ (UNIT.exec(name))[1], features: [...FEATURES], profileId: integerId(text, "profile"), compilerId: integerId(text, "rustc"), configId: integerId(text, "config"), compileKind: integerId(text, "compile_kind"), invocationNs: regular(join(folder, "invoked.timestamp"), 65_536, false).mtime.toString() });
     }
     if (candidates.length !== 1) return { ...base, status: "unavailable", reason: candidates.length ? "ambiguous-default-library" : "missing-default-library", unitIds: candidates.map(unit => unit.id) };
-    const unit = candidates[0];
+    const unit = /** @type {NativeUnit} */ (candidates[0]);
     const depInfo = regular(join(target, "debug", "deps", `aiolm_lib-${unit.id}.d`), 4_194_304).content.toString("utf8");
     const dependencies = [...new Set(rustDependencyPaths(depInfo).map(path => resolve(root, path))
       .filter(path => isAbsolute(path) && GENERATED.test(relative(target, path).replaceAll("\\", "/"))))].sort();
@@ -138,9 +171,10 @@ export function observeNativeBuildInputs({ root = ROOT, targetDirectory = resolv
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2);
+    /** @type {Record<string, string | undefined>} */
     const options = {};
     for (let index = 0; index < args.length; index += 2) {
-      const name = args[index];
+      const name = /** @type {string} */ (args[index]);
       if (!["--source", "--phase", "--output"].includes(name) || options[name] !== undefined || !args[index + 1]) throw new Error("Invalid native observation arguments");
       options[name] = args[index + 1];
     }

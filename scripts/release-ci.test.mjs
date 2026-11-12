@@ -1,65 +1,64 @@
 /* global structuredClone */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
 import test from "node:test";
 import { BUILD_INPUT_FILES, assertMainCI, matchingMainCI, parseReleaseArguments, prepareAssets, recordBuildInputs, releaseAssets, validateBuildInput, verifyBuildInputs, verifyDefaultFeatureInputs, waitForMainCI } from "./release-ci.mjs";
+import { recheckCI, recheckReleaseState, resolveReleaseVersion } from "./release-policy.mjs";
 
 const sha = "a".repeat(40);
 const success = { id: 1, head_sha: sha, head_branch: "main", event: "push", path: ".github/workflows/ci.yml", status: "completed", conclusion: "success", html_url: "https://github.com/aiolm/AioLM/actions/runs/1" };
 
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-function workflowScript(source, name, next) {
-  const parts = source.replace(/\r\n/g, "\n").split(`      - name: ${name}\n`);
-  assert.equal(parts.length, 2, `Expected one ${name} step`);
-  const step = parts[1].split(next.startsWith("\n") ? next : `      - name: ${next}\n`)[0];
-  assert.ok(step.includes("          script: |\n"), `Expected inline ${name} policy`);
-  const script = step.split("          script: |\n")[1].split("\n").filter(line => line.trim()).map(line => {
-    assert.ok(line.startsWith("            "), `Unexpected ${name} script indentation`);
-    return line.slice(12);
-  }).join("\n");
-  return new AsyncFunction("github", "context", "process", "core", "require", script);
-}
 
-function publicationFixture(options = {}, workflow = releaseWorkflow) {
+/**
+ * @typedef {import("./release-policy.mjs").ReadArguments} ReadArguments
+ * @typedef {{tag?: string, source?: string, ci?: import("./release-ci.mjs").CIRun, releases?: unknown[], latest?: unknown, tags?: Record<string, unknown>, errors?: Record<string, unknown>, existing?: unknown, reference?: unknown}} PublicationState
+ */
+/** @param {PublicationState} options */
+function publicationFixture(options = {}) {
+  /** @type {PublicationState & {tag: string, source: string, ci: import("./release-ci.mjs").CIRun, releases: unknown[], tags: Record<string, unknown>, errors: Record<string, unknown>}} */
   const state = {
     tag: "v1.2.3", source: sha, ci: success,
     releases: [[]], latest: { tag_name: "v1.2.2", draft: false, prerelease: false },
     tags: {}, errors: {}, ...options,
   };
-  const calls = [], mutations = [];
+  /** @type {{name: string, args: ReadArguments}[]} */
+  const calls = [];
+  /** @type {string[]} */
+  const mutations = [];
+  /** @template T @param {string} name @param {ReadArguments} args @param {T} value @param {boolean} optional */
   const read = async (name, args, value, optional = false) => {
     calls.push({ name, args });
     if (state.errors[name]) throw state.errors[name];
     if (optional && value === undefined) throw Object.assign(new Error("Synthetic absent state"), { status: 404 });
     return { data: value };
   };
+  /** @param {string} name */
   const mutation = name => async () => { mutations.push(name); throw new Error("Publication policy must be read-only"); };
   const github = { rest: {
-    actions: { getWorkflowRun: args => read("getWorkflowRun", args, state.ci) },
+    actions: { getWorkflowRun: /** @param {ReadArguments} args */ args => read("getWorkflowRun", args, state.ci) },
     repos: {
-      getReleaseByTag: args => read("getReleaseByTag", args, state.existing, true),
-      listReleases: args => read("listReleases", args, Object.hasOwn(state.releases, args.page - 1) ? state.releases[args.page - 1] : []),
-      getLatestRelease: args => read("getLatestRelease", args, state.latest, true),
+      getReleaseByTag: /** @param {ReadArguments} args */ args => read("getReleaseByTag", args, state.existing, true),
+      listReleases: /** @param {ReadArguments} args */ args => read("listReleases", args, Object.hasOwn(state.releases, /** @type {number} */ (args.page) - 1) ? state.releases[/** @type {number} */ (args.page) - 1] : []),
+      getLatestRelease: /** @param {ReadArguments} args */ args => read("getLatestRelease", args, state.latest, true),
       ...Object.fromEntries(["createRelease", "updateRelease", "deleteRelease", "uploadReleaseAsset", "deleteReleaseAsset"].map(name => [name, mutation(name)])),
     },
     git: {
-      getRef: args => read("getRef", args, state.reference, true),
-      getTag: args => read("getTag", args, state.tags[args.tag_sha], true),
+      getRef: /** @param {ReadArguments} args */ args => read("getRef", args, state.reference, true),
+      getTag: /** @param {ReadArguments} args */ args => read("getTag", args, state.tags[/** @type {string} */ (args.tag_sha)], true),
       ...Object.fromEntries(["createRef", "updateRef", "deleteRef"].map(name => [name, mutation(name)])),
     },
   } };
   const context = { repo: { owner: "synthetic", repo: "synthetic" }, ref: "refs/heads/main", sha: state.source };
   const process = { env: { TARGET_SHA: state.source, TAG_NAME: state.tag, CI_RUN_ID: "1" } };
+  /** @type {Record<string, string>} */
   const outputs = {};
-  const core = { info: () => {}, setOutput: (key, value) => { outputs[key] = value; } };
-  const ci = workflowScript(workflow, "Recheck CI after approval", "Recheck staged checksums");
-  const release = workflowScript(workflow, "Recheck release and tag state after approval", "Publish GitHub release");
-  const prepare = workflowScript(workflow, "Resolve version and release state", "\n  build:\n");
+  const core = { info: () => {}, setOutput: /** @param {string} key @param {string} value */ (key, value) => { outputs[key] = value; } };
   const version = state.tag.slice(1);
+  /** @type {Record<string, string>} */
   const files = {
     "package.json": JSON.stringify({ version }),
     "package-lock.json": JSON.stringify({ packages: { "": { version } } }),
@@ -69,22 +68,22 @@ function publicationFixture(options = {}, workflow = releaseWorkflow) {
     "src-tauri/tauri-cli-build.conf.json": JSON.stringify({ version }),
   };
   const runPrepare = async () => {
-    await prepare(github, context, process, core, name => {
-      assert.equal(name, "node:fs");
-      return { readFileSync: path => { assert.ok(Object.hasOwn(files, path)); return files[path]; } };
-    });
+    await resolveReleaseVersion({ github: /** @type {import("./release-policy.mjs").PolicyGitHub} */ (github), context, core, fs: {
+      readFileSync: path => { assert.ok(Object.hasOwn(files, path)); return /** @type {string} */ (files[path]); },
+    } });
     return outputs;
   };
-  const runState = () => release(github, context, process, core);
-  return { calls, mutations, runPrepare, runState, run: async () => { await ci(github, context, process, core); await runState(); } };
+  const runState = () => recheckReleaseState({ github: /** @type {import("./release-policy.mjs").PolicyGitHub} */ (github), context, core, env: process.env });
+  return { calls, mutations, runPrepare, runState, run: async () => { await recheckCI({ github: /** @type {import("./release-policy.mjs").PolicyGitHub} */ (github), context, env: process.env }); await runState(); } };
 }
 
+/** @param {import("node:test").TestContext} t */
 function inputArtifacts(t) {
   const root = mkdtempSync(join(tmpdir(), "aiolm-build-inputs-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const directories = { ciInputs: join(root, "ci"), packageInputs: join(root, "package") };
   const records = [];
-  for (const [os, arch] of [["Windows", "X64"], ["Linux", "X64"], ["macOS", "ARM64"], ["macOS", "X64"]]) {
+  for (const [os, arch] of /** @type {[string, string][]} */ ([["Windows", "X64"], ["Linux", "X64"], ["macOS", "ARM64"], ["macOS", "X64"]])) {
     const input = {
       formatVersion: 1, sourceSha: sha, runner: { os, arch }, benchmarkOriginSha256: "b".repeat(64),
       rustcVersion: "rustc 1.98.0 (synthetic 2026-08-18)",
@@ -143,7 +142,18 @@ test("approval preparation rejects extra, empty and linked assets", t => {
     for (const name of names) writeFileSync(join(directory, name), "synthetic");
     if (bad === "extra") writeFileSync(join(directory, "unexpected.txt"), "extra");
     if (bad === "empty") writeFileSync(join(directory, names[0]), "");
-    if (bad === "link") { rmSync(join(directory, names[0])); symlinkSync(join(directory, names[1]), join(directory, names[0])); }
+    if (bad === "link") {
+      rmSync(join(directory, names[0]));
+      // Windows junctions exercise link rejection without requiring the
+      // machine-wide permission needed to create file symlinks.
+      if (platform() === "win32") {
+        const target = mkdtempSync(join(tmpdir(), "aiolm-approval-link-"));
+        t.after(() => rmSync(target, { recursive: true, force: true }));
+        symlinkSync(target, join(directory, names[0]), "junction");
+      } else {
+        symlinkSync(join(directory, names[1]), join(directory, names[0]));
+      }
+    }
     assert.throws(() => prepareAssets(directory, "0.3.3", sha, success, inputArtifacts(t)));
   }
 });
@@ -152,13 +162,14 @@ test("all four package targets must bind the same source, actual origin and pinn
   const inputs = inputArtifacts(t);
   assert.equal(verifyBuildInputs(inputs.ciInputs, inputs.packageInputs, sha).length, 4);
   const record = inputs.records.find(record => record.directory === inputs.packageInputs);
-  for (const change of [
+  assert.ok(record);
+  for (const change of /** @type {((input: import("./release-ci.mjs").BuildInput) => void)[]} */ ([
     input => { input.benchmarkOriginSha256 = "d".repeat(64); },
     input => { input.rustcVersion = "rustc 1.99.0 (different compiler)"; },
-    input => { input.sourceInputs[0].sha256 = "d".repeat(64); },
+    input => { /** @type {{path: string, sha256: string}} */ (input.sourceInputs[0]).sha256 = "d".repeat(64); },
     input => { input.sourceSha = "d".repeat(40); },
     input => { input.formatVersion = 2; },
-  ]) {
+  ])) {
     const altered = structuredClone(record.input);
     change(altered);
     writeFileSync(record.file, JSON.stringify(altered));
@@ -166,10 +177,12 @@ test("all four package targets must bind the same source, actual origin and pinn
   }
   writeFileSync(record.file, JSON.stringify(record.input));
   const missing = inputs.records.find(item => item.directory === inputs.ciInputs);
+  assert.ok(missing);
   rmSync(missing.file);
   assert.throws(() => verifyBuildInputs(inputs.ciInputs, inputs.packageInputs, sha), /contents/);
   writeFileSync(missing.file, JSON.stringify(missing.input));
   const duplicate = inputs.records.find(item => item.directory === inputs.ciInputs && item.file !== missing.file);
+  assert.ok(duplicate);
   writeFileSync(duplicate.file, JSON.stringify(missing.input));
   assert.throws(() => verifyBuildInputs(inputs.ciInputs, inputs.packageInputs, sha), /Duplicate/);
 });
@@ -184,7 +197,9 @@ test("recording observes checkout, compiler and raw origin without storing the o
   }
   const secretOrigin = "https://synthetic-user:synthetic-secret@example.invalid";
   const env = { RUNNER_OS: "Linux", RUNNER_ARCH: "X64", AIOLM_BENCHMARK_API_URL: secretOrigin };
+  /** @type {[string, string[]][]} */
   const calls = [];
+  /** @type {import("./release-ci.mjs").IdentitySpawn} */
   const spawn = (name, args) => {
     calls.push([name, args]);
     return { status: 0, stdout: name === "git" ? sha + "\n" : "rustc 1.98.0 (synthetic 2026-08-18)\n" };
@@ -209,27 +224,29 @@ test("split default-feature checks must match both Mac compiler and source input
   }
   assert.deepEqual(verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), ["macOS/ARM64", "macOS/X64"]);
   const record = records[0];
+  assert.ok(record);
   const file = join(defaults, record.input.runner.arch, "build-inputs.json");
-  for (const change of [
+  for (const change of /** @type {((input: import("./release-ci.mjs").BuildInput) => void)[]} */ ([
     input => { input.sourceSha = "d".repeat(40); },
     input => { input.rustcVersion = "rustc 1.99.0 (different compiler)"; },
     input => { input.benchmarkOriginSha256 = "d".repeat(64); },
-    input => { input.sourceInputs[0].sha256 = "d".repeat(64); },
+    input => { /** @type {{path: string, sha256: string}} */ (input.sourceInputs[0]).sha256 = "d".repeat(64); },
     input => { input.runner.os = "Windows"; },
-  ]) {
+  ])) {
     const altered = structuredClone(record.input);
     change(altered);
     writeFileSync(file, JSON.stringify(altered));
     assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha));
   }
   writeFileSync(file, JSON.stringify(record.input));
-  const otherFile = join(defaults, records[1].input.runner.arch, "build-inputs.json");
+  const other = /** @type {NonNullable<typeof records[number]>} */ (records[1]);
+  const otherFile = join(defaults, other.input.runner.arch, "build-inputs.json");
   writeFileSync(otherFile, JSON.stringify(record.input));
   assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /Duplicate/);
-  writeFileSync(otherFile, JSON.stringify(records[1].input));
+  writeFileSync(otherFile, JSON.stringify(other.input));
   rmSync(otherFile);
   assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /contents/);
-  writeFileSync(otherFile, JSON.stringify(records[1].input));
+  writeFileSync(otherFile, JSON.stringify(other.input));
   mkdirSync(join(defaults, "extra"));
   assert.throws(() => verifyDefaultFeatureInputs(inputs.ciInputs, defaults, sha), /exactly 2/);
 });
@@ -255,12 +272,12 @@ test("publication state is checked after hashes and before the non-overwriting p
   const state = releaseWorkflow.indexOf("      - name: Recheck release and tag state after approval\n");
   const publish = releaseWorkflow.indexOf("      - name: Publish GitHub release\n");
   assert.ok(ci < hashes && hashes < state && state < publish);
-  const job = releaseWorkflow.split("  publish:\n")[1].split("  verify-public:\n")[0];
+  const job = /** @type {string} */ (/** @type {string} */ (releaseWorkflow.split("  publish:\n")[1]).split("  verify-public:\n")[0]);
   assert.match(job, / {4}environment: release-publish\n/);
   assert.ok(!job.includes("actions/checkout@"), "publication does not check out repository source");
   assert.match(job, / {10}overwrite_files: false\n/);
   const guardStep = releaseWorkflow.slice(state, publish);
-  const publisher = releaseWorkflow.slice(publish).split("  verify-public:\n")[0];
+  const publisher = /** @type {string} */ (releaseWorkflow.slice(publish).split("  verify-public:\n")[0]);
   assert.doesNotMatch(guardStep, /^ {8}(?:if|continue-on-error):/m, "the state guard must run and its failure must stop publication");
   assert.doesNotMatch(publisher, /^ {8}(?:if|continue-on-error):/m, "the publisher must retain normal success gating");
   const fixture = publicationFixture();
@@ -281,7 +298,7 @@ test("preflight and fresh publication reject unusable versions before scheduling
     { latest: { tag_name: "v1.2.2", draft: true, prerelease: false } },
     { tag: "v9007199254740992.0.0", latest: { tag_name: "v9007199254740993.0.0", draft: false, prerelease: false } },
   ]) {
-    for (const method of ["runPrepare", "runState"]) {
+    for (const method of /** @type {const} */ (["runPrepare", "runState"])) {
       const fixture = publicationFixture(options);
       await assert.rejects(fixture[method]());
       assert.deepEqual(fixture.mutations, []);
@@ -318,7 +335,7 @@ test("existing candidate releases skip preflight but still stop a fresh publicat
 
 test("preflight and publication require complete bounded release reads and fail closed on API errors", async () => {
   const page = Array.from({ length: 100 }, (_, index) => ({ tag_name: `v0.0.${index}`, draft: false, prerelease: false }));
-  for (const method of ["runPrepare", "runState"]) {
+  for (const method of /** @type {const} */ (["runPrepare", "runState"])) {
     const complete = publicationFixture({ releases: [page, []] });
     await complete[method]();
     assert.deepEqual(complete.calls.filter(call => call.name === "listReleases").map(call => call.args.page), [1, 2]);
@@ -346,8 +363,9 @@ test("preflight and publication require complete bounded release reads and fail 
   }
 });
 
-test("both release policies resolve bounded tags to the exact main source with LF or CRLF", async () => {
+test("both release policies resolve bounded tags to the exact main source", async () => {
   const first = "b".repeat(40), second = "c".repeat(40);
+  /** @param {import("./release-policy.mjs").GitObject} object */
   const ref = object => ({ ref: "refs/tags/v1.2.3", object });
   const acceptedChain = Object.fromEntries(Array.from({ length: 4 }, (_, index) => [(index + 1).toString(16).repeat(40), {
     object: index === 3 ? { type: "commit", sha } : { type: "tag", sha: (index + 2).toString(16).repeat(40) },
@@ -355,12 +373,10 @@ test("both release policies resolve bounded tags to the exact main source with L
   const chain = Object.fromEntries(Array.from({ length: 5 }, (_, index) => [(index + 1).toString(16).repeat(40), {
     object: index === 4 ? { type: "commit", sha } : { type: "tag", sha: (index + 2).toString(16).repeat(40) },
   }]));
-  for (const newline of ["\n", "\r\n"]) {
-    const workflow = releaseWorkflow.replace(/\n/g, newline);
-    for (const method of ["runPrepare", "runState"]) {
+    for (const method of /** @type {const} */ (["runPrepare", "runState"])) {
       for (const options of [{}, { reference: ref({ type: "commit", sha }) }, { reference: ref({ type: "tag", sha: first }), tags: { [first]: { object: { type: "tag", sha: second } }, [second]: { object: { type: "commit", sha } } } },
         { reference: ref({ type: "tag", sha: "1".repeat(40) }), tags: acceptedChain }]) {
-        const fixture = publicationFixture(options, workflow);
+        const fixture = publicationFixture(options);
         await fixture[method]();
         assert.deepEqual(fixture.mutations, []);
       }
@@ -373,12 +389,11 @@ test("both release policies resolve bounded tags to the exact main source with L
         { reference: ref({ type: "tag", sha: "1".repeat(40) }), tags: chain },
         { reference: ref({ type: "tag", sha: first }), errors: { getTag: Object.assign(new Error("Synthetic nested API error"), { status: 503 }) } },
       ]) {
-        const fixture = publicationFixture(options, workflow);
+        const fixture = publicationFixture(options);
         await assert.rejects(fixture[method]());
         assert.deepEqual(fixture.mutations, []);
       }
     }
-  }
 });
 
 test("publication still requires the approved exact-main CI before reading release state", async () => {
@@ -480,6 +495,7 @@ test("absent, direct and nested annotated tags are accepted only for the approve
 });
 
 test("moved, cyclic, missing, malformed and excessively nested tag objects stop publication", async () => {
+  /** @param {import("./release-policy.mjs").GitObject} object */
   const reference = object => ({ ref: "refs/tags/v1.2.3", object });
   const first = "b".repeat(40);
   const nested = Object.fromEntries(Array.from({ length: 5 }, (_, index) => [(index + 1).toString(16).repeat(40), { object: { type: "tag", sha: (index + 2).toString(16).repeat(40) } }]));
@@ -501,7 +517,7 @@ test("moved, cyclic, missing, malformed and excessively nested tag objects stop 
 });
 
 test("GitHub read errors other than allowed absence never become publication permission", async () => {
-  for (const [name, status] of [["getReleaseByTag", 403], ["listReleases", 404], ["getLatestRelease", 429], ["getRef", 500], ["getTag", 404]]) {
+  for (const [name, status] of /** @type {[string, number][]} */ ([["getReleaseByTag", 403], ["listReleases", 404], ["getLatestRelease", 429], ["getRef", 500], ["getTag", 404]])) {
     const fixture = publicationFixture({
       errors: { [name]: Object.assign(new Error("Synthetic API failure"), { status }) },
       ...(name === "getTag" ? { reference: { ref: "refs/tags/v1.2.3", object: { type: "tag", sha: "b".repeat(40) } } } : {}),
@@ -511,13 +527,11 @@ test("GitHub read errors other than allowed absence never become publication per
   }
 });
 
-test("the actual publication policy handles LF and Windows CRLF workflow sources identically", async () => {
-  for (const workflow of [releaseWorkflow, releaseWorkflow.replace(/\n/g, "\r\n")]) {
-    const empty = publicationFixture({}, workflow);
-    await empty.run();
-    const conflict = publicationFixture({ existing: { tag_name: "v1.2.3", draft: true } }, workflow);
-    await assert.rejects(conflict.run(), /release already exists/);
-    assert.deepEqual(empty.mutations, []);
-    assert.deepEqual(conflict.mutations, []);
+test("workflow imports tested policy functions without embedding or evaluating their source", () => {
+  for (const name of ["resolveReleaseVersion", "recheckCI", "recheckReleaseState"]) {
+    assert.match(releaseWorkflow, new RegExp(`await ${name}\\(\\{ github, context`));
   }
+  assert.match(releaseWorkflow, /name: release-policy\n/);
+  assert.match(releaseWorkflow, /generate_release_notes: true/);
+  assert.doesNotMatch(releaseWorkflow, /## What's changed|const parseVersion =/);
 });

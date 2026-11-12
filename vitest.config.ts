@@ -14,12 +14,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.ts"],
     coverage: {
       // This fixture was test-local before the suite was split. Keep it out of
       // production coverage while retaining the pre-existing source universe.
       exclude: ["src/testing/modelSettingsDialog.tsx"],
-      // Direct Node assertion scripts run through npm run test:checks and are not included in Vitest coverage.
       provider: "v8",
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "./coverage",

@@ -12,8 +12,22 @@ import { createServer, createConnection } from 'node:net';
 import { readRuntimeAdapterStream, validateRuntimeAdapterCompletion, validateRuntimeAdapterRecovery,
   DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS, validateRuntimeAdapterRequestTimeout, withRuntimeAdapterRequestDeadline } from './runtime-adapter-stream.mjs';
 
+/**
+ * @typedef {{item: string, status: string, evidence?: unknown, error?: string, reason?: string}} Step
+ * @typedef {{state?: string, pid?: number, url?: string, upstream_model?: string, provider?: string, runtime_id?: string, config?: {active_provider?: string, active_runtime?: string}, active_provider?: string, active_runtime?: string, failed?: boolean}} CommandResult
+ */
+/** @param {unknown} value @returns {Record<string, unknown>} */
+function asRecord(value) {
+  return value !== null && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value) : {};
+}
+/** @param {unknown} error */
+function errorMessage(error) { return asRecord(error).message; }
+
 const execute = promisify(execFile);
-const args = Object.fromEntries(process.argv.slice(2).reduce((rows, value, i, all) => value.startsWith('--') ? [...rows, [value.slice(2), all[i + 1]]] : rows, []));
+const parsedArgs = Object.fromEntries(process.argv.slice(2).reduce(
+  (rows, value, i, all) => value.startsWith('--') ? [...rows, [value.slice(2), all[i + 1]]] : rows,
+  /** @type {[string, string | undefined][]} */ ([])));
+const args = /** @type {Record<'cli' | 'manifest' | 'model' | 'provenance', string> & Record<string, string | undefined>} */ (parsedArgs);
 const requestTimeoutMs = validateRuntimeAdapterRequestTimeout(Object.hasOwn(args, 'request-timeout-ms')
   ? args['request-timeout-ms'] : DEFAULT_RUNTIME_ADAPTER_REQUEST_TIMEOUT_MS);
 for (const key of ['cli', 'manifest', 'model', 'provenance']) if (!args[key]) throw new Error(`Required: --${key}`);
@@ -39,37 +53,51 @@ Object.assign(env, {
 const manifest = JSON.parse(await readFile(resolve(args.manifest), 'utf8'));
 const provenance = JSON.parse(await readFile(resolve(args.provenance), 'utf8'));
 if (!/^[0-9a-f]{40}$/.test(provenance.model_revision ?? '') || !Array.isArray(provenance.files) || !provenance.files.length) throw new Error('Provenance requires a full model revision and files with SHA-256');
+/** @type {Step[]} */
 const steps = [];
+/** @param {unknown} condition @param {string} message */
 const check = (condition, message) => { if (!condition) throw new Error(message); };
+/** @param {string} path */
 async function hash(path) { const digest = createHash('sha256'); for await (const chunk of createReadStream(path)) digest.update(chunk); return digest.digest('hex'); }
+/** @param {string} label @param {string[]} commandArgs @returns {Promise<CommandResult>} */
 async function command(label, commandArgs, expectedFailure = false) {
   try {
     const result = await execute(resolve(args.cli), commandArgs, { env, timeout: 240000, maxBuffer: 8 * 1024 * 1024 });
     await writeFile(join(output, `${label}.log`), result.stdout + result.stderr, { flag: 'wx', mode: 0o600 });
     check(!expectedFailure, `${label}: unexpected success`);
-    return JSON.parse(result.stdout);
+    return /** @type {CommandResult} */ (JSON.parse(result.stdout));
   } catch (error) {
-    if (error.stdout !== undefined) await writeFile(join(output, `${label}.log`), String(error.stdout ?? '') + String(error.stderr ?? ''), { flag: 'wx', mode: 0o600 });
-    if (!expectedFailure || !error.code || typeof error.code !== 'number') throw error;
+    const failure = asRecord(error);
+    if (failure.stdout !== undefined) await writeFile(join(output, `${label}.log`), String(failure.stdout ?? '') + String(failure.stderr ?? ''), { flag: 'wx', mode: 0o600 });
+    if (!expectedFailure || !failure.code || typeof failure.code !== 'number') throw error;
     return { failed: true };
   }
 }
+/** @param {string} label @param {() => Promise<unknown>} action */
 async function record(label, action) {
   try { const evidence = await action(); steps.push({ item: label, status: 'pass', evidence }); }
-  catch (error) { steps.push({ item: label, status: 'fail', error: String(error.message ?? error) }); throw error; }
+  catch (error) { steps.push({ item: label, status: 'fail', error: String(errorMessage(error) ?? error) }); throw error; }
 }
 // Answer correctness is not a prerequisite for exercising cancellation or
 // shutdown. Keep each failure and the failing exit status while continuing
 // only the checks whose actual setup/lifecycle prerequisites succeeded.
+/** @param {string} label @param {() => Promise<unknown>} action */
 async function independent(label, action) {
   try { await record(label, action); return true; }
-  catch (error) { process.exitCode = 1; process.stderr.write(`${label}: ${error.message}\n`); return false; }
+  catch (error) { process.exitCode = 1; process.stderr.write(`${label}: ${errorMessage(error)}\n`); return false; }
 }
+/** @param {string} label @param {string} reason */
 function unrun(label, reason) { steps.push({ item: label, status: 'unrun', reason }); process.exitCode = 1; }
-const lifecycleChecks = ['A03 actual response and usage', 'A04 cancellation preserves server', 'A05 restart', 'A06 shutdown and unavailable selection', 'A07 register again without rebuilding'];
-const reserve = createServer(); await new Promise((done, reject) => { reserve.once('error', reject); reserve.listen(0, '127.0.0.1', done); });
-const port = reserve.address().port; await new Promise(done => reserve.close(done));
-let url, served;
+const lifecycleChecks = /** @type {const} */ (['A03 actual response and usage', 'A04 cancellation preserves server', 'A05 restart', 'A06 shutdown and unavailable selection', 'A07 register again without rebuilding']);
+const reserve = createServer(); await new Promise((done, reject) => { reserve.once('error', reject); reserve.listen(0, '127.0.0.1', () => done(undefined)); });
+const address = reserve.address();
+if (!address || typeof address === 'string') throw new Error('No reserved TCP port');
+const port = address.port; await new Promise(done => reserve.close(done));
+/** @type {string | undefined} */
+let url;
+/** @type {string | undefined} */
+let served;
+/** @type {Set<number>} */
 const ownedPids = new Set();
 async function stopped() {
   const listener = () => new Promise(done => {
@@ -80,7 +108,7 @@ async function stopped() {
     socket.once('timeout', () => { socket.destroy(); done(true); });
   });
   for (let attempt = 0; attempt < 50; attempt++) {
-    const live = [...ownedPids].filter(pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } });
+    const live = [...ownedPids].filter(pid => { try { process.kill(pid, 0); return true; } catch (error) { return asRecord(error).code !== 'ESRCH'; } });
     if (!live.length && !await listener()) return { ownedPids: [...ownedPids], portClosed: true };
     await new Promise(done => setTimeout(done, 100));
   }
@@ -110,7 +138,7 @@ try {
     check(probe.provider === manifest.engine_id && probe.runtime_id === manifest.runtime_id, 'Probe identity mismatch');
     return { engine: probe.provider, runtime: probe.runtime_id, servedModel: served };
   });
-  await independent(lifecycleChecks[0], async () => { const started = await command('start', ['server', 'start']); check(started.url && started.pid, 'No owned server URL/PID'); url = started.url; ownedPids.add(started.pid); return completion(); });
+  await independent(lifecycleChecks[0], async () => { const started = await command('start', ['server', 'start']); check(started.url && started.pid, 'No owned server URL/PID'); url = started.url; ownedPids.add(/** @type {number} */ (started.pid)); return completion(); });
   if (url) {
     await independent(lifecycleChecks[1], async () => {
       const before = await command('status-before-cancel', ['server', 'status']);
@@ -120,7 +148,7 @@ try {
       const afterFollowup = await command('status-after-followup', ['server', 'status']);
       return { ...result, followup, sameProcessAfterFollowup: validateRuntimeAdapterRecovery(before, afterCancel, afterFollowup) };
     });
-    await independent(lifecycleChecks[2], async () => { const result = await command('restart', ['server', 'restart']); check(result.url && result.pid, 'No owned server URL/PID after restart'); url = result.url; ownedPids.add(result.pid); return completion(); });
+    await independent(lifecycleChecks[2], async () => { const result = await command('restart', ['server', 'restart']); check(result.url && result.pid, 'No owned server URL/PID after restart'); url = result.url; ownedPids.add(/** @type {number} */ (result.pid)); return completion(); });
   } else {
     unrun(lifecycleChecks[1], 'Initial server start did not provide a ready owned URL/PID');
     unrun(lifecycleChecks[2], 'Initial server start did not provide a ready owned URL/PID');
@@ -136,11 +164,11 @@ try {
   if (removed) {
     await independent(lifecycleChecks[4], async () => {
       await command('register-again', ['runtime', 'register-manifest', resolve(args.manifest)]);
-      const started = await command('start-again', ['server', 'start']); check(started.url && started.pid, 'No owned server URL/PID after re-registration'); url = started.url; ownedPids.add(started.pid);
+      const started = await command('start-again', ['server', 'start']); check(started.url && started.pid, 'No owned server URL/PID after re-registration'); url = started.url; ownedPids.add(/** @type {number} */ (started.pid));
       return completion();
     });
   } else unrun(lifecycleChecks[4], 'Shutdown/removal prerequisites failed');
-} catch (error) { process.exitCode = 1; process.stderr.write(`${error.message}\n`); }
+} catch (error) { process.exitCode = 1; process.stderr.write(`${errorMessage(error)}\n`); }
 finally {
   for (const label of ['A02 register and select', ...lifecycleChecks]) if (!steps.some(step => step.item === label)) unrun(label, 'Provenance or registration prerequisites failed');
   try { await command('final-stop', ['server', 'stop']); const evidence = await stopped(); steps.push({ item: 'A08 cleanup', status: 'pass', evidence }); } catch (error) { steps.push({ item: 'A08 cleanup', status: 'fail', error: String(error) }); process.exitCode = 1; }

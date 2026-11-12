@@ -64,10 +64,67 @@
  import { tmpdir } from "node:os";
  import { dirname, join, resolve } from "node:path";
 
+/**
+ * @typedef {Record<string, unknown>} JsonRecord
+ * @typedef {'pass' | 'fail' | 'unsupported' | 'unrun' | 'blocked'} Status
+ * @typedef {{prompt_tokens: number, completion_tokens: number, total_tokens: number, [key: string]: unknown}} TokenUsage
+ * @typedef {{name: string, status: Status, detail: string, evidence: JsonRecord}} Check
+ * @typedef {Record<string, Check> & Record<typeof CHECKS[number], Check>} Checks
+ * @typedef {{engine: string, task: string, python: string, runtimeId: string, runtimeBundle?: string, model: string, revision: string, companion: string, cli: string, port: number, timeoutMs: number, startTimeoutMs: number, out: string, keepHome: boolean, selfTest: boolean, expectEmbeddings: boolean, expectMedia: boolean, expectTools: boolean, expectTranscription: boolean, mediaFile: string, audioFile: string, prompt: string, maxTokens: number, help?: boolean}} Args
+ * @typedef {{platform: string, arch: string, node: string, platformDetail?: string, gate?: string}} Host
+ * @typedef {{path?: string, isDirectory?: boolean, isFile?: boolean, sizeBytes?: number, kind?: string, manifest?: {repository: unknown, revision: unknown, complete: unknown, files: number}, hasConfig?: boolean, expectedRevision?: string, revision?: string}} ModelEvidence
+ * @typedef {object} ProviderResult
+ * @property {number} schema
+ * @property {string} harness
+ * @property {boolean} synthetic
+ * @property {boolean} live
+ * @property {Host} host
+ * @property {string} task
+ * @property {{engine: string, task: string, python: string | null, runtimeId: string | null, runtimeBundle: string | null, model: string | null, revision: string | null, companion: string | null, cli: string | null, port: number, expectations: {embeddings: boolean, media: boolean, tools: boolean, transcription: boolean}, mediaFile: boolean, audioFile: boolean}} inputs
+ * @property {Checks} checks
+ * @property {ReturnType<typeof summarize> | null} summary
+ * @property {JsonRecord} [probe]
+ * @property {JsonRecord} [runtime]
+ * @property {JsonRecord} [doctor]
+ * @property {{kind: string, complete: unknown}} [model]
+ * @property {string} [servedAlias]
+ * @property {TokenUsage} [usage]
+ * @property {{accepted: boolean, called: boolean}} [tools]
+ * @property {{count: number, dims: number}} [embeddings]
+ * @property {{chars: number}} [transcript]
+ * @property {unknown} [error]
+ * @property {unknown} [cleanupStatus]
+ * @property {string} [out]
+ * @property {unknown} [outError]
+ * @typedef {ProviderResult & {summary: ReturnType<typeof summarize>}} CompletedProviderResult
+ */
+
+/** @param {unknown} value @returns {JsonRecord} */
+function asRecord(value) {
+  return value !== null && typeof value === "object" ? /** @type {JsonRecord} */ (value) : {};
+}
+
+/** @param {unknown} value @returns {unknown[]} */
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/** @param {unknown} error */
+function errorMessage(error) {
+  return asRecord(error).message;
+}
+
+/** @param {import('node:net').Server} server */
+function serverPort(server) {
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return address.port;
+}
+
  export const RESULT_SCHEMA = 1;
- export const STATUSES = ["pass", "fail", "unsupported", "unrun", "blocked"];
+ export const STATUSES = /** @type {const} */ (["pass", "fail", "unsupported", "unrun", "blocked"]);
  export const TASKS = ["chat", "embedding", "transcription"];
- export const CHECKS = [
+ export const CHECKS = /** @type {const} */ ([
    "platform",
    "registration",
    "probe",
@@ -88,28 +145,36 @@
    "benchmark",
    "deep_verification",
    "cleanup",
- ];
+ ]);
 
  export function newChecks() {
-   const checks = {};
+   const checks = /** @type {Checks} */ ({});
    for (const name of CHECKS) {
      checks[name] = { name, status: "unrun", detail: "not attempted", evidence: {} };
    }
    return checks;
  }
 
+/**
+ * @param {Checks} checks
+ * @param {string} name
+ * @param {Status} status
+ * @param {unknown} [detail]
+ * @param {JsonRecord} [evidence]
+ */
  export function setCheck(checks, name, status, detail = "", evidence = {}) {
    assert.ok(checks[name], `unknown check ${name}`);
    assert.ok(STATUSES.includes(status), `unknown status ${status}`);
    // A failure recorded after a live run started is never downgraded to a
    // skip-like status by later bookkeeping.
-   if (checks[name].status === "fail" && (status === "unrun" || status === "blocked")) {
+   if (checks[name]?.status === "fail" && (status === "unrun" || status === "blocked")) {
      return checks[name];
    }
    checks[name] = { name, status, detail: String(detail).slice(0, 2000), evidence };
    return checks[name];
  }
 
+/** @param {Checks} checks */
  export function summarize(checks) {
    const summary = { pass: 0, fail: 0, unsupported: 0, unrun: 0, blocked: 0 };
    for (const name of CHECKS) {
@@ -124,6 +189,7 @@
  // A platform verdict must precede any live attempt. Windows cannot run the
  // managed Python engines natively; mlx-vlm needs Apple Silicon macOS and the
  // vllm-metal variant needs Apple Silicon macOS 15+ (checked again by probe).
+/** @param {string} engine @param {string} [platform] @param {string} [arch] */
  export function platformAllowsEngine(engine, platform = process.platform, arch = process.arch) {
    if (engine === "vllm") {
      if (platform === "linux") return { allowed: true, detail: `${platform}/${arch} supports vLLM` };
@@ -141,29 +207,40 @@
    return { allowed: false, detail: `unknown engine ${engine}; select vllm or mlx-vlm` };
  }
 
+/** @param {unknown} body */
  export function assertUsagePresent(body, context = "chat") {
-   const usage = body?.usage;
+   const usage = asRecord(body).usage;
    assert.ok(usage && typeof usage === "object", `${context}: missing usage block: ${JSON.stringify(body).slice(0, 500)}`);
+   const fields = asRecord(usage);
    for (const key of ["prompt_tokens", "completion_tokens", "total_tokens"]) {
-     assert.equal(typeof usage[key], "number", `${context}: usage.${key} must be a number`);
-     assert.ok(Number.isFinite(usage[key]) && usage[key] >= 0, `${context}: usage.${key} must be finite`);
+     const value = fields[key];
+     assert.equal(typeof value, "number", `${context}: usage.${key} must be a number`);
+     assert.ok(typeof value === "number" && Number.isFinite(value) && value >= 0, `${context}: usage.${key} must be finite`);
    }
-   return usage;
+   return /** @type {TokenUsage} */ (usage);
  }
 
+/** @param {unknown} body */
  export function assertModelsAlias(body) {
-   const data = body?.data;
+   const data = asRecord(body).data;
    assert.ok(Array.isArray(data) && data.length > 0, `GET /v1/models must list at least one served model: ${JSON.stringify(body).slice(0, 500)}`);
+   const ids = /** @type {string[]} */ ([]);
    for (const entry of data) {
-     assert.equal(typeof entry?.id, "string", "each /v1/models entry must have a string id");
-     assert.ok(entry.id.length > 0, "served model id must be nonempty");
+     const id = asRecord(entry).id;
+     assert.equal(typeof id, "string", "each /v1/models entry must have a string id");
+     assert.ok(typeof id === "string" && id.length > 0, "served model id must be nonempty");
+     ids.push(id);
    }
-   return data.map((entry) => entry.id);
+   return ids;
  }
 
+/** @param {unknown[]} events */
  export function assertStreamEvents(events) {
    assert.ok(events.length > 0, "stream must emit at least one SSE data event");
-   const texts = events.map((event) => event?.choices?.[0]?.delta?.content ?? event?.choices?.[0]?.text ?? "").join("");
+   const texts = events.map((event) => {
+     const choice = asRecord(asArray(asRecord(event).choices)[0]);
+     return asRecord(choice.delta).content ?? choice.text ?? "";
+   }).join("");
    assert.ok(texts.trim().length > 0, "streamed deltas must contain non-whitespace text");
    return texts;
  }
@@ -171,12 +248,13 @@
  // A genuine embedding verdict: every returned vector must be a complete,
  // nonempty, finite numeric array. A 200 with an empty or non-numeric vector
  // is corruption, never a pass.
+/** @param {unknown} body */
  export function assertEmbeddingsPresent(body, context = "embeddings") {
-   const data = body?.data;
+   const data = asRecord(body).data;
    assert.ok(Array.isArray(data) && data.length > 0, `${context}: response must carry a nonempty data array: ${JSON.stringify(body).slice(0, 500)}`);
    let dims = -1;
    for (const entry of data) {
-     const vector = entry?.embedding;
+     const vector = asRecord(entry).embedding;
      assert.ok(Array.isArray(vector) && vector.length > 0, `${context}: every entry must carry a nonempty numeric embedding vector`);
      if (dims < 0) dims = vector.length;
      assert.equal(vector.length, dims, `${context}: embedding vectors must share one dimensionality`);
@@ -191,25 +269,29 @@
  // A probe pass needs engine identity from the installed package itself: a
  // nonempty version, no reported errors, the interpreter version, and a
  // platform identity. Anything less is a failure, never a pass.
+/** @param {unknown} record */
  export function validateProbeRecord(record, engine = "") {
    assert.ok(record && typeof record === "object", `probe returned no record: ${JSON.stringify(record).slice(0, 300)}`);
-   assert.ok(typeof record.version === "string" && record.version.length > 0, `${engine || "engine"} probe returned no version: ${JSON.stringify(record).slice(0, 500)}`);
-   const errors = Array.isArray(record.errors) ? record.errors : [];
+   const fields = asRecord(record);
+   assert.ok(typeof fields.version === "string" && fields.version.length > 0, `${engine || "engine"} probe returned no version: ${JSON.stringify(record).slice(0, 500)}`);
+   const errors = Array.isArray(fields.errors) ? fields.errors : [];
    assert.equal(errors.length, 0, `${engine || "engine"} probe reported errors: ${errors.join("; ").slice(0, 1000)}`);
-   const platform = record.platform_system || record.platform_class || "";
+   const platform = fields.platform_system || fields.platform_class || "";
    assert.ok(typeof platform === "string" && platform.length > 0, `${engine || "engine"} probe returned no platform identity (platform_system/platform_class)`);
-   assert.ok(typeof record.python_version === "string" && record.python_version.length > 0, `${engine || "engine"} probe returned no python version`);
+   assert.ok(typeof fields.python_version === "string" && fields.python_version.length > 0, `${engine || "engine"} probe returned no python version`);
    return {
-     version: record.version,
-     variant: record.variant ?? "",
-     plugin_version: record.metal_version ?? record.plugin_version ?? "",
-     accelerator: record.accelerator ?? "",
-     python_version: record.python_version,
+     version: fields.version,
+     variant: fields.variant ?? "",
+     plugin_version: fields.metal_version ?? fields.plugin_version ?? "",
+     accelerator: fields.accelerator ?? "",
+     python_version: fields.python_version,
      platform,
    };
  }
 
+/** @param {string[]} argv */
  export function parseArgs(argv) {
+   /** @type {Args} */
    const args = {
      engine: "",
      task: "chat",
@@ -317,6 +399,7 @@
    return { temporary, home, env, aiolmHome: join(home, "aiolm") };
  }
 
+/** @param {string} executable @param {string[]} args @param {NodeJS.ProcessEnv} env @returns {unknown} */
  export function runCli(executable, args, env, timeoutMs = 30000) {
    const result = spawnSync(executable, args, { env, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
    if (result.error) throw result.error;
@@ -327,12 +410,14 @@
      throw new Error(`${args.join(" ")} emitted non-JSON output (status ${result.status}): ${(result.stdout ?? "").slice(0, 1000)} ${(result.stderr ?? "").slice(0, 1000)}`);
    }
    if (result.status !== 0) {
-     throw new Error(`${args.join(" ")} failed: ${body?.error ?? result.stdout.slice(0, 1000)}`);
+     throw new Error(`${args.join(" ")} failed: ${asRecord(body).error ?? result.stdout.slice(0, 1000)}`);
    }
    return body;
  }
 
+/** @param {string} modelPath */
  export function inspectModelInput(modelPath, expectedRevision = "") {
+   /** @type {ModelEvidence} */
    const evidence = { path: modelPath };
    if (!existsSync(modelPath)) {
      return { ok: false, kind: "missing", evidence, detail: `model path does not exist: ${modelPath}` };
@@ -352,7 +437,7 @@
    const manifestPath = join(modelPath, ".aiolm-snapshot.json");
    if (existsSync(manifestPath)) {
      try {
-       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+       const manifest = asRecord(JSON.parse(readFileSync(manifestPath, "utf8")));
        evidence.manifest = {
          repository: manifest.repository ?? "",
          revision: manifest.revision ?? "",
@@ -367,7 +452,7 @@
        }
        return { ok: true, kind: "snapshot", evidence, detail: `snapshot ${manifest.repository ?? ""}@${manifest.revision ?? ""} with ${evidence.manifest.files} manifest files` };
      } catch (error) {
-       return { ok: false, kind: "snapshot", evidence, detail: `cannot parse snapshot manifest: ${error.message}` };
+       return { ok: false, kind: "snapshot", evidence, detail: `cannot parse snapshot manifest: ${errorMessage(error)}` };
      }
    }
    const configPath = join(modelPath, "config.json");
@@ -382,19 +467,21 @@
      if (revision?.toLowerCase() !== expectedRevision.toLowerCase()) {
        return { ok: false, kind: "external-snapshot", evidence, detail: "cannot verify --revision: provide an app snapshot manifest or the exact Hub cache snapshots/<full-sha> directory" };
      }
-     evidence.revision = revision;
+     evidence.revision = /** @type {string} */ (revision);
    }
    return { ok: true, kind: "external-snapshot", evidence, detail: "external snapshot directory without app manifest; launch decides compatibility" };
  }
 
  // Shareable-JSON hygiene: basenames keep debuggability without user paths,
  // and error/detail strings are scrubbed of absolute paths and PIDs.
+/** @param {unknown} value */
  export function basenameOf(value) {
    if (!value) return null;
    const base = String(value).split(/[/\\]/).pop() ?? "";
    return base.length > 0 ? base : null;
  }
 
+/** @template T @param {T} value @returns {T | string} */
 export function redactPathsInString(value) {
   if (typeof value !== "string") return value;
   return value
@@ -408,28 +495,31 @@ export function redactPathsInString(value) {
  // or URLs. Internal evidence avoids them by construction (basenames only, no
  // pid/url keys), and this pass defensively redacts every string so a future
  // CLI error that embeds a path cannot leak into shareable JSON.
+/** @template T @param {T} result @returns {T} */
 export function sanitizeResultForFile(result) {
-  const copy = JSON.parse(JSON.stringify(result));
+  const copy = /** @type {T} */ (JSON.parse(JSON.stringify(result)));
   const sensitiveKeys = new Set([
     "pid", "url", "location", "log_path", "logPath", "state_file", "stateFile",
     "executable", "home", "isolatedHome",
   ]);
+  /** @param {unknown} node */
   const walk = (node) => {
     if (Array.isArray(node)) {
       node.forEach(walk);
       return;
     }
     if (node && typeof node === "object") {
-      for (const key of Object.keys(node)) {
-        const value = node[key];
+      const fields = asRecord(node);
+      for (const key of Object.keys(fields)) {
+        const value = fields[key];
         if (sensitiveKeys.has(key)) {
-          node[key] = "[redacted]";
+          fields[key] = "[redacted]";
           continue;
         }
         if (typeof value === "string") {
           // A bare "path" keeps relative names (manifest file lists) but
           // never absolute user paths; everything else is scrubbed textually.
-          node[key] = key === "path" && /[/\\]/.test(value)
+          fields[key] = key === "path" && /[/\\]/.test(value)
             ? (basenameOf(value) ?? "[redacted]")
             : redactPathsInString(value);
         } else {
@@ -448,6 +538,7 @@ export function sanitizeResultForFile(result) {
  // Even Connection: close on fetch leaves cancellation's replacement socket
  // in its pool. agent:false owns exactly one socket, including streaming and
  // multipart requests. Errors propagate without retry or readiness bypass.
+/** @param {string} url @param {RequestInit} [init] @returns {Promise<Response>} */
  async function fetchAcceptance(url, init = {}) {
    const input = new Request(url, init);
    const body = input.body ? Buffer.from(await input.arrayBuffer()) : undefined;
@@ -458,10 +549,10 @@ export function sanitizeResultForFile(result) {
        agent: false,
        signal: input.signal,
      }, response => {
-       resolve(new Response(Readable.toWeb(response), {
+       resolve(new Response(/** @type {ReadableStream<Uint8Array>} */ (/** @type {unknown} */ (Readable.toWeb(response))), {
          status: response.statusCode,
          statusText: response.statusMessage,
-         headers: Object.fromEntries(Object.entries(response.headers).filter(([, value]) => value !== undefined)),
+         headers: /** @type {Record<string, string>} */ (/** @type {unknown} */ (Object.fromEntries(Object.entries(response.headers).filter(([, value]) => value !== undefined)))),
        }));
      });
      request.on("error", reject);
@@ -469,12 +560,14 @@ export function sanitizeResultForFile(result) {
    });
  }
 
+/** @param {string} url @param {RequestInit} [init] */
  async function fetchJson(url, init = {}, timeoutMs = 60000) {
    const controller = new AbortController();
    const timer = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms: ${url}`)), timeoutMs);
    try {
      const response = await fetchAcceptance(url, { ...init, signal: init.signal ?? controller.signal });
      const text = await response.text();
+     /** @type {unknown} */
      let body = null;
      try {
        body = text ? JSON.parse(text) : null;
@@ -489,6 +582,7 @@ export function sanitizeResultForFile(result) {
 
  // vLLM only returns usage on streams when the client asks for it, so every
  // streamed chat request carries stream_options.include_usage.
+/** @param {string} url @param {JsonRecord} payload @param {number} timeoutMs */
  export async function readChatStream(url, payload, timeoutMs) {
    const controller = new AbortController();
    const timer = setTimeout(() => controller.abort(new Error("stream timeout")), timeoutMs);
@@ -496,7 +590,7 @@ export function sanitizeResultForFile(result) {
      const response = await fetchAcceptance(url, {
        method: "POST",
        headers: { "content-type": "application/json" },
-       body: JSON.stringify({ ...payload, stream: true, stream_options: { ...(payload.stream_options ?? {}), include_usage: true } }),
+       body: JSON.stringify({ ...payload, stream: true, stream_options: { ...asRecord(payload.stream_options), include_usage: true } }),
        signal: controller.signal,
      });
      const text = await response.text();
@@ -510,6 +604,7 @@ export function sanitizeResultForFile(result) {
        return { ok: false, status: response.status, body, events: [], usage: null };
      }
      const events = [];
+     /** @type {JsonRecord | null} */
      let usage = null;
      for (const chunk of text.split("\n")) {
        const line = chunk.trim();
@@ -517,9 +612,9 @@ export function sanitizeResultForFile(result) {
        const data = line.slice(5).trim();
        if (data === "[DONE]") continue;
        try {
-         const event = JSON.parse(data);
+         const event = asRecord(JSON.parse(data));
          events.push(event);
-         if (event?.usage) usage = event.usage;
+         if (event.usage) usage = asRecord(event.usage);
        } catch {
          // Non-JSON SSE payloads are recorded as stream corruption.
        }
@@ -538,6 +633,7 @@ export function sanitizeResultForFile(result) {
  // resolve before the body completes and prove nothing. Returns the refusal
  // when the server rejects chat outright, so non-chat tasks can record unrun
  // instead of inventing a cancel verdict.
+/** @param {string} url @param {JsonRecord} payload @param {number} timeoutMs */
  export async function cancelChatStreamAndRecover(url, payload, timeoutMs) {
    const controller = new AbortController();
    const deadline = performance.now() + timeoutMs;
@@ -602,6 +698,7 @@ export function sanitizeResultForFile(result) {
    return Buffer.concat([header, Buffer.alloc(samples * 2)]);
  }
 
+/** @param {string} base @param {string} alias */
  export async function probeTranscription(base, alias, { audioFile = "", timeoutMs = 60000 } = {}) {
    const bytes = audioFile ? readFileSync(resolve(audioFile)) : syntheticSilentWav();
    const form = new FormData();
@@ -619,7 +716,7 @@ export function sanitizeResultForFile(result) {
        body = { _raw: text.slice(0, 1000) };
      }
      if (!response.ok) return { ok: false, status: response.status, body, transcript: "" };
-     const transcript = typeof body?.text === "string" ? body.text : "";
+     const transcript = typeof asRecord(body).text === "string" ? /** @type {string} */ (asRecord(body).text) : "";
      return { ok: true, status: response.status, body, transcript };
    } finally {
      clearTimeout(timer);
@@ -629,6 +726,7 @@ export function sanitizeResultForFile(result) {
  const TINY_PNG_DATA_URI =
    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+/** @param {Args} args */
  function imagePartFor(args) {
    if (args.mediaFile) {
      const bytes = readFileSync(resolve(args.mediaFile));
@@ -645,6 +743,7 @@ export function sanitizeResultForFile(result) {
    return { type: "image_url", image_url: { url: TINY_PNG_DATA_URI } };
  }
 
+/** @param {Args} args @param {Host} host @returns {ProviderResult} */
  export function resultSkeleton(args, host) {
    return {
      schema: RESULT_SCHEMA,
@@ -684,7 +783,8 @@ export function sanitizeResultForFile(result) {
    // never be mistaken for a Linux/macOS native pass.
    const checks = newChecks();
    const evidenceNote = "synthetic loopback fixture";
-   let lastChatPayload = null;
+   /** @type {{value: JsonRecord | null}} */
+   const lastChatPayload = { value: null };
    const server = createServer((req, res) => {
      if (req.url === "/health") {
        res.writeHead(200, { "content-type": "application/json" });
@@ -697,7 +797,7 @@ export function sanitizeResultForFile(result) {
        req.on("data", (chunk) => { body += chunk; });
        req.on("end", () => {
          const payload = JSON.parse(body || "{}");
-         lastChatPayload = payload;
+         lastChatPayload.value = payload;
          const text = JSON.stringify(payload);
          if (text.includes("file://")) {
            res.writeHead(400, { "content-type": "application/json" });
@@ -748,8 +848,8 @@ export function sanitizeResultForFile(result) {
        res.end();
      }
    });
-   await new Promise((resolveServer) => server.listen(0, "127.0.0.1", resolveServer));
-   const port = server.address().port;
+   await new Promise(resolveServer => server.listen(0, "127.0.0.1", () => resolveServer(undefined)));
+   const port = serverPort(server);
    const base = `http://127.0.0.1:${port}`;
    try {
      const health = await fetchJson(`${base}/health`, {}, 5000);
@@ -761,7 +861,7 @@ export function sanitizeResultForFile(result) {
      assert.ok(stream.ok, "synthetic stream must succeed");
      assertStreamEvents(stream.events);
      assertUsagePresent({ usage: stream.usage }, "synthetic");
-     assert.equal(lastChatPayload?.stream_options?.include_usage, true, "chat streams must request stream_options.include_usage");
+     assert.equal(asRecord(lastChatPayload.value?.stream_options).include_usage, true, "chat streams must request stream_options.include_usage");
      setCheck(checks, "stream_text_usage", "pass", "synthetic streamed text with authoritative usage", { evidenceNote });
      // Cancellation aborts an open stream body, then the server recovers.
      const cancel = await cancelChatStreamAndRecover(
@@ -799,7 +899,7 @@ export function sanitizeResultForFile(result) {
        }),
      }, 5000);
      if (tools.ok) {
-       const message = tools.body?.choices?.[0]?.message ?? {};
+       const message = asRecord(asRecord(asArray(asRecord(tools.body).choices)[0]).message);
        const called = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
        setCheck(checks, "tools", "pass", called ? "synthetic tool call returned" : "synthetic tools accepted; model answered with text", { evidenceNote, toolsAccepted: true, toolCalled: called });
      } else {
@@ -811,7 +911,7 @@ export function sanitizeResultForFile(result) {
        body: JSON.stringify({ model: aliases[0], input: "hello" }),
      }, 5000);
      setCheck(checks, "embeddings", !embeddings.ok ? "unsupported" : "pass", `synthetic embeddings status ${embeddings.status}`, { evidenceNote });
-     const transcription = await probeTranscription(base, aliases[0], { timeoutMs: 5000 });
+     const transcription = await probeTranscription(base, /** @type {string} */ (aliases[0]), { timeoutMs: 5000 });
      if (transcription.ok && transcription.transcript.trim().length > 0) {
        setCheck(checks, "transcription", "pass", "synthetic transcription returned text", { evidenceNote });
      } else {
@@ -819,7 +919,7 @@ export function sanitizeResultForFile(result) {
      }
      // Statuses that need a real engine stay unrun in synthetic mode.
      for (const name of ["platform", "registration", "probe", "runtime_identity", "config_selection", "model_validation", "restart", "stop", "benchmark", "deep_verification", "cleanup"]) {
-       if (checks[name].status === "unrun") {
+       if (checks[name]?.status === "unrun") {
          setCheck(checks, name, name === "platform" ? "pass" : "unrun", name === "platform" ? "synthetic host check" : "needs a real engine; not attempted synthetically", { evidenceNote });
        }
      }
@@ -833,7 +933,9 @@ export function sanitizeResultForFile(result) {
  // Test-only injection point (no production effect): opts.platform/arch
  // override the gate, opts.cliPrefix prepends a fake CLI script when the
  // executable is the Node binary, and opts.extraEnv reaches the child CLI.
+/** @param {Args} args @param {{platform?: string, arch?: string, cliPrefix?: string[], extraEnv?: NodeJS.ProcessEnv}} [opts] @returns {Promise<CompletedProviderResult>} */
  export async function runLive(args, opts = {}) {
+   /** @type {Host} */
    const host = {
      platform: process.platform,
      arch: process.arch,
@@ -874,7 +976,7 @@ export function sanitizeResultForFile(result) {
        setCheck(checks, "cleanup", "pass", "no live resources were created", {});
        result.summary = summarize(checks);
        result.live = false;
-       return result;
+       return /** @type {CompletedProviderResult} */ (result);
      }
      setCheck(checks, "platform", "pass", gate.detail, {});
 
@@ -945,6 +1047,7 @@ export function sanitizeResultForFile(result) {
      isolated = createIsolatedHome();
      base = `http://127.0.0.1:${args.port}`;
      const env = { ...isolated.env, ...extraEnv };
+     /** @param {string[]} cliArgs */
      const run = (cliArgs, timeoutMs = 30000) => runCli(executable, [...cliPrefix, ...cliArgs], env, timeoutMs);
 
      // 3. Registration: probe an explicitly supplied interpreter. Managed
@@ -957,15 +1060,15 @@ export function sanitizeResultForFile(result) {
      let runtimeId = args.runtimeId;
      if (!runtimeId) {
        try {
-         const registered = args.runtimeBundle
+         const registered = asRecord(args.runtimeBundle
            ? run(["runtime", "import", resolve(args.runtimeBundle)], Math.max(180000, args.startTimeoutMs))
-           : run(["runtime", "register", args.engine, fullPython], 180000);
+           : run(["runtime", "register", args.engine, fullPython], 180000));
          if (args.runtimeBundle) assert.equal(registered?.provider, args.engine, "imported runtime belongs to another engine");
-         runtimeId = registered?.id ?? registered?.runtime?.id ?? "";
+         runtimeId = /** @type {string} */ (registered?.id ?? asRecord(registered?.runtime).id ?? "");
          assert.ok(runtimeId, `registration must return a runtime id: ${JSON.stringify(registered).slice(0, 500)}`);
          setCheck(checks, "registration", "pass", `${args.runtimeBundle ? 'imported offline' : 'registered'} ${args.engine} runtime ${runtimeId}`, { runtimeId, engine: args.engine, source: args.runtimeBundle ? 'portable-bundle' : 'interpreter' });
        } catch (error) {
-         setCheck(checks, "registration", "fail", error.message, { engine: args.engine });
+         setCheck(checks, "registration", "fail", errorMessage(error), { engine: args.engine });
          throw error;
        }
      } else {
@@ -977,7 +1080,7 @@ export function sanitizeResultForFile(result) {
      // come from the installed engine itself, never from a guess. A probe
      // with errors or without platform identity is a failure, never a pass.
      try {
-       const probe = run(["runtime", "probe", args.engine, runtimeId], 180000);
+       const probe = asRecord(run(["runtime", "probe", args.engine, runtimeId], 180000));
        const record = probe?.probe ?? probe;
        const identity = validateProbeRecord(record, args.engine);
        const evidence = {
@@ -991,14 +1094,14 @@ export function sanitizeResultForFile(result) {
        setCheck(checks, "probe", "pass", `${args.engine} ${evidence.version}${evidence.variant ? ` variant ${evidence.variant}` : ""} accelerator ${evidence.accelerator || "unknown"} platform ${evidence.platform}`, evidence);
        result.probe = evidence;
      } catch (error) {
-       if (checks.probe.status === "unrun") setCheck(checks, "probe", "fail", error.message, {});
+       if (checks.probe.status === "unrun") setCheck(checks, "probe", "fail", errorMessage(error), {});
        throw error;
      }
 
      try {
        const listed = run(["runtime", "list"], 30000);
-       const instances = Array.isArray(listed) ? listed : listed?.runtimes ?? [];
-       const match = instances.find((item) => item?.id === runtimeId && (item?.provider === args.engine || item?.provider?.includes?.(args.engine)));
+       const instances = asArray(Array.isArray(listed) ? listed : asRecord(listed).runtimes).map(asRecord);
+       const match = instances.find((item) => item.id === runtimeId && (item.provider === args.engine || (typeof item.provider === "string" && item.provider.includes(args.engine))));
        if (!match) {
          setCheck(checks, "runtime_identity", "fail", `runtime ${runtimeId} absent from runtime list in this isolated home (${instances.length} listed)`, { count: instances.length });
          throw new Error(`runtime ${runtimeId} absent from runtime list`);
@@ -1012,7 +1115,7 @@ export function sanitizeResultForFile(result) {
          accelerator: match.accelerator ?? "",
          installation: match.installation ?? "",
          available: match.available ?? false,
-         problems: match.problems ?? [],
+         problems: asArray(match.problems),
        };
        if (!evidence.available) {
          setCheck(checks, "runtime_identity", "fail", `runtime not ready: ${(evidence.problems || []).join("; ").slice(0, 1000)}`, { available: false, problems: evidence.problems });
@@ -1021,7 +1124,7 @@ export function sanitizeResultForFile(result) {
        setCheck(checks, "runtime_identity", "pass", `${evidence.provider} ${evidence.id} ${evidence.version ?? ""} (${evidence.installation}, ${evidence.accelerator || "unknown accelerator"})`, evidence);
        result.runtime = evidence;
      } catch (error) {
-       if (checks.runtime_identity.status === "unrun") setCheck(checks, "runtime_identity", "fail", error.message, {});
+       if (checks.runtime_identity.status === "unrun") setCheck(checks, "runtime_identity", "fail", errorMessage(error), {});
        throw error;
      }
 
@@ -1033,14 +1136,14 @@ export function sanitizeResultForFile(result) {
        run(["runtime", "select", args.engine, runtimeId], 30000);
        run(["config", "set", "active_model", fullModel], 30000);
        run(["config", "set", "port", String(args.port)], 30000);
-       const config = run(["config", "get"], 30000);
+       const config = asRecord(run(["config", "get"], 30000));
        assert.equal(config?.active_model, fullModel, "active_model must round-trip");
        assert.equal(Number(config?.port), args.port, "port must round-trip");
-       const providerOptions = config?.provider_options?.[args.engine] ?? {};
+       const providerOptions = asRecord(asRecord(config?.provider_options)[args.engine]);
        if (typeof providerOptions?.embedding_model === "string" && providerOptions.embedding_model.length > 0) {
          declaredEmbeddingModel = providerOptions.embedding_model;
        }
-       const doctor = run(["doctor"], 120000);
+       const doctor = asRecord(run(["doctor"], 120000));
        const evidence = {
          provider: doctor?.provider ?? "",
          runtime: doctor?.runtime ?? "",
@@ -1055,7 +1158,7 @@ export function sanitizeResultForFile(result) {
        setCheck(checks, "config_selection", "pass", `selected ${evidence.provider} runtime ${evidence.runtime} via ${evidence.readiness_source}`, evidence);
        result.doctor = evidence;
      } catch (error) {
-       if (checks.config_selection.status === "unrun") setCheck(checks, "config_selection", "fail", error.message, {});
+       if (checks.config_selection.status === "unrun") setCheck(checks, "config_selection", "fail", errorMessage(error), {});
        throw error;
      }
 
@@ -1080,21 +1183,21 @@ export function sanitizeResultForFile(result) {
        serverRunning = true;
      } catch (error) {
        serverRunning = false;
-       if (expectedIncomplete && /incomplete|not complete|readiness|missing|not ready|complete:false/i.test(error.message)) {
-         setCheck(checks, "server_launch", "pass", `refused incomplete snapshot as expected: ${error.message.slice(0, 300)}`, { negativeFixture: true });
+       if (expectedIncomplete && /incomplete|not complete|readiness|missing|not ready|complete:false/i.test(String(errorMessage(error)))) {
+         setCheck(checks, "server_launch", "pass", `refused incomplete snapshot as expected: ${String(errorMessage(error)).slice(0, 300)}`, { negativeFixture: true });
          for (const name of ["model_alias", "stream_text_usage", "cancel", "restart", "stop", "media_supported", "media_refusal", "tools", "embeddings", "transcription"]) {
            setCheck(checks, name, "unrun", "not attempted: incomplete snapshot refused at launch", {});
          }
          setCheck(checks, "benchmark", "unrun", "not attempted: incomplete snapshot refused at launch", {});
          setCheck(checks, "deep_verification", "unrun", "not attempted: incomplete snapshot refused at launch", {});
          result.summary = summarize(checks);
-         return result;
+         return /** @type {CompletedProviderResult} */ (result);
        }
-       setCheck(checks, "server_launch", "fail", error.message, {});
+       setCheck(checks, "server_launch", "fail", errorMessage(error), {});
        throw error;
      }
 
-     const status = run(["server", "status"], 30000);
+     const status = asRecord(run(["server", "status"], 30000));
      if (status?.state !== "running" || status?.health !== true) {
        setCheck(checks, "server_launch", "fail", `server status not healthy: ${JSON.stringify(status).slice(0, 1000)}`, { state: status?.state ?? "unknown", health: status?.health ?? false });
        throw new Error(`server status not healthy: ${JSON.stringify(status)}`);
@@ -1109,11 +1212,11 @@ export function sanitizeResultForFile(result) {
          throw new Error(`GET /v1/models failed with ${models.status}`);
        }
        const aliases = assertModelsAlias(models.body);
-       servedAlias = aliases[0];
+       servedAlias = aliases[0] ?? "";
        setCheck(checks, "model_alias", "pass", `served alias ${servedAlias} (${aliases.length} listed)`, { aliases, count: aliases.length });
        result.servedAlias = servedAlias;
      } catch (error) {
-       if (checks.model_alias.status === "unrun") setCheck(checks, "model_alias", "fail", error.message, {});
+       if (checks.model_alias.status === "unrun") setCheck(checks, "model_alias", "fail", errorMessage(error), {});
        throw error;
      }
 
@@ -1137,7 +1240,7 @@ export function sanitizeResultForFile(result) {
          setCheck(checks, "stream_text_usage", "pass", `streamed ${text.length} chars; usage ${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}`, { usage, chars: text.length, rawBytes: stream.rawBytes });
          result.usage = usage;
        } catch (error) {
-         if (checks.stream_text_usage.status === "unrun") setCheck(checks, "stream_text_usage", "fail", error.message, {});
+         if (checks.stream_text_usage.status === "unrun") setCheck(checks, "stream_text_usage", "fail", errorMessage(error), {});
          throw error;
        }
      } else {
@@ -1159,7 +1262,7 @@ export function sanitizeResultForFile(result) {
            throw new Error(`chat probe failed with ${probe.status}`);
          }
        } catch (error) {
-         if (checks.stream_text_usage.status === "unrun") setCheck(checks, "stream_text_usage", "fail", error.message, {});
+         if (checks.stream_text_usage.status === "unrun") setCheck(checks, "stream_text_usage", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1197,7 +1300,7 @@ export function sanitizeResultForFile(result) {
            setCheck(checks, "cancel", "pass", "aborted one open stream mid-body; next request completed with usage", { sawData: cancel.sawData });
          }
        } catch (error) {
-         if (checks.cancel.status === "unrun") setCheck(checks, "cancel", "fail", error.message, {});
+         if (checks.cancel.status === "unrun") setCheck(checks, "cancel", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1206,7 +1309,7 @@ export function sanitizeResultForFile(result) {
      // a task-appropriate request.
      try {
        run(["server", "restart"], args.startTimeoutMs);
-       const restarted = run(["server", "status"], 30000);
+       const restarted = asRecord(run(["server", "status"], 30000));
       if (restarted?.state !== "running") {
         setCheck(checks, "restart", "fail", `restart status ${JSON.stringify(restarted).slice(0, 500)}`, { state: restarted?.state ?? "unknown" });
         throw new Error("restart did not return to running");
@@ -1234,7 +1337,7 @@ export function sanitizeResultForFile(result) {
       }
       setCheck(checks, "restart", "pass", "restart returned to running and answered", {});
      } catch (error) {
-       if (checks.restart.status === "unrun") setCheck(checks, "restart", "fail", error.message, {});
+       if (checks.restart.status === "unrun") setCheck(checks, "restart", "fail", errorMessage(error), {});
        throw error;
      }
 
@@ -1262,7 +1365,7 @@ export function sanitizeResultForFile(result) {
              assertUsagePresent(media.body, "image chat");
              setCheck(checks, "media_supported", "pass", args.mediaFile ? "supplied media file answered with usage" : "image data-URI request answered with usage", { status: media.status });
            } catch (error) {
-             setCheck(checks, "media_supported", "fail", `image request lacked authoritative usage: ${error.message}`, { status: media.status });
+             setCheck(checks, "media_supported", "fail", `image request lacked authoritative usage: ${errorMessage(error)}`, { status: media.status });
              throw error;
            }
          } else if (media.status === 400 || media.status === 422) {
@@ -1276,7 +1379,7 @@ export function sanitizeResultForFile(result) {
            throw new Error(`image request failed with ${media.status}`);
          }
        } catch (error) {
-         if (checks.media_supported.status === "unrun") setCheck(checks, "media_supported", "fail", error.message, {});
+         if (checks.media_supported.status === "unrun") setCheck(checks, "media_supported", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1300,9 +1403,10 @@ export function sanitizeResultForFile(result) {
            }),
          }, args.timeoutMs);
          const clientError = !refusal.ok && refusal.status >= 400 && refusal.status < 500;
-         const errorMessages = [refusal.body?.error, refusal.body?.error?.message, refusal.body?.message, refusal.body?.detail];
-         if (Array.isArray(refusal.body?.detail)) {
-           errorMessages.push(...refusal.body.detail.map(item => item?.msg));
+         const refusalBody = asRecord(refusal.body);
+         const errorMessages = [refusalBody.error, asRecord(refusalBody.error).message, refusalBody.message, refusalBody.detail];
+         if (Array.isArray(refusalBody.detail)) {
+           errorMessages.push(...refusalBody.detail.map(item => asRecord(item).msg));
          }
          const hasExplanation = errorMessages.some(message => typeof message === "string" && message.trim().length > 0);
          if (clientError && hasExplanation) {
@@ -1317,7 +1421,7 @@ export function sanitizeResultForFile(result) {
            throw new Error(detail);
          }
        } catch (error) {
-         if (checks.media_refusal.status === "unrun") setCheck(checks, "media_refusal", "fail", error.message, {});
+         if (checks.media_refusal.status === "unrun") setCheck(checks, "media_refusal", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1343,15 +1447,15 @@ export function sanitizeResultForFile(result) {
            }),
          }, args.timeoutMs);
          if (tools.ok) {
-           const message = tools.body?.choices?.[0]?.message ?? {};
+           const message = asRecord(asRecord(asArray(asRecord(tools.body).choices)[0]).message);
            const called = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
            try {
              assertUsagePresent(tools.body, "tools chat");
            } catch (error) {
-             setCheck(checks, "tools", "fail", `tools response lacked authoritative usage: ${error.message}`, { status: tools.status });
+             setCheck(checks, "tools", "fail", `tools response lacked authoritative usage: ${errorMessage(error)}`, { status: tools.status });
              throw error;
            }
-           setCheck(checks, "tools", "pass", called ? `tool call returned (${message.tool_calls.length} call(s))` : "tools accepted (200 with usage) but the model answered with text; no tool call observed", { status: tools.status, toolsAccepted: true, toolCalled: called });
+           setCheck(checks, "tools", "pass", called ? `tool call returned (${asArray(message.tool_calls).length} call(s))` : "tools accepted (200 with usage) but the model answered with text; no tool call observed", { status: tools.status, toolsAccepted: true, toolCalled: called });
            result.tools = { accepted: true, called };
          } else if (tools.status === 400 || tools.status === 422) {
            if (args.expectTools) {
@@ -1364,7 +1468,7 @@ export function sanitizeResultForFile(result) {
            throw new Error(`tools request failed with ${tools.status}`);
          }
        } catch (error) {
-         if (checks.tools.status === "unrun") setCheck(checks, "tools", "fail", error.message, {});
+         if (checks.tools.status === "unrun") setCheck(checks, "tools", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1395,7 +1499,7 @@ export function sanitizeResultForFile(result) {
              setCheck(checks, "embeddings", "pass", `embeddings returned ${count} complete numeric vector(s) of dim ${dims}`, { count, dims });
              result.embeddings = { count, dims };
            } catch (error) {
-             setCheck(checks, "embeddings", "fail", `embeddings response lacked complete numeric vectors: ${error.message}`, {});
+             setCheck(checks, "embeddings", "fail", `embeddings response lacked complete numeric vectors: ${errorMessage(error)}`, {});
              throw error;
            }
          } else if (embeddings.status === 400 || embeddings.status === 404 || embeddings.status === 422) {
@@ -1410,7 +1514,7 @@ export function sanitizeResultForFile(result) {
          }
        }
      } catch (error) {
-       if (checks.embeddings.status === "unrun") setCheck(checks, "embeddings", "fail", error.message, {});
+       if (checks.embeddings.status === "unrun") setCheck(checks, "embeddings", "fail", errorMessage(error), {});
        throw error;
      }
 
@@ -1436,7 +1540,7 @@ export function sanitizeResultForFile(result) {
            throw new Error("transcription did not return text");
          }
        } catch (error) {
-         if (checks.transcription.status === "unrun") setCheck(checks, "transcription", "fail", error.message, {});
+         if (checks.transcription.status === "unrun") setCheck(checks, "transcription", "fail", errorMessage(error), {});
          throw error;
        }
      }
@@ -1451,7 +1555,7 @@ export function sanitizeResultForFile(result) {
      // "running", so a successful stop (state left running) records a pass.
      try {
        run(["server", "stop"], 30000);
-       const stopped = run(["server", "status"], 30000);
+       const stopped = asRecord(run(["server", "status"], 30000));
        serverRunning = stopped?.state === "running";
        if (!serverRunning) {
          setCheck(checks, "stop", "pass", `server left running state (now ${stopped?.state ?? "unknown"})`, { state: stopped?.state ?? "unknown" });
@@ -1460,14 +1564,14 @@ export function sanitizeResultForFile(result) {
          throw new Error("server still running after stop");
        }
      } catch (error) {
-       if (checks.stop.status === "unrun") setCheck(checks, "stop", "fail", error.message, {});
+       if (checks.stop.status === "unrun") setCheck(checks, "stop", "fail", errorMessage(error), {});
        throw error;
      }
 
      result.summary = summarize(checks);
-     return result;
+     return /** @type {CompletedProviderResult} */ (result);
    } catch (error) {
-     result.error = error.message;
+     result.error = errorMessage(error);
      // After a live start, downstream unstarted checks stay unrun but the
      // summary must remain fail: never swallow a started-run failure. Input
      // validation above already recorded its failing check, so a
@@ -1475,11 +1579,11 @@ export function sanitizeResultForFile(result) {
      if (!result.summary) result.summary = summarize(checks);
      if (liveStarted && result.summary.outcome !== "fail") {
        // Ensure at least the active failure is visible even if bookkeeping missed it.
-       if (checks.server_launch.status === "unrun") setCheck(checks, "server_launch", "fail", error.message, {});
+       if (checks.server_launch.status === "unrun") setCheck(checks, "server_launch", "fail", errorMessage(error), {});
        result.summary = summarize(checks);
      }
      if (!result.summary) result.summary = summarize(checks);
-     return result;
+     return /** @type {CompletedProviderResult} */ (result);
    } finally {
      // Cleanup always runs: stop an owned server, then remove only the
      // isolated home. External interpreters and user data are untouched.
@@ -1490,6 +1594,7 @@ export function sanitizeResultForFile(result) {
      try {
        if (isolated) {
          const env = { ...isolated.env, ...extraEnv };
+         /** @param {string[]} cliArgs */
          const runCleanup = (cliArgs, timeoutMs = 30000) => runCli(executable, [...cliPrefix, ...cliArgs], env, timeoutMs);
          if (serverRunning) {
            try {
@@ -1501,7 +1606,7 @@ export function sanitizeResultForFile(result) {
          let statusAfter = "unknown";
          try {
            const queried = runCleanup(["server", "status"], 15000);
-           statusAfter = queried?.state ?? "unknown";
+           statusAfter = String(asRecord(queried).state ?? "unknown");
            serverRunning = statusAfter === "running";
          } catch {
            statusAfter = "unknown";
@@ -1531,7 +1636,7 @@ export function sanitizeResultForFile(result) {
          serverRunning = false;
        }
      } catch (cleanupError) {
-       setCheck(result.checks, "cleanup", "fail", cleanupError.message, {});
+       setCheck(result.checks, "cleanup", "fail", errorMessage(cleanupError), {});
      }
      // Cleanup can change a check after the main result was prepared.
      result.summary = summarize(result.checks);
@@ -1541,12 +1646,13 @@ export function sanitizeResultForFile(result) {
          writeFileSync(resolve(args.out), `${JSON.stringify(sanitizeResultForFile(result), null, 2)}\n`);
          result.out = args.out;
        } catch (writeError) {
-         result.outError = writeError.message;
+         result.outError = errorMessage(writeError);
        }
      }
    }
  }
 
+/** @param {Pick<ProviderResult, 'live' | 'synthetic' | 'checks' | 'summary'> & Partial<Pick<ProviderResult, 'task' | 'error' | 'out'>>} result */
  function printResult(result) {
    const summary = result.summary ?? summarize(result.checks);
    console.log(`provider acceptance: live=${result.live ? "yes" : "no"} synthetic=${result.synthetic ? "yes" : "no"} task=${result.task ?? "chat"} outcome=${summary.outcome}`);

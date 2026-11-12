@@ -23,19 +23,22 @@ const ELF_MACHINE_X86_64 = 62;
 
 /** Pinned inputs and the expected runtime hash from pins.conf. */
 export function readPins(directory = RUNTIME_DIRECTORY) {
+  /** @type {Record<string, string>} */
   const pins = {};
   for (const line of readFileSync(join(directory, "pins.conf"), "utf8").split("\n")) {
     const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (match) pins[match[1]] = match[2];
+    if (match) pins[/** @type {string} */ (match[1])] = /** @type {string} */ (match[2]);
   }
   if (!/^[0-9a-f]{64}$/.test(pins.RUNTIME_SHA256 ?? "")) throw new Error("pins.conf has no valid RUNTIME_SHA256");
-  return pins;
+  return /** @type {Record<string, string> & { RUNTIME_SHA256: string }} */ (pins);
 }
 
+/** @param {Buffer} bytes */
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** @param {Buffer} bytes */
 function elfSections(bytes) {
   if (bytes.length < 64 || bytes.readUInt32BE(0) !== 0x7f454c46 || bytes[4] !== 2 || bytes[5] !== 1) return null;
   const shoff = Number(bytes.readBigUInt64LE(0x28));
@@ -44,6 +47,7 @@ function elfSections(bytes) {
   const shstrndx = bytes.readUInt16LE(0x3e);
   const end = shoff + shentsize * shnum;
   if (shentsize < 64 || shstrndx >= shnum || end > bytes.length) return null;
+  /** @param {number} index */
   const header = (index) => shoff + index * shentsize;
   const names = Number(bytes.readBigUInt64LE(header(shstrndx) + 0x18));
   const sections = [];
@@ -58,6 +62,7 @@ function elfSections(bytes) {
 
 /**
  * Read a candidate runtime and require the pinned x86-64 AppImage type 2 runtime.
+ * @param {string} path
  * @returns {Buffer} the runtime bytes
  */
 export function readVerifiedRuntime(path, pins = readPins()) {
@@ -76,7 +81,10 @@ export function readVerifiedRuntime(path, pins = readPins()) {
   return bytes;
 }
 
-/** Why the pinned runtime cannot be used on this host, or null when it can. */
+/**
+ * Why the pinned runtime cannot be used on this host, or null when it can.
+ * @param {{ platform?: NodeJS.Platform, arch?: string }} [options]
+ */
 export function hostSupportProblem({ platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "linux" || arch !== "x64") {
     return `the pinned AppImage runtime is built for Linux x86-64 only (this host is ${platform}/${arch})`;
@@ -88,6 +96,7 @@ export function hostSupportProblem({ platform = process.platform, arch = process
  * Host requirements of a runtime build. `which(name)` reports whether a
  * command exists; `probeNamespace()` whether bubblewrap can create an
  * unprivileged user namespace.
+ * @param {{ platform?: NodeJS.Platform, arch?: string, which: (name: string) => boolean, probeNamespace: () => boolean }} options
  */
 export function buildPrerequisiteProblems({ platform = process.platform, arch = process.arch, which, probeNamespace }) {
   const unsupported = hostSupportProblem({ platform, arch });
@@ -101,6 +110,7 @@ export function buildPrerequisiteProblems({ platform = process.platform, arch = 
   return [];
 }
 
+/** @param {string} name */
 function hostWhich(name) {
   return spawnSync("sh", ["-c", 'command -v "$1" >/dev/null', "sh", name]).status === 0;
 }
@@ -114,6 +124,7 @@ function hostProbeNamespace() {
  * 1. LDAI_RUNTIME_FILE from the environment, accepted only if it is the pinned binary;
  * 2. `<cacheRoot>/<sha256>/runtime-x86_64`, re-hashed on every use and rebuilt if it differs;
  * 3. a fresh `build.sh` run, whose output must match the pin before it is cached.
+ * @param {{ env?: NodeJS.ProcessEnv, cacheRoot: string, pins?: ReturnType<typeof readPins>, platform?: NodeJS.Platform, arch?: string, build?: (workDirectory: string) => boolean, prerequisites?: () => string[], log?: (message: string) => void }} options
  * @returns {string} absolute path for LDAI_RUNTIME_FILE
  */
 export function provisionAppImageRuntime({
@@ -143,7 +154,7 @@ export function provisionAppImageRuntime({
       log(`using cached ${cached}`);
       return cached;
     } catch (error) {
-      log(`discarding cached runtime: ${error.message}`);
+      log(`discarding cached runtime: ${/** @type {Error} */ (error).message}`);
       rmSync(dirname(cached), { recursive: true, force: true });
     }
   }
@@ -176,6 +187,8 @@ export function provisionAppImageRuntime({
  * Require an AppImage to start with exactly `runtime`. appimagetool only
  * fills the runtime's .digest_md5 section with the image's own digest, so
  * that section is compared as zeros.
+ * @param {string} appImagePath
+ * @param {Buffer} runtime
  */
 export function verifyEmbeddedRuntime(appImagePath, runtime) {
   const layout = elfSections(runtime);
@@ -204,7 +217,12 @@ export function verifyEmbeddedRuntime(appImagePath, runtime) {
   }
 }
 
-/** Every AppImage written in `bundleDirectory` since `since` (ms) must embed `runtime`. */
+/**
+ * Every AppImage written in `bundleDirectory` since `since` (ms) must embed `runtime`.
+ * @param {string} bundleDirectory
+ * @param {Buffer} runtime
+ * @param {number} since
+ */
 export function verifyBundledAppImages(bundleDirectory, runtime, since) {
   const images = existsSync(bundleDirectory)
     ? readdirSync(bundleDirectory).filter((name) => name.endsWith(".AppImage")).map((name) => join(bundleDirectory, name))

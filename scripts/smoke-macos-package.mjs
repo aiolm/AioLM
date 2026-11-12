@@ -18,11 +18,12 @@ let app = systemApp;
 let mounted = false, installed = false;
 assert.ok(!existsSync(app), "refuse to replace an existing app");
 
+/** @param {string} program @param {string[]} args @param {import("node:child_process").SpawnSyncOptions} [options] @returns {string} */
 function run(program, args, options = {}) {
   const result = spawnSync(program, args, { encoding: "utf8", timeout: 180_000, ...options });
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${program}: ${result.stderr}\n${result.stdout}`);
-  return result.stdout;
+  return /** @type {string} */ (result.stdout);
 }
 function removeInstalledApp() {
   if (app === systemApp) run("sudo", ["rm", "-rf", app]);
@@ -35,18 +36,21 @@ function installedGuiPids() {
   const executable = join(app, "Contents/MacOS/aiolm").normalize("NFC");
   return run("/bin/ps", ["-axo", "pid=,command="]).split("\n").flatMap(line => {
     const match = /^\s*(\d+)\s(.*)$/.exec(line.normalize("NFC"));
-    return match && (match[2] === executable || match[2].startsWith(`${executable} `)) ? [Number(match[1])] : [];
+    return match && (match[2] === executable || /** @type {string} */ (match[2]).startsWith(`${executable} `)) ? [Number(match[1])] : [];
   });
 }
 // Open the installed bundle through LaunchServices, as Finder does, and leave
 // through the standard quit request that the Dock's Quit item sends.
+/** @param {Record<string, string>} appEnv @param {string} probe @param {string} terminate */
 async function launchInstalledGui(appEnv, probe, terminate) {
   assert.deepEqual(installedGuiPids(), [], "no installed app may already run");
   // `open` hands its own environment to the app; use launchd's, as Finder does.
+  /** @type {NodeJS.ProcessEnv} */
   const launchdEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
   for (const key of ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"]) if (process.env[key]) launchdEnv[key] = process.env[key];
   const output = join(root, "installed-gui.log");
   run("/usr/bin/open", ["-a", app, "--stdout", output, "--stderr", output, ...Object.entries(appEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`])], { env: launchdEnv });
+  /** @type {number | undefined} */
   let pid;
   const alive = () => spawnSync("/bin/kill", ["-0", String(pid)]).status === 0;
   try {
@@ -68,6 +72,7 @@ async function launchInstalledGui(appEnv, probe, terminate) {
     }
   } catch (error) {
     // Keep what LaunchServices, code signing and the app itself reported.
+    /** @param {string} program @param {string[]} args */
     const report = (program, args) => {
       const result = spawnSync(program, args, { encoding: "utf8", timeout: 60_000 });
       return `$ ${program} ${args.join(" ")}\n${result.stdout}${result.stderr}`;
@@ -90,7 +95,7 @@ try {
   const files = readdirSync(directory).filter(name => name.endsWith(".dmg"));
   assert.equal(files.length, 1, "expected one host-architecture DMG");
   mkdirSync(mount);
-  run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, join(directory, files[0])]);
+  run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mount, join(directory, /** @type {string} */ (files[0]))]);
   mounted = true;
   const source = join(mount, "AioLM.app");
   assert.ok(existsSync(source));
@@ -110,6 +115,7 @@ try {
   // Ad-hoc signing seals the whole bundle without a Developer ID, so the
   // signature verifies strictly instead of reporting missing resources.
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", source]);
+  /** @param {string} path */
   const signature = path => spawnSync("/usr/bin/codesign", ["--display", "--verbose=4", path], { encoding: "utf8" }).stderr;
   const signatureOutput = signature(source);
   assert.match(signatureOutput, /Signature=adhoc/);
@@ -132,6 +138,7 @@ try {
   run("swiftc", ["scripts/macos-terminate-app.swift", "-o", terminate]);
   const userApplications = join(home, "Applications");
   mkdirSync(userApplications);
+  /** @param {...string} args */
   const cli = (...args) => JSON.parse(run(join(app, "Contents/MacOS/aiolm-cli"), args, { env }));
   let initialized = false;
   for (app of [systemApp, join(userApplications, "AioLM.app")]) {
@@ -157,12 +164,12 @@ try {
     removeInstalledApp();
     assert.ok(!existsSync(app));
   }
-  assert.equal(JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).ctx_size, 8192);
+  assert.equal(JSON.parse(readFileSync(join(/** @type {string} */ (env.AIOLM_HOME), "config.json"), "utf8")).ctx_size, 8192);
 
   // install.sh verifies and installs the same DMG into a synthetic folder.
   run("/usr/bin/hdiutil", ["detach", mount]);
   mounted = false;
-  const dmg = join(directory, files[0]);
+  const dmg = join(directory, /** @type {string} */ (files[0]));
   const digest = run("/usr/bin/shasum", ["-a", "256", dmg]).split(" ")[0];
   const scriptApplications = join(home, "Script Applications");
   const installEnv = { ...env, AIOLM_DMG: dmg, AIOLM_DMG_SHA256: digest, AIOLM_APPLICATIONS_DIR: scriptApplications };

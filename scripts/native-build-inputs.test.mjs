@@ -14,9 +14,12 @@ const UNIT = "1".repeat(16);
 const GENERATED_UNIT = "2".repeat(16);
 const CHECKSUM = "b".repeat(64);
 const PRIVATE = "SYNTHETIC_PRIVATE_SETTING";
+/** @param {string} text */
 const escapeMake = text => text.replaceAll("\\", "\\\\").replaceAll(" ", "\\ ").replaceAll("#", "\\#").replaceAll("$", "$$");
+/** @param {string[]} features */
 const fingerprint = features => `{"rustc":18446744073709551615,"features":${JSON.stringify(JSON.stringify(features))},"profile":12345678901234567890,"config":9876543210987654321,"compile_kind":0,"local":[{"env":"${PRIVATE}"}],"rustflags":["${PRIVATE}"]}`;
 
+/** @param {import("node:test").TestContext} t */
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aiolm inputs # ")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -53,6 +56,10 @@ test("after observation distinguishes a later compile reference from unchanged g
   const before = f.observe();
   utimesSync(f.invocation, 4, 4);
   const after = f.observe("after");
+  assert.equal(before.status, "observed");
+  assert.equal(after.status, "observed");
+  assert.ok(before.generatedInputs[0]);
+  assert.ok(after.generatedInputs[0]);
   assert.equal(after.unit.id, before.unit.id);
   assert.equal(after.generatedInputs[0].sha256, before.generatedInputs[0].sha256);
   assert.equal(after.generatedInputs[0].mtimeNs, before.generatedInputs[0].mtimeNs);
@@ -192,7 +199,7 @@ test("the CLI writes only the bounded snapshot and never echoes paths or invalid
   const good = spawnSync(process.execPath, [script, "--source", head.stdout.trim(), "--phase", "before", "--output", output], { cwd: root, env, encoding: "utf8" });
   assert.ifError(good.error);
   assert.equal(good.status, 0, good.stderr);
-  assert.equal(JSON.parse(readFileSync(output)).status, "observed");
+  assert.equal(JSON.parse(readFileSync(output, "utf8")).status, "observed");
   assert.ok(!good.stdout.includes(f.root));
   assert.equal(good.stderr, "");
   writeFileSync(output, "preserved");

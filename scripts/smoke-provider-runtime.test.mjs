@@ -32,18 +32,39 @@ import {
   validateProbeRecord,
 } from "./smoke-provider-runtime.mjs";
 
+/**
+ * @typedef {import('./smoke-provider-runtime.mjs').Args} Args
+ * @typedef {import('./smoke-provider-runtime.mjs').ProviderResult} ProviderResult
+ * @typedef {{stream?: boolean, stream_options?: {include_usage?: boolean}, [key: string]: unknown}} ChatPayload
+ * @typedef {{payloads: ChatPayload[], cancelled: boolean, transcriptionHits: number, streamOptionsSeen: ({include_usage?: boolean} | null)[]}} Seen
+ * @typedef {{server: import('node:http').Server, port: number, seen: Seen, close: () => import('node:http').Server}} FakeEngine
+ */
+
+/** @param {import('node:net').Server} server */
+function serverPort(server) {
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  return address.port;
+}
+
+/** @param {(string | Uint8Array)[]} frames */
 function adapterStream(frames) {
   let read = 0, cancelled = false;
   const encoder = new TextEncoder();
+  /** @type {ReadableStream<Uint8Array>} */
   const body = new ReadableStream({
     pull(target) {
       if (read === frames.length) target.close();
-      else target.enqueue(typeof frames[read] === 'string' ? encoder.encode(frames[read++]) : frames[read++]);
+      else {
+        const frame = /** @type {string | Uint8Array} */ (frames[read++]);
+        target.enqueue(typeof frame === 'string' ? encoder.encode(frame) : frame);
+      }
     },
     cancel() { cancelled = true; },
   }, { highWaterMark: 0 });
   return { response: { body }, observed: () => ({ read, cancelled }) };
 }
+/** @param {Record<string, unknown>} delta @param {string | undefined} [finish_reason] */
 const adapterFrame = (delta, finish_reason = undefined) => `data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\n`;
 
 for (const field of ['reasoning_content', 'reasoning']) test(`registered adapter cancels on ${field} before final content`, async () => {
@@ -107,8 +128,9 @@ test('registered adapter keeps reasoning separate from final text and usage', as
 
 test('registered adapter reasoning cancellation closes the actual HTTP stream and leaves the server usable', { timeout: 5000 }, async () => {
   let naturalEnd = false, prematureClose = false;
+  /** @type {() => void} */
   let resolveClosed;
-  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const closed = new Promise(resolve => { resolveClosed = () => resolve(undefined); });
   const server = createServer((request, response) => {
     if (request.url === '/health') { response.end('ready'); return; }
     response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
@@ -116,8 +138,8 @@ test('registered adapter reasoning cancellation closes the actual HTTP stream an
     const fallback = setTimeout(() => { naturalEnd = true; response.end('data: [DONE]\n\n'); }, 500);
     response.on('close', () => { clearTimeout(fallback); prematureClose = !response.writableFinished; resolveClosed(); });
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const url = `http://127.0.0.1:${server.address().port}`;
+  await new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+  const url = `http://127.0.0.1:${serverPort(server)}`;
   try {
     const controller = new AbortController();
     const response = await fetch(url, { signal: controller.signal, headers: { Connection: 'close' } });
@@ -136,8 +158,10 @@ test('registered adapter reasoning cancellation closes the actual HTTP stream an
 
 test('provider acceptance cancels fast open output before natural completion and recovers with usage', { timeout: 3000 }, async () => {
   let naturalEnd = false, prematureClose = false, requests = 0;
+  /** @type {() => void} */
   let resolveClosed;
-  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const closed = new Promise(resolve => { resolveClosed = () => resolve(undefined); });
+  /** @type {ChatPayload[]} */
   const payloads = [];
   const server = createServer((request, response) => {
     let body = '';
@@ -157,49 +181,56 @@ test('provider acceptance cancels fast open output before natural completion and
       }
     });
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(undefined)));
   try {
-    const result = await cancelChatStreamAndRecover(`http://127.0.0.1:${server.address().port}`, { max_tokens: 32 }, 1000);
+    const result = await cancelChatStreamAndRecover(`http://127.0.0.1:${serverPort(server)}`, { max_tokens: 32 }, 1000);
     await closed;
     assert.equal(result.cancelled, true);
     assert.equal(result.sawData, true);
     assert.equal(result.completedEarly, false);
     assert.equal(prematureClose, true);
     assert.equal(naturalEnd, false);
+    assert.ok(result.after);
     assert.deepEqual(result.after.usage, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
-    assert.ok(payloads.every(payload => payload.stream_options.include_usage === true));
+    assert.ok(payloads.every(payload => payload.stream_options?.include_usage === true));
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
 });
 
+/**
+ * @param {(response: import('node:http').ServerResponse, count: number) => void} reply
+ * @param {(url: string, requests: () => number) => Promise<void>} check
+ */
 async function withProviderCancellationServer(reply, check) {
   let requests = 0;
   const server = createServer((request, response) => {
     request.resume();
     request.on('end', () => { requests += 1; reply(response, requests); });
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(undefined)));
   try {
-    await check(`http://127.0.0.1:${server.address().port}`, () => requests);
+    await check(`http://127.0.0.1:${serverPort(server)}`, () => requests);
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
 }
 
+/** @param {import('node:http').ServerResponse} response */
 function providerRecovery(response) {
   response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
   response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'OK' } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`);
 }
 
+/** @template T @param {Promise<T>} operation @returns {Promise<T>} */
 async function cancellationWithinBound(operation) {
   let timer;
   try {
-    return await Promise.race([operation, new Promise((_, reject) => {
+    return await Promise.race([operation, /** @type {Promise<never>} */ (new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error('cancellation did not settle within the test bound')), 500);
-    })]);
+    }))]);
   } finally {
     clearTimeout(timer);
   }
@@ -219,18 +250,19 @@ for (const field of ['reasoning_content', 'reasoning']) {
       assert.equal(result.cancelled, true);
       assert.equal(prematureClose, true);
       assert.equal(naturalEnd, false);
+      assert.ok(result.after?.usage);
       assert.equal(result.after.usage.total_tokens, 2);
     });
   });
 }
 
-for (const [kind, frame, error] of [
+for (const [kind, frame, error] of /** @type {[string, string, RegExp][]} */ ([
   ['finish reason with content', adapterFrame({ content: '5' }, 'stop'), /before cancellation/],
   ['DONE in the same body chunk', adapterFrame({ content: '5' }) + 'data: [DONE]\n\n', /before cancellation/],
   ['role-only output', adapterFrame({ role: 'assistant' }) + 'data: [DONE]\n\n', /before cancellation/],
   ['empty output', '', /before cancellation/],
   ['malformed output', 'data: broken-json\n\n', /invalid SSE/],
-]) {
+])) {
   test(`provider acceptance rejects ${kind} as cancellation evidence`, async () => {
     await withProviderCancellationServer((response, count) => {
       if (count !== 1) { providerRecovery(response); return; }
@@ -270,7 +302,9 @@ for (const stage of ['headers', 'generation output', 'recovery headers']) {
 }
 
 test("chat acceptance uses fresh connections across same-port server replacement", async () => {
+  /** @type {(string | undefined)[]} */
   const connections = [];
+  /** @type {import('node:http').RequestListener} */
   const handler = (req, res) => {
     connections.push(req.headers.connection);
     req.resume();
@@ -280,16 +314,17 @@ test("chat acceptance uses fresh connections across same-port server replacement
     });
   };
   let server = createServer(handler);
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
+  await new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(undefined)));
+  const port = serverPort(server);
   const url = `http://127.0.0.1:${port}/v1/chat/completions`;
   try {
     assert.equal((await readChatStream(url, {}, 5000)).ok, true);
     await new Promise(resolve => server.close(resolve));
     server = createServer(handler);
-    await new Promise(resolve => server.listen(port, "127.0.0.1", resolve));
+    await new Promise(resolve => server.listen(port, "127.0.0.1", () => resolve(undefined)));
     const after = await readChatStream(url, {}, 5000);
     assert.equal(assertStreamEvents(after.events), "OK");
+    assert.ok(after.usage);
     assert.equal(after.usage.total_tokens, 2);
     assert.deepEqual(connections, ["close", "close"]);
   } finally {
@@ -450,6 +485,7 @@ test("isolated home clears parent AIOLM state and points AIOLM_HOME inside it", 
   const isolated = createIsolatedHome();
   try {
     assert.ok(isolated.home.includes("home with spaces"));
+    assert.ok(isolated.env.AIOLM_HOME);
     assert.ok(isolated.env.AIOLM_HOME.startsWith(isolated.home));
     assert.equal(isolated.env.AIOLM_SMOKE_PARENT, undefined);
     assert.ok(isolated.env.HOME === isolated.home || isolated.env.USERPROFILE === isolated.home);
@@ -465,7 +501,7 @@ test("CLI runner parses JSON and surfaces failures without swallowing output", (
   try {
     const okStub = join(dir, "ok-stub.mjs");
     writeFileSync(okStub, 'console.log(JSON.stringify({ ok: true, argv: process.argv.slice(2) }));\n');
-    const ok = runCli(process.execPath, [okStub, "hello"], process.env, 10000);
+    const ok = /** @type {{ok?: boolean}} */ (runCli(process.execPath, [okStub, "hello"], process.env, 10000));
     assert.equal(ok.ok, true);
     const failStub = join(dir, "fail-stub.mjs");
     writeFileSync(failStub, 'console.log(JSON.stringify({ error: "boom" })); process.exit(1);\n');
@@ -602,10 +638,14 @@ if (cmd === "runtime" && sub === "register") {
 }
 `;
 
+/** @returns {Promise<FakeEngine>} */
 function startFakeEngine({ behavior = "ok" } = {}) {
   const behaviors = new Set(String(behavior).split("+"));
+  /** @param {string} name */
   const has = (name) => behaviors.has(name);
+  /** @type {Seen} */
   const seen = { payloads: [], cancelled: false, transcriptionHits: 0, streamOptionsSeen: [] };
+  /** @param {import('node:http').ServerResponse} res @param {number} status @param {unknown} obj */
   const send = (res, status, obj) => {
     res.writeHead(status, { "content-type": "application/json" });
     res.end(JSON.stringify(obj));
@@ -710,7 +750,7 @@ function startFakeEngine({ behavior = "ok" } = {}) {
   });
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
-      resolveServer({ server, port: server.address().port, seen, close: () => server.close() });
+      resolveServer({ server, port: serverPort(server), seen, close: () => server.close() });
     });
   });
 }
@@ -739,11 +779,13 @@ function makeLiveCase() {
   return { dir, stubPath, stateDir };
 }
 
+/** @param {{task?: string, behavior?: string, cliMode?: string, extraArgs?: Partial<Args> & {snapshotComplete?: boolean}, extraEnv?: NodeJS.ProcessEnv}} [options] */
 async function runLiveWithFakes({ task = "chat", behavior = "ok", cliMode = "ok", extraArgs = {}, extraEnv = {} } = {}) {
   const live = makeLiveCase();
   const model = makeModelDir({ complete: extraArgs.snapshotComplete ?? true });
   const engine = await startFakeEngine({ behavior });
   const outPath = join(live.dir, "result.json");
+  /** @type {Args & {snapshotComplete?: boolean}} */
   const args = {
     engine: "vllm",
     task,
@@ -783,15 +825,18 @@ async function runLiveWithFakes({ task = "chat", behavior = "ok", cliMode = "ok"
   return { result, live, model, engine, outPath };
 }
 
+/** @param {{live: ReturnType<typeof makeLiveCase>, model: ReturnType<typeof makeModelDir>, engine: FakeEngine}} fixture */
 function closeLive({ live, model, engine }) {
   engine.close();
   rmSync(live.dir, { recursive: true, force: true });
   rmSync(model.dir, { recursive: true, force: true });
 }
 
+/** @param {ProviderResult} result */
 function assertChecksShape(result) {
   assert.equal(result.schema, 1);
   assert.equal(result.synthetic, false);
+  assert.ok(result.summary);
   for (const name of CHECKS) {
     const check = result.checks[name];
     assert.ok(check, `missing check ${name}`);
@@ -827,7 +872,7 @@ test("live path with fakes: successful stop, mid-body cancel and redacted sharea
     }
     // Tools acceptance is recorded separately from the actual tool call.
     assert.equal(result.checks.tools.status, "pass");
-    assert.equal(result.tools.called, true);
+    assert.equal(result.tools?.called, true);
     assertChecksShape(result);
     // Shareable JSON hygiene.
     const fileText = readFileSync(outPath, "utf8");
@@ -842,6 +887,7 @@ test("live path with fakes: successful stop, mid-body cancel and redacted sharea
 });
 
 test("failure cleanup retention: a stop failure keeps the isolated home and fails cleanup", async () => {
+  /** @type {string[]} */
   const errors = [];
   const original = console.error;
   console.error = (...parts) => { errors.push(parts.join(" ")); };
@@ -855,7 +901,7 @@ test("failure cleanup retention: a stop failure keeps the isolated home and fail
     assert.match(result.checks.cleanup.detail, /retained/);
     const retained = errors.find((line) => line.includes("retaining isolated home for manual stop:"));
     assert.ok(retained, "retained home must be logged on console only");
-    const home = retained.split("manual stop:")[1].trim();
+    const home = (retained.split("manual stop:")[1] ?? "").trim();
     assert.ok(home.length > 0, "console must carry the retained home path");
     rmSync(home, { recursive: true, force: true });
   } finally {
@@ -1062,6 +1108,7 @@ test("transcription task: STT passes without mandatory chat", async () => {
   try {
     assert.equal(run.result.checks.stream_text_usage.status, "unsupported");
     assert.equal(run.result.checks.transcription.status, "pass");
+    assert.ok(run.result.transcript);
     assert.ok(run.result.transcript.chars > 0);
     assert.equal(run.result.summary.outcome, "pass");
   } finally {
@@ -1072,6 +1119,7 @@ test("transcription task: STT passes without mandatory chat", async () => {
 test("incomplete snapshots are refused at launch as the negative fixture", async () => {
   const run = await runLiveWithFakes({ cliMode: "start-refuses-incomplete", extraArgs: { snapshotComplete: false } });
   try {
+    assert.ok(run.result.model);
     assert.equal(run.result.model.kind, "snapshot-incomplete");
     assert.equal(run.result.checks.server_launch.status, "pass");
     assert.match(run.result.checks.server_launch.detail, /refused incomplete snapshot as expected/);
@@ -1154,7 +1202,10 @@ test('external CLI rejects invalid or missing request-timeout values before any 
 });
 
 test('external request deadline clears its timer after success or an unrelated error', async () => {
-  let completedController, failedController;
+  /** @type {AbortController | undefined} */
+  let completedController;
+  /** @type {AbortController | undefined} */
+  let failedController;
   assert.equal(await withRuntimeAdapterRequestDeadline(async controller => {
     completedController = controller;
     return 'done';
@@ -1165,16 +1216,23 @@ test('external request deadline clears its timer after success or an unrelated e
     throw failure;
   }, 30), error => error === failure);
   await new Promise(resolve => setTimeout(resolve, 60));
+  assert.ok(completedController);
+  assert.ok(failedController);
   assert.equal(completedController.signal.aborted, false);
   assert.equal(failedController.signal.aborted, true);
 });
 
+/**
+ * @param {import('node:http').RequestListener} handler
+ * @param {(url: string) => Promise<void>} check
+ */
 async function withStalledAdapterResponse(handler, check) {
+  /** @type {Set<import('node:net').Socket>} */
   const sockets = new Set();
   const server = createServer(handler);
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  try { await check(`http://127.0.0.1:${server.address().port}`); }
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(undefined)); });
+  try { await check(`http://127.0.0.1:${serverPort(server)}`); }
   finally {
     for (const socket of sockets) socket.destroy();
     await new Promise(resolve => server.close(resolve));
@@ -1182,9 +1240,12 @@ async function withStalledAdapterResponse(handler, check) {
 }
 
 test('external request deadline aborts an actual loopback request stalled before headers', { timeout: 5000 }, async () => {
-  let sawRequest, sawClose;
-  const requested = new Promise(resolve => { sawRequest = resolve; });
-  const closed = new Promise(resolve => { sawClose = resolve; });
+  /** @type {() => void} */
+  let sawRequest;
+  /** @type {() => void} */
+  let sawClose;
+  const requested = new Promise(resolve => { sawRequest = () => resolve(undefined); });
+  const closed = new Promise(resolve => { sawClose = () => resolve(undefined); });
   await withStalledAdapterResponse((_request, response) => {
     sawRequest();
     response.once('close', sawClose);
@@ -1200,8 +1261,9 @@ test('external request deadline aborts an actual loopback request stalled before
 });
 
 for (const cancel of [false, true]) test(`external request deadline aborts a stalled whole SSE body (cancel=${cancel})`, { timeout: 5000 }, async () => {
+  /** @type {() => void} */
   let sawClose;
-  const closed = new Promise(resolve => { sawClose = resolve; });
+  const closed = new Promise(resolve => { sawClose = () => resolve(undefined); });
   await withStalledAdapterResponse((_request, response) => {
     response.once('close', sawClose);
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -1218,8 +1280,9 @@ for (const cancel of [false, true]) test(`external request deadline aborts a sta
 });
 
 test('external request deadline preserves intentional generation cancellation', { timeout: 5000 }, async () => {
+  /** @type {() => void} */
   let sawClose;
-  const closed = new Promise(resolve => { sawClose = resolve; });
+  const closed = new Promise(resolve => { sawClose = () => resolve(undefined); });
   await withStalledAdapterResponse((_request, response) => {
     response.once('close', sawClose);
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -1238,8 +1301,9 @@ test('external request deadline preserves intentional generation cancellation', 
 
 
 test('external request rejection closes an unread error response without replacing its diagnostic', { timeout: 5000 }, async () => {
+  /** @type {() => void} */
   let sawClose;
-  const closed = new Promise(resolve => { sawClose = resolve; });
+  const closed = new Promise(resolve => { sawClose = () => resolve(undefined); });
   const failure = new Error('Chat returned 503');
   await withStalledAdapterResponse((_request, response) => {
     response.once('close', sawClose);

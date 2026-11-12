@@ -1,4 +1,9 @@
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
+import { loadLocale } from "./src/shared/i18n/i18nUnified";
+
+// Components and direct catalog consumers remain synchronous in tests.
+await Promise.all((["ko", "ja", "zh"] as const).map(loadLocale));
 
 // jsdom ships <dialog> but not showModal()/close(). Without these, any
 // component that opens a modal throws on mount instead of rendering. The

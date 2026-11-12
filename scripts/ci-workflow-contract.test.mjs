@@ -1,20 +1,24 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { readCiWorkflowSources, verifyCiWorkflowContracts } from "./ci-workflow-contract.mjs";
 
+/** @typedef {import("./ci-workflow-contract.mjs").WorkflowSources} WorkflowSources */
+/** @typedef {(job: string) => string} JobChange */
 // Windows checks out YAML with CRLF. Use one canonical mutation fixture so a
 // literal replacement always changes the intended input on every host.
-const sources = Object.fromEntries(Object.entries(readCiWorkflowSources()).map(([key, source]) => [key, source.replace(/\r\n/g, "\n")]));
+const sources = /** @type {WorkflowSources} */ (Object.fromEntries(Object.entries(readCiWorkflowSources()).map(([key, source]) => [key, source.replace(/\r\n/g, "\n")])));
+/** @param {Partial<WorkflowSources>} [patch] */
 const verify = patch => {
   for (const [key, source] of Object.entries(patch ?? {})) {
-    assert.notEqual(source, sources[key], `Expected mutation of ${key} to change the fixture`);
+    assert.notEqual(source, sources[/** @type {keyof WorkflowSources} */ (key)], `Expected mutation of ${key} to change the fixture`);
   }
   return verifyCiWorkflowContracts({ ...sources, ...patch });
 };
+/** @param {string} source @param {string} name @param {JobChange} change */
 const changeCiJob = (source, name, change) => {
   const start = source.indexOf(`  ${name}:\n`);
   assert.ok(start >= 0, `Expected ${name} job`);
@@ -33,36 +37,38 @@ test("the historical release/package backtrace mismatch is rejected", () => {
 
 test("LF and Windows CRLF workflows enforce the same historical mismatch check", () => {
   for (const newline of ["\n", "\r\n"]) {
-    const variant = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.replace(/\n/g, newline)]));
+    const variant = /** @type {WorkflowSources} */ (Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.replace(/\n/g, newline)])));
     assert.deepEqual(verifyCiWorkflowContracts(variant), verify());
     const packages = variant.packages.replace(/ {6}RUST_BACKTRACE: "1"\r?\n/, "");
     assert.notEqual(packages, variant.packages, "Expected backtrace removal in either line-ending format");
     assert.throws(() => verifyCiWorkflowContracts({ ...variant, packages }), /Cache environment differs between package jobs/);
-    const ci = changeCiJob(sources.ci, "rust", job => job.replace("        run: npm run build", "        if: runner.os == 'macOS'\n        run: npm run build")).replace(/\n/g, newline);
+    const ci = changeCiJob(sources.ci, "rust", job => job.replace("      - name: Download verified frontend inputs\n", "      - name: Download verified frontend inputs\n        if: runner.os == 'macOS'\n")).replace(/\n/g, newline);
     assert.notEqual(ci, variant.ci, "Expected conditional frontend mutation in either line-ending format");
-    assert.throws(() => verifyCiWorkflowContracts({ ...variant, ci }), /Frontend build must be unconditional and required/);
+    assert.throws(() => verifyCiWorkflowContracts({ ...variant, ci }), /Frontend artifact download must be unconditional and required/);
   }
 });
 
-test("native verification builds frontend once and requires success before its first Cargo compile", () => {
+test("native verification reuses the Linux artifact before its first Cargo compile", () => {
   for (const name of ["rust", "rust-portability"]) {
-    for (const change of [
-      job => job.replace("        run: npm run build", "        run: npm run build:contracts"),
-      job => job.replace("        run: npm run build", "        if: runner.os == 'macOS'\n        run: npm run build"),
-      job => job.replace("        run: npm run build", "        continue-on-error: true\n        run: npm run build"),
-      job => job.replace("        run: npm run build", "        run: npm run build\n      - run: npm run build"),
+    for (const change of /** @type {JobChange[]} */ ([
+      job => job.replace("name: frontend-dist", "name: unrelated"),
+      job => job.replace("          path: dist", "          path: other"),
+      job => job.replace("    needs: frontend-checks", "    needs: frontend-plan"),
+      job => job.replace("      - name: Download verified frontend inputs\n", "      - name: Download verified frontend inputs\n        if: runner.os == 'macOS'\n"),
+      job => job.replace("      - name: Download verified frontend inputs\n", "      - name: Download verified frontend inputs\n        continue-on-error: true\n"),
+      job => job.replace("      - name: Download verified frontend inputs\n", "      - run: npm run build\n      - name: Download verified frontend inputs\n"),
       job => {
-        const build = job.match(/^ {6}- name: .*\n {8}run: npm run build\n/m)?.[0];
-        assert.ok(build, "Expected frontend step to relocate");
-        return job.replace(build, "").replace(/^( {8}run: cargo clippy[^\n]*\n)/m, `$1${build}`);
+        const download = job.match(/^ {6}- name: Download verified frontend inputs\n(?: {8}.*\n)*/m)?.[0];
+        assert.ok(download);
+        return job.replace(download, "").replace(/^( {8}run: cargo clippy[^\n]*\n)/m, `$1${download}`);
       },
-    ]) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), /Frontend build must/);
+    ])) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), /Frontend artifact|must depend on frontend-checks|must reuse frontend inputs/);
   }
 });
 
 test("the default-feature Mac helper never regenerates frontend inputs", () => {
   const ci = changeCiJob(sources.ci, "macos-default", job => job.replace("      - name: Default-feature native tests", "      - run: npm run build\n      - name: Default-feature native tests"));
-  assert.throws(() => verify({ ci }), /Mac default helper must not rebuild frontend inputs/);
+  assert.throws(() => verify({ ci }), /must reuse frontend inputs/);
 });
 
 test("the pinned installer default makes explicit and implicit incremental settings equivalent", () => {
@@ -82,12 +88,12 @@ test("additional cache-prefixed flags, step overrides and unsupported expression
 });
 
 test("cache recipes keep workspace dependencies separate and reject unreviewed broad cache settings", () => {
-  for (const [before, after] of [
+  for (const [before, after] of /** @type {[string, string][]} */ ([
     ['shared-key: "package-', 'shared-key: "verify-'],
     ["          cache-bin: false", "          cache-bin: true"],
     ["          cache-bin: false", "          cache-bin: false\n          cache-workspace-crates: true"],
     ["Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0", "Swatinem/rust-cache@v2"],
-  ]) assert.throws(() => verify({ packages: sources.packages.replace(before, after) }), /cache recipe|Unreviewed/);
+  ])) assert.throws(() => verify({ packages: sources.packages.replace(before, after) }), /cache recipe|Unreviewed/);
 });
 
 test("only main writers save caches and the Mac default helper remains restore-only", () => {
@@ -126,7 +132,7 @@ test("only the reviewed macOS-gated WebDriver use is found in native sources", (
 test("Windows and Linux binaries reuse the all-feature test build while macOS keeps default features", () => {
   const linuxBuild = "        if: runner.os == 'Linux'\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --all-features --timings";
   const macBuild = "        if: runner.os == 'macOS'\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins --timings";
-  for (const [ci, error] of [
+  for (const [ci, error] of /** @type {[string, RegExp][]} */ ([
     [changeCiJob(sources.ci, "rust", job => job.replace("--bins --all-features", "--bins")), /Windows binaries must reuse/],
     [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace(" --all-features", ""))), /Linux binaries must reuse/],
     [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace("        if: runner.os == 'Linux'\n", ""))), /Expected one Linux and one macOS binary build/],
@@ -137,27 +143,31 @@ test("Windows and Linux binaries reuse the all-feature test build while macOS ke
     [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins -Fmacos-ui-smoke"))), /macOS binaries must keep the default features/],
     [changeCiJob(sources.ci, "rust-portability", job => job.replace(macBuild, macBuild.replace("--bins", "--bins --features=macos-ui-smoke"))), /macOS binaries must keep the default features/],
     [changeCiJob(sources.ci, "rust-portability", job => job.replace(linuxBuild, linuxBuild.replace("--bins", "--bins --release"))), /Linux binaries must reuse/],
-  ]) assert.throws(() => verify({ ci }), error);
+  ])) assert.throws(() => verify({ ci }), error);
 });
 
+/** @param {string} job @param {string} name */
 const stepText = (job, name) => {
   const text = job.match(new RegExp(`^ {6}- name: ${name}\\n(?: {8}.*\\n)*`, "m"))?.[0];
   assert.ok(text, `Expected step ${name}`);
   return text;
 };
+/** @param {string} job @param {string} name @param {string} anchor */
 const moveStepAfter = (job, name, anchor) => {
   const without = job.replace(stepText(job, name), "");
   return without.replace(stepText(without, anchor), `${stepText(without, anchor)}${stepText(job, name)}`);
 };
+/** @param {string} job @param {string} name @param {string} lines */
 const addToStep = (job, name, lines) => job.replace(`      - name: ${name}\n`, `      - name: ${name}\n${lines}`);
+/** @param {string} job @param {string} name @param {string} step */
 const insertBefore = (job, name, step) => job.replace(`      - name: ${name}\n`, `${step}      - name: ${name}\n`);
 
 test("binary reuse needs the required all-feature tests first and binaries before their consumers", () => {
-  for (const [name, tests, build, beforeTests, cli] of [
+  for (const [name, tests, build, beforeTests, cli] of /** @type {[string, string, string, string, string][]} */ ([
     ["rust", "Rust tests", "Build desktop and CLI", "Clippy", "Native CLI with a clean home"],
     ["rust-portability", "Native tests", "Build desktop and CLI", "Lint native code", "Native CLI with a clean home"],
-  ]) {
-    for (const [change, error] of [
+  ])) {
+    for (const [change, error] of /** @type {[JobChange, RegExp][]} */ ([
       [job => job.replace("--all-targets --all-features --timings", "--all-targets --timings"), /must follow the required all-feature test build/],
       [job => moveStepAfter(job, build, beforeTests), /must follow the required all-feature test build/],
       [job => addToStep(job, tests, "        continue-on-error: true\n"), /All-feature tests must stay unconditional, required and compile-identical/],
@@ -169,7 +179,7 @@ test("binary reuse needs the required all-feature tests first and binaries befor
       [job => insertBefore(job, build, "      - name: Write compiler environment\n        run: echo RUSTFLAGS=-Cdebuginfo=2 >> \"$GITHUB_ENV\"\n"), /Only reviewed run steps may separate/],
       [job => moveStepAfter(job, build, cli), /Binaries must be built before their consumers/],
       [job => insertBefore(job, cli, "      - name: Rebuild CLI\n        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm-cli -F macos-ui-smoke\n"), /Binaries must be built before their consumers/],
-    ]) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), error, `${name}: ${String(change)}`);
+    ])) assert.throws(() => verify({ ci: changeCiJob(sources.ci, name, change) }), error, `${name}: ${String(change)}`);
   }
   // The macOS default binaries must also exist before the generated-input observer.
   const ci = changeCiJob(sources.ci, "rust-portability", job => moveStepAfter(job, "Observe generated inputs before the CPU compilation", "Native tests"));
@@ -239,4 +249,57 @@ test("the source reader finds feature uses in nested modules, tests, examples an
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("platform-independent frontend gates run once and native jobs consume their dist", () => {
+  const checksSource = sources.ci.split("  frontend-checks:\n")[1];
+  assert.ok(checksSource);
+  const checks = checksSource.split("  frontend-plan:\n")[0];
+  assert.ok(checks);
+  assert.match(checks, /runs-on: ubuntu-24\.04/);
+  assert.doesNotMatch(checks, /matrix:/);
+  for (const command of ["lint", "typecheck", "test:checks", "build"]) {
+    assert.equal([...sources.ci.matchAll(new RegExp(`^ +npm run ${command}$`, "gm"))].length
+      + [...sources.ci.matchAll(new RegExp(`^ +run: npm run ${command}$`, "gm"))].length, 1, command);
+  }
+  assert.match(checks, /npm audit --omit=dev --audit-level=high/);
+  assert.match(checks, /npm audit --audit-level=high/);
+  assert.match(checks, /cargo install cargo-audit --version \d+\.\d+\.\d+ --locked/);
+  assert.match(checks, /cargo audit --file src-tauri\/Cargo\.lock/);
+  assert.match(checks, /python3 -B -m unittest discover -s scripts\/runtime-adapters -p 'test_\*\.py'/);
+  assert.match(checks, /python3 -B src-tauri\/src\/providers\/portable_python_tests\.py/);
+  const macSource = sources.ci.split("  macos-default:\n")[1];
+  assert.ok(macSource);
+  const mac = macSource.split("  native:\n")[0];
+  assert.ok(mac);
+  assert.doesNotMatch(mac, /npm ci|npm rebuild|npm install|components: rustfmt, clippy/);
+  assert.doesNotMatch(sources.release, /components: rustfmt, clippy/);
+});
+
+test("workflows discard checkout credentials and scope publication and concurrency", () => {
+  const directory = new URL("../.github/workflows/", import.meta.url);
+  const workflows = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
+    .map(file => [file, readFileSync(new URL(file, directory), "utf8").replace(/\r\n/g, "\n")]));
+  for (const [file, source] of Object.entries(workflows)) {
+    for (const block of source.split(/^ {6}- /m).filter(block => /uses: actions\/checkout@/.test(block))) {
+      assert.match(block, /persist-credentials: false/, file);
+    }
+  }
+  assert.ok(workflows["linux-desktop-acceptance.yml"]);
+  assert.ok(workflows["pr-runtime.yml"]);
+  assert.match(workflows["linux-desktop-acceptance.yml"], /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+  assert.match(workflows["pr-runtime.yml"], /group: pr-runtime-\$\{\{ inputs\.pull_request \}\}\n {2}cancel-in-progress: false/);
+  assert.match(workflows["pr-runtime.yml"], /target_commitish: \$\{\{ github\.ref_name \}\}/);
+  assert.match(workflows["pr-runtime.yml"], /overwrite_files: false/);
+  const releaseAction = sources.release.match(/uses: (softprops\/action-gh-release@\w+)/)?.[1];
+  assert.ok(releaseAction);
+  assert.ok(workflows["pr-runtime.yml"].includes(`uses: ${releaseAction}`));
+  const packages = workflows["desktop-packages.yml"];
+  assert.ok(packages);
+  const packageHeader = packages.split("jobs:\n")[0];
+  const installJob = packages.split("  install:\n")[1];
+  assert.ok(packageHeader);
+  assert.ok(installJob);
+  assert.doesNotMatch(packageHeader, /actions: read/);
+  assert.match(installJob, /permissions:\n {6}contents: read\n {6}actions: read/);
 });

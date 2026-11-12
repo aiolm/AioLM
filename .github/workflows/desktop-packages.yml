@@ -34,7 +34,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: desktop-packages-${{ github.event.pull_request.number || github.run_id }}
@@ -278,6 +277,9 @@ jobs:
 
   install:
     if: inputs.package_run_id != ''
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:

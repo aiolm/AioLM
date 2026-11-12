@@ -8,13 +8,17 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
     "types": ["node"],
     "skipLibCheck": true,
 
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true
   },
-  "include": ["scripts/**/*.ts", "tests/direct/**/*.ts", "vite.config.ts", "vitest*.config.ts"]
+  "include": ["scripts/**/*.ts", "scripts/**/*.mjs", "tests/**/*.ts", "vite.config.ts", "vitest*.config.ts", "vitest.setup.ts"]
 }

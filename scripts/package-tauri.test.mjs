@@ -1,11 +1,12 @@
 /* global Buffer */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import {
   buildPrerequisiteProblems, provisionAppImageRuntime, readPins, readVerifiedRuntime, RUNTIME_DIRECTORY, verifyBundledAppImages, verifyEmbeddedRuntime,
 } from "./appimage-runtime/runtime.mjs";
@@ -26,14 +27,17 @@ test("desktop packaging selects formats that the host can build", () => {
 });
 
 test("smoke fixtures stay enabled for normal tests and excluded from packaging", () => {
-  const manifest = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
-  const featureSection = manifest.match(/\[features\]([\s\S]*?)(?=\n\[|$)/)?.[1];
-  assert.match(featureSection, /default\s*=\s*\["test-fixtures"\]/);
-  for (const [kind, name] of [["bin", "fake-llama-server"], ["test", "smoke_fake"]]) {
-    const sections = manifest.split(new RegExp(`\\[\\[${kind}\\]\\]`)).slice(1);
-    const target = sections.map((section) => section.split(/\n\[/)[0])
-      .find((section) => section.includes(`name = "${name}"`));
-    assert.match(target, /required-features\s*=\s*\["test-fixtures"\]/);
+  const manifest = fileURLToPath(new URL("../src-tauri/Cargo.toml", import.meta.url));
+  const parsed = spawnSync("cargo", [
+    "metadata", "--no-deps", "--format-version", "1", "--manifest-path", manifest,
+  ], { encoding: "utf8" });
+  assert.ifError(parsed.error);
+  assert.equal(parsed.status, 0, parsed.stderr);
+  const cargo = /** @type {{packages: {name: string, features: Record<string, string[]>, targets: {name: string, kind: string[], "required-features"?: string[]}[]}[]}} */ (JSON.parse(parsed.stdout)).packages.find((pkg) => pkg.name === "aiolm");
+  assert.deepEqual(/** @type {NonNullable<typeof cargo>} */ (cargo).features.default, ["test-fixtures"]);
+  for (const [kind, name] of /** @type {[string, string][]} */ ([["bin", "fake-llama-server"], ["test", "smoke_fake"]])) {
+    const target = /** @type {NonNullable<typeof cargo>} */ (cargo).targets.find((target) => target.name === name && target.kind.includes(kind));
+    assert.deepEqual(target?.["required-features"], ["test-fixtures"]);
   }
   for (const platform of ["win32", "linux", "darwin"]) {
     assert.ok(packagingArgs(platform).includes("--no-default-features"));
@@ -41,10 +45,12 @@ test("smoke fixtures stay enabled for normal tests and excluded from packaging",
   }
 });
 
+/** @param {import("node:test").TestContext} t */
 function packagingFixture(t, platform = "win32") {
   const root = mkdtempSync(join(tmpdir(), "aiolm-desktop-package-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const directory = join(root, ".codex-target", "release");
+  /** @param {string} name */
   const writeExecutable = (name) => {
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, name + (platform === "win32" ? ".exe" : "")), `synthetic ${name}`);
@@ -54,6 +60,7 @@ function packagingFixture(t, platform = "win32") {
 
 test("one production build produces both executables before bundle-only packaging", (t) => {
   const fixture = packagingFixture(t);
+  /** @type {{command: string, args: string[], options: import("./package-tauri.mjs").PackagingSpawnOptions}[]} */
   const calls = [];
   const result = runPackaging({ ...fixture, spawn(command, args, options) {
     calls.push({ command, args, options });
@@ -66,16 +73,18 @@ test("one production build produces both executables before bundle-only packagin
   assert.equal(result, 0);
   assert.deepEqual(calls.map(({ args }) => args[1]), ["build", "bundle"]);
   assert.equal(calls.filter(({ args }) => args.includes("--no-bundle")).length, 1);
-  assert.equal(calls[0].options.env, calls[1].options.env);
-  assert.equal(calls[0].options.cwd, fixture.root);
-  assert.equal(calls[1].options.cwd, fixture.root);
-  assert.equal(calls[1].options.env.SYNTHETIC_BUILD, "1");
+  const [build, bundle] = /** @type {[typeof calls[number], typeof calls[number]]} */ (calls);
+  assert.equal(build.options.env, bundle.options.env);
+  assert.equal(build.options.cwd, fixture.root);
+  assert.equal(bundle.options.cwd, fixture.root);
+  assert.equal(bundle.options.env.SYNTHETIC_BUILD, "1");
 });
 
 test("a failed production build never packages existing executables", (t) => {
   const fixture = packagingFixture(t);
   fixture.writeExecutable("aiolm");
   fixture.writeExecutable("aiolm-cli");
+  /** @type {(string | undefined)[]} */
   const calls = [];
   assert.equal(runPackaging({ ...fixture, spawn(_command, args) {
     calls.push(args[1]);
@@ -86,6 +95,7 @@ test("a failed production build never packages existing executables", (t) => {
 
 test("packaging stops when a successful runner has not produced the auxiliary CLI", (t) => {
   const fixture = packagingFixture(t);
+  /** @type {(string | undefined)[]} */
   const calls = [];
   assert.throws(() => runPackaging({ ...fixture, spawn(_command, args) {
     calls.push(args[1]);
@@ -97,6 +107,7 @@ test("packaging stops when a successful runner has not produced the auxiliary CL
 
 test("bundle failures propagate without reporting verified AppImages", (t) => {
   const fixture = packagingFixture(t, "linux");
+  /** @type {(string | undefined)[]} */
   const calls = [];
   const result = runPackaging({ ...fixture,
     provisionRuntime: () => "/synthetic/pinned-runtime",
@@ -114,6 +125,7 @@ test("bundle failures propagate without reporting verified AppImages", (t) => {
 
 test("early AppImage preparation uses the same cache as normal packaging", (t) => {
   const fixture = packagingFixture(t, "linux");
+  /** @type {Parameters<typeof provisionAppImageRuntime>[0][]} */
   const options = [];
   const prepare = () => preparePackagingEnv({ ...fixture, provisionRuntime(value) {
     options.push(value);
@@ -121,11 +133,13 @@ test("early AppImage preparation uses the same cache as normal packaging", (t) =
   } });
   assert.equal(prepare().LDAI_RUNTIME_FILE, "/synthetic/pinned-runtime");
   assert.equal(prepare().LDAI_RUNTIME_FILE, "/synthetic/pinned-runtime");
-  assert.equal(options[0].cacheRoot, join(fixture.root, ".codex-target", "appimage-runtime"));
-  assert.equal(options[0].cacheRoot, options[1].cacheRoot);
+  const [first, second] = /** @type {[NonNullable<typeof options[number]>, NonNullable<typeof options[number]>]} */ (options);
+  assert.equal(first.cacheRoot, join(fixture.root, ".codex-target", "appimage-runtime"));
+  assert.equal(first.cacheRoot, second.cacheRoot);
 });
 
 test("direct Tauri builds use host formats and CLI builds never bundle", () => {
+  /** @param {string} name */
   const read = (name) => JSON.parse(readFileSync(new URL(`../src-tauri/${name}`, import.meta.url), "utf8"));
   assert.equal(read("tauri.conf.json").bundle.targets, "all");
   assert.equal(read("tauri-cli-build.conf.json").bundle.active, false);
@@ -152,6 +166,7 @@ function syntheticRuntime({ machine = 62, magic = "AI\u0002", body = "runtime co
   header.writeUInt16LE(64, 0x3a);
   header.writeUInt16LE(3, 0x3c);
   header.writeUInt16LE(1, 0x3e);
+  /** @param {number} name @param {number} offset @param {number} size */
   const section = (name, offset, size) => {
     const row = Buffer.alloc(64);
     row.writeUInt32LE(name, 0);
@@ -163,11 +178,13 @@ function syntheticRuntime({ machine = 62, magic = "AI\u0002", body = "runtime co
     section(1, namesAt, names.length), section(11, digestAt, 16)]);
 }
 
+/** @param {import("node:test").TestContext} t */
 function runtimeFixture(t) {
   const directory = mkdtempSync(join(tmpdir(), "aiolm-appimage-runtime-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const runtime = syntheticRuntime();
   const pins = { RUNTIME_SHA256: createHash("sha256").update(runtime).digest("hex") };
+  /** @param {string} name @param {string | Uint8Array} bytes */
   const write = (name, bytes) => {
     const path = join(directory, name);
     mkdirSync(dirname(path), { recursive: true });
@@ -197,6 +214,7 @@ test("packaging re-verifies the pinned runtime after the bundle command", (t) =>
 
 test("Linux packaging hands appimagetool the pinned runtime; other hosts are unchanged", () => {
   const base = { PATH: "/usr/bin" };
+  /** @type {NodeJS.ProcessEnv[]} */
   const seen = [];
   const env = packagingEnv("linux", base, (environment) => {
     seen.push(environment);
@@ -215,7 +233,7 @@ test("the committed runtime pin names the reviewed upstream revision, both patch
   assert.match(pins.RUNTIME_SHA256, /^[0-9a-f]{64}$/);
   const build = readFileSync(join(RUNTIME_DIRECTORY, "build.sh"), "utf8");
   const patches = [...build.matchAll(/patches\/[\w.-]+\.patch/g)].map(([path]) => path);
-  assert.deepEqual(patches.map((path) => path.split("/")[1].slice(0, 4)), ["0001", "0002"]);
+  assert.deepEqual(patches.map((path) => /** @type {string} */ (path.split("/")[1]).slice(0, 4)), ["0001", "0002"]);
   for (const path of patches) assert.match(readFileSync(join(RUNTIME_DIRECTORY, path), "utf8"), /^diff --git a\/src\/runtime\/runtime\.c/);
   assert.match(readFileSync(join(RUNTIME_DIRECTORY, "LICENSE.type2-runtime"), "utf8"), /^MIT License\n\nCopyright \(c\) 2004-23 probonopd/);
   assert.match(readFileSync(join(RUNTIME_DIRECTORY, "apk.lock"), "utf8"), /^musl-1\.2\.5-r12$/m);
@@ -223,18 +241,19 @@ test("the committed runtime pin names the reviewed upstream revision, both patch
 
 test("an operator-provided LDAI_RUNTIME_FILE is used only when it is the pinned x86-64 runtime", (t) => {
   const { directory, runtime, pins, write, noBuild, ready, log } = runtimeFixture(t);
+  /** @type {Parameters<typeof provisionAppImageRuntime>[0]} */
   const options = {
     cacheRoot: join(directory, "cache"), pins, build: noBuild, prerequisites: ready, log,
     platform: "linux", arch: "x64",
   };
   const pinned = write("provided/runtime", runtime);
   assert.equal(provisionAppImageRuntime({ ...options, env: { LDAI_RUNTIME_FILE: pinned } }), pinned);
-  for (const [bytes, reason] of [
+  for (const [bytes, reason] of /** @type {[Buffer, RegExp][]} */ ([
     [syntheticRuntime({ machine: 183 }), /not an x86-64 ELF/],
     [syntheticRuntime({ magic: "\0\0\0" }), /not an AppImage type 2 runtime/],
     [syntheticRuntime({ body: "upstream runtime" }), /requires the pinned/],
     [Buffer.from("MZ not an ELF"), /not an x86-64 ELF/],
-  ]) {
+  ])) {
     const candidate = write("provided/other", bytes);
     assert.throws(() => provisionAppImageRuntime({ ...options, env: { LDAI_RUNTIME_FILE: candidate } }), reason);
   }
@@ -245,12 +264,14 @@ test("the build cache is re-verified on use and a changed entry is rebuilt, neve
   const { directory, runtime, pins, write, ready, log } = runtimeFixture(t);
   const cacheRoot = join(directory, "cache");
   let builds = 0;
+  /** @param {string} work */
   const build = (work) => {
     builds += 1;
     write(join("cache", work.slice(cacheRoot.length + 1), "out", "runtime-x86_64"), runtime);
     write(join("cache", work.slice(cacheRoot.length + 1), "out", "inputs.sha256"), "inputs\n");
     return true;
   };
+  /** @type {Parameters<typeof provisionAppImageRuntime>[0]} */
   const options = { env: {}, cacheRoot, pins, build, prerequisites: ready, log, platform: "linux", arch: "x64" };
   const first = provisionAppImageRuntime(options);
   assert.equal(first, join(cacheRoot, pins.RUNTIME_SHA256, "runtime-x86_64"));
@@ -266,10 +287,12 @@ test("the build cache is re-verified on use and a changed entry is rebuilt, neve
 test("a build whose output drifts from the pin fails and caches nothing", (t) => {
   const { directory, pins, write, ready, log } = runtimeFixture(t);
   const cacheRoot = join(directory, "cache");
+  /** @param {string} work */
   const build = (work) => {
     write(join("cache", work.slice(cacheRoot.length + 1), "out", "runtime-x86_64"), syntheticRuntime({ body: "drifted toolchain" }));
     return true;
   };
+  /** @type {Parameters<typeof provisionAppImageRuntime>[0]} */
   const options = { env: {}, cacheRoot, pins, build, prerequisites: ready, log, platform: "linux", arch: "x64" };
   assert.throws(() => provisionAppImageRuntime(options), /requires the pinned/);
   assert.throws(() => provisionAppImageRuntime({ ...options, build: () => false }), /build failed/);
@@ -278,14 +301,15 @@ test("a build whose output drifts from the pin fails and caches nothing", (t) =>
 
 test("missing build prerequisites stop packaging before any build", (t) => {
   const { directory, pins, noBuild, log } = runtimeFixture(t);
+  /** @type {Parameters<typeof provisionAppImageRuntime>[0]} */
   const options = { env: {}, cacheRoot: join(directory, "cache"), pins, build: noBuild, log, platform: "linux", arch: "x64" };
   const present = () => true;
-  assert.match(buildPrerequisiteProblems({ platform: "linux", arch: "arm64", which: present, probeNamespace: present })[0], /x86-64 only/);
-  assert.match(buildPrerequisiteProblems({ platform: "darwin", arch: "x64", which: present, probeNamespace: present })[0], /Linux x86-64 only/);
-  assert.match(buildPrerequisiteProblems({ platform: "linux", arch: "x64", which: (name) => name !== "bwrap" && name !== "gpg", probeNamespace: present })[0],
+  assert.match(/** @type {string} */ (buildPrerequisiteProblems({ platform: "linux", arch: "arm64", which: present, probeNamespace: present })[0]), /x86-64 only/);
+  assert.match(/** @type {string} */ (buildPrerequisiteProblems({ platform: "darwin", arch: "x64", which: present, probeNamespace: present })[0]), /Linux x86-64 only/);
+  assert.match(/** @type {string} */ (buildPrerequisiteProblems({ platform: "linux", arch: "x64", which: (name) => name !== "bwrap" && name !== "gpg", probeNamespace: present })[0]),
     /missing build tools: bwrap, gpg/);
   if (existsSync("/dev/fuse")) {
-    assert.match(buildPrerequisiteProblems({ platform: "linux", arch: "x64", which: present, probeNamespace: () => false })[0], /unprivileged user namespace/);
+    assert.match(/** @type {string} */ (buildPrerequisiteProblems({ platform: "linux", arch: "x64", which: present, probeNamespace: () => false })[0]), /unprivileged user namespace/);
   }
   assert.throws(() => provisionAppImageRuntime({ ...options, prerequisites: () => ["missing build tools: bwrap"] }),
     /cannot build the pinned AppImage runtime: missing build tools: bwrap.*LDAI_RUNTIME_FILE/);
