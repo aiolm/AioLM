@@ -176,7 +176,10 @@
 .performance-markdown-preview ul, .performance-markdown-preview ol { padding-left: 24px; }
 .performance-markdown-preview pre { padding: 8px; background: var(--ui-mono-bg); color: var(--ui-mono-ink); border-radius: var(--ui-radius-control); overflow-x: auto; }
 .performance-markdown-preview a { color: var(--ui-accent); overflow-wrap: anywhere; }
-.performance-explorer-actions { display: grid; gap: 8px; flex: 0 1 24rem; min-width: 0; }
+/* The button row sets the width so the buttons end at the header's edge; the
+   hint and error wrap within it instead of widening the block past the buttons. */
+.performance-explorer-actions { display: grid; gap: 8px; flex: 0 1 auto; min-width: 0; }
+.performance-explorer-actions > :not(.performance-target-actions) { contain: inline-size; }
 /* Use the actual work width, excluding shell/sidebar and page padding. */
 @container workspace (min-width: 900px) {
   .performance-workspace { grid-template-columns: clamp(20rem, 25cqi, 28rem) minmax(0, 1fr); }
