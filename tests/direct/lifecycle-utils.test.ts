@@ -69,7 +69,15 @@ test("lifecycle utils contracts", async () => {
   assert.equal(isLifecycleCancellation(new IpcError("internal", "server start cancelled")), false);
   assert.equal(isLifecycleCancellation(new Error("server start cancelled")), false, "engine diagnostics are not native cancellation");
   assert.equal(classifyLifecycleError(new IpcError("timeout", "readiness deadline reached")), "timeout");
-  assert.equal(classifyLifecycleError(new IpcError("busy", "another model operation is running")), "active-response");
+  // Busy from runtime installs or other model operations must not tell the
+  // user to stop a response that does not exist.
+  for (const detail of ["another model operation is running", "a runtime operation is in progress; wait for it to finish before starting the server"]) {
+    const busy = new IpcError("busy", detail);
+    assert.equal(classifyLifecycleError(busy), "busy", detail);
+    const message = lifecycleErrorMessage("start", busy, "en");
+    assert.ok(message.includes("Another model or runtime operation is in progress."), message);
+    assert.doesNotMatch(message, /active response/i);
+  }
   assert.equal(isLifecycleCancellation(new Error("server failed to load")), false);
   assert.equal(isLifecycleCancellation("model file does not exist or is unreadable: /synthetic/cancelled-runs/a.gguf (No such file or directory (os error 2))"), false, "a path naming cancellation is still a failure");
   assert.equal(isLifecycleCancellation(new Error("Selected runtime rejected this model: request canceled by upstream proxy")), false);

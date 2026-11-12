@@ -3,10 +3,15 @@ import { isIpcErrorKind } from "../api/ipcError.ts";
 import { translate, type UnifiedKey } from "../i18n/i18nUnified.ts";
 import type { Locale } from "../i18n/i18nCatalog.ts";
 
-export type LifecycleErrorKind = "active-response" | "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
+export type LifecycleErrorKind = "active-response" | "busy" | "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
+
+/** The native gate that refuses to change a model while it answers a request. */
+const ACTIVE_RESPONSE = /^finish or stop the active response(?: in session '[^']+')? before (?:loading a model|replacing this model|unloading this model)$/i;
 
 export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
-  if (isIpcErrorKind(error, "busy")) return "active-response";
+  // Busy also covers runtime installs and other operations; only the active
+  // response gate asks the user to stop a response.
+  if (isIpcErrorKind(error, "busy")) return error instanceof Error && ACTIVE_RESPONSE.test(error.message) ? "active-response" : "busy";
   if (isIpcErrorKind(error, "timeout")) return "timeout";
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
   // Allocation failures often include model-loading frames and startup timeout
@@ -25,6 +30,7 @@ export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
 
 const LIFECYCLE_HINT_KEYS: Record<LifecycleErrorKind, UnifiedKey> = {
   "active-response": "lifecycle.activeResponse",
+  busy: "lifecycle.busy",
   timeout: "lifecycle.timeout",
   port: "lifecycle.port",
   executable: "lifecycle.executable",

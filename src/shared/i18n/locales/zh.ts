@@ -108,6 +108,7 @@ export default {
     "lifecycle.startFailed": "模型加载失败",
     "lifecycle.stopFailed": "模型卸载失败",
     "lifecycle.activeResponse": "请先完成或停止正在进行的回复，然后重试。",
+    "lifecycle.busy": "另一个模型或运行时操作正在进行。请等待其完成后重试。",
     "lifecycle.timeout": "操作超时。请检查此错误附带的运行时日志，然后重试。",
     "lifecycle.port": "配置的端口已被占用。请选择其他端口或停止冲突的进程。",
     "lifecycle.executable": "找不到运行时可执行文件。请检查所选运行时的安装。",

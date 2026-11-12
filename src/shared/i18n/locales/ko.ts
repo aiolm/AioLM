@@ -108,6 +108,7 @@ export default {
     "lifecycle.startFailed": "모델 로드 실패",
     "lifecycle.stopFailed": "모델 언로드 실패",
     "lifecycle.activeResponse": "진행 중인 응답을 완료하거나 중지한 후 다시 시도하세요.",
+    "lifecycle.busy": "다른 모델 또는 런타임 작업이 진행 중입니다. 작업이 끝난 후 다시 시도하세요.",
     "lifecycle.timeout": "작업 시간이 초과되었습니다. 이 오류와 함께 표시된 런타임 로그를 확인한 후 다시 시도하세요.",
     "lifecycle.port": "설정된 포트가 이미 사용 중입니다. 다른 포트를 선택하거나 충돌하는 프로세스를 중지하세요.",
     "lifecycle.executable": "런타임 실행 파일을 찾을 수 없습니다. 선택한 런타임 설치를 확인하세요.",

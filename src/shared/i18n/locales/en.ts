@@ -111,6 +111,7 @@ export default {
     "lifecycle.startFailed": "Model load failed",
     "lifecycle.stopFailed": "Model unload failed",
     "lifecycle.activeResponse": "Finish or stop the active response, then try again.",
+    "lifecycle.busy": "Another model or runtime operation is in progress. Wait for it to finish, then try again.",
     "lifecycle.timeout": "The operation timed out. Check the runtime log shown with this error and try again.",
     "lifecycle.port": "The configured port is already in use. Choose another port or stop the conflicting process.",
     "lifecycle.executable": "The runtime executable could not be found. Check the selected runtime installation.",

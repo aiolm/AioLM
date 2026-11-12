@@ -507,7 +507,7 @@ it("shows retry guidance for native Busy failures independently of their wording
   const cause = new IpcError("busy", "A model operation is already running.");
   vi.mocked(api.startServer).mockRejectedValueOnce(cause);
   await act(async () => { await expect(result.current.start()).rejects.toBe(cause); });
-  expect(result.current.actionError).toBe("Model load failed: Finish or stop the active response, then try again. (A model operation is already running.)");
+  expect(result.current.actionError).toBe("Model load failed: Another model or runtime operation is in progress. Wait for it to finish, then try again. (A model operation is already running.)");
 });
 
 it("keeps a late failure from a stopped slow start from reporting an error", async () => {

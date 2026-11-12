@@ -23,7 +23,7 @@ describe('localized lifecycle errors', () => {
 
   it('uses native busy and timeout kinds even when their messages do not name the diagnosis', () => {
     expect(lifecycleErrorMessage('start', new IpcError('busy', 'operation in progress'), 'en'))
-      .toBe('Model load failed: Finish or stop the active response, then try again. (operation in progress)');
+      .toBe('Model load failed: Another model or runtime operation is in progress. Wait for it to finish, then try again. (operation in progress)');
     expect(lifecycleErrorMessage('start', new IpcError('timeout', 'readiness deadline reached'), 'en'))
       .toBe('Model load failed: The operation timed out. Check the runtime log shown with this error and try again. (readiness deadline reached)');
   });
