@@ -222,6 +222,9 @@ fn unix_process(pid: u32) -> Option<UnixProcess> {
 
 #[cfg(unix)]
 fn descendant_processes(root: u32) -> Vec<UnixProcess> {
+    if root <= 1 {
+        return Vec::new();
+    }
     const MAX_PROCESSES: usize = 16_384;
     #[cfg(not(target_os = "macos"))]
     let processes: Vec<_> = std::fs::read_dir("/proc")
@@ -1563,5 +1566,11 @@ mod unix_tests {
             .unwrap()
             .trees
             .contains_key(&token));
+    }
+
+    #[test]
+    fn descendant_pids_ignores_kernel_and_init_roots() {
+        assert!(descendant_pids(0).is_empty());
+        assert!(descendant_pids(1).is_empty());
     }
 }

@@ -1258,6 +1258,9 @@ pub(crate) fn listener_owned_by_child(
     port: u16,
     owner: Option<crate::procutil::ProcessHandle>,
 ) -> bool {
+    if pid == 0 && owner.is_none() {
+        return false;
+    }
     #[cfg(windows)]
     {
         let mut command = crate::procutil::std_command("netstat");
