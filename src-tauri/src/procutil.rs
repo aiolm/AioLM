@@ -78,6 +78,30 @@ impl ProcessHandle {
     }
 }
 
+/// An engine exit code as diagnostics print it: decimal, or the NTSTATUS hex
+/// form Windows tools use for a negative code.
+pub fn exit_code_label(code: i32) -> String {
+    if code < 0 {
+        format!("{:#010X}", code as u32)
+    } else {
+        code.to_string()
+    }
+}
+
+/// The Windows loader cause behind an exit code, when it is one. The loader
+/// ends the process before the engine writes anything, so this status is the
+/// only evidence of a missing, mismatched or damaged DLL (for example one
+/// quarantined by security software).
+pub fn loader_failure(code: i32) -> Option<&'static str> {
+    match code as u32 {
+        0xC000_0135 => Some("a DLL the engine needs was not found; check that its folder is complete and that security software did not quarantine one of its files"),
+        0xC000_0139 => Some("a DLL the engine loaded lacks a required entry point; its DLLs do not match each other"),
+        0xC000_007B => Some("the engine or one of its DLLs is damaged or built for another architecture"),
+        0xC000_0142 => Some("a DLL the engine needs failed to initialize"),
+        _ => None,
+    }
+}
+
 /// Preserve the OS error while distinguishing policy denial from model/GPU errors.
 pub fn spawn_error(program: &std::path::Path, error: &std::io::Error) -> String {
     let message = format!("failed to spawn {}: {error}", program.display());

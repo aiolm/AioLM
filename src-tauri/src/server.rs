@@ -1057,7 +1057,28 @@ pub fn spawn(
     capture: Option<SpawnCapture<'_>>,
 ) -> Result<SpawnedServer, AppError> {
     let adapter = crate::providers::adapter::resolve(cfg);
-    let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
+    let plan = match adapter.launch(cfg, cfg.port, api_key, resolved_gpu) {
+        Ok(plan) => plan,
+        // A launch refused for stale reviewed help is retried once after the
+        // unchanged help is re-confirmed; only engine starts rerun help.
+        Err(error) => match crate::providers::runtime_schema::reconfirm_stale_help_for_start(
+            &crate::providers::registry::root(),
+            cfg,
+            &std::sync::atomic::AtomicBool::new(false),
+        ) {
+            Ok(true) => adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?,
+            Ok(false) => return Err(error),
+            Err(cause) => {
+                return Err(AppError::new(
+                    error.kind,
+                    format!(
+                        "{} Rechecking its help failed: {}.",
+                        error.message, cause.message
+                    ),
+                ))
+            }
+        },
+    };
     let bin = plan.program.to_string_lossy().into_owned();
     let api_key_file = if adapter.kind() == crate::providers::adapter::RuntimeKind::Native {
         create_api_key_file(api_key)?
@@ -1373,18 +1394,23 @@ pub async fn wait_ready(
             Ok(Some(status)) => {
                 let code = status
                     .code()
-                    .map(|value| value.to_string())
+                    .map(crate::procutil::exit_code_label)
                     .unwrap_or_else(|| "signal".into());
                 stop_readiness_child(&shared, None).await;
                 let tail = err.tail();
                 let trimmed = tail.trim();
-                let hint = if trimmed.to_uppercase().contains("SPLIT_MODE_TENSOR")
+                let hint = if let Some(cause) =
+                    status.code().and_then(crate::procutil::loader_failure)
+                {
+                    // The loader wrote nothing; the status is the diagnosis.
+                    format!(" The engine could not start: {cause}.")
+                } else if trimmed.to_uppercase().contains("SPLIT_MODE_TENSOR")
                     || trimmed.to_lowercase().contains("tensor-split")
                     || trimmed.to_lowercase().contains("tensor split")
                 {
-                    " This model does not support the Tensor split mode (experimental). Change GPU split mode to Automatic, layer, or row and try again."
+                    " This model does not support the Tensor split mode (experimental). Change GPU split mode to Automatic, layer, or row and try again.".into()
                 } else {
-                    ""
+                    String::new()
                 };
                 return Err(AppError::unavailable(format!(
                     "server exited before ready ({code}). {trimmed}{hint}"

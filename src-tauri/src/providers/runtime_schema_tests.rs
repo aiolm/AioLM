@@ -1,6 +1,7 @@
 use super::*;
 use super::{
     effective::apply_supplement,
+    help::{adopt_unchanged_help, reconfirmable_review},
     launch::{resolve_launch_plan, strip_scope, with_template_slots},
     persistence::{accepted_path, supplement_path, SUPPLEMENT_FILE, SUPPLEMENT_LIMIT},
     redaction::sensitive_entry_tokens,
@@ -977,6 +978,124 @@ fn help_parsed_by_an_earlier_parser_is_stale_and_its_values_are_kept() {
         REDACTED
     );
     assert_eq!(projection["provider_options"]["llama.cpp"]["no_host"], true);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn launch_carries_a_review_to_a_new_identity_only_when_its_help_is_unchanged() {
+    let text = "Options:\n  --synthetic-depth N      synthetic search depth\n";
+    let (root, cfg) = accepted_llama_help(text);
+    let (engine, runtime) = ("llama.cpp", "cpu-metadata-test");
+    let reviewed_fingerprint = "c".repeat(64);
+    let rerun = |fingerprint: char, text: &str| {
+        let mut report = complete_help_report(&fingerprint.to_string().repeat(64));
+        report.stdout.text = text.into();
+        report.stdout.clean_text = text.into();
+        report
+    };
+    let review = || {
+        let accepted = load_accepted(&root, engine, runtime).unwrap().unwrap();
+        let reviewed = reconfirmable_review(&root, engine, runtime, &accepted).unwrap();
+        (accepted, reviewed)
+    };
+    let accepted_fingerprint = || {
+        load_accepted(&root, engine, runtime)
+            .unwrap()
+            .unwrap()
+            .fingerprint
+    };
+
+    // Resolving launch arguments (command previews, validation) for a stale
+    // runtime refuses with the retained values and never reruns its help.
+    let selected = Selected::from_config(&cfg).unwrap();
+    assert_eq!(
+        effective(&root, &cfg, true).unwrap().help_state,
+        HelpState::Stale
+    );
+    let values: Map<String, Value> =
+        serde_json::from_value(json!({"synthetic_depth": "4"})).unwrap();
+    let refused = resolve_launch_plan(&root, &cfg, &selected, values, None, &[]).unwrap_err();
+    assert!(
+        refused.contains("synthetic_depth were retained"),
+        "{refused}"
+    );
+    assert!(!refused.contains("Rechecking its help"), "{refused}");
+    assert_eq!(accepted_fingerprint(), reviewed_fingerprint);
+
+    // Changed help keeps the earlier review for an explicit one.
+    let (accepted, reviewed) = review();
+    let changed = rerun('a', "Options:\n  -t, --threads N          number of threads\n  -b, --batch-size N       batch size\n");
+    assert!(!adopt_unchanged_help(
+        &root,
+        engine,
+        runtime,
+        accepted,
+        reviewed.unwrap(),
+        changed,
+        root.clone()
+    )
+    .unwrap());
+    assert_eq!(accepted_fingerprint(), reviewed_fingerprint);
+
+    // An engine the loader cannot start (a quarantined DLL) says so.
+    let (accepted, reviewed) = review();
+    let mut failed = rerun('a', "");
+    failed.success = false;
+    failed.exit_code = Some(0xC000_0135_u32 as i32);
+    let error = adopt_unchanged_help(
+        &root,
+        engine,
+        runtime,
+        accepted,
+        reviewed.unwrap(),
+        failed,
+        root.clone(),
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("status 0xC0000135"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error
+            .message
+            .contains("security software did not quarantine"),
+        "{}",
+        error.message
+    );
+    assert_eq!(accepted_fingerprint(), reviewed_fingerprint);
+
+    // Identical help under a new identity (another shell, a rebuilt engine,
+    // an earlier app's fingerprint) carries the review and its request.
+    let (accepted, reviewed) = review();
+    let request = accepted.request.clone();
+    assert!(adopt_unchanged_help(
+        &root,
+        engine,
+        runtime,
+        accepted,
+        reviewed.unwrap(),
+        rerun('b', text),
+        root.clone()
+    )
+    .unwrap());
+    let moved = load_accepted(&root, engine, runtime).unwrap().unwrap();
+    assert_eq!(moved.fingerprint, "b".repeat(64));
+    assert_eq!(moved.request, request);
+    assert!(
+        runtime_help_store::load_snapshot(&root, engine, runtime, &moved.fingerprint)
+            .unwrap()
+            .is_some()
+    );
+
+    // Confirmations pinned to a review are never inherited by another build.
+    std::fs::write(
+        supplement_path(&root, engine, runtime).unwrap(),
+        serde_json::to_vec(&supplement_with_static_roles(&moved.fingerprint)).unwrap(),
+    )
+    .unwrap();
+    assert!(review().1.is_none());
     std::fs::remove_dir_all(root).unwrap();
 }
 

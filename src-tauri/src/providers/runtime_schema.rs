@@ -241,8 +241,8 @@ pub use help::{
     draft_acceptance, help_command, help_target, manifest_help_command, register_entrypoint,
 };
 pub(crate) use help::{
-    ensure_automatic_help, register_entrypoint_outcome, resume_entrypoint_help,
-    unicode_environment, EntrypointRegistration,
+    ensure_automatic_help, reconfirm_stale_help_for_start, register_entrypoint_outcome,
+    resume_entrypoint_help, unicode_environment, EntrypointRegistration,
 };
 use launch::generic_entries;
 pub(crate) use launch::{additional_launch_args, binding_for};

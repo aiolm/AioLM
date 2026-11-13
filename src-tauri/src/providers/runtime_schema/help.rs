@@ -352,6 +352,136 @@ pub(super) fn current_identity(
     }
 }
 
+/// Carry a review to a new runtime identity when the help it reviewed is
+/// unchanged. Only a real engine start calls this, after its launch was
+/// refused, and it acts only while the reviewed help is stale.
+///
+/// An engine update, a rebuilt binary or a fingerprint computed by an earlier
+/// app version changes the identity without changing what was reviewed, and
+/// used to block every launch until the user rediscovered identical help.
+/// The start the user requested runs this registered program anyway, so it
+/// runs the reviewed help request once more: identical parsed help moves the
+/// review to the new identity (`Ok(true)`); different help, or confirmations
+/// pinned to the old review, keep the runtime stale for an explicit review
+/// (`Ok(false)`). A help run that cannot complete is returned as the error
+/// that explains why. Previews and validation never reach it.
+pub(crate) fn reconfirm_stale_help_for_start(
+    root: &Path,
+    cfg: &AppConfig,
+    cancel: &AtomicBool,
+) -> Result<bool, crate::error::AppError> {
+    let selected = Selected::from_config(cfg)?;
+    if effective_for(root, cfg, &selected, true)?.help_state != HelpState::Stale {
+        return Ok(false);
+    }
+    let key = &selected.key;
+    let Some(accepted) = load_accepted(root, &key.engine, &key.runtime)? else {
+        return Ok(false);
+    };
+    let Some(reviewed) = reconfirmable_review(root, &key.engine, &key.runtime, &accepted)? else {
+        return Ok(false);
+    };
+    let command = option_help_command_for(root, cfg, &selected, &accepted.request)?;
+    let report = crate::providers::runtime_help::discover(&command, cancel)?;
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(crate::error::AppError::cancelled("server start cancelled"));
+    }
+    let working_directory =
+        crate::providers::execution_context::observed(command.working_directory)
+            .map_err(crate::error::AppError::validation)?;
+    adopt_unchanged_help(
+        root,
+        &key.engine,
+        &key.runtime,
+        accepted,
+        reviewed,
+        report,
+        working_directory,
+    )
+}
+
+/// The reviewed snapshot a new identity may inherit: present, and without
+/// confirmations pinned to it (they describe the reviewed build and are
+/// never inherited).
+pub(super) fn reconfirmable_review(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    accepted: &AcceptedHelp,
+) -> Result<Option<HelpSnapshot>, crate::error::AppError> {
+    if load_supplement(root, engine, runtime)
+        .ok()
+        .flatten()
+        .is_some_and(|saved| saved.fingerprint == accepted.fingerprint && !saved.options.is_empty())
+    {
+        return Ok(None);
+    }
+    runtime_help_store::load_snapshot(root, engine, runtime, &accepted.fingerprint)
+}
+
+/// Record `report` as the reviewed help when it parses to exactly the
+/// reviewed schema; otherwise leave the review untouched.
+pub(super) fn adopt_unchanged_help(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    accepted: AcceptedHelp,
+    reviewed: HelpSnapshot,
+    report: crate::providers::runtime_help::HelpReport,
+    working_directory: PathBuf,
+) -> Result<bool, crate::error::AppError> {
+    if !report.complete() {
+        return Err(crate::error::AppError::unavailable(help_failure(&report)));
+    }
+    let schema = crate::providers::runtime_help_parse::parse_help_report(
+        &report,
+        crate::providers::runtime_options::SchemaBinding {
+            engine: engine.into(),
+            runtime: runtime.into(),
+            fingerprint: report.identity.fingerprint.clone(),
+        },
+    )?;
+    let mut previous = reviewed.schema;
+    previous.binding = schema.binding.clone();
+    if previous != schema {
+        return Ok(false);
+    }
+    let fingerprint = report.identity.fingerprint.clone();
+    runtime_help_store::save_snapshot(root, engine, runtime, &HelpSnapshot { report, schema })?;
+    write_accepted(
+        root,
+        engine,
+        runtime,
+        &AcceptedHelp {
+            version: ACCEPTED_VERSION,
+            working_directory: Some(working_directory),
+            fingerprint,
+            request: accepted.request,
+        },
+    )?;
+    Ok(true)
+}
+
+/// Why a help run produced no usable help, in the engine's own terms.
+fn help_failure(report: &crate::providers::runtime_help::HelpReport) -> String {
+    if report.timed_out {
+        return "its help command did not finish in time".into();
+    }
+    if let Some(error) = &report.error {
+        return error.clone();
+    }
+    match report.exit_code {
+        Some(code) if !report.success => {
+            let status = crate::procutil::exit_code_label(code);
+            match crate::procutil::loader_failure(code) {
+                Some(cause) => format!("its help command exited with status {status}: {cause}"),
+                None => format!("its help command exited with status {status}"),
+            }
+        }
+        _ => "its help output could not be read completely".into(),
+    }
+}
+
 /// New automatic connections and legacy specs without accepted help use one
 /// explicit, shell-free help run of their validated underlying launch entry.
 /// Existing acceptance (including stale evidence) is never silently replaced.

@@ -28,6 +28,8 @@ Help is code execution, not a sandbox. External Python runtimes retain their pac
 
 Cancellation and supersession cover the native approval wait as well as help execution. A withdrawn request cannot persist a late approval or start a help child. Approval publication is checked against the live request under the same ownership lock used by cancellation.
 
+A model launch whose reviewed help no longer matches the runtime identity reruns the reviewed help request of the registered launch program without a separate approval: the launch the user started executes that same program, so the help run adds no new program, arguments or directory. It runs only for engine starts (launch preflight, server, session, benchmark and CLI starts) after the start was refused for stale help; command previews and option validation never run it. It only re-confirms a review when the parsed help is identical, and never inherits option confirmations made for another build.
+
 ## Network redirects
 
 Runtime GitHub and Hugging Face requests require HTTPS and a trusted service host on every redirect, with a 10-hop cap. GitHub metadata uses the GitHub host allowlist; runtime and verification-model transfers use their trusted download hosts. The final response URL is checked as well; a permitted first URL cannot redirect through an untrusted host or downgrade to HTTP.

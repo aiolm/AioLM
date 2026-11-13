@@ -57,12 +57,17 @@ counter; the original first-shard path is still used to open the model.
 For an AioLM-managed connection, model settings show options from the selected
 engine command's own help. Existing connections discover this help when their
 settings are first opened. The executable and connection files must still match
-their recorded hashes; later changes do not silently replace reviewed help.
+their recorded hashes; changed help never silently replaces reviewed help.
 Host environment values the engine command inherits unchanged from AioLM
 (PATH, temp directory, GPU selection) are not part of that identity, so starting
 AioLM from another shell or after an installer edits PATH keeps reviewed help
-current. Help reviewed by an earlier AioLM version needs **Recheck options**
-once after updating.
+current. When the identity does change (an engine update, a rebuilt binary, or
+help reviewed by an earlier AioLM version), launch runs the reviewed help
+command once more; if it parses to exactly the reviewed options the review
+moves to the new identity and the launch continues. Changed help, or option
+confirmations made for the old build, still need **Recheck options**. If the
+help command cannot run, the launch error says why, including a missing,
+mismatched or damaged Windows DLL.
 Simple option controls use responsive columns; JSON, token lists, local paths,
 repeated and multi-value editors retain full width. Use these controls or
 **Import command** for documented options. Command import, preview, order,

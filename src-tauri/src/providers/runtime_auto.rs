@@ -1059,23 +1059,13 @@ async fn upstream(
     }
 }
 
-/// Why the managed engine ended before serving. A Windows loader failure ends
-/// the process before it writes anything, so its status is the only evidence.
+/// Why the managed engine ended before serving.
 fn engine_exit_message(code: Option<i32>) -> String {
-    let status = match code {
-        // NTSTATUS values are negative as i32; Windows tools print them in hex.
-        Some(code) if code < 0 => format!("status {:#010X}", code as u32),
-        Some(code) => format!("status {code}"),
-        None => "a signal".into(),
-    };
-    let cause = match code.map(|code| code as u32) {
-        Some(0xC000_0135) => Some("a DLL the engine needs was not found; check that its folder is complete and that security software did not quarantine one of its files"),
-        Some(0xC000_0139) => Some("a DLL the engine loaded lacks a required entry point; its DLLs do not match each other"),
-        Some(0xC000_007B) => Some("the engine or one of its DLLs is damaged or built for another architecture"),
-        Some(0xC000_0142) => Some("a DLL the engine needs failed to initialize"),
-        _ => None,
-    };
-    match cause {
+    let status = code.map_or_else(
+        || "a signal".into(),
+        |code| format!("status {}", crate::procutil::exit_code_label(code)),
+    );
+    match code.and_then(crate::procutil::loader_failure) {
         Some(cause) => format!("discovered entry point exited with {status} before serving a model API: {cause}"),
         None => format!("discovered entry point exited with {status} before serving a model API; see the engine diagnostics"),
     }
