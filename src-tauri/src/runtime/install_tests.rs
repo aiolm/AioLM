@@ -114,6 +114,7 @@ async fn cpu_preflight_accepts_a_machine_without_accelerators() {
     assert!(preflight_staged_runtime(&root, "vulkan", progress, &cancel)
         .await
         .unwrap_err()
+        .message
         .contains("no accelerator"));
     // Keep the launched executable immutable while changing reported devices.
     for devices in [
@@ -125,7 +126,7 @@ async fn cpu_preflight_accepts_a_machine_without_accelerators() {
             .await
             .unwrap_err();
         assert!(
-            error.contains("no accelerator"),
+            error.message.contains("no accelerator"),
             "ROCm preflight for {devices:?}: {error}"
         );
     }

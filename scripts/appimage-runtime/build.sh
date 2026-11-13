@@ -68,6 +68,7 @@ mkdir out
 cp rootfs/work/out/runtime-x86_64 rootfs/work/out/runtime-x86_64.debug out/
 (cd "$here" && sha256sum pins.conf apk.lock inside-build.sh build.sh $PATCHES) > out/inputs.sha256
 echo "$RUNTIME_SHA256  out/runtime-x86_64" | sha256sum -c - || {
-    echo "the built runtime differs from RUNTIME_SHA256 in pins.conf; review the build before updating the pin" >&2
+    actual=$(sha256sum out/runtime-x86_64 | awk '{print $1}')
+    echo "the built runtime ($actual) differs from RUNTIME_SHA256 in pins.conf; review the build before updating the pin" >&2
     exit 1
 }
