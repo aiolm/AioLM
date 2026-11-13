@@ -3,8 +3,10 @@
 // do, using only a disposable home. launchd then supplies its own minimal
 // environment instead of this runner's shell PATH.
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -85,6 +87,91 @@ const executablePattern = "^" + executable.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&"
 function appPids() {
   const result = spawnSync("/usr/bin/pgrep", ["-f", executablePattern], { encoding: "utf8" });
   return result.stdout.split("\n").filter(Boolean).map(Number);
+}
+
+/** @param {string} name */
+function launchctlGetenv(name) {
+  const out = spawnSync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
+  if (out.status !== 0) return undefined;
+  const value = out.stdout.replace(/\r?\n$/, "");
+  return value.length > 0 ? value : undefined;
+}
+
+/** @param {string} path */
+function isDir(path) {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+}
+
+/** @param {string} text */
+function pathEntries(text) {
+  return text.split(/\r?\n/).map(line => line.trim()).filter(line => line.startsWith("/"));
+}
+
+/** @param {string} initialPath */
+function expectedExtendedPath(initialPath) {
+  const additions = [];
+  if (existsSync("/etc/paths")) additions.push(...pathEntries(readFileSync("/etc/paths", "utf8")));
+  if (existsSync("/etc/paths.d")) {
+    for (const entry of readdirSync("/etc/paths.d").sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
+      additions.push(...pathEntries(readFileSync(join("/etc/paths.d", entry), "utf8")));
+    }
+  }
+  additions.push("/opt/homebrew/bin", "/opt/homebrew/sbin");
+  const entries = initialPath ? initialPath.split(":") : [];
+  for (const directory of additions) {
+    if (isDir(directory) && !entries.includes(directory)) entries.push(directory);
+  }
+  return entries.join(":");
+}
+
+/** @param {string} command */
+function launchApprovalFingerprint(command) {
+  const allowed = [
+    "PATH", "SystemRoot", "SystemDrive", "WINDIR", "COMSPEC", "PATHEXT",
+    "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+    "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
+    "OS", "TEMP", "TMP", "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH",
+    "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    "LANG", "LC_ALL", "LC_CTYPE",
+  ];
+  /** @type {Record<string, string | undefined>} */
+  const candidate = {
+    PATH: expectedExtendedPath(launchctlGetenv("PATH") ?? launchdEnv.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin"),
+    USERPROFILE: appEnv.USERPROFILE,
+    HOME: appEnv.HOME,
+    APPDATA: appEnv.APPDATA,
+    LOCALAPPDATA: appEnv.LOCALAPPDATA,
+    XDG_CONFIG_HOME: appEnv.XDG_CONFIG_HOME,
+    XDG_DATA_HOME: appEnv.XDG_DATA_HOME,
+    LANG: launchctlGetenv("LANG"),
+    LC_ALL: launchctlGetenv("LC_ALL"),
+    LC_CTYPE: launchctlGetenv("LC_CTYPE"),
+  };
+  /** @type {[string, string][]} */
+  const environment = allowed.flatMap(name => candidate[name] !== undefined ? [[name, /** @type {string} */ (candidate[name])]] : []);
+  const hash = createHash("sha256");
+  /** @param {string} value */
+  const field = value => {
+    const bytes = Buffer.from(value, "utf8");
+    const len = Buffer.alloc(8);
+    len.writeBigUInt64LE(BigInt(bytes.length));
+    hash.update(len);
+    hash.update(bytes);
+  };
+  field("aiolm-mcp-launch-v1");
+  field(command);
+  const zero = Buffer.alloc(8);
+  hash.update(zero);
+  const envCount = Buffer.alloc(8);
+  envCount.writeBigUInt64LE(BigInt(environment.length));
+  hash.update(envCount);
+  for (const [name, value] of environment) {
+    field(name);
+    field(value);
+  }
+  field("/");
+  return hash.digest("hex");
 }
 // `open` hands its own environment to the app. Use launchd's defaults, which
 // are what Finder, the Dock and Login Items provide, not this runner's shell.
@@ -168,9 +255,13 @@ createInterface({ input: process.stdin }).on("line", line => {
   await waitFor(() => visible(), "LaunchServices reopen restores the hidden window");
   assert.deepEqual(appPids(), [pid], "reopen must not start a second instance");
 
-  const server = { id: "launch-path", name: "Launch PATH", command: launcher.split("/").pop(), args: [], enabled: true };
+  const command = /** @type {string} */ (launcher.split("/").pop());
+  const server = { id: "launch-path", name: "Launch PATH", command, args: [], enabled: true };
   const saved = await invoke("mcp_save_server", { server });
   assert.equal(saved.failure, undefined, saved.failure);
+  // Pre-approve this synthetic launcher's exact LaunchServices fingerprint so
+  // CI does not hang on a modal Cocoa prompt; any PATH drift still misses it.
+  writeFileSync(join(appEnv.AIOLM_HOME, "mcp-launch-approvals.json"), JSON.stringify([launchApprovalFingerprint(command)]));
   const listed = await invoke("mcp_list_tools", { id: server.id });
   assert.equal(listed.failure, undefined, `MCP command lookup from a LaunchServices start: ${listed.failure}`);
   const searchPath = listed.result[0].description.split(":");
