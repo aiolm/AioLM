@@ -364,24 +364,28 @@ pub(super) fn current_identity(
 /// review to the new identity (`Ok(true)`); different help, or confirmations
 /// pinned to the old review, keep the runtime stale for an explicit review
 /// (`Ok(false)`). A help run that cannot complete is returned as the error
-/// that explains why. Previews and validation never reach it.
+/// that explains why; anything that fails before help runs (no runtime, an
+/// unreadable record) is `Ok(false)` so the start keeps its own error.
+/// Previews and validation never reach it.
 pub(crate) fn reconfirm_stale_help_for_start(
     root: &Path,
     cfg: &AppConfig,
     cancel: &AtomicBool,
 ) -> Result<bool, crate::error::AppError> {
-    let selected = Selected::from_config(cfg)?;
-    if effective_for(root, cfg, &selected, true)?.help_state != HelpState::Stale {
+    let Some((selected, accepted, reviewed, command)) = (|| {
+        let selected = Selected::from_config(cfg).ok()?;
+        if effective_for(root, cfg, &selected, true).ok()?.help_state != HelpState::Stale {
+            return None;
+        }
+        let key = &selected.key;
+        let accepted = load_accepted(root, &key.engine, &key.runtime).ok()??;
+        let reviewed = reconfirmable_review(root, &key.engine, &key.runtime, &accepted).ok()??;
+        let command = option_help_command_for(root, cfg, &selected, &accepted.request).ok()?;
+        Some((selected, accepted, reviewed, command))
+    })() else {
         return Ok(false);
-    }
+    };
     let key = &selected.key;
-    let Some(accepted) = load_accepted(root, &key.engine, &key.runtime)? else {
-        return Ok(false);
-    };
-    let Some(reviewed) = reconfirmable_review(root, &key.engine, &key.runtime, &accepted)? else {
-        return Ok(false);
-    };
-    let command = option_help_command_for(root, cfg, &selected, &accepted.request)?;
     let report = crate::providers::runtime_help::discover(&command, cancel)?;
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
         return Err(crate::error::AppError::cancelled("server start cancelled"));

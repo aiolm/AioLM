@@ -321,43 +321,7 @@ pub async fn refresh(
     }
 }
 
-/// Prepare an engine start. A start refused because the reviewed help is
-/// stale is retried once after unchanged help is re-confirmed; only starts
-/// (preflight, server, session, benchmark and CLI) reach this.
 pub(crate) async fn prepare_launch(
-    cfg: &AppConfig,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<(), crate::error::AppError> {
-    let error = match prepare_launch_once(cfg, cancel.clone()).await {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind == crate::error::ErrorKind::Cancelled => return Err(error),
-        Err(error) => error,
-    };
-    let (owned, flag) = (cfg.clone(), cancel.clone());
-    let reconfirmed = tokio::task::spawn_blocking(move || {
-        super::runtime_schema::reconfirm_stale_help_for_start(
-            &super::registry::root(),
-            &owned,
-            flag.as_deref().unwrap_or(&AtomicBool::new(false)),
-        )
-    })
-    .await
-    .map_err(crate::error::AppError::from)?;
-    match reconfirmed {
-        Ok(true) => prepare_launch_once(cfg, cancel).await,
-        Ok(false) => Err(error),
-        Err(cause) if cause.kind == crate::error::ErrorKind::Cancelled => Err(cause),
-        Err(cause) => Err(crate::error::AppError::new(
-            error.kind,
-            format!(
-                "{} Rechecking its help failed: {}.",
-                error.message, cause.message
-            ),
-        )),
-    }
-}
-
-async fn prepare_launch_once(
     cfg: &AppConfig,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<(), crate::error::AppError> {

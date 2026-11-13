@@ -73,6 +73,44 @@ pub(crate) async fn validate_launch_config_with_cancel(
     validate_launch(cfg, cancel, true).await
 }
 
+/// Whether an engine start refused with `error` may be retried: the reviewed
+/// help was stale and its unchanged help was just re-confirmed. Only start
+/// paths call this; previews and validation keep the refusal read-only.
+/// A help rerun that cannot complete is reported with the original refusal.
+pub(crate) fn retry_after_help_reconfirm(
+    cfg: &config::AppConfig,
+    cancel: &AtomicBool,
+    error: AppError,
+) -> Result<(), AppError> {
+    if error.kind == crate::error::ErrorKind::Cancelled {
+        return Err(error);
+    }
+    match crate::providers::runtime_schema::reconfirm_stale_help_for_start(
+        &crate::providers::registry::root(),
+        cfg,
+        cancel,
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(error),
+        Err(cause) if cause.kind == crate::error::ErrorKind::Cancelled => Err(cause),
+        Err(cause) => Err(AppError::new(
+            error.kind,
+            format!(
+                "{} Rechecking its help failed: {}.",
+                error.message, cause.message
+            ),
+        )),
+    }
+}
+
+async fn prepare_and_validate_start(
+    cfg: &mut config::AppConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<(), AppError> {
+    crate::providers::adapter::prepare_launch(cfg, cancel.cloned()).await?;
+    validate_start_config(cfg)
+}
+
 pub(crate) async fn validate_launch(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
@@ -80,8 +118,19 @@ pub(crate) async fn validate_launch(
 ) -> Result<gpu::ResolvedGpu, AppError> {
     cfg.normalize();
     cfg.validate().map_err(AppError::validation)?;
-    crate::providers::adapter::prepare_launch(cfg, cancel.cloned()).await?;
-    validate_start_config(cfg)?;
+    if let Err(error) = prepare_and_validate_start(cfg, cancel).await {
+        let (owned, flag) = (cfg.clone(), cancel.cloned());
+        tokio::task::spawn_blocking(move || {
+            retry_after_help_reconfirm(
+                &owned,
+                flag.as_deref().unwrap_or(&AtomicBool::new(false)),
+                error,
+            )
+        })
+        .await
+        .map_err(AppError::from)??;
+        prepare_and_validate_start(cfg, cancel).await?;
+    }
     if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
             return Err(AppError::cancelled("server start cancelled"));

@@ -1057,28 +1057,7 @@ pub fn spawn(
     capture: Option<SpawnCapture<'_>>,
 ) -> Result<SpawnedServer, AppError> {
     let adapter = crate::providers::adapter::resolve(cfg);
-    let plan = match adapter.launch(cfg, cfg.port, api_key, resolved_gpu) {
-        Ok(plan) => plan,
-        // A launch refused for stale reviewed help is retried once after the
-        // unchanged help is re-confirmed; only engine starts rerun help.
-        Err(error) => match crate::providers::runtime_schema::reconfirm_stale_help_for_start(
-            &crate::providers::registry::root(),
-            cfg,
-            &std::sync::atomic::AtomicBool::new(false),
-        ) {
-            Ok(true) => adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?,
-            Ok(false) => return Err(error),
-            Err(cause) => {
-                return Err(AppError::new(
-                    error.kind,
-                    format!(
-                        "{} Rechecking its help failed: {}.",
-                        error.message, cause.message
-                    ),
-                ))
-            }
-        },
-    };
+    let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
     let bin = plan.program.to_string_lossy().into_owned();
     let api_key_file = if adapter.kind() == crate::providers::adapter::RuntimeKind::Native {
         create_api_key_file(api_key)?
