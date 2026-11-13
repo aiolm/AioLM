@@ -126,6 +126,7 @@ async fn closed_sender_is_replaced_only_on_the_next_explicit_request() {
         .submit("sample", "generic body")
         .await
         .unwrap_err()
+        .message
         .contains("already"));
     drop(cached);
     drop(service);
