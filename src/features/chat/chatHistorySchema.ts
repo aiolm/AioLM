@@ -201,9 +201,19 @@ function localSafeWorkspace(workspace: ChatWorkspace, nativeRuntime: boolean): C
   };
 }
 
+/** Only a draft with no conversation-specific choices can be reused or omitted. */
+export function isPristineThread(thread: ChatThread): boolean {
+  return thread.messages.length === 0
+    && !thread.systemPrompt.trim()
+    && thread.useDefaultSystemPrompt !== false
+    && thread.mediaBeforeText !== true
+    && thread.projectBinding === undefined
+    && thread.title === "New conversation";
+}
+
 export function persistedWorkspace(workspace: ChatWorkspace, nativeRuntime: boolean): ChatWorkspace {
   const safe = localSafeWorkspace(workspace, nativeRuntime);
-  const threads = safe.threads.filter((thread) => thread.messages.length > 0 || thread.id === safe.activeThreadId);
+  const threads = safe.threads.filter((thread) => !isPristineThread(thread) || thread.id === safe.activeThreadId);
   return {
     ...safe,
     threads: threads.length ? threads : safe.threads.slice(0, 1),

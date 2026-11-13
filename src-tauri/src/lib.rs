@@ -5,6 +5,7 @@ mod attachment_drop;
 pub mod backends;
 mod benchmark;
 pub mod branding;
+mod cancellation;
 mod commands;
 pub mod config;
 mod conversations;

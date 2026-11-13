@@ -2,7 +2,9 @@
 use crate::error::{AppError, ErrorKind};
 use crate::providers::sse::Framer;
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -36,12 +38,6 @@ impl Budget {
             response_bytes: MAX_RESPONSE_BYTES
                 .saturating_add((target as usize).saturating_mul(1024)),
         }
-    }
-}
-
-pub(super) async fn cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -353,7 +349,7 @@ pub(super) async fn request(
     };
     tokio::select! {
         biased;
-        _ = cancelled(cancel) => Err(AppError::cancelled("benchmark cancelled")),
+        _ = crate::cancellation::wait_cancelled(cancel) => Err(AppError::cancelled("benchmark cancelled")),
         result = tokio::time::timeout(budget.timeout, work) => result.unwrap_or_else(|_| Err(AppError::timeout("benchmark request timed out"))),
     }
 }

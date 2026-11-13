@@ -50,6 +50,24 @@ is not saved to configuration. Copy it from the API server page; examples and
 diagnostic output do not contain the key. Private model-process credentials are
 separate.
 
+### Function tools
+
+Anthropic Messages and OpenAI Responses translate function tools to the loaded
+engine's Chat Completions API, including streamed calls and tool-result turns.
+The engine must itself support function calling. Responses accepts flat
+`type: "function"` definitions and `function_call` / `function_call_output`
+input items; `previous_response_id` preserves the assistant's tool calls for
+the next tool-result turn. Built-in Responses tools such as web search are not
+supported and are rejected rather than silently omitted.
+
+Stateless Responses clients can resend returned output items in `input` before
+their `function_call_output` items. Returned reasoning summaries remain attached
+to the assistant turn instead of creating extra user messages.
+
+Anthropic streams deliver parallel tool calls as consecutive content blocks
+after generation finishes, preserving each call's argument fragments. Text and
+reasoning continue streaming while the engine generates them.
+
 ### Local request boundaries
 
 Every request must include a `Host` header naming `127.0.0.1`, `localhost`

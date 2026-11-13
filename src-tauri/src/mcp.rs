@@ -17,6 +17,10 @@ const MCP_FILE: &str = "mcp-servers.json";
 const LAUNCH_APPROVAL_FILE: &str = "mcp-launch-approvals.json";
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RPC_LINE: usize = 1024 * 1024;
+// Pagination shares the per-response byte budget rather than multiplying it.
+const MAX_TOOL_LIST_BYTES: usize = MAX_RPC_LINE;
+const MAX_TOOL_LIST_PAGES: usize = 64;
+const MAX_LISTED_TOOLS: usize = 4096;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
 const MAX_APPROVAL_DESCRIPTION_BYTES: usize = 4096;
 const APPROVAL_TRUNCATION_SUFFIX: &str = "\n…";
@@ -485,6 +489,7 @@ where
         stdin,
         stdout: BufReader::new(stdout),
         stderr_drain,
+        next_request_id: 2,
     };
     let initialized = async {
         send_message(
@@ -514,6 +519,15 @@ struct McpSession {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     stderr_drain: Option<OwnedTask<()>>,
+    next_request_id: u64,
+}
+
+impl McpSession {
+    fn next_request_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        id
+    }
 }
 
 async fn send_message(
@@ -583,6 +597,15 @@ async fn read_bounded_line(
 }
 
 async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<Value, AppError> {
+    read_response_with_size(reader, id)
+        .await
+        .map(|(result, _)| result)
+}
+
+async fn read_response_with_size(
+    reader: &mut BufReader<ChildStdout>,
+    id: u64,
+) -> Result<(Value, usize), AppError> {
     let read = timeout(RPC_TIMEOUT, async {
         loop {
             let Some(line) = read_bounded_line(reader).await? else {
@@ -599,10 +622,13 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
             if let Some(error) = message.get("error") {
                 return Err(AppError::internal(format!("MCP request failed: {error}")));
             }
-            return Ok(message
-                .as_object_mut()
-                .and_then(|object| object.remove("result"))
-                .unwrap_or(Value::Null));
+            return Ok((
+                message
+                    .as_object_mut()
+                    .and_then(|object| object.remove("result"))
+                    .unwrap_or(Value::Null),
+                line.len(),
+            ));
         }
     })
     .await
@@ -675,16 +701,7 @@ pub async fn tools(id: &str) -> Result<Vec<McpTool>, AppError> {
     let mut session = spawn_session(&server).await?;
     let result = send_tools_request(&mut session).await;
     close_session(session).await;
-    let mut result = result?;
-    let tools = result
-        .as_object_mut()
-        .and_then(|object| object.remove("tools"))
-        .and_then(|tools| match tools {
-            Value::Array(tools) => Some(tools),
-            _ => None,
-        })
-        .ok_or_else(|| AppError::validation("MCP tools/list returned no tools array"))?;
-    tools
+    result?
         .into_iter()
         .map(|tool| {
             serde_json::from_value(tool).map_err(|error| {
@@ -694,9 +711,58 @@ pub async fn tools(id: &str) -> Result<Vec<McpTool>, AppError> {
         .collect()
 }
 
-async fn send_tools_request(session: &mut McpSession) -> Result<Value, AppError> {
-    send_message(&mut session.stdin, 2, "tools/list", json!({})).await?;
-    read_response(&mut session.stdout, 2).await
+async fn send_tools_request(session: &mut McpSession) -> Result<Vec<Value>, AppError> {
+    let mut tools = Vec::new();
+    let mut cursor = None;
+    let mut seen_cursors = BTreeSet::new();
+    let mut bytes = 0_usize;
+    for _ in 0..MAX_TOOL_LIST_PAGES {
+        let id = session.next_request_id();
+        let params = cursor
+            .as_ref()
+            .map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+        send_message(&mut session.stdin, id, "tools/list", params).await?;
+        let (mut result, response_bytes) = read_response_with_size(&mut session.stdout, id).await?;
+        bytes = bytes.saturating_add(response_bytes);
+        if bytes > MAX_TOOL_LIST_BYTES {
+            return Err(AppError::validation(
+                "MCP tools/list exceeded the 1 MiB aggregate safety limit",
+            ));
+        }
+        let page = result
+            .as_object_mut()
+            .and_then(|object| object.remove("tools"))
+            .and_then(|tools| match tools {
+                Value::Array(tools) => Some(tools),
+                _ => None,
+            })
+            .ok_or_else(|| AppError::validation("MCP tools/list returned no tools array"))?;
+        if tools.len().saturating_add(page.len()) > MAX_LISTED_TOOLS {
+            return Err(AppError::validation(
+                "MCP tools/list exceeded the 4096 tool safety limit",
+            ));
+        }
+        tools.extend(page);
+        match result.get("nextCursor") {
+            None | Some(Value::Null) => return Ok(tools),
+            Some(Value::String(next)) => {
+                if !seen_cursors.insert(next.clone()) {
+                    return Err(AppError::validation(
+                        "MCP tools/list repeated a pagination cursor",
+                    ));
+                }
+                cursor = Some(next.clone());
+            }
+            Some(_) => {
+                return Err(AppError::validation(
+                    "MCP tools/list returned an invalid pagination cursor",
+                ));
+            }
+        }
+    }
+    Err(AppError::validation(
+        "MCP tools/list exceeded the 64 page safety limit",
+    ))
 }
 
 fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), AppError> {
@@ -876,13 +942,8 @@ where
     let work = async {
         let tool_list = send_tools_request(&mut session).await?;
         let tool = tool_list
-            .get("tools")
-            .and_then(Value::as_array)
-            .and_then(|tools| {
-                tools
-                    .iter()
-                    .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
-            })
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
             .ok_or_else(|| {
                 AppError::not_found(format!("MCP tool '{name}' is not declared by the server"))
             })?;
@@ -897,14 +958,15 @@ where
         if approval_cancel.is_cancelled() {
             return Err(AppError::cancelled(TOOL_CALL_CANCELLED));
         }
+        let request_id = session.next_request_id();
         send_message(
             &mut session.stdin,
-            2,
+            request_id,
             "tools/call",
             json!({"name": name, "arguments": arguments}),
         )
         .await?;
-        read_response(&mut session.stdout, 2).await
+        read_response(&mut session.stdout, request_id).await
     };
     let result = cancel.guard(work).await.and_then(|result| result);
     close_session(session).await;
@@ -1439,6 +1501,88 @@ input.on('line', line => {
     }
 
     #[cfg(any(windows, unix))]
+    fn paginated_tools_fixture(root: &Path, mode: &str) -> McpServer {
+        std::fs::write(root.join("pagination-mode"), mode).unwrap();
+        node_fixture(
+            root,
+            r#"import { appendFileSync, readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const mode = readFileSync(join(root, 'pagination-mode'), 'utf8');
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', line => {
+    appendFileSync(join(root, 'requests.jsonl'), line + '\n');
+    const message = JSON.parse(line);
+    let result;
+    if (message.method === 'initialize') result = {};
+    else if (message.method === 'tools/list') {
+        const cursor = message.params.cursor;
+        if (mode === 'repeated-cursor') result = { tools: [], nextCursor: 'same' };
+        else if (mode === 'page-limit') result = { tools: [], nextCursor: String(Number(cursor ?? 0) + 1) };
+        else if (mode === 'tool-limit') result = { tools: Array.from({ length: 4097 }, (_, i) => ({ name: `tool-${i}` })) };
+        else if (mode === 'byte-limit') result = { tools: [{ name: 'large', description: 'x'.repeat(600000) }], ...(cursor === undefined ? { nextCursor: 'second' } : {}) };
+        else if (cursor === undefined) result = { tools: [{ name: 'first' }], nextCursor: 'second' };
+        else if (cursor === 'second') result = { tools: [{ name: 'second', inputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } }] };
+        else throw new Error('unexpected cursor');
+    } else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: message.params.arguments.text }] };
+    if (result !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\n');
+});
+"#,
+        )
+    }
+
+    #[cfg(any(windows, unix))]
+    #[tokio::test]
+    async fn paginated_tools_reject_repeated_cursors_and_bound_aggregate_work() {
+        for (mode, message, list_requests) in [
+            (
+                "repeated-cursor",
+                "MCP tools/list repeated a pagination cursor",
+                2,
+            ),
+            (
+                "page-limit",
+                "MCP tools/list exceeded the 64 page safety limit",
+                64,
+            ),
+            (
+                "tool-limit",
+                "MCP tools/list exceeded the 4096 tool safety limit",
+                1,
+            ),
+            (
+                "byte-limit",
+                "MCP tools/list exceeded the 1 MiB aggregate safety limit",
+                2,
+            ),
+        ] {
+            let fixture = LifecycleFixture::new();
+            let candidate = paginated_tools_fixture(&fixture.0, mode);
+            let result = run_tool_call(
+                spawn_test_session(&candidate),
+                "second",
+                &json!({"text": "synthetic"}),
+                CallCancel(None),
+                || async { panic!("an invalid tool list must not reach approval") },
+                Duration::from_secs(60),
+            )
+            .await;
+            assert_eq!(result, Err(AppError::validation(message)), "{mode}");
+            let requests = recorded_requests(&fixture.0);
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request["method"] == "tools/list")
+                    .count(),
+                list_requests,
+                "{mode}"
+            );
+            assert!(requests
+                .iter()
+                .all(|request| request["method"] != "tools/call"));
+        }
+    }
+
+    #[cfg(any(windows, unix))]
     fn tools_list_reply(result: Value) -> Vec<u8> {
         let mut line =
             serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": 2, "result": result})).unwrap();
@@ -1589,7 +1733,10 @@ input.on('line', line => {
             let mut session = spawn_test_session(&candidate).await.unwrap();
             #[cfg(windows)]
             let exit = open_server_probe(&fixture.0);
-            let result = send_tools_request(&mut session).await;
+            send_message(&mut session.stdin, 2, "tools/list", json!({}))
+                .await
+                .unwrap();
+            let result = read_response(&mut session.stdout, 2).await;
             close_session(session).await;
             assert_eq!(result, expected, "{case}");
             assert_eq!(
@@ -1652,7 +1799,7 @@ input.on('line', line => {
                 initialize,
                 initialized,
                 tools_list,
-                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
                     "name": "shout",
                     "arguments": {"text": "llama 가🦙"}
                 }}),
@@ -1744,8 +1891,7 @@ input.on('line', line => {
                         {"name": "alpha", "description": "", "inputSchema": schema},
                         {"name": "검색", "description": "🦙 설명", "inputSchema": nested},
                         {"name": "bare", "annotations": {"readOnlyHint": true}}
-                    ],
-                    "nextCursor": "ignored"
+                    ]
                 })),
                 Ok(json!([
                     {"name": "alpha", "description": "", "inputSchema": schema},
@@ -1836,6 +1982,48 @@ input.on('line', line => {
                 }
             }
         }
+        let fixture = LifecycleFixture::new();
+        let server = paginated_tools_fixture(&fixture.0, "two-pages");
+        save(server.clone()).await.unwrap();
+        approve_launch(
+            &home.join(LAUNCH_APPROVAL_FILE),
+            LaunchContext::capture().unwrap().fingerprint(&server),
+            || async { Ok(true) },
+        )
+        .await
+        .unwrap();
+        let discovered = tools("test-server").await.unwrap();
+        assert_eq!(
+            discovered
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        let mut expected = handshake_requests().to_vec();
+        expected.push(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {"cursor": "second"}}));
+        assert_eq!(recorded_requests(&fixture.0), expected);
+        let result = run_tool_call(
+            spawn_test_session(&server),
+            "second",
+            &json!({"text": "synthetic page two"}),
+            CallCancel(None),
+            || async { Ok(()) },
+            Duration::from_secs(60),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Ok(json!({"content": [{"type": "text", "text": "synthetic page two"}]}))
+        );
+        let mut call_requests = expected.clone();
+        call_requests.push(
+            json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                "name": "second", "arguments": {"text": "synthetic page two"}
+            }}),
+        );
+        expected.extend(call_requests);
+        assert_eq!(recorded_requests(&fixture.0), expected);
         std::fs::remove_file(home.join(MCP_FILE)).unwrap();
         println!("MCP_PUBLIC_TOOLS_CHILD_DONE");
     }

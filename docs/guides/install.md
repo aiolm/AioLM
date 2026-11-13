@@ -39,6 +39,10 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/
 
 The one-line command downloads the `install.ps1` copy included in the selected release. Current source: <https://github.com/aiolm/AioLM/blob/main/install.ps1>
 
+For MSI installations, Windows Installer exit codes 3010 (restart required) and
+1641 (restart initiated) are successful installations. The script reports the
+restart requirement instead of treating them as installation failures.
+
 AioLM — All-In-One LM installs separately from the previous application. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](../reference/migration.md).
 
 AioLM keeps its data in `%USERPROFILE%\.aiolm`, or in the folder named by the `AIOLM_HOME` environment variable. Data from earlier AioLM releases is brought there at startup; managed runtimes are moved rather than copied. See [data folder](../reference/migration.md#data-folder).

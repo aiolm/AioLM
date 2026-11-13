@@ -630,6 +630,26 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
 
+  it.each([
+    { useDefaultSystemPrompt: false },
+    { mediaBeforeText: true },
+    { projectBinding: { id: 'synthetic-project', updatedAt: 1 } },
+  ])("does not reuse a configured empty conversation as a new draft: %j", async configuration => {
+    const configured = { ...createChatThread(1, 'configured-draft'), ...configuration };
+    saveChatWorkspace({ activeThreadId: configured.id, threads: [configured] });
+    renderPanel();
+    await waitFor(() => expect(loadChatWorkspace().threads).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await waitFor(() => expect(loadChatWorkspace().threads).toHaveLength(2));
+    const saved = loadChatWorkspace();
+    expect(saved.activeThreadId).not.toBe(configured.id);
+    expect(saved.threads.find(thread => thread.id === configured.id)).toEqual(configured);
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(loadChatWorkspace().threads.find(thread => thread.id === configured.id)).toEqual(configured);
+  });
+
   it("keeps one untouched conversation however often a new one is asked for", async () => {
     // Every press used to append another identical "New conversation" row, and
     // leaving one behind kept it in the list for good.

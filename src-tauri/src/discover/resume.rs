@@ -273,7 +273,7 @@ where
             request = request.header(header::RANGE, format!("bytes={offset}-"));
         }
         let response = tokio::select! {
-            _ = super::snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             response = request.send() => response.map_err(|error| network_error(&error, format!("model download failed: {error}")))?
         };
         validate_response_url(&response)?;

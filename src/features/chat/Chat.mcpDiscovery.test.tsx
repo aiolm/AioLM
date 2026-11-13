@@ -62,10 +62,10 @@ it.each(['success', 'failure'] as const)('retains a request error when an earlie
   });
   expect(log.getByText(requestError)).toBeInTheDocument();
   if (outcome === 'failure') {
-    expect(screen.getByText('MCP tool discovery failed: Synthetic discovery unavailable')).toBeInTheDocument();
+    expect(screen.getByText('MCP tool discovery failed: Synthetic tools (fixture): Synthetic discovery unavailable')).toBeInTheDocument();
     fireEvent.click(summary);
     fireEvent.click(screen.getByRole('button', { name: 'Load MCP tools' }));
-    await waitFor(() => expect(screen.queryByText('MCP tool discovery failed: Synthetic discovery unavailable')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('MCP tool discovery failed: Synthetic tools (fixture): Synthetic discovery unavailable')).not.toBeInTheDocument());
     expect(log.getByText(requestError)).toBeInTheDocument();
   }
 });

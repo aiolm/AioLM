@@ -276,3 +276,39 @@ test("chat history contracts", async () => {
     else Reflect.deleteProperty(globalThis, "indexedDB");
   }
 });
+
+test("configured empty conversations survive beside an active used conversation", () => {
+  const values = new Map<string, string>();
+  const storage: ChatStorage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+  };
+  const draft = createChatThread(1, "configured");
+  const used = { ...createChatThread(2, "used"), messages: [{ role: "user" as const, content: "Synthetic question" }] };
+  for (const configuration of [
+    { title: "Planned conversation" },
+    { systemPrompt: "Synthetic instructions" },
+    { useDefaultSystemPrompt: false },
+    { mediaBeforeText: true },
+    { projectBinding: { id: "synthetic-project", updatedAt: 1 } },
+  ]) {
+    const configured = { ...draft, ...configuration };
+    saveChatWorkspace({ activeThreadId: used.id, threads: [configured, used, createChatThread(3, "pristine")] }, storage);
+    const loaded = loadChatWorkspace(storage);
+    assert.deepEqual(loaded.threads.find(thread => thread.id === configured.id), configured);
+    assert.equal(loaded.threads.some(thread => thread.id === "pristine"), false);
+    assert.equal(loaded.activeThreadId, used.id);
+  }
+});
+
+test("hydration keeps an edited initial conversation absent from persisted history active", () => {
+  const initial = defaultChatWorkspace(1);
+  const edited = { ...defined(initial.threads[0]), systemPrompt: "Synthetic local instructions" };
+  const current = { ...initial, threads: [edited] };
+  const stored = createChatThread(2, "stored", "Stored conversation");
+  const persisted = { activeThreadId: stored.id, threads: [stored] };
+  const merged = mergeHydratedWorkspace(persisted, current, initial);
+  assert.deepEqual(merged.threads, [stored, edited]);
+  assert.equal(merged.activeThreadId, edited.id);
+  assert.deepEqual(mergeHydratedWorkspace(persisted, structuredClone(initial), initial), persisted);
+});

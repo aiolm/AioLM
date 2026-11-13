@@ -73,6 +73,26 @@ beforeEach(() => {
 });
 
 describe("conversations in the data folder", () => {
+  it.each([
+    { title: 'Planned conversation' },
+    { systemPrompt: 'Synthetic instructions' },
+    { useDefaultSystemPrompt: false },
+    { mediaBeforeText: true },
+    { projectBinding: { id: 'synthetic-project', updatedAt: 1 } },
+  ])('keeps configured empty conversations when another conversation becomes active: %j', async configuration => {
+    const configured: ChatThread = { id: 'configured', title: 'New conversation', systemPrompt: '', messages: [], createdAt: 1, updatedAt: 1, ...configuration };
+    const used = thread('used', 'Synthetic question', 2);
+    const history = await freshHistory();
+    await history.loadChatWorkspaceAsync();
+    await history.saveChatWorkspaceAsync({ activeThreadId: configured.id, threads: [configured, used] });
+    native.calls.length = 0;
+    expect(await history.saveChatWorkspaceAsync({ activeThreadId: used.id, threads: [configured, used] })).toBe('native');
+    expect(native.files.get(configured.id)).toEqual(configured);
+    expect(commands()).not.toContain('conversation_delete');
+    const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
+    expect(loaded.threads.find(item => item.id === configured.id)).toEqual(configured);
+    expect(loaded.activeThreadId).toBe(used.id);
+  });
   it('preserves an explicit media ordering choice in an empty conversation through a fresh native load', async () => {
     const conversation: ChatThread = { id: 'media-order', title: 'New conversation', systemPrompt: '', mediaBeforeText: true, messages: [], createdAt: 1, updatedAt: 1 };
     const history = await freshHistory();

@@ -100,15 +100,23 @@ try {
     }
 
     if ($Installer -eq "msi") {
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $installerPath, "/qn", "/norestart") -Wait -PassThru
+        # Start-Process joins -ArgumentList with spaces without quoting, so a
+        # temporary path containing spaces must be quoted inside one argument.
+        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$installerPath`" /qn /norestart" -Wait -PassThru
     } else {
         $process = Start-Process -FilePath $installerPath -ArgumentList @("/S") -Wait -PassThru
     }
 
-    if ($process.ExitCode -ne 0) {
+    # Windows Installer reports a completed installation that still needs a
+    # restart as 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) or 1641 (restart started).
+    $rebootRequired = $Installer -eq "msi" -and $process.ExitCode -in @(3010, 1641)
+    if ($process.ExitCode -ne 0 -and -not $rebootRequired) {
         throw "Installer exited with code $($process.ExitCode)."
     }
     Write-Host "AioLM installed successfully."
+    if ($rebootRequired) {
+        Write-Host "Restart Windows to finish the installation (installer exit code $($process.ExitCode))."
+    }
 } finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }

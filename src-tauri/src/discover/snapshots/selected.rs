@@ -134,7 +134,7 @@ async fn read_indices(
             ));
         }
         let response = tokio::select! {
-            _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             response = client()?.get(download_url_at(repo, &entry.path, revision)).send() => response.map_err(|error| network_error(&error, error.to_string()))?
         };
         validate_response_url(&response)?;
@@ -145,7 +145,7 @@ async fn read_indices(
             ));
         }
         let bytes = tokio::select! {
-            _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             bytes = bounded_response_bytes(response, entry.size as usize) => bytes?
         };
         if bytes.len() as u64 != entry.size {
@@ -237,7 +237,7 @@ async fn range_response_bytes(
         });
     }
     let bytes = tokio::select! {
-        _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+        _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         bytes = bounded_response_bytes(response, length) => bytes?
     };
     if bytes.len() != length {
@@ -264,7 +264,7 @@ async fn weight_range(
         .and_then(|end| end.checked_sub(1))
         .ok_or_else(|| AppError::validation("invalid Safetensors header range"))?;
     let response = tokio::select! {
-        _ = wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+        _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         response = client()?.get(download_url_at(repo, file.repository_path(), revision))
             .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
             .header(reqwest::header::ACCEPT_ENCODING, "identity")

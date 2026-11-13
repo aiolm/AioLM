@@ -1,12 +1,14 @@
 export interface StorageAdapter {
   get<T>(key: string): Promise<T | null>;
-  set<T>(key: string, value: T): Promise<void>;
+  set<T>(key: string, value: T): Promise<"indexeddb" | "local">;
   remove(key: string): Promise<void>;
 }
 
 const DB_NAME = "aiolm-storage";
 const DB_VERSION = 1;
 const STORE_NAME = "values";
+// The workspace also has a synchronous mirror, so only marked writes outrank IndexedDB.
+const FALLBACK_MARKER_PREFIX = "aiolm-storage.local-fallback:";
 
 function localStorageSafe(): Storage | null {
   try { return typeof window !== "undefined" ? window.localStorage : null; } catch { return null; }
@@ -59,25 +61,38 @@ async function idbRemove(key: string): Promise<void> {
 
 export const storageAdapter: StorageAdapter = {
   async get<T>(key: string): Promise<T | null> {
-    try {
-      const value = await idbGet<T>(key);
-      if (value !== null) return value;
-    } catch { /* fallback below */ }
     const storage = localStorageSafe();
+    let fallback = false;
+    try { fallback = storage?.getItem(`${FALLBACK_MARKER_PREFIX}${key}`) === "local"; } catch { /* Try IndexedDB when browser storage is blocked. */ }
+    if (!fallback) {
+      try {
+        const value = await idbGet<T>(key);
+        if (value !== null) return value;
+      } catch { /* fallback below */ }
+    }
     if (!storage) return null;
     try { return JSON.parse(storage.getItem(key) ?? "null") as T | null; } catch { return null; }
   },
-  async set<T>(key: string, value: T): Promise<void> {
-    try { await idbPut(key, value); return; } catch { /* fallback below */ }
+  async set<T>(key: string, value: T): Promise<"indexeddb" | "local"> {
+    try {
+      await idbPut(key, value);
+      localStorageSafe()?.removeItem(`${FALLBACK_MARKER_PREFIX}${key}`);
+      return "indexeddb";
+    } catch { /* If marker cleanup failed, refresh the marked fallback too. */ }
     const storage = localStorageSafe();
     if (!storage) throw new Error("No writable storage is available");
     storage.setItem(key, JSON.stringify(value));
+    storage.setItem(`${FALLBACK_MARKER_PREFIX}${key}`, "local");
+    return "local";
   },
   async remove(key: string): Promise<void> {
     const results = await Promise.allSettled([
       typeof indexedDB === "undefined" ? Promise.resolve() : idbRemove(key),
       Promise.resolve().then(() => {
-        if (typeof window !== "undefined") window.localStorage.removeItem(key);
+        if (typeof window !== "undefined") {
+          try { window.localStorage.removeItem(key); }
+          finally { window.localStorage.removeItem(`${FALLBACK_MARKER_PREFIX}${key}`); }
+        }
       }),
     ]);
     const failure = results.find(result => result.status === "rejected");

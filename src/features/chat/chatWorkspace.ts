@@ -46,10 +46,17 @@ export function mergeHydratedWorkspace(
     const localChanged = local && (!baseline || (local !== baseline && JSON.stringify(local) !== JSON.stringify(baseline)));
     return [localChanged ? local : thread];
   });
+  const retainedLocalIds = new Set<string>();
   for (const local of current.threads) {
-    if (!persisted.threads.some((thread) => thread.id === local.id) && !initialById.has(local.id)) merged.push(local);
+    if (persisted.threads.some((thread) => thread.id === local.id)) continue;
+    const baseline = initialById.get(local.id);
+    if (!baseline || (local !== baseline && JSON.stringify(local) !== JSON.stringify(baseline))) {
+      merged.push(local);
+      retainedLocalIds.add(local.id);
+    }
   }
-  const activeThreadId = current.activeThreadId !== initial.activeThreadId && currentById.has(current.activeThreadId)
+  const activeThreadId = (current.activeThreadId !== initial.activeThreadId || retainedLocalIds.has(current.activeThreadId))
+    && currentById.has(current.activeThreadId)
     ? current.activeThreadId
     : persisted.threads.some((thread) => thread.id === persisted.activeThreadId)
       ? persisted.activeThreadId

@@ -64,3 +64,101 @@ async fn cancelled_runtime_download_keeps_its_kind_without_contacting_the_networ
     assert_eq!(error.message, "runtime install cancelled");
     assert!(!path.exists());
 }
+
+#[tokio::test]
+async fn stalled_runtime_download_cancels_during_headers_and_body_reads() {
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    for send_chunk in [false, true] {
+        let root = test_directory("stalled-download");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("runtime.zip");
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let url = format!("http://{}/runtime.zip", listener.local_addr().unwrap());
+        let (request_seen, request_received) = tokio::sync::oneshot::channel();
+        let (stop_server, server_stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.extend_from_slice(&byte);
+            }
+            if send_chunk {
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\nruntime\r\n",
+                    )
+                    .await
+                    .unwrap();
+                socket.flush().await.unwrap();
+            }
+            request_seen.send(()).unwrap();
+            let _ = server_stopped.await;
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (chunk_written, chunk_received) = tokio::sync::watch::channel(false);
+        let updates = Mutex::new(Vec::new());
+        let progress = |phase: &str, received, total| {
+            updates
+                .lock()
+                .unwrap()
+                .push((phase.to_owned(), received, total));
+            chunk_written.send_replace(true);
+        };
+        let download = download_request_to_file(
+            &progress,
+            "downloading",
+            download_http().get(&url),
+            &path,
+            &cancel,
+            |url| {
+                assert_eq!(
+                    reqwest::Url::parse(url).unwrap().host_str(),
+                    Some("127.0.0.1")
+                );
+                Ok(())
+            },
+        );
+        let stop = async {
+            request_received.await.unwrap();
+            if send_chunk {
+                let mut chunk_received = chunk_received;
+                timeout(
+                    Duration::from_secs(5),
+                    chunk_received.wait_for(|written| *written),
+                )
+                .await
+                .expect("first chunk must reach the progress callback")
+                .unwrap();
+            }
+            let started = Instant::now();
+            cancel.store(true, Ordering::Release);
+            started
+        };
+        let (result, cancelled_at) = timeout(Duration::from_secs(10), async {
+            tokio::join!(download, stop)
+        })
+        .await
+        .expect("cancellation must not wait for the 60 second read timeout");
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            result.unwrap_err(),
+            AppError::cancelled("runtime install cancelled")
+        );
+        if send_chunk {
+            assert_eq!(
+                *updates.lock().unwrap(),
+                [("downloading".to_owned(), 7.0, 0.0)]
+            );
+        } else {
+            assert!(!path.exists());
+            assert!(updates.lock().unwrap().is_empty());
+        }
+        stop_server.send(()).unwrap();
+        server.await.unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+}

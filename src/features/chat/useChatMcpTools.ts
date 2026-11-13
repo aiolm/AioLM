@@ -42,7 +42,7 @@ export function useChatMcpTools() {
   }, []);
   const mcpSelectionRevision = useCallback(() => selectionRevision.current, []);
 
-  /** Resolves to the discovered catalog, or null when discovery failed or was superseded. */
+  /** Resolves to the available catalog, or null when listing servers failed or discovery was superseded. */
   const refreshMcpTools = async (): Promise<ChatMcpTool[] | null> => {
     if (pendingRefresh.current) return null;
     pendingRefresh.current = true;
@@ -50,20 +50,35 @@ export function useChatMcpTools() {
     setLoadingMcpTools(true);
     try {
       const servers = await api.mcpListServers();
+      const enabledServers = servers.filter((server) => server.enabled);
+      const results = await Promise.allSettled(enabledServers.map(async (server) => ({
+        server,
+        tools: await api.mcpListTools(server.id),
+      })));
       const entries: ChatMcpTool[] = [];
-      for (const server of servers.filter((item) => item.enabled)) {
-        const tools = await api.mcpListTools(server.id);
-        entries.push(...tools.map((tool) => ({ serverId: server.id, serverName: server.name, tool })));
-      }
+      const failures: string[] = [];
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          const { server, tools } = result.value;
+          entries.push(...tools.map((tool) => ({ serverId: server.id, serverName: server.name, tool })));
+        } else {
+          const server = enabledServers[index]!;
+          const caught: unknown = result.reason;
+          failures.push(`${server.name} (${server.id}): ${caught instanceof Error ? caught.message : String(caught)}`);
+        }
+      });
       if (generation.current !== ownGeneration) return null;
       setMcpCatalog(entries);
       const keys = entries.map((entry) => `${entry.serverId}:${entry.tool.name}`);
       const firstCatalog = !catalogLoaded.current;
       // Discovery resolves stored choices; it must never remove or broaden explicit selections.
-      writeSelection(current => firstCatalog && !selectionExplicit.current ? keys : current);
-      catalogLoaded.current = true;
+      // Wait for all enabled servers before choosing an implicit default, so a
+      // partial first catalog cannot permanently exclude a failed server's tools.
+      const complete = failures.length === 0;
+      writeSelection(current => firstCatalog && complete && !selectionExplicit.current ? keys : current);
+      if (complete) catalogLoaded.current = true;
       setMcpCatalogLoaded(true);
-      setMcpError(null);
+      setMcpError(failures.length ? `MCP tool discovery failed: ${failures.join("; ")}` : null);
       return entries;
     } catch (caught) {
       if (generation.current !== ownGeneration) return null;

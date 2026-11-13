@@ -925,7 +925,7 @@ pub async fn run(
             emit(&progress, &request, "loading", 0, None, Some(warning));
         }
         tokio::select! { biased;
-            _ = protocol::cancelled(&cancel) => return Err(AppError::cancelled("benchmark cancelled")),
+            _ = crate::cancellation::wait_cancelled(&cancel) => return Err(AppError::cancelled("benchmark cancelled")),
             ready = server::wait_ready(shared.clone(),&url,&key,server::SERVER_START_TIMEOUT_SECS,&ring,readiness) => ready?,
         }
         let ready_engine = shared.lock().map_err(|_| "benchmark process lock was poisoned")?.engine.clone().ok_or("ready server has no engine information")?;

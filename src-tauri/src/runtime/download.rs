@@ -202,12 +202,34 @@ pub(super) async fn download_to_file(
         return Err(AppError::cancelled("runtime install cancelled"));
     }
     validate_download_url(url)?;
-    let response = download_http()
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| download_error(&error, format!("runtime download failed: {error}")))?;
-    validate_download_url(response.url().as_str())?;
+    download_request_to_file(
+        progress,
+        phase,
+        download_http().get(url),
+        path,
+        cancel,
+        validate_download_url,
+    )
+    .await
+}
+
+pub(super) async fn download_request_to_file(
+    progress: ProgressSink<'_>,
+    phase: &str,
+    request: reqwest::RequestBuilder,
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+    validate_response_url: impl FnOnce(&str) -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    let response = tokio::select! {
+        biased;
+        _ = crate::cancellation::wait_cancelled(cancel) => {
+            return Err(AppError::cancelled("runtime install cancelled"));
+        }
+        response = request.send() => response
+            .map_err(|error| download_error(&error, format!("runtime download failed: {error}")))?,
+    };
+    validate_response_url(response.url().as_str())?;
     if !response.status().is_success() {
         return Err(AppError::new(
             if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -232,9 +254,19 @@ pub(super) async fn download_to_file(
         .map_err(|error| AppError::from_io(&error))?;
     let mut received = 0_u64;
     let mut stream = response;
-    while let Some(chunk) = stream.chunk().await.map_err(|error| {
-        download_error(&error, format!("runtime download stream failed: {error}"))
-    })? {
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = crate::cancellation::wait_cancelled(cancel) => {
+                return Err(AppError::cancelled("runtime install cancelled"));
+            }
+            chunk = stream.chunk() => chunk.map_err(|error| {
+                download_error(&error, format!("runtime download stream failed: {error}"))
+            })?,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         if cancel.load(Ordering::Acquire) {
             return Err(AppError::cancelled("runtime install cancelled"));
         }

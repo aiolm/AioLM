@@ -879,11 +879,6 @@ where
     progress(SNAPSHOT_MANIFEST, "complete", completed, total);
     Ok(crate::providers::artifacts::inspect_snapshot(snapshot))
 }
-pub(super) async fn wait_cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
 
 #[cfg(test)]
 mod tests {

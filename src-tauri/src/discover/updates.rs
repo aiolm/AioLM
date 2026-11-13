@@ -1121,7 +1121,7 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
     for &index in &plan.changed {
         let file = &plan.files[index];
         let response = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             response = download_client()?.get(source.url(&plan.installed.repository, &file.remote, &plan.revision)).send() => response.map_err(|error| network_error(&error, format!("model update download failed: {error}")))?
         };
         source.validate(&response)?;

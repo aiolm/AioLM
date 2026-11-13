@@ -1630,13 +1630,22 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
         names,
         [
             "response.created",
+            "response.output_item.added",
             "response.output_text.delta",
             "response.output_text.delta",
+            "response.output_item.done",
             "response.completed"
         ]
     );
-    assert_eq!(events[3].1["response"]["output_text"], "Hello");
-    let streamed_id = events[3].1["response"]["id"].as_str().unwrap();
+    let item_id = &events[1].1["item"]["id"];
+    assert_eq!(&events[2].1["item_id"], item_id);
+    assert_eq!(&events[3].1["item_id"], item_id);
+    assert_eq!(&events[4].1["item"]["id"], item_id);
+    assert_eq!(events[4].1["item"]["status"], "completed");
+    let completed = &events.last().unwrap().1["response"];
+    assert_eq!(&completed["output"][0]["id"], item_id);
+    assert_eq!(completed["output_text"], "Hello");
+    let streamed_id = completed["id"].as_str().unwrap();
     let fourth: Value = api
         .post(
             "/v1/responses",

@@ -2,7 +2,7 @@ import type { ChatThread, ChatWorkspace, ChatStorage, ChatPersistenceResult, Cha
 import { isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { conversationDelete, conversationSave, conversationsClear, conversationsImport, conversationsLoad, type StoredConversations } from "../../shared/api/conversations.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
-import { normalizeThread, normalizeWorkspace, parseWorkspace, persistedWorkspace, safeThread } from "./chatHistorySchema.ts";
+import { isPristineThread, normalizeThread, normalizeWorkspace, parseWorkspace, persistedWorkspace, safeThread } from "./chatHistorySchema.ts";
 import { defaultChatWorkspace } from "./chatWorkspace.ts";
 
 export const CHAT_WORKSPACE_KEY = "aiolm.chat-workspace.v2";
@@ -237,8 +237,7 @@ export function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPe
     const safe = persistedWorkspace(workspace, isNativeRuntimeAvailable());
     saveChatWorkspace(safe);
     try {
-      await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
-      return "indexeddb";
+      return await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
     } catch {
       try {
         await writeIndexedWorkspace(safe);
@@ -266,11 +265,6 @@ function inNativeQueue<T>(task: () => Promise<T>): Promise<T> {
   const operation = nativeQueue.then(task, task);
   nativeQueue = operation.then(() => undefined, () => undefined);
   return operation;
-}
-
-/** An empty draft without an explicit conversation choice gets no file. */
-function untouched(thread: ChatThread): boolean {
-  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.useDefaultSystemPrompt !== false && thread.mediaBeforeText !== true && thread.title === "New conversation";
 }
 
 function readActiveThreadId(): string | null {
@@ -317,7 +311,7 @@ async function moveBrowserConversations(): Promise<StoredConversations | undefin
   const storage = browserStorage();
   if (storage?.getItem(NATIVE_STORAGE_KEY) === "native") return;
   const browser = await loadBrowserWorkspace();
-  const threads = browser.threads.filter((thread) => !untouched(thread));
+  const threads = browser.threads.filter((thread) => !isPristineThread(thread));
   let stored: StoredConversations | undefined;
   if (threads.length) {
     await conversationsImport(threads);
@@ -341,7 +335,7 @@ async function moveBrowserConversations(): Promise<StoredConversations | undefin
 async function saveNativeWorkspace(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
   const safe = persistedWorkspace(workspace, isNativeRuntimeAvailable());
   writeActiveThreadId(safe.activeThreadId);
-  const threads = safe.threads.filter((thread) => !untouched(thread));
+  const threads = safe.threads.filter((thread) => !isPristineThread(thread));
   try {
     await inNativeQueue(async () => {
       for (const thread of threads) {

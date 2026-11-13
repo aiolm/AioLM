@@ -669,12 +669,12 @@ fn has_root_safetensors(entries: &[ApiTreeEntry]) -> bool {
 
 async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, AppError> {
     let response = tokio::select! {
-        _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+        _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         response = client()?.get(format!("{HF_API}/models/{repo}/revision/main")).send() => response.map_err(|error| network_error(&error, error.to_string()))?
     };
     validate_response_url(&response)?;
     let metadata: serde_json::Value = tokio::select! {
-        _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+        _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
         metadata = decode_json(response) => metadata?
     };
     let revision = metadata
@@ -745,13 +745,13 @@ async fn repository_tree(
             ));
         }
         let response = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             response = client()?.get(&url).send() => response.map_err(|error| network_error(&error, error.to_string()))?
         };
         validate_response_url(&response)?;
         next = tree_next_page(response.headers(), repo, revision)?;
         let page: Vec<ApiTreeEntry> = tokio::select! {
-            _ = snapshots::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
+            _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
             page = decode_json(response) => page?
         };
         entries.extend(page);

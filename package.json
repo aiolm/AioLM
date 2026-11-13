@@ -20,7 +20,7 @@
     "lint:fix": "eslint src scripts tests packages/benchmark-contracts vite.config.ts vitest.config.ts vitest.ci.config.ts vitest.setup.ts --fix",
     "test:unit": "npm run test:checks && npm run test:coverage:run",
     "test:provider-options": "node scripts/sync-provider-launch-options.mjs --check",
-    "test:scripts": "node --test scripts/package-tauri.test.mjs scripts/smoke-provider-runtime.test.mjs scripts/frontend-ci.test.mjs scripts/release-ci.test.mjs scripts/ci-rust-toolchain.test.mjs scripts/ci-workflow-contract.test.mjs scripts/native-build-inputs.test.mjs",
+    "test:scripts": "node --test scripts/package-tauri.test.mjs scripts/smoke-provider-runtime.test.mjs scripts/frontend-ci.test.mjs scripts/release-ci.test.mjs scripts/ci-rust-toolchain.test.mjs scripts/ci-workflow-contract.test.mjs scripts/native-build-inputs.test.mjs scripts/install-entrypoint.test.mjs",
     "test:provider-runtime": "node --test scripts/smoke-provider-runtime.test.mjs && node scripts/smoke-provider-runtime.mjs --self-test",
     "test:native-cli": "node scripts/smoke-native-cli.mjs",
     "test": "npm run test:unit",

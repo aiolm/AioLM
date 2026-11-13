@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { CHAT_WORKSPACE_CLEAR_EVENT, isChatWorkspaceClearing, loadChatWorkspace, loadChatWorkspaceAsync, saveChatWorkspaceAsync } from "./chatHistory";
 import { createChatThread, mergeHydratedWorkspace, threadMatchesQuery, titleFromMessage } from "./chatWorkspace";
+import { isPristineThread } from "./chatHistorySchema";
 import type { ChatHistoryMessage, ChatThread, ChatWorkspace, ChatWorkspaceClearDetail } from "../../shared/api/conversationTypes";
 import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
@@ -19,16 +20,6 @@ interface UseChatThreadsOptions {
   requireIdle: () => boolean;
   /** Resets composer-local state (input, attachments, context warnings) after a thread switch. */
   onSwitchThread: () => void;
-}
-
-/**
- * A conversation nothing has been put into yet: no messages, no instructions of
- * its own, and still carrying the generated name. Pressing "New chat" repeatedly
- * used to stack identical rows like this, so at most one is kept — a record is
- * worth storing once it holds something.
- */
-function unused(thread: ChatThread): boolean {
-  return thread.messages.length === 0 && !thread.systemPrompt?.trim() && thread.title === "New conversation";
 }
 
 /** Document paths this thread used that no remaining thread still needs. */
@@ -180,7 +171,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
 
   // Reading another conversation is always allowed. Only the buffer stays put
   // while a reply is arriving; the view is free to move.
-  const keeping = (keepId: string) => (item: ChatThread) => item.id === keepId || item.id === msgsThreadId || !unused(item);
+  const keeping = (keepId: string) => (item: ChatThread) => item.id === keepId || item.id === msgsThreadId || !isPristineThread(item);
 
   const selectThread = (thread: ChatThread) => {
     setThreadPanelOpen(false);
@@ -197,7 +188,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const newThread = () => {
     // An untouched conversation already is a new one; opening it again beats
     // creating a second copy that is indistinguishable from it.
-    const reusable = workspace.threads.find((item) => unused(item) && (!turnInProgress() || item.id !== msgsThreadId));
+    const reusable = workspace.threads.find((item) => isPristineThread(item) && (!turnInProgress() || item.id !== msgsThreadId));
     const now = Date.now();
     let id = `thread-${now}`;
     let suffix = 1;

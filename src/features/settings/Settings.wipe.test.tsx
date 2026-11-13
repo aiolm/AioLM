@@ -20,7 +20,7 @@ const runtime = vi.hoisted(() => ({ native: false }));
 vi.mock('../../shared/api/transport.ts', () => ({ isNativeRuntimeAvailable: () => runtime.native, invoke: vi.fn() }));
 vi.mock('../../shared/storage/storageAdapter.ts', () => ({ storageAdapter: {
   get: vi.fn(async (key: string) => cache.get(key) ?? null),
-  set: vi.fn(async (key: string, value: unknown) => { cache.set(key, value); }),
+  set: vi.fn(async (key: string, value: unknown) => { cache.set(key, value); return 'indexeddb' as const; }),
   remove: vi.fn(async (key: string) => { cache.delete(key); }),
 } }));
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
@@ -78,7 +78,7 @@ beforeEach(() => {
   localStorage.clear(); cache.clear(); vi.clearAllMocks(); runtime.native = false;
   vi.mocked(invoke).mockReset();
   vi.spyOn(storageAdapter, 'get').mockReset().mockImplementation(async key => cache.get(key) ?? null);
-  vi.spyOn(storageAdapter, 'set').mockReset().mockImplementation(async (key, value) => { cache.set(key, value); });
+  vi.spyOn(storageAdapter, 'set').mockReset().mockImplementation(async (key, value) => { cache.set(key, value); return 'indexeddb' as const; });
   vi.mocked(api.serverActivity).mockReset().mockResolvedValue(undefined);
   vi.mocked(api.mcpCallTool).mockReset();
   vi.mocked(api.chatStream).mockReset().mockResolvedValue('New synthetic answer');
@@ -103,7 +103,7 @@ it('clears the mounted chat and does not restore removed conversations on its ne
 
 it('waits for an older pending save before removing every persisted copy', async () => {
   const pending = deferred<void>();
-  vi.spyOn(storageAdapter, 'set').mockImplementationOnce(async (key, value) => { await pending.promise; cache.set(key, value); });
+  vi.spyOn(storageAdapter, 'set').mockImplementationOnce(async (key, value) => { await pending.promise; cache.set(key, value); return 'indexeddb' as const; });
   mount();
   await waitFor(() => expect(vi.spyOn(storageAdapter, 'set')).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));

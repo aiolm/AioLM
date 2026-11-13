@@ -18,6 +18,56 @@ beforeEach(() => {
 });
 
 describe('MCP catalog refresh selection', () => {
+  it('publishes successful servers when another fails and waits for a complete catalog before default selection', async () => {
+    const servers = [
+      { id: 'a', name: 'Server A', enabled: true, command: 'synthetic', args: [] },
+      { id: 'b', name: 'Server B', enabled: true, command: 'synthetic', args: [] },
+      { id: 'c', name: 'Server C', enabled: true, command: 'synthetic', args: [] },
+    ];
+    vi.mocked(api.mcpListServers).mockResolvedValue(servers);
+    vi.mocked(api.mcpListTools).mockImplementation(async id => {
+      if (id === 'b') throw new Error('Synthetic connection failed');
+      return [{ name: 'lookup', input_schema: {} }];
+    });
+    const { result } = setup();
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.mcpCatalog.map(entry => entry.serverId)).toEqual(['a', 'c']);
+    expect(result.current.mcpError).toBe('MCP tool discovery failed: Server B (b): Synthetic connection failed');
+    expect(result.current.selectedMcpTools).toEqual([]);
+    expect(result.current.loadingMcpTools).toBe(false);
+    vi.mocked(api.mcpListTools).mockResolvedValue([{ name: 'lookup', input_schema: {} }]);
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['a:lookup', 'b:lookup', 'c:lookup']);
+    expect(result.current.mcpError).toBeNull();
+    vi.mocked(api.mcpListTools).mockImplementation(async id => {
+      if (id === 'b') throw new Error('Synthetic connection failed');
+      return [{ name: 'lookup', input_schema: {} }];
+    });
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['a:lookup', 'b:lookup', 'c:lookup']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['a__lookup', 'c__lookup']);
+  });
+
+  it('preserves explicit selections across partial discovery and recovery', async () => {
+    vi.mocked(api.mcpListServers).mockResolvedValue([
+      { id: 'catalog', name: 'Catalog', enabled: true, command: 'synthetic', args: [] },
+      { id: 'offline', name: 'Offline', enabled: true, command: 'synthetic', args: [] },
+    ]);
+    vi.mocked(api.mcpListTools).mockImplementation(async id => {
+      if (id === 'offline') throw new Error('Synthetic failure');
+      return tools;
+    });
+    const { result } = setup();
+    act(() => result.current.setSelectedMcpTools(['catalog:lookup', 'offline:remember']));
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['catalog:lookup', 'offline:remember']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['catalog__lookup']);
+    vi.mocked(api.mcpListTools).mockImplementation(async id => id === 'offline' ? [{ name: 'remember', input_schema: {} }] : tools);
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['catalog:lookup', 'offline:remember']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['catalog__lookup', 'offline__remember']);
+  });
+
   it('reuses derived values while an unrelated refresh state changes', async () => {
     const { result } = setup();
     await act(async () => { await result.current.refreshMcpTools(); });
