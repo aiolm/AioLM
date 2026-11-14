@@ -29,9 +29,11 @@ deletion.
 
 ## Versioned public contracts
 
-`@aiolm/benchmark-contracts` 0.11.0 accepts legacy schema1/2 snapshots and
+`@aiolm/benchmark-contracts` 0.12.0 accepts legacy schema1/2 snapshots and
 schema3 cap-based `openai-chat-serving@1` unchanged through the same `/v1` API,
 and adds fixed-output `openai-chat-serving@2` with per-request count evidence.
+Contract 0.12.0 adds the 128-token fixed-output target the desktop app now runs;
+a website must deploy 0.12.0 before it accepts those uploads.
 Schema3 identifies inputs by exact UTF-8 byte count and SHA-256, not token
 length. Its runtime identity has six nullable fields and permits any safe
 engine name, including an unknown name. Model format is independent of engine.

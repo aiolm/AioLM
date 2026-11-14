@@ -103,7 +103,7 @@ fn only_fixed_output_presets_execute_while_cap_requests_stay_readable() {
         validate_execution_request(&mut fixed).unwrap();
     }
     assert_eq!(FIXED_OUTPUT_TOKENS.last(), Some(&MAX_SERVING_OUTPUT_TOKENS));
-    for (target, usage) in [(1000, true), (204_801, true), (128, true), (1024, false)] {
+    for (target, usage) in [(1000, true), (204_801, true), (127, true), (128, false)] {
         let mut invalid = PerformanceBenchRequest {
             max_output_tokens: target,
             request_usage: usage,

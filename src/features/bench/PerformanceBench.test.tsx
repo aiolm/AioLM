@@ -34,7 +34,7 @@ const unlisten = vi.fn();
 const mocked = vi.mocked(api);
 
 function row(overrides: Partial<api.PerformanceBenchmarkRow> = {}): api.PerformanceBenchmarkRow {
-  const output = overrides.max_output_tokens ?? 1024;
+  const output = overrides.max_output_tokens ?? 128;
   const concurrency = overrides.concurrency ?? 1;
   return { id: "single-4096-1", input_bytes: 4096, max_output_tokens: output, concurrency, repetition: 1,
     first_output_ms: 50, first_content_ms: 100, first_reasoning_ms: 50, e2e_ms: 200,
@@ -44,7 +44,7 @@ function row(overrides: Partial<api.PerformanceBenchmarkRow> = {}): api.Performa
 }
 function result(runId: string, rows: api.PerformanceBenchmarkRow[] = [], status: api.PerformanceBenchmarkResult["status"] = "complete"): api.PerformanceBenchmarkResult {
   const request = mocked.runPerformanceBench.mock.calls.find(([, request]) => request.run_id === runId)?.[1]
-    ?? { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: 'code_python', prompt_bytes: [4096], max_output_tokens: 1024, concurrencies: [1], repetitions: 1, warmup: true, request_usage: true } satisfies api.PerformanceBenchmarkRequest;
+    ?? { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: 'code_python', prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: true } satisfies api.PerformanceBenchmarkRequest;
   const measurements = status === 'complete' ? request.prompt_bytes.flatMap(bytes => request.concurrencies.flatMap(concurrency =>
     Array.from({ length: request.repetitions }, (_, i) => rows.find(row => row.input_bytes === bytes && row.concurrency === concurrency && row.repetition === i + 1)
       ?? row({ id: `${bytes}/${concurrency}/${i + 1}`, input_bytes: bytes, concurrency, repetition: i + 1, max_output_tokens: request.max_output_tokens, finish_reasons: Array.from({ length: concurrency }, () => 'not_reported') })))) : rows;
@@ -455,32 +455,30 @@ describe("Performance benchmark workflow", () => {
   });
 
 
-  it('measures and saves the selected workload while locking its controls during a run', async () => {
+  it('measures the selected workload at a fixed 128-token output once per point while locking its controls', async () => {
     let finish!: (value: api.PerformanceBenchmarkResult) => void;
     mocked.runPerformanceBench.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     renderPanel();
     const corpus = screen.getByRole('combobox', { name: 'Prompt content' });
-    const outputTokens = screen.getByRole('combobox', { name: 'Output tokens' });
-    const repetitions = screen.getByRole('combobox', { name: 'Repetitions' });
     fireEvent.click(corpus);
     fireEvent.click(screen.getByRole('option', { name: 'Prose · Korean' }));
-    fireEvent.click(outputTokens);
-    fireEvent.click(screen.getByRole('option', { name: '200k' }));
-    fireEvent.click(repetitions);
-    fireEvent.click(screen.getByRole('option', { name: '3' }));
+    expect(screen.queryByRole('combobox', { name: 'Output tokens' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Repetitions' })).not.toBeInTheDocument();
+    const concurrency = within(screen.getByRole('group', { name: 'Concurrent requests' })).getAllByRole('checkbox');
+    expect(concurrency.map(box => box.closest('label')?.textContent)).toEqual(['1×', '2×', '4×', '8×']);
+    fireEvent.click(screen.getByRole('checkbox', { name: '8×' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     expect(corpus).toBeDisabled();
-    expect(outputTokens).toBeDisabled();
-    expect(repetitions).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: '8×' })).toBeDisabled();
     const request = defined(mocked.runPerformanceBench.mock.calls[0])[1];
-    await act(async () => finish(result(request.run_id, [row({ max_output_tokens: 204800 })])));
+    expect(request).toMatchObject({ max_output_tokens: 128, concurrencies: [1, 2, 4, 8], repetitions: 1 });
+    await act(async () => finish(result(request.run_id)));
     const saved = defined(performanceRecords.readPerformanceHistory()[0]);
-    expect(saved.request).toMatchObject({ method: { version: 2 }, context_profile: 'novel_ko', max_output_tokens: 204800, repetitions: 3, request_usage: true });
-    expect(saved.result.rows).toHaveLength(18);
-    expect(outputTokens).toBeEnabled();
-    expect(repetitions).toBeEnabled();
+    expect(saved.request).toMatchObject({ method: { version: 2 }, context_profile: 'novel_ko', max_output_tokens: 128, repetitions: 1, request_usage: true });
+    expect(saved.result.rows).toHaveLength(8);
+    expect(corpus).toBeEnabled();
   });
 
   it("requires an input size and the loaded model to unload before measuring", async () => {

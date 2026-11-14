@@ -43,25 +43,24 @@
 .performance-environment-devices { display: grid; gap: 2px; }
 .performance-environment-devices small { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .performance-fields { display: grid; align-content: start; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.performance-input-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
 .performance-field { display: grid; gap: 6px; min-width: 0; font-size: var(--ui-text-support); font-weight: 500; color: var(--ui-muted); }
-.performance-field:first-child { grid-column: 1 / -1; }
 .performance-field > input, .performance-field > .app-custom-select-container { width: 100%; min-width: 0; }
-/* Multiple-choice workload inputs collapse to one row each; the row names the
-   current selection so the collapsed form still states what will run. */
-.performance-option-list { display: grid; min-width: 0; border-block: 1px solid var(--ui-border); }
-.performance-option { min-width: 0; }
-.performance-option + .performance-option { border-top: 1px solid var(--ui-border); }
-.performance-option > summary { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-height: var(--ui-control); padding-block: 6px; padding-inline-end: 24px; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; line-height: 1.5; }
-.performance-option > summary::after { position: absolute; inset-block: 0; inset-inline-end: 0; margin: auto 0; float: none; }
-.performance-option > summary > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.performance-option-value { min-width: 0; margin-inline-start: auto; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 400; font-variant-numeric: tabular-nums; text-align: end; overflow-wrap: anywhere; }
-.performance-option-value--empty { color: var(--ui-danger); font-weight: 500; }
-.performance-option-body { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 4px 0 12px; border: 0; }
+/* Workload choices stay expanded: the checked chips state exactly what will run. */
+.performance-choice { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.performance-choice > legend { margin-bottom: 6px; padding: 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; }
+.performance-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ui-control); color: var(--ui-ink); font-size: var(--ui-text-support); cursor: pointer; }
+.performance-toggle > input { flex: none; margin: 0; }
+.performance-toggle > span { min-width: 0; overflow-wrap: anywhere; }
+/* Output length and samples per point are fixed by the app, so they read as
+   facts beside the editable choices rather than as disabled controls. */
+.performance-fixed-workload { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); }
+.performance-fixed-workload dl { margin: 0; }
+.performance-fixed-workload dl > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; font-size: var(--ui-text-support); }
+.performance-fixed-workload dt { color: var(--ui-muted); }
+.performance-fixed-workload dd { margin: 0; color: var(--ui-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .performance-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-/* Size the hidden checkbox's hit area to the visible chip, also when the chip
-   is a direct grid item of the form. */
-.performance-chip { position: relative; display: inline-flex; justify-self: start; min-width: 0; max-width: 100%; cursor: pointer; }
+/* Size the hidden checkbox's hit area to the visible chip. */
+.performance-chip { position: relative; display: inline-flex; min-width: 0; max-width: 100%; cursor: pointer; }
 .performance-chip > input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; margin: 0; }
 .performance-chip > span { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: var(--ui-control); padding: 6px 8px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-control); background: var(--ui-input); color: var(--ui-ink); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .performance-chip > input:checked + span { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: var(--ui-border-accent); font-weight: 600; }

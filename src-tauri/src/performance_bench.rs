@@ -42,8 +42,11 @@ const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 pub const CAP_METHOD_VERSION: u32 = 1;
 /// Exact fixed-output method used by every new execution.
 pub const FIXED_OUTPUT_METHOD_VERSION: u32 = 2;
-/// The only targets a fixed-output run may request (1k = 1024 tokens).
-pub const FIXED_OUTPUT_TOKENS: [u32; 8] = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 204800];
+/// The only targets a fixed-output run may request (1k = 1024 tokens). The
+/// desktop benchmark runs the 128-token preset; longer presets stay valid for
+/// recorded history and the shared public contract.
+pub const FIXED_OUTPUT_TOKENS: [u32; 9] =
+    [128, 1024, 4096, 8192, 16384, 32768, 65536, 131072, 204800];
 pub const MAX_SERVING_OUTPUT_TOKENS: u32 = crate::providers::protocol::MAX_FIXED_OUTPUT_TOKENS;
 /// Historical cap records accepted request limits up to this value.
 pub(crate) const CAP_METHOD_MAX_OUTPUT_TOKENS: u32 = 65_536;
@@ -286,7 +289,7 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     if request.method.version == FIXED_OUTPUT_METHOD_VERSION {
         if !FIXED_OUTPUT_TOKENS.contains(&request.max_output_tokens) {
             return Err(
-                "fixed output tokens must be 1024, 4096, 8192, 16384, 32768, 65536, 131072 or 204800"
+                "fixed output tokens must be 128, 1024, 4096, 8192, 16384, 32768, 65536, 131072 or 204800"
                     .into(),
             );
         }

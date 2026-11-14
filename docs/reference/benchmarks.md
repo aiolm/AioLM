@@ -74,17 +74,24 @@ older target cannot enable the current one.
 
 Accepting refreshed runtime options under **Key settings** repeats the support check for the selected target. The target, workload and saved settings remain unchanged; this never starts a benchmark automatically.
 
-Choose exact input UTF-8 byte sizes, fixed output tokens, client concurrencies,
-repetitions, corpus and warmup. Defaults are 4096/16384 input bytes, 1k output
-tokens, concurrencies 1/2/4, one repetition, Python code and warmup enabled.
-Usage reporting is required and is no longer an optional setup checkbox.
+Choose exact input UTF-8 byte sizes, client concurrencies, corpus and warmup.
+Input sizes and concurrencies are always-visible checkbox chips; concurrency
+choices are 1, 2, 4 and 8. Defaults are 4096/16384 input bytes, concurrencies
+1/2/4, Python code and warmup enabled. Usage reporting is required and is no
+longer an optional setup checkbox.
 
-Output choices are **1k, 4k, 8k, 16k, 32k, 64k, 128k and 200k**, where k=1024
-(200k=204800). Repetitions are 1, 3, 5 or 10. Both use non-editable dropdowns,
-locked while measuring. The wire field `max_output_tokens` remains the request
-limit and fixed target; method `@2` additionally controls termination and verifies
-the result. Model context is not enlarged automatically: prompt plus output
-must fit the model's context allocation, including each parallel slot's share.
+Every new run uses **128 output tokens** and measures each input/concurrency
+point once (`repetitions: 1`). Neither value is a setup control; the setup shows
+the fixed output count as a read-only fact. The wire field `max_output_tokens`
+remains the request limit and fixed target; method `@2` additionally controls
+termination and verifies the result. Model context is not enlarged
+automatically: prompt plus output must fit the model's context allocation,
+including each parallel slot's share.
+
+The shared contract's fixed-output targets are 128 and **1k, 4k, 8k, 16k, 32k,
+64k, 128k and 200k**, where k=1024 (200k=204800). Recorded runs with the longer
+targets, repetitions up to 100 or concurrencies up to 64 stay valid history and
+remain publishable; the native runner keeps those protocol bounds.
 
 Historical `openai-chat-serving@1` results remain cap-based, with their original
 values through 65536 and optional usage. They are never relabelled as fixed.

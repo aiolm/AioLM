@@ -28,7 +28,7 @@ import { useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { useBenchmarkProfileImport } from './BenchmarkExplorerActions';
 import { benchmarkExplorerCopy } from './benchmarkExplorerCopy';
 import { useModelNames } from '../../shared/ui/ModelName';
-import { TASK_ID } from './performanceBenchConfig';
+import { OUTPUT_TOKENS, REPETITIONS, TASK_ID } from './performanceBenchConfig';
 import { usePerformanceConditions } from './usePerformanceConditions';
 
 type Copy = ReturnType<typeof benchmarkCopy>;
@@ -110,8 +110,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const target = useMemo(() => store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget, [store.cfg, targetApplication, defaultTarget]);
   const targetConfig = target?.config ?? null;
   const { promptBytes, setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup,
-    outputTokens, setOutputTokens, repetitions, setRepetitions, corpus, setCorpus,
-    valid, total, admission, setAdmissionRevision, toggle } = usePerformanceConditions(targetConfig, active, busy);
+    corpus, setCorpus, valid, total, admission, setAdmissionRevision, toggle } = usePerformanceConditions(targetConfig, active, busy);
   const model = targetConfig?.active_model ?? "";
   const targetDiffers = !!defaultTarget && !!target && (defaultTarget.application.profile_id !== target.application.profile_id
     || Object.keys(executionChanges(defaultTarget.config, target.config)).length > 0);
@@ -223,7 +222,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     const snapshot = structuredClone(benchmarkTarget(store.getConfig?.() ?? store.cfg, targetApplication));
     const cfg = snapshot.config;
     const runId = `performance-${crypto.randomUUID()}`;
-    const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: outputTokens, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions, warmup, request_usage: true };
+    const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: OUTPUT_TOKENS, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions: REPETITIONS, warmup, request_usage: true };
     const createdAt = Date.now();
     setRunTarget(snapshot);
     activeRef.current = true;
@@ -280,7 +279,6 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     finishTask(TASK_ID, finalResult.status === "cancelled" ? "cancelled" : finalResult.status === "failed" || finalResult.status === "partial" ? "failed" : "completed", finalResult.message ?? undefined);
   };
 
-  const advancedSummary = warmup ? copy.warmupShort : copy.noneSelected;
   const statusLabel = visibleResult ? ({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[visibleResult.status]) : null;
   const progressMessage = phase === "cancelling" ? copy.cancelling : progressLabel(progress?.phase, copy);
   const copyResults = async () => {
@@ -347,7 +345,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     store, active, setupFormId, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions,
     promptBytes, setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup,
-    outputTokens, setOutputTokens, repetitions, setRepetitions, corpus, setCorpus,
+    corpus, setCorpus,
     phase, progress, rows, record, history,
     historyOffset, historyLoading, historyError, historyWarnings, exporting, exportFormat,
     setExportFormat, exportNotice, setExportNotice, sharingRevision, setSharingRevision, sharingBusy,
@@ -360,7 +358,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     exportAllDiffers, visibleRows, visibleResult, provenance, selectedGpuLabel, modelHash,
     legacyRecord, servingRecord, servingPoints, singleRows, batchRows,
     servingProvenance, modelSource, refreshSessions, loadHistory, editModel, stopSessions,
-    cancel, run, toggle, advancedSummary, statusLabel, progressMessage,
+    cancel, run, toggle, statusLabel, progressMessage,
     copyResults, exportResults, deleteSelectedHistory,
     importDefaultTarget: () => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); },
   };

@@ -23,7 +23,7 @@ import { formatBytes, formatCpuCores } from '../../shared/lib/units';
 import BenchmarkExplorerActions from './BenchmarkExplorerActions';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import type { usePerformanceBench } from './usePerformanceBench';
-import { CONCURRENCIES, CORPORA, OUTPUT_TOKEN_OPTIONS, PROMPT_BYTES, REPETITIONS, TASK_ID } from './performanceBenchConfig';
+import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID } from './performanceBenchConfig';
 
 const STATUS_TONES = { complete: 'success', partial: 'warning', cancelled: 'neutral', failed: 'danger' } as const;
 type Copy = ReturnType<typeof benchmarkCopy>;
@@ -34,11 +34,6 @@ function numberLabel(value: number | null | undefined, copy: Copy, digits = 1): 
 }
 
 const startsOption = (token: string | undefined) => token !== undefined && /^--?[a-zA-Z]/.test(token);
-
-/** Selected values in run order, as their collapsed disclosure summarizes them. */
-function selectionSummary(values: readonly number[], format: (value: number) => string, none: string): string {
-  return values.length ? [...values].sort((a, b) => a - b).map(format).join(' · ') : none;
-}
 
 /** One line per launch argument: an option keeps the value it was given. */
 function argumentLines(args: readonly string[]): string[] {
@@ -89,8 +84,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
   const {
     store, active, setupFormId, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions, promptBytes,
-    setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup, outputTokens,
-    setOutputTokens, repetitions, setRepetitions, corpus, setCorpus, phase,
+    setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup, corpus, setCorpus, phase,
     progress, rows, record, history, historyOffset,
     historyLoading, historyError, historyWarnings, exporting, exportFormat, setExportFormat,
     exportNotice, setExportNotice, sharingRevision, setSharingRevision, sharingBusy, setSharingBusy,
@@ -103,7 +97,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
     visibleRows, visibleResult, provenance, selectedGpuLabel, modelHash, legacyRecord,
     servingRecord, servingPoints, singleRows, batchRows, servingProvenance,
     modelSource, refreshSessions, loadHistory, editModel, stopSessions, cancel,
-    run, toggle, advancedSummary, statusLabel, progressMessage, copyResults,
+    run, toggle, statusLabel, progressMessage, copyResults,
     exportResults, deleteSelectedHistory,
     importDefaultTarget,
   } = controller;
@@ -156,27 +150,20 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           </div>}
           <div className="performance-setup-section"><fieldset disabled={busy} className="performance-fields">
             <legend className="performance-column-title">{copy.conditions}</legend>
-            <div className="performance-input-grid">
-              <label className="performance-field"><span>{copy.corpus}</span><CustomSelect ariaLabel={copy.corpus} value={corpus} disabled={busy} onChange={setCorpus} options={CORPORA.map(key => ({ value: key, label: copy[key] }))} /></label>
-              <label className="performance-field"><span>{copy.outputTokens}</span><CustomSelect id="performance-output-tokens" ariaLabel={copy.outputTokens} value={outputTokens} disabled={busy} onChange={setOutputTokens} options={OUTPUT_TOKEN_OPTIONS} /></label>
-              <label className="performance-field"><span>{copy.repetitions}</span><CustomSelect id="performance-repetitions" ariaLabel={copy.repetitions} value={repetitions} disabled={busy} onChange={setRepetitions} options={REPETITIONS.map(value => ({ value, label: value.toLocaleString() }))} /></label>
-            </div>
-            <div className="performance-option-list">
-              <details className="performance-option">
-                <summary><span>{copy.inputBytes}</span><span className={promptBytes.length ? 'performance-option-value' : 'performance-option-value performance-option-value--empty'}>{selectionSummary(promptBytes, value => value.toLocaleString(), copy.noneSelected)}</span></summary>
-                <fieldset className="performance-option-body"><legend className="sr-only">{copy.inputBytes}</legend><div className="performance-chips">{PROMPT_BYTES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptBytes.includes(value)} onChange={() => toggle(value, promptBytes, setPromptBytes)} /><span>{value.toLocaleString()}</span></label>)}</div></fieldset>
-              </details>
-              <details className="performance-option">
-                <summary><span>{copy.batchSizes}</span><span className={concurrencies.length ? 'performance-option-value' : 'performance-option-value performance-option-value--empty'}>{selectionSummary(concurrencies, value => `${value}×`, copy.noneSelected)}</span></summary>
-                <fieldset className="performance-option-body"><legend className="sr-only">{copy.batchSizes}</legend><div className="performance-chips">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div><p className="performance-hint">{copy.concurrencyHint}</p></fieldset>
-              </details>
-              <details className="performance-option">
-                <summary><span>{copy.advanced}</span><span className="performance-option-value">{advancedSummary}</span></summary>
-                <div className="performance-option-body">
-                  <label className="performance-chip"><input type="checkbox" checked={warmup} onChange={event => setWarmup(event.target.checked)} /><span>{copy.warmup}</span></label>
-                  <p className="performance-hint">{copy.fixedOutputConditions}</p>
-                </div>
-              </details>
+            <label className="performance-field"><span>{copy.corpus}</span><CustomSelect ariaLabel={copy.corpus} value={corpus} disabled={busy} onChange={setCorpus} options={CORPORA.map(key => ({ value: key, label: copy[key] }))} /></label>
+            <fieldset className="performance-choice">
+              <legend>{copy.inputBytes}</legend>
+              <div className="performance-chips">{PROMPT_BYTES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptBytes.includes(value)} onChange={() => toggle(value, promptBytes, setPromptBytes)} /><span>{value.toLocaleString()}</span></label>)}</div>
+            </fieldset>
+            <fieldset className="performance-choice" aria-describedby="performance-concurrency-hint">
+              <legend>{copy.batchSizes}</legend>
+              <div className="performance-chips">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div>
+              <p id="performance-concurrency-hint" className="performance-hint">{copy.concurrencyHint}</p>
+            </fieldset>
+            <label className="performance-toggle"><input type="checkbox" checked={warmup} onChange={event => setWarmup(event.target.checked)} /><span>{copy.warmup}</span></label>
+            <div className="performance-fixed-workload">
+              <dl><div><dt>{copy.outputTokens}</dt><dd>{OUTPUT_TOKENS.toLocaleString()}</dd></div></dl>
+              <p className="performance-hint">{copy.fixedOutputConditions}</p>
             </div>
           </fieldset></div>
         </form>

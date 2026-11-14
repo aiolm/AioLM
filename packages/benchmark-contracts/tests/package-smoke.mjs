@@ -143,6 +143,11 @@ try {
     largestFixed.execution.settings.splice(1, 0, { target: 'request', scope: [], name: 'min_tokens', value: 204800, unit: 'tokens', role: null });
     Object.assign(largestFixed.measurements.rows[0], { max_output_tokens: 204800, reported_completion_tokens: 409600, reported_completion_tokens_by_request: [204800, 204800] });
     assert.equal(validatePublicBenchmark(largestFixed), largestFixed, 'The requested 200k fixed length accepts exact per-slot evidence.');
+    const shortestFixed = structuredClone(fixed);
+    shortestFixed.workload.max_output_tokens = 128;
+    shortestFixed.execution.settings[1].value = 128;
+    Object.assign(shortestFixed.measurements.rows[0], { max_output_tokens: 128, reported_completion_tokens: 256, reported_completion_tokens_by_request: [128, 128] });
+    assert.equal(validatePublicBenchmark(shortestFixed), shortestFixed, 'The 128-token desktop preset is a public fixed-output target.');
     const wrongMinimum = structuredClone(largestFixed);
     wrongMinimum.execution.settings[1].value = 131072;
     assert.throws(() => validatePublicBenchmark(wrongMinimum));
