@@ -77,8 +77,9 @@ GPU IDs, installations or connections are restored from public settings.
 ### Fixed-output measurements
 
 New runs use `openai-chat-serving@2`, with engine output-length control and an
-exact reported completion count for every request. The eight targets are
-1k/4k/8k/16k/32k/64k/128k/200k, where k=1024. Unsupported controls or unverifiable
+exact reported completion count for every request. The contract targets are
+128 and 1k/4k/8k/16k/32k/64k/128k/200k, where k=1024; new desktop runs use 128
+tokens, one sample per point and at most 8 concurrent requests. Unsupported controls or unverifiable
 counts fail instead of falling back to `@1`. Per-request count arrays are
 retained for replay/publication. Local serving schema2 and public schema3 stay
 in use; the method version distinguishes fixed output from historical caps.

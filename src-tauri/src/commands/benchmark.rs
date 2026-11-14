@@ -169,7 +169,7 @@ pub(crate) async fn run_performance_bench_with_progress(
         .operation
         .try_lock()
         .map_err(|_| AppError::busy("another server or benchmark operation is in progress"))?;
-    let validation = performance_bench::validate_execution_request(&mut request)
+    let validation = performance_bench::validate_desktop_request(&mut request)
         .map_err(AppError::validation)
         .and_then(|()| {
             cfg.normalize();

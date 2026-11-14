@@ -91,7 +91,9 @@ including each parallel slot's share.
 The shared contract's fixed-output targets are 128 and **1k, 4k, 8k, 16k, 32k,
 64k, 128k and 200k**, where k=1024 (200k=204800). Recorded runs with the longer
 targets, repetitions up to 100 or concurrencies up to 64 stay valid history and
-remain publishable; the native runner keeps those protocol bounds.
+remain publishable. New runs must request 128 output tokens, one repetition and
+concurrencies of at most 8; the native run and support-check commands reject
+anything else.
 
 Historical `openai-chat-serving@1` results remain cap-based, with their original
 values through 65536 and optional usage. They are never relabelled as fixed.

@@ -5,6 +5,15 @@ use tokio::{
     net::TcpListener as AsyncListener,
 };
 
+/// The workload the desktop app sends: 128 tokens, one sample per point.
+fn desktop_request() -> PerformanceBenchRequest {
+    PerformanceBenchRequest {
+        max_output_tokens: DESKTOP_OUTPUT_TOKENS,
+        repetitions: 1,
+        ..request()
+    }
+}
+
 fn request() -> PerformanceBenchRequest {
     PerformanceBenchRequest {
         run_id: "serving-journal".into(),
@@ -133,6 +142,34 @@ fn only_fixed_output_presets_execute_while_cap_requests_stay_readable() {
         ..request()
     };
     assert!(validate_request(&mut unknown).is_err());
+}
+
+#[test]
+fn desktop_runs_only_the_128_token_single_sample_workload_up_to_8_concurrent_requests() {
+    validate_desktop_request(&mut PerformanceBenchRequest {
+        concurrencies: vec![1, 2, 4, 8],
+        ..desktop_request()
+    })
+    .unwrap();
+    for invalid in [
+        PerformanceBenchRequest {
+            max_output_tokens: 1024,
+            ..desktop_request()
+        },
+        PerformanceBenchRequest {
+            repetitions: 2,
+            ..desktop_request()
+        },
+        PerformanceBenchRequest {
+            concurrencies: vec![8, 16],
+            ..desktop_request()
+        },
+    ] {
+        let mut request = invalid;
+        // Each stays a valid recorded workload under the shared contract.
+        validate_execution_request(&mut request.clone()).unwrap();
+        assert!(validate_desktop_request(&mut request).is_err());
+    }
 }
 
 struct Reply {
@@ -890,7 +927,7 @@ async fn native_benchmark_rejection_preserves_history_and_measurement_permits_on
         ..AppConfig::default()
     };
     registry::refresh(&cfg, None).await.unwrap();
-    let verdict = admission(cfg.clone(), request()).await;
+    let verdict = admission(cfg.clone(), desktop_request()).await;
     assert_eq!(verdict.status, "unsupported");
     assert_eq!(verdict.reason, "fixed_output");
     let expected_error = verdict.detail.unwrap();
@@ -944,7 +981,7 @@ async fn native_benchmark_rejection_preserves_history_and_measurement_permits_on
             cfg.clone(),
             PerformanceBenchRequest {
                 run_id: run_id.into(),
-                ..request()
+                ..desktop_request()
             },
             progress.clone(),
         )

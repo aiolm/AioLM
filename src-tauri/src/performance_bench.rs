@@ -323,6 +323,31 @@ pub fn validate_execution_request(request: &mut PerformanceBenchRequest) -> Resu
     Ok(())
 }
 
+/// Desktop product policy for runs started from the app: one sample per
+/// input/concurrency point at the 128-token preset, with at most 8 concurrent
+/// requests. Recorded history and the engine-level runner keep the wider
+/// protocol bounds of the shared contract.
+pub const DESKTOP_OUTPUT_TOKENS: u32 = 128;
+pub const DESKTOP_MAX_CONCURRENCY: u32 = 8;
+
+pub fn validate_desktop_request(request: &mut PerformanceBenchRequest) -> Result<(), String> {
+    validate_execution_request(request)?;
+    if request.max_output_tokens != DESKTOP_OUTPUT_TOKENS {
+        return Err("desktop benchmarks run exactly 128 output tokens".into());
+    }
+    if request.repetitions != 1 {
+        return Err("desktop benchmarks measure each input/concurrency point once".into());
+    }
+    if request
+        .concurrencies
+        .iter()
+        .any(|n| *n > DESKTOP_MAX_CONCURRENCY)
+    {
+        return Err("desktop benchmarks allow at most 8 concurrent requests".into());
+    }
+    Ok(())
+}
+
 /// The runtime must declare both a real force control and streamed usage;
 /// neither is assumed from an engine name, and there is no cap-mode fallback.
 pub(crate) fn fixed_output_control(engine: &EngineInfo) -> Result<FixedOutputControl, String> {
@@ -357,7 +382,7 @@ pub async fn admission(
         reason: "configuration",
         detail: Some(detail),
     };
-    if let Err(error) = validate_execution_request(&mut request) {
+    if let Err(error) = validate_desktop_request(&mut request) {
         return unknown(error);
     }
     if let Err(error) = crate::launch_validation::validate_start_config(&mut cfg) {
