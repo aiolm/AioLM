@@ -216,7 +216,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           {exportNotice && <FeedbackBanner tone="success" className="performance-notice">{exportNotice}</FeedbackBanner>}
           {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
           {legacyRecord ? <><ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} /></> : <ServingResultTable points={servingPoints} copy={copy} fixedOutput={!selectedRecord || selectedRecord.schemaVersion === 2 && selectedRecord.request.method.version === 2} />}
-          {!visibleRows.length && !visibleResult && !busy && !error && <EmptyState title={copy.emptyTitle} description={copy.empty} />}
+          {!visibleRows.length && !visibleResult && !busy && !error && <div className="app-card performance-results-empty"><EmptyState title={copy.emptyTitle} description={copy.empty} /></div>}
           <div className="app-card app-card--flush performance-disclosures">
             {selectedRecord && <details className="performance-details"><summary>{copy.details}</summary><div className="performance-details-body"><dl className="performance-run-config">
               <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>

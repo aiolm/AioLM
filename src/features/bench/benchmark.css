@@ -1,6 +1,8 @@
 .performance-page { height: 100%; min-height: 0; }
 .performance-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 24px; min-width: 0; }
 .performance-setup-column, .performance-results-column, .performance-results-area, .performance-sharing { display: grid; align-content: start; gap: 16px; min-width: 0; }
+/* No result yet still reserves a result-sized card, so later sections keep their place. */
+.performance-results-empty { display: grid; place-items: center; min-height: 16rem; }
 .performance-section-title { margin: 0; color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.4; }
 .performance-card { min-width: 0; overflow: hidden; }
 .performance-card-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); }
@@ -181,7 +183,12 @@
 .performance-explorer-actions > :not(.performance-target-actions) { contain: inline-size; }
 /* Use the actual work width, excluding shell/sidebar and page padding. */
 @container workspace (min-width: 900px) {
-  .performance-workspace { grid-template-columns: clamp(20rem, 25cqi, 28rem) minmax(0, 1fr); }
+  .performance-workspace { grid-template-columns: clamp(20rem, 25cqi, 28rem) minmax(0, 1fr); align-items: stretch; }
+  /* Beside the setup, an empty result card takes the remaining height so the
+     metrics guide and shared results line up with the setup's bottom edge. */
+  .performance-results-column, .performance-results-area { display: flex; flex-direction: column; }
+  .performance-results-area { flex: 1 0 auto; }
+  .performance-results-empty { flex: 1 0 auto; }
 }
 @container workspace (max-width: 620px) {
   .performance-share-summary, .performance-metric-guide > div { grid-template-columns: minmax(0, 1fr); }
