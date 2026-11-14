@@ -75,8 +75,10 @@ older target cannot enable the current one.
 Accepting refreshed runtime options under **Key settings** repeats the support check for the selected target. The target, workload and saved settings remain unchanged; this never starts a benchmark automatically.
 
 Choose exact input UTF-8 byte sizes, client concurrencies, corpus and warmup.
-Input sizes and concurrencies are always-visible checkbox chips; concurrency
-choices are 1, 2, 4 and 8. Defaults are 4096/16384 input bytes, concurrencies
+Input sizes and concurrencies are always-visible checkbox chips. Input choices
+are 1K, 4K, 16K, 64K, 256K and 1024K UTF-8 bytes (K=1024), and the benchmark page
+labels input sizes in K; concurrency choices are 1, 2, 4 and 8. Defaults are
+4K/16K input bytes, concurrencies
 1/2/4, Python code and warmup enabled. Usage reporting is required and is no
 longer an optional setup checkbox.
 

@@ -23,7 +23,7 @@ import { formatBytes, formatCpuCores } from '../../shared/lib/units';
 import BenchmarkExplorerActions from './BenchmarkExplorerActions';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import type { usePerformanceBench } from './usePerformanceBench';
-import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID } from './performanceBenchConfig';
+import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID, formatInputSize } from './performanceBenchConfig';
 
 const STATUS_TONES = { complete: 'success', partial: 'warning', cancelled: 'neutral', failed: 'danger' } as const;
 type Copy = ReturnType<typeof benchmarkCopy>;
@@ -153,7 +153,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
             <label className="performance-field"><span>{copy.corpus}</span><CustomSelect ariaLabel={copy.corpus} value={corpus} disabled={busy} onChange={setCorpus} options={CORPORA.map(key => ({ value: key, label: copy[key] }))} /></label>
             <fieldset className="performance-choice">
               <legend>{copy.inputBytes}</legend>
-              <div className="performance-chips">{PROMPT_BYTES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptBytes.includes(value)} onChange={() => toggle(value, promptBytes, setPromptBytes)} /><span>{value.toLocaleString()}</span></label>)}</div>
+              <div className="performance-chips">{PROMPT_BYTES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={promptBytes.includes(value)} onChange={() => toggle(value, promptBytes, setPromptBytes)} /><span>{formatInputSize(value)}</span></label>)}</div>
             </fieldset>
             <fieldset className="performance-choice" aria-describedby="performance-concurrency-hint">
               <legend>{copy.batchSizes}</legend>
@@ -220,7 +220,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           <div className="app-card app-card--flush performance-disclosures">
             {selectedRecord && <details className="performance-details"><summary>{copy.details}</summary><div className="performance-details-body"><dl className="performance-run-config">
               <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>
-              <div><dt>{selectedRecord.schemaVersion === 2 ? copy.inputBytes : copy.promptLengths}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.prompt_bytes : selectedRecord.request.prompt_lengths).map((value) => value.toLocaleString()).join(" / ")}</dd></div>
+              <div><dt>{selectedRecord.schemaVersion === 2 ? copy.inputBytes : copy.promptLengths}</dt><dd>{selectedRecord.schemaVersion === 2 ? selectedRecord.request.prompt_bytes.map(formatInputSize).join(" / ") : selectedRecord.request.prompt_lengths.map((value) => value.toLocaleString()).join(" / ")}</dd></div>
               <div><dt>{selectedRecord.schemaVersion === 2 ? selectedRecord.request.method.version === 2 ? copy.outputTokens : copy.outputCap : copy.generation}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.max_output_tokens : selectedRecord.request.generation_length).toLocaleString()}</dd></div>
               <div><dt>{copy.batchSizes}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.concurrencies : [1, ...selectedRecord.request.batch_sizes]).map((value) => `${value}×`).join(" / ")}</dd></div>
               <div><dt>{copy.repetitions}</dt><dd>{selectedRecord.request.repetitions}</dd></div>

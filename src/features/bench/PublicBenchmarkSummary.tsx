@@ -3,6 +3,7 @@ import { formatRuntimeVersionLabel, summarizeServingPoints, type LegacyPublicBen
 import { summarizePublicBenchmarkRows } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import type { benchmarkCopy } from './benchmarkCopy.ts';
 import { formatBytes, formatCpuCores, formatMebibytes } from '../../shared/lib/units.ts';
+import { formatInputSize } from './performanceBenchConfig.ts';
 
 type Copy = ReturnType<typeof benchmarkCopy>;
 
@@ -157,7 +158,7 @@ export function ServingResultTable({ points, copy, label = copy.servingResults, 
         {metrics.map(([key, label, unit]) => <th scope="col" key={key}>{label}{unit && <small>{unit}</small>}</th>)}
       </tr></thead>
       <tbody>{points.map(point => <tr key={`${point.input_bytes}/${point.concurrency}/${point.max_output_tokens}`}>
-        <th scope="row">{point.input_bytes.toLocaleString()} / {point.max_output_tokens.toLocaleString()}</th>
+        <th scope="row">{formatInputSize(point.input_bytes)} / {point.max_output_tokens.toLocaleString()}</th>
         <td>{point.concurrency}×</td><td>{point.samples}</td>
         {metrics.map(([key]) => <MetricCell key={key} stat={point[key]} copy={copy} memory={key === 'peak_memory_bytes'} />)}
       </tr>)}</tbody>
@@ -208,7 +209,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
     <section className="performance-share-settings" aria-label={copy.shareSettings}><h4>{copy.shareSettings}</h4><dl>
       <div><dt>{copy.method}</dt><dd>{snapshot.method.id}@{snapshot.method.version}</dd></div>
       <div><dt>{copy.corpus}</dt><dd>{copy[snapshot.workload.corpus]}</dd></div>
-      <div><dt>{copy.inputBytes}</dt><dd>{snapshot.workload.inputs.map(input => input.bytes.toLocaleString()).join(' / ')}</dd></div>
+      <div><dt>{copy.inputBytes}</dt><dd>{snapshot.workload.inputs.map(input => formatInputSize(input.bytes)).join(' / ')}</dd></div>
       {snapshot.workload.inputs.map(input => <div key={input.bytes}><dt>{copy.inputHash} · {input.bytes}</dt><dd>{input.sha256}</dd></div>)}
       <div><dt>{snapshot.method.version === 2 ? copy.outputTokens : copy.outputCap}</dt><dd>{snapshot.workload.max_output_tokens}</dd></div>
       <div><dt>{copy.concurrency}</dt><dd>{snapshot.workload.concurrencies.map(value => `${value}×`).join(' / ')}</dd></div>
