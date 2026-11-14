@@ -76,8 +76,8 @@ Accepting refreshed runtime options under **Key settings** repeats the support c
 
 Choose exact input UTF-8 byte sizes, client concurrencies, corpus and warmup.
 Input sizes and concurrencies are always-visible checkbox chips. Input choices
-are 1K, 4K, 16K, 64K, 256K and 1024K UTF-8 bytes (K=1024), and the benchmark page
-labels input sizes in K; concurrency choices are 1, 2, 4 and 8. Defaults are
+are 1K, 4K, 16K, 64K, 256K and 1M UTF-8 bytes (K=1024, M=1024K), and the
+benchmark page labels input sizes in K/M; concurrency choices are 1, 2, 4 and 8. Defaults are
 4K/16K input bytes, concurrencies
 1/2/4, Python code and warmup enabled. Usage reporting is required and is no
 longer an optional setup checkbox.

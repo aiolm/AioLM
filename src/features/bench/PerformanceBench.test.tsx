@@ -484,7 +484,7 @@ describe("Performance benchmark workflow", () => {
   it("requires an input size and the loaded model to unload before measuring", async () => {
     const { rerender } = renderPanel();
     const inputs = within(screen.getByRole("group", { name: "Input UTF-8 bytes" })).getAllByRole("checkbox");
-    expect(inputs.map(box => box.closest("label")?.textContent)).toEqual(["1K", "4K", "16K", "64K", "256K", "1024K"]);
+    expect(inputs.map(box => box.closest("label")?.textContent)).toEqual(["1K", "4K", "16K", "64K", "256K", "1M"]);
     fireEvent.click(screen.getByRole("checkbox", { name: "4K" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "16K" }));
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
