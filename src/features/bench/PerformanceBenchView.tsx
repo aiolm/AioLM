@@ -94,7 +94,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
     otherBenchmark, valid, serverRunning, targetDiffers,
     displayedTarget, displayedModel, blockingSessions, setupGaps, admission, canRun,
     total, selectedRecord, localImportUnavailable, previousRecords, historyModelNames, exportAllDiffers,
-    visibleRows, visibleResult, provenance, selectedGpuLabel, modelHash, legacyRecord,
+    visibleResult, provenance, selectedGpuLabel, modelHash, legacyRecord,
     servingRecord, servingPoints, singleRows, batchRows, servingProvenance,
     modelSource, refreshSessions, loadHistory, editModel, stopSessions, cancel,
     run, toggle, statusLabel, progressMessage, copyResults,
@@ -216,7 +216,8 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           {exportNotice && <FeedbackBanner tone="success" className="performance-notice">{exportNotice}</FeedbackBanner>}
           {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
           {legacyRecord ? <><ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} /></> : <ServingResultTable points={servingPoints} copy={copy} fixedOutput={!selectedRecord || selectedRecord.schemaVersion === 2 && selectedRecord.request.method.version === 2} />}
-          {!visibleRows.length && !visibleResult && !busy && !error && <div className="app-card performance-results-empty"><EmptyState title={copy.emptyTitle} description={copy.empty} /></div>}
+          {/* Reserve the result space whenever no table shows (idle, running before the first point, or failed), so later sections never jump. */}
+          {!(legacyRecord ? singleRows.length + batchRows.length : servingPoints.length) && <div className="app-card performance-results-empty"><EmptyState title={copy.emptyTitle} description={copy.empty} /></div>}
           <div className="app-card app-card--flush performance-disclosures">
             {selectedRecord && <details className="performance-details"><summary>{copy.details}</summary><div className="performance-details-body"><dl className="performance-run-config">
               <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>

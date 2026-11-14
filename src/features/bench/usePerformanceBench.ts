@@ -131,7 +131,6 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const previousRecords = history.filter(item => item.id !== record?.id);
   const historyModelNames = useModelNames(previousRecords.map(item => item.schemaVersion === 1 ? item.model : ''));
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0]?.id !== selectedRecord?.id);
-  const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
   const visibleResult = selectedHistory && selectedRecord ? selectedRecord.result : result;
   const provenance = selectedRecord?.result.provenance;
   const selectedGpus = provenance?.environment?.execution?.selected_gpus;
@@ -355,7 +354,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     busy, otherBenchmark, valid, serverRunning,
     targetDiffers, displayedTarget, displayedModel, blockingSessions, setupGaps, admission,
     canRun, total, selectedRecord, localImportUnavailable, previousRecords, historyModelNames,
-    exportAllDiffers, visibleRows, visibleResult, provenance, selectedGpuLabel, modelHash,
+    exportAllDiffers, visibleResult, provenance, selectedGpuLabel, modelHash,
     legacyRecord, servingRecord, servingPoints, singleRows, batchRows,
     servingProvenance, modelSource, refreshSessions, loadHistory, editModel, stopSessions,
     cancel, run, toggle, statusLabel, progressMessage,
