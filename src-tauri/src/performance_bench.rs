@@ -1,24 +1,15 @@
 //! Client-observed OpenAI chat serving measurements on an isolated adapter launch.
 //!
-//! New runs use the fixed-output method `openai-chat-serving@2`: every request
-//! carries the runtime's declared force control (`ignore_eos` or `min_tokens`)
-//! next to `max_tokens`, and every launch slot must report exactly the selected
-//! completion token count before its batch can become a row. Historical `@1`
-//! records stay readable as cap measurements, but are never executed again.
-//!
-//! Budgets scale with the target in 1024-token units (`ceil(target / 1024)`):
-//! each request may take 5 minutes per unit and stream 8 MiB plus 1 KiB per
-//! target token; a run may take 30 minutes per unit. The 204800-token preset
-//! therefore allows 1000 minutes per request, 6000 minutes per run and
-//! 208 MiB per response. Cancellation always ends a run immediately. Output is
-//! counted while streaming and never retained or preallocated.
+//! Cold Prompt `openai-chat-serving@5` uses one normal isolated launch, then
+//! distinct run/point/slot user prompts without workload warmup. Early completion
+//! and missing token usage are valid observations.
+//! Requests use a five-minute, 8 MiB budget and runs have a 30-minute limit.
+//! Output is counted while streaming and never retained or preallocated.
 mod corpus;
 mod protocol;
 
 use crate::benchmark::provenance::{ServingBenchmarkProvenance, ServingInput, ServingWorkload};
-use crate::providers::protocol::{
-    EngineInfo, FixedOutputControl, RequestDefaultsPolicy, ServingMemoryScope,
-};
+use crate::providers::protocol::{EngineInfo, RequestDefaultsPolicy, ServingMemoryScope};
 use crate::{
     config::AppConfig, error::AppError, gpu::ResolvedGpu, performance_memory::PeakMemorySampler,
     server,
@@ -34,22 +25,13 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-/// Run budget per started 1024 target tokens.
-const RUN_TIMEOUT_PER_UNIT: Duration = Duration::from_secs(30 * 60);
+/// Wall-clock budget for an entire run, including launch.
+const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-/// Historical cap-only method; readable, never executed.
-pub const CAP_METHOD_VERSION: u32 = 1;
-/// Exact fixed-output method used by every new execution.
-pub const FIXED_OUTPUT_METHOD_VERSION: u32 = 2;
-/// The only targets a fixed-output run may request (1k = 1024 tokens). The
-/// desktop benchmark runs the 128-token preset; longer presets stay valid for
-/// recorded history and the shared public contract.
-pub const FIXED_OUTPUT_TOKENS: [u32; 9] =
-    [128, 1024, 4096, 8192, 16384, 32768, 65536, 131072, 204800];
-pub const MAX_SERVING_OUTPUT_TOKENS: u32 = crate::providers::protocol::MAX_FIXED_OUTPUT_TOKENS;
-/// Historical cap records accepted request limits up to this value.
-pub(crate) const CAP_METHOD_MAX_OUTPUT_TOKENS: u32 = 65_536;
+/// Fresh user-prompt inputs without measured-workload warmup.
+pub const METHOD_VERSION: u32 = 5;
+pub const MAX_SERVING_OUTPUT_TOKENS: u32 = 128;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -63,18 +45,9 @@ impl Default for ServingMethod {
     fn default() -> Self {
         Self {
             id: "openai-chat-serving".into(),
-            version: FIXED_OUTPUT_METHOD_VERSION,
+            version: METHOD_VERSION,
         }
     }
-}
-
-/// Number of started 1024-token units; the scale for every bounded budget.
-pub(crate) fn budget_units(target: u32) -> u32 {
-    target.div_ceil(1024).max(1)
-}
-
-pub(crate) fn run_timeout(target: u32) -> Duration {
-    RUN_TIMEOUT_PER_UNIT * budget_units(target)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -100,19 +73,15 @@ pub struct PerformanceBenchRow {
     pub concurrency: u32,
     pub repetition: u32,
     pub first_output_ms: Option<f64>,
-    pub first_content_ms: Option<f64>,
-    pub first_reasoning_ms: Option<f64>,
+    /// Digests of the actual user prompts, in launch-slot order.
+    pub input_sha256_by_request: Vec<String>,
     pub e2e_ms: f64,
-    pub content_bytes: u64,
-    pub reasoning_bytes: u64,
     pub output_bytes: u64,
     pub reported_prompt_tokens: Option<u64>,
     pub reported_completion_tokens: Option<u64>,
-    /// Fixed-output evidence: one reported completion count per launch slot,
-    /// in slot order. Absent on historical cap rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reported_completion_tokens_by_request: Option<Vec<u64>>,
-    pub reported_cached_tokens: Option<u64>,
+    pub prefill_tokens_per_second: Option<f64>,
+    pub decode_tokens_per_second: Option<f64>,
+    pub tpot_ms: Option<f64>,
     pub usage_status: String,
     pub finish_reasons: Vec<String>,
     pub peak_memory_bytes: Option<u64>,
@@ -124,7 +93,9 @@ pub struct PerformanceBenchRow {
 impl PerformanceBenchRow {
     pub(crate) fn validate(&self) -> bool {
         let time = |value: f64| value.is_finite() && value >= 0.0;
+        let positive = |value: f64| value.is_finite() && value > 0.0;
         let counter = |value: Option<u64>| value.is_none_or(|n| n <= MAX_SAFE_INTEGER);
+        let known = [self.reported_prompt_tokens, self.reported_completion_tokens];
         !self.id.is_empty()
             && self.id.len() <= 256
             && (256..=1048576).contains(&self.input_bytes)
@@ -132,96 +103,41 @@ impl PerformanceBenchRow {
             && (1..=64).contains(&self.concurrency)
             && (1..=100).contains(&self.repetition)
             && time(self.e2e_ms)
-            && [
-                self.first_output_ms,
-                self.first_content_ms,
-                self.first_reasoning_ms,
-            ]
-            .into_iter()
-            .all(|v| v.is_none_or(time))
-            && self.content_bytes <= MAX_SAFE_INTEGER
-            && self.reasoning_bytes <= MAX_SAFE_INTEGER
-            && self.content_bytes.checked_add(self.reasoning_bytes) == Some(self.output_bytes)
+            && self.first_output_ms.is_none_or(time)
+            && self.prefill_tokens_per_second.is_none_or(time)
+            && self.decode_tokens_per_second.is_none_or(positive)
+            && self.tpot_ms.is_none_or(positive)
+            && (self.first_output_ms.is_some()
+                || [self.prefill_tokens_per_second, self.decode_tokens_per_second, self.tpot_ms]
+                    .iter().all(Option::is_none))
+            && (self.reported_prompt_tokens.is_some() || self.prefill_tokens_per_second.is_none())
+            && (self.reported_completion_tokens.is_some()
+                || (self.decode_tokens_per_second.is_none() && self.tpot_ms.is_none()))
             && self.output_bytes <= MAX_SAFE_INTEGER
-            && (self.content_bytes != 0 || self.first_content_ms.is_none())
-            && (self.reasoning_bytes != 0 || self.first_reasoning_ms.is_none())
             && (self.output_bytes != 0 || self.first_output_ms.is_none())
             && counter(self.reported_prompt_tokens)
             && counter(self.reported_completion_tokens)
-            && counter(self.reported_cached_tokens)
-            && self
-                .reported_completion_tokens_by_request
-                .as_ref()
-                .is_none_or(|counts| {
-                    counts.len() == self.concurrency as usize
-                        && counts
-                            .iter()
-                            .try_fold(0u64, |sum, n| {
-                                sum.checked_add(*n).filter(|sum| *sum <= MAX_SAFE_INTEGER)
-                            })
-                            .is_some_and(|sum| Some(sum) == self.reported_completion_tokens)
-                })
-            && self
-                .reported_cached_tokens
-                .zip(self.reported_prompt_tokens)
-                .is_none_or(|(cached, prompt)| cached <= prompt)
+            && self.input_sha256_by_request.len() == self.concurrency as usize
+            && self.input_sha256_by_request.iter().enumerate().all(|(index, hash)| {
+                hash.len() == 64
+                    && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    && !self.input_sha256_by_request[..index].contains(hash)
+            })
             && match self.usage_status.as_str() {
-                "complete" => [
-                    self.reported_prompt_tokens,
-                    self.reported_completion_tokens,
-                    self.reported_cached_tokens,
-                ]
-                .iter()
-                .all(Option::is_some),
-                "partial" => [
-                    self.reported_prompt_tokens,
-                    self.reported_completion_tokens,
-                    self.reported_cached_tokens,
-                ]
-                .iter()
-                .any(Option::is_none),
-                "missing" | "invalid" => [
-                    self.reported_prompt_tokens,
-                    self.reported_completion_tokens,
-                    self.reported_cached_tokens,
-                ]
-                .iter()
-                .all(Option::is_none),
+                "complete" => known.iter().all(Option::is_some),
+                "partial" => known.iter().any(Option::is_none),
+                "missing" | "invalid" => known.iter().all(Option::is_none),
                 _ => false,
             }
             && self.finish_reasons.len() == self.concurrency as usize
             && self.finish_reasons.iter().all(|v| {
-                [
-                    "stop",
-                    "length",
-                    "content_filter",
-                    "tool_calls",
-                    "other",
-                    "not_reported",
-                ]
-                .contains(&v.as_str())
+                ["stop", "length", "content_filter", "tool_calls", "other", "not_reported"]
+                    .contains(&v.as_str())
             })
             && counter(self.peak_memory_bytes)
             && self.timing_source == "client"
             && !self.failed
             && self.error.is_none()
-    }
-
-    /// A fixed-output row proves every launch slot produced exactly `target`
-    /// reported completion tokens; an aggregate that merely sums correctly
-    /// is not evidence.
-    pub(crate) fn validate_fixed_output(&self, target: u32) -> bool {
-        let target = u64::from(target);
-        self.validate()
-            && self.max_output_tokens as u64 == target
-            && self
-                .reported_completion_tokens_by_request
-                .as_ref()
-                .is_some_and(|counts| {
-                    counts.len() == self.concurrency as usize
-                        && counts.iter().all(|count| *count == target)
-                })
-            && self.reported_completion_tokens == Some(target * u64::from(self.concurrency))
     }
 }
 
@@ -252,8 +168,7 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     if request.run_id.is_empty() || request.run_id.len() > 128 {
         return Err("benchmark run_id must contain 1 to 128 bytes".into());
     }
-    if request.method.id != "openai-chat-serving"
-        || ![CAP_METHOD_VERSION, FIXED_OUTPUT_METHOD_VERSION].contains(&request.method.version)
+    if request.method.id != "openai-chat-serving" || request.method.version != METHOD_VERSION
     {
         return Err("unsupported benchmark method".into());
     }
@@ -286,18 +201,11 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     if !(1..=100).contains(&request.repetitions) {
         return Err("repetitions must be 1 to 100".into());
     }
-    if request.method.version == FIXED_OUTPUT_METHOD_VERSION {
-        if !FIXED_OUTPUT_TOKENS.contains(&request.max_output_tokens) {
-            return Err(
-                "fixed output tokens must be 128, 1024, 4096, 8192, 16384, 32768, 65536, 131072 or 204800"
-                    .into(),
-            );
-        }
-        if !request.request_usage {
-            return Err("fixed-output benchmarks require reported token usage".into());
-        }
-    } else if !(1..=CAP_METHOD_MAX_OUTPUT_TOKENS).contains(&request.max_output_tokens) {
-        return Err("maximum output tokens must be 1 to 65536".into());
+    if !(1..=MAX_SERVING_OUTPUT_TOKENS).contains(&request.max_output_tokens) {
+        return Err("maximum output tokens must be 1 to 128".into());
+    }
+    if request.warmup {
+        return Err("Cold Prompt benchmarks do not warm up measured prompts".into());
     }
     // Reject duplicate points rather than silently changing the requested workload.
     request.prompt_bytes.sort_unstable();
@@ -311,20 +219,13 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     Ok(())
 }
 
-/// Generic validation plus the execution rule: only the fixed-output method runs.
+/// Admission and execution share the single benchmark request contract.
 pub fn validate_execution_request(request: &mut PerformanceBenchRequest) -> Result<(), String> {
-    validate_request(request)?;
-    if request.method.version != FIXED_OUTPUT_METHOD_VERSION {
-        return Err(
-            "only the fixed-output method openai-chat-serving@2 can be run; @1 cap records remain readable history"
-                .into(),
-        );
-    }
-    Ok(())
+    validate_request(request)
 }
 
 /// Desktop product policy for runs started from the app: one sample per
-/// input/concurrency point at the 128-token preset, with at most 8 concurrent
+/// input/concurrency point at a 128-token output cap, with at most 8 concurrent
 /// requests. Recorded history and the engine-level runner keep the wider
 /// protocol bounds of the shared contract.
 pub const DESKTOP_OUTPUT_TOKENS: u32 = 128;
@@ -333,7 +234,7 @@ pub const DESKTOP_MAX_CONCURRENCY: u32 = 8;
 pub fn validate_desktop_request(request: &mut PerformanceBenchRequest) -> Result<(), String> {
     validate_execution_request(request)?;
     if request.max_output_tokens != DESKTOP_OUTPUT_TOKENS {
-        return Err("desktop benchmarks run exactly 128 output tokens".into());
+        return Err("desktop benchmarks use a 128-token output cap".into());
     }
     if request.repetitions != 1 {
         return Err("desktop benchmarks measure each input/concurrency point once".into());
@@ -346,21 +247,6 @@ pub fn validate_desktop_request(request: &mut PerformanceBenchRequest) -> Result
         return Err("desktop benchmarks allow at most 8 concurrent requests".into());
     }
     Ok(())
-}
-
-/// The runtime must declare both a real force control and streamed usage;
-/// neither is assumed from an engine name, and there is no cap-mode fallback.
-pub(crate) fn fixed_output_control(engine: &EngineInfo) -> Result<FixedOutputControl, String> {
-    let control = engine.fixed_output.ok_or(
-        "the selected runtime does not declare a fixed-output control (ignore_eos or min_tokens), so it cannot run a fixed-output benchmark",
-    )?;
-    if engine.stream_usage_supported != Some(true) {
-        return Err(
-            "the selected runtime does not declare streamed token usage, so exact output counts cannot be verified"
-                .into(),
-        );
-    }
-    Ok(control)
 }
 
 /// Read-only admission from the selected model/runtime's existing probe metadata.
@@ -392,7 +278,16 @@ pub async fn admission(
         Ok(engine) => engine,
         Err(error) => return unknown(error),
     };
-    engine_admission(&engine, &request)
+    engine_admission(&engine, &effective_request(&engine, &request))
+}
+
+/// Standard OpenAI streamed usage is requested unless the runtime explicitly
+/// declares that it rejects `stream_options`; unknown support is attempted.
+fn effective_request(engine: &EngineInfo, request: &PerformanceBenchRequest) -> PerformanceBenchRequest {
+    let mut effective = request.clone();
+    effective.request_usage =
+        request.request_usage && engine.stream_usage_supported != Some(false);
+    effective
 }
 
 fn engine_admission(engine: &EngineInfo, request: &PerformanceBenchRequest) -> BenchmarkAdmission {
@@ -401,13 +296,7 @@ fn engine_admission(engine: &EngineInfo, request: &PerformanceBenchRequest) -> B
         reason,
         detail: Some(detail),
     };
-    let Some(control) = engine.fixed_output else {
-        return unsupported("fixed_output", fixed_output_control(engine).unwrap_err());
-    };
-    if let Err(error) = fixed_output_control(engine) {
-        return unsupported("stream_usage", error);
-    }
-    match point_body(engine, String::new(), request, control) {
+    match point_body(engine, String::new(), request) {
         Ok(_) => BenchmarkAdmission {
             status: "supported",
             reason: "ready",
@@ -415,36 +304,6 @@ fn engine_admission(engine: &EngineInfo, request: &PerformanceBenchRequest) -> B
         },
         Err(error) => unsupported("request", error),
     }
-}
-
-/// Each launch slot must report exactly `target` completion tokens. A batch
-/// with early EOS, overrun, or a missing/invalid counter is not a measurement.
-fn fixed_output_counts(
-    target: u32,
-    measurements: &[protocol::Measurement],
-) -> Result<Vec<u64>, String> {
-    let target = u64::from(target);
-    measurements
-        .iter()
-        .enumerate()
-        .map(
-            |(slot, measurement)| match measurement.reported_completion_tokens {
-                Some(count) if count == target => Ok(count),
-                Some(count) if count < target => Err(format!(
-                    "request {} stopped after {count} of {target} output tokens",
-                    slot + 1
-                )),
-                Some(count) => Err(format!(
-                    "request {} reported {count} output tokens instead of exactly {target}",
-                    slot + 1
-                )),
-                None => Err(format!(
-                    "request {} did not report a valid completion token count",
-                    slot + 1
-                )),
-            },
-        )
-        .collect()
 }
 
 pub fn failed(
@@ -566,15 +425,13 @@ fn aggregate(
     };
     let prompt = sum(|m| m.reported_prompt_tokens);
     let completion = sum(|m| m.reported_completion_tokens);
-    let cached = sum(|m| m.reported_cached_tokens);
     let invalid = measurements.iter().any(|m| m.usage_status == "invalid")
         || prompt.is_err()
-        || completion.is_err()
-        || cached.is_err();
-    let (reported_prompt_tokens, reported_completion_tokens, reported_cached_tokens) = if invalid {
-        (None, None, None)
+        || completion.is_err();
+    let (reported_prompt_tokens, reported_completion_tokens) = if invalid {
+        (None, None)
     } else {
-        (prompt.unwrap(), completion.unwrap(), cached.unwrap())
+        (prompt.unwrap(), completion.unwrap())
     };
     let usage_status = if invalid {
         "invalid"
@@ -585,8 +442,34 @@ fn aggregate(
     } else {
         "partial"
     };
-    let content_bytes = measurements.iter().map(|m| m.content_bytes).sum();
-    let reasoning_bytes = measurements.iter().map(|m| m.reasoning_bytes).sum();
+    let (prefill_tokens_per_second, decode_tokens_per_second, tpot_ms) = if invalid {
+        (None, None, None)
+    } else {
+        let mut prefill_total = Some(0.0);
+        let mut decode_total = Some(0.0);
+        let mut tpot_total = Some(0.0);
+        for measurement in measurements {
+            let first = measurement.first_output_ms;
+            let prefill = measurement.reported_prompt_tokens
+                .filter(|tokens| *tokens > 0)
+                .zip(first.filter(|ms| *ms > 0.0))
+                .map(|(tokens, ms)| 1000.0 * tokens as f64 / ms);
+            let tpot = measurement.reported_completion_tokens
+                .filter(|tokens| *tokens >= 2)
+                .zip(first)
+                .filter(|(_, ms)| measurement.e2e_ms > *ms)
+                .map(|(tokens, ms)| (measurement.e2e_ms - ms) / (tokens - 1) as f64)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            prefill_total = prefill_total.zip(prefill).map(|(sum, value)| sum + value);
+            decode_total = decode_total.zip(tpot).map(|(sum, value)| sum + 1000.0 / value);
+            tpot_total = tpot_total.zip(tpot).map(|(sum, value)| sum + value);
+        }
+        let mean = |total: Option<f64>| total
+            .filter(|_| !measurements.is_empty())
+            .map(|sum| sum / measurements.len() as f64)
+            .filter(|value| value.is_finite());
+        (mean(prefill_total), mean(decode_total), mean(tpot_total))
+    };
     let finished = measurements
         .iter()
         .map(|m| m.finished)
@@ -601,17 +484,15 @@ fn aggregate(
         max_output_tokens: request.max_output_tokens,
         concurrency,
         repetition,
+        input_sha256_by_request: Vec::new(),
         first_output_ms: channel_mean(measurements, |m| m.first_output_ms),
-        first_content_ms: channel_mean(measurements, |m| m.first_content_ms),
-        first_reasoning_ms: channel_mean(measurements, |m| m.first_reasoning_ms),
         e2e_ms: finished.duration_since(started).as_secs_f64() * 1000.0,
-        content_bytes,
-        reasoning_bytes,
-        output_bytes: content_bytes + reasoning_bytes,
+        output_bytes: measurements.iter().map(|m| m.output_bytes).sum(),
         reported_prompt_tokens,
         reported_completion_tokens,
-        reported_completion_tokens_by_request: None,
-        reported_cached_tokens,
+        prefill_tokens_per_second,
+        decode_tokens_per_second,
+        tpot_ms,
         usage_status: usage_status.into(),
         finish_reasons: measurements
             .iter()
@@ -624,41 +505,55 @@ fn aggregate(
     }
 }
 
+enum BatchOutcome {
+    Complete(Instant, Vec<protocol::Measurement>),
+    UsageRejected(u16),
+}
+
 async fn batch(
     client: &reqwest::Client,
-    request: &reqwest::Request,
-    concurrency: u32,
+    requests: &[reqwest::Request],
     cancel: &AtomicBool,
     budget: protocol::Budget,
-) -> Result<(Instant, Vec<protocol::Measurement>), AppError> {
+    negotiate_usage: bool,
+) -> Result<BatchOutcome, AppError> {
     let started = Instant::now();
     let mut pending = FuturesUnordered::new();
+    let mut rejection = None;
     let mut measurements: Vec<Option<protocol::Measurement>> =
-        (0..concurrency).map(|_| None).collect();
-    for slot in 0..concurrency as usize {
+        (0..requests.len()).map(|_| None).collect();
+    for (slot, request) in requests.iter().enumerate() {
         pending.push(async move {
             (
                 slot,
-                protocol::request(client, request, cancel, budget).await,
+                protocol::request_outcome(client, request, cancel, budget, negotiate_usage).await,
             )
         });
     }
     while let Some((slot, result)) = pending.next().await {
-        measurements[slot] = Some(result?);
+        match result? {
+            protocol::RequestOutcome::Complete(measurement) => measurements[slot] = Some(measurement),
+            protocol::RequestOutcome::UsageRejected(status) => rejection = Some(status),
+        }
     }
     if cancel.load(Ordering::Acquire) {
         return Err(AppError::cancelled("benchmark cancelled"));
     }
-    Ok((
+    if let Some(status) = rejection {
+        if measurements.iter().any(Option::is_some) {
+            return Err(AppError::unavailable(
+                "the first usage batch mixed accepted streams with HTTP 400/422 rejections; it cannot be replayed",
+            ));
+        }
+        return Ok(BatchOutcome::UsageRejected(status));
+    }
+    Ok(BatchOutcome::Complete(
         started,
-        measurements
-            .into_iter()
-            .map(|m| m.expect("all launch slots completed"))
-            .collect(),
+        measurements.into_iter().map(|m| m.expect("all launch slots completed")).collect(),
     ))
 }
 
-/// Serialize once per input, then cheaply reuse the buffer across slots and concurrencies.
+/// Serialize a slot once, sharing its buffered body only for an all-rejected usage retry.
 fn point_request(
     client: &reqwest::Client,
     url: &str,
@@ -666,9 +561,8 @@ fn point_request(
     engine: &EngineInfo,
     text: String,
     request: &PerformanceBenchRequest,
-    control: FixedOutputControl,
 ) -> Result<reqwest::Request, String> {
-    let body = point_body(engine, text, request, control)?;
+    let body = point_body(engine, text, request)?;
     client
         .post(format!("{}/chat/completions", url.trim_end_matches('/')))
         .bearer_auth(key)
@@ -682,7 +576,6 @@ fn point_body(
     engine: &EngineInfo,
     text: String,
     request: &PerformanceBenchRequest,
-    control: FixedOutputControl,
 ) -> Result<serde_json::Value, String> {
     let model = engine
         .request_lora
@@ -690,11 +583,10 @@ fn point_body(
         .unwrap_or(&engine.upstream_model);
     let target = request.max_output_tokens;
     let mut body = serde_json::json!({"model": model, "messages": [{"role":"user"}], "temperature":0, "max_tokens":target, "stream":true});
-    body["messages"][0]["content"] = serde_json::Value::String(text);
     if request.request_usage {
-        body["stream_options"] = serde_json::json!({"include_usage":true});
+        body["stream_options"] = serde_json::json!({"include_usage": true});
     }
-    body[control.field_name()] = control.value(target);
+    body["messages"][0]["content"] = serde_json::Value::String(text);
     crate::providers::protocol::adapt_request(
         engine,
         "chat/completions",
@@ -702,13 +594,21 @@ fn point_body(
         RequestDefaultsPolicy::Omit,
     )
     .map_err(|error| error.message)?;
-    // The frozen descriptors are only true if the adapter sent them unchanged.
-    if body.get(control.field_name()) != Some(&control.value(target))
-        || body.get("max_tokens") != Some(&serde_json::json!(target))
+    // The adapter must preserve the standard request without injecting defaults.
+    let allowed: &[&str] = if request.request_usage {
+        &["model", "messages", "temperature", "max_tokens", "stream", "stream_options"]
+    } else {
+        &["model", "messages", "temperature", "max_tokens", "stream"]
+    };
+    if !body.as_object().is_some_and(|fields| {
+        fields.len() == allowed.len() && fields.keys().all(|key| allowed.contains(&key.as_str()))
+    }) || body.get("max_tokens") != Some(&serde_json::json!(target))
+        || body.get("temperature") != Some(&serde_json::json!(0))
+        || body.get("stream") != Some(&serde_json::json!(true))
         || (request.request_usage
-            && body.pointer("/stream_options/include_usage") != Some(&serde_json::json!(true)))
+            && body.get("stream_options") != Some(&serde_json::json!({"include_usage": true})))
     {
-        return Err("the runtime adapter did not send the fixed-output request unchanged".into());
+        return Err("the runtime adapter did not send the standard-cap request unchanged".into());
     }
     Ok(body)
 }
@@ -730,8 +630,10 @@ impl RuntimeInfo {
         let mut request = request.clone();
         validate_execution_request(&mut request).map_err(AppError::validation)?;
         let engine = crate::providers::execution::probed_info(cfg).await?;
-        let control = fixed_output_control(&engine).map_err(AppError::unavailable)?;
-        let admission = engine_admission(&engine, &request);
+        // The journaled request keeps the caller's intent; provenance freezes
+        // what this runtime is asked to send.
+        let effective = effective_request(&engine, &request);
+        let admission = engine_admission(&engine, &effective);
         if admission.status != "supported" {
             return Err(AppError::unavailable(
                 admission
@@ -739,7 +641,7 @@ impl RuntimeInfo {
                     .unwrap_or_else(|| "benchmark admission failed".into()),
             ));
         }
-        let (workload, input_texts) = prepare_inputs(&request);
+        let (workload, input_texts) = prepare_inputs(&effective);
         let model_path = PathBuf::from(&cfg.active_model);
         let label = model_path
             .file_name()
@@ -761,7 +663,6 @@ impl RuntimeInfo {
             workload,
             engine.serving_metadata.as_ref(),
             label,
-            control,
         );
         provenance
             .validate(&request.context_profile)
@@ -777,29 +678,37 @@ impl RuntimeInfo {
 }
 
 pub(crate) fn prepare_inputs(request: &PerformanceBenchRequest) -> (ServingWorkload, Vec<String>) {
+    let prompt_nonce = uuid::Uuid::new_v4().simple().to_string();
+    let first_concurrency = request.concurrencies.iter().copied().min().expect("validated grid");
+    // Freeze one shared suffix per size, not a complete grid of per-slot payloads.
     let input_texts: Vec<_> = request
         .prompt_bytes
         .iter()
-        .map(|bytes| corpus::text(&request.context_profile, *bytes as usize))
+        .map(|bytes| {
+            let suffix_bytes = *bytes as usize - corpus::COLD_PREFIX_BYTES;
+            corpus::text(&request.context_profile, suffix_bytes)
+        })
         .collect();
-    let inputs = input_texts
-        .iter()
-        .map(|text| ServingInput {
-            bytes: text.len() as u32,
-            sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+    let inputs = request.prompt_bytes.iter().copied().zip(&input_texts)
+        .map(|(bytes, text)| {
+            let mut hash = Sha256::new();
+            hash.update(corpus::cold_prefix(&prompt_nonce, (bytes, first_concurrency, 1), 0).as_bytes());
+            hash.update(text.as_bytes());
+            ServingInput { bytes, sha256: format!("{:x}", hash.finalize()) }
         })
         .collect();
     (
         ServingWorkload {
             corpus: request.context_profile.clone(),
-            corpus_version: 1,
+            corpus_version: 2,
             inputs,
             max_output_tokens: request.max_output_tokens,
             concurrencies: request.concurrencies.clone(),
             repetitions: request.repetitions,
             warmup: request.warmup,
             request_usage: request.request_usage,
-            cache_policy: "as_configured".into(),
+            cache_policy: "cold_prompt".into(),
+            prompt_nonce: Some(prompt_nonce),
         },
         input_texts,
     )
@@ -808,13 +717,82 @@ pub(crate) fn prepare_inputs(request: &PerformanceBenchRequest) -> (ServingWorkl
 pub(crate) type Checkpoint =
     Arc<dyn Fn(&PerformanceBenchResult) -> Result<(), AppError> + Send + Sync>;
 
+/// Only the current point's distinct slot payloads are buffered. The first
+/// actual batch decides usage support for the rest of the run.
+struct BufferedWorkload {
+    request: PerformanceBenchRequest,
+    slots: Vec<reqwest::Request>,
+    input_hashes: Option<Vec<String>>,
+    usage_undecided: bool,
+}
+
+impl BufferedWorkload {
+    #[allow(clippy::too_many_arguments)]
+    async fn measure(
+        &mut self,
+        client: &reqwest::Client,
+        pid: u32,
+        tree: Option<&crate::procutil::ProcessHandle>,
+        memory_scope: ServingMemoryScope,
+        cancel: &AtomicBool,
+        result: &mut PerformanceBenchResult,
+        checkpoint: Option<&Checkpoint>,
+        progress: &Progress,
+    ) -> Result<(Instant, Vec<protocol::Measurement>, Option<u64>), AppError> {
+        loop {
+            // Each accepted attempt owns its timer and sampler; rejected
+            // negotiation latency/memory never enters the measured row.
+            let sampler = match memory_scope {
+                ServingMemoryScope::OwnedProcessTree if tree.is_some() => {
+                    Some(PeakMemorySampler::start(pid, tree.cloned()))
+                }
+                ServingMemoryScope::OwnedRootProcess => Some(PeakMemorySampler::start(pid, None)),
+                _ => None,
+            };
+            let measured = batch(client, &self.slots, cancel,
+                protocol::Budget::default(), self.usage_undecided).await;
+            let peak = sampler.and_then(PeakMemorySampler::finish);
+            match measured? {
+                BatchOutcome::Complete(started, measurements) => {
+                    self.usage_undecided = false;
+                    return Ok((started, measurements, peak));
+                }
+                BatchOutcome::UsageRejected(status) => {
+                    self.usage_undecided = false;
+                    self.request.request_usage = false;
+                    let provenance = result.provenance.as_mut().expect("frozen provenance");
+                    provenance.workload.request_usage = false;
+                    provenance.execution.settings.retain(|setting| {
+                        !(setting.target == "request" && setting.name == "stream_options.include_usage")
+                    });
+                    // Persist the actual request policy before any resend.
+                    if let Some(checkpoint) = checkpoint { checkpoint(result)?; }
+                    emit(progress, &self.request, "loading", result.rows.len(), None, Some(format!(
+                        "The runtime rejected stream_options.include_usage (HTTP {status}); token usage is not requested for this run."
+                    )));
+                    for buffered in &mut self.slots {
+                        let bytes = buffered.body().and_then(reqwest::Body::as_bytes)
+                            .ok_or("benchmark request body is not buffered")?;
+                        let mut body: serde_json::Value = serde_json::from_slice(bytes)
+                            .map_err(|error| error.to_string())?;
+                        body.as_object_mut().ok_or("benchmark request body is not an object")?
+                            .remove("stream_options");
+                        *buffered.body_mut() = Some(serde_json::to_vec(&body)
+                            .map_err(|error| error.to_string())?.into());
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn trial(
-    request: &PerformanceBenchRequest,
+    workload: &mut BufferedWorkload,
     client: &reqwest::Client,
-    buffered: &reqwest::Request,
     point: (u32, u32, u32),
     pid: u32,
+    tree: Option<&crate::procutil::ProcessHandle>,
     memory_scope: ServingMemoryScope,
     cancel: &AtomicBool,
     result: &mut PerformanceBenchResult,
@@ -822,39 +800,33 @@ async fn trial(
     progress: &Progress,
 ) -> Result<(), AppError> {
     let (input_bytes, concurrency, repetition) = point;
+    if workload.slots.len() != concurrency as usize
+        || workload.input_hashes.as_ref().is_none_or(|hashes| hashes.len() != concurrency as usize)
+    {
+        return Err(AppError::validation("buffered slot inputs do not match the measured point"));
+    }
+    let request = &workload.request;
     let target = request.max_output_tokens;
     let phase = if concurrency == 1 { "single" } else { "batch" };
     emit(progress,request,phase,result.rows.len(),None,Some(format!("{input_bytes} UTF-8 bytes / {target} output tokens, {concurrency} request(s), repetition {repetition}")));
-    let sampler =
-        (memory_scope != ServingMemoryScope::Unavailable).then(|| PeakMemorySampler::start(pid));
-    let measured = batch(
-        client,
-        buffered,
-        concurrency,
-        cancel,
-        protocol::Budget::fixed_output(target),
-    )
-    .await;
-    let peak = sampler.and_then(PeakMemorySampler::finish);
+    let measured = workload.measure(client, pid, tree,
+        memory_scope, cancel, result, checkpoint, progress).await;
     let failure = |e: AppError| {
         AppError::new(
             e.kind,
             format!("point b{input_bytes}/c{concurrency}/o{target}, repetition {repetition}: {e}"),
         )
     };
-    let (started, measurements) = measured.map_err(failure)?;
+    let (started, measurements, peak) = measured.map_err(failure)?;
     if cancel.load(Ordering::Acquire) {
         return Err(failure(AppError::cancelled("benchmark cancelled")));
     }
-    // Per-request evidence is checked before any aggregate or checkpoint.
-    let counts = fixed_output_counts(target, &measurements)
-        .map_err(AppError::unavailable)
-        .map_err(failure)?;
+    let request = &workload.request;
     let mut row = aggregate(request, point, started, &measurements, peak);
-    row.reported_completion_tokens_by_request = Some(counts);
-    if !row.validate_fixed_output(target) {
+    row.input_sha256_by_request = workload.input_hashes.take().unwrap_or_default();
+    if !row.validate() {
         return Err(failure(AppError::unavailable(
-            "reported usage could not be recorded as fixed-output evidence",
+            "serving observations could not be recorded",
         )));
     }
     result.rows.push(row.clone());
@@ -892,21 +864,22 @@ pub async fn run(
     let mut active_point = None;
     emit(&progress, &request, "loading", 0, None, None);
     let target = request.max_output_tokens;
-    let timeout = run_timeout(target);
-    let timeout_minutes = timeout.as_secs() / 60;
-    let request_budget = protocol::Budget::fixed_output(target);
-    let outcome: Result<(),AppError> = tokio::time::timeout(timeout, async {
+    let timeout_minutes = RUN_TIMEOUT.as_secs() / 60;
+    let request_budget = protocol::Budget::default();
+    let outcome: Result<(),AppError> = tokio::time::timeout(RUN_TIMEOUT, async {
         if cancel.load(Ordering::Acquire) { return Err(AppError::cancelled("benchmark cancelled")); }
         let provenance = result.provenance.as_ref().expect("frozen provenance");
         provenance.validate(&request.context_profile).map_err(AppError::validation)?;
-        let frozen_control = provenance.fixed_output_control()
-            .filter(|_| provenance.method.version == request.method.version)
-            .ok_or_else(|| AppError::validation("prepared serving provenance does not describe a fixed-output run"))?;
+        if provenance.method.id != request.method.id || provenance.method.version != request.method.version {
+            return Err(AppError::validation("prepared serving method does not match the request"));
+        }
         if input_texts.len() != request.prompt_bytes.len() || provenance.workload.inputs.len() != input_texts.len()
-            || input_texts.iter().zip(&request.prompt_bytes).any(|(text,bytes)| text.len() != *bytes as usize)
+            || input_texts.iter().zip(&request.prompt_bytes).any(|(text,bytes)| text.len() + corpus::COLD_PREFIX_BYTES != *bytes as usize)
             || provenance.workload.inputs.iter().zip(&request.prompt_bytes).any(|(input,bytes)| input.bytes != *bytes)
             || provenance.workload.max_output_tokens != request.max_output_tokens || provenance.workload.concurrencies != request.concurrencies
-            || provenance.workload.repetitions != request.repetitions || provenance.workload.warmup != request.warmup || provenance.workload.request_usage != request.request_usage {
+            || provenance.workload.repetitions != request.repetitions || provenance.workload.warmup != request.warmup
+            // Usage may be frozen off when the runtime declares or proves it unsupported.
+            || (provenance.workload.request_usage && !request.request_usage) {
             return Err(AppError::validation("prepared serving workload does not match the request"));
         }
         let reservation = TcpListener::bind(("127.0.0.1",0)).map_err(|e| AppError::unavailable(format!("cannot reserve benchmark port: {e}")))?;
@@ -948,7 +921,7 @@ pub async fn run(
         let shared = Arc::new(Mutex::new(server::ServerState::default()));
         { let mut state = shared.lock().map_err(|_| "benchmark process lock was poisoned")?; state.child = Some(child); state.engine = Some(engine); }
         managed = Some(IsolatedServer { state: shared.clone(),key_file,active_process: active_process.clone() });
-        *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle;
+        *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle.clone();
         if let Some(warning) = settings_warning {
             emit(&progress, &request, "loading", 0, None, Some(warning));
         }
@@ -957,37 +930,42 @@ pub async fn run(
             ready = server::wait_ready(shared.clone(),&url,&key,server::SERVER_START_TIMEOUT_SECS,&ring,readiness) => ready?,
         }
         let ready_engine = shared.lock().map_err(|_| "benchmark process lock was poisoned")?.engine.clone().ok_or("ready server has no engine information")?;
-        // The launched runtime must still declare the control frozen in provenance.
-        if fixed_output_control(&ready_engine).map_err(AppError::unavailable)? != frozen_control {
-            return Err(AppError::unavailable("the launched runtime changed its fixed-output control after preflight"));
-        }
         let memory_scope = result.provenance.as_ref().unwrap().execution.memory_scope;
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5)).timeout(request_budget.timeout).build().map_err(|e| e.to_string())?;
+        let mut effective = request.clone();
+        effective.request_usage = result.provenance.as_ref().unwrap().workload.request_usage;
+        let usage_undecided = effective.request_usage;
         if let Some(checkpoint) = &checkpoint { checkpoint(&result)?; }
-        let buffered_inputs = request.prompt_bytes.iter().copied().zip(input_texts)
-            .map(|(bytes, text)| point_request(&client, &url, &key, &ready_engine, text, &request, frozen_control)
-                .map(|buffered| (bytes, buffered)))
-            .collect::<Result<Vec<_>, String>>()?;
-        for &concurrency in &request.concurrencies {
-            for (input_bytes, buffered) in &buffered_inputs {
-                let input_bytes = *input_bytes;
-                if request.warmup {
-                    active_point = Some((input_bytes,concurrency,0));
-                    emit(&progress,&request,"warmup",result.rows.len(),None,Some(format!("{input_bytes} UTF-8 bytes, {concurrency} requests")));
-                    let warmup = |e: AppError| AppError::new(e.kind, format!("warmup b{input_bytes}/c{concurrency}/o{target}: {e}"));
-                    let (_, measurements) = batch(&client,buffered,concurrency,&cancel,request_budget).await.map_err(warmup)?;
-                    fixed_output_counts(target,&measurements).map_err(AppError::unavailable).map_err(warmup)?;
-                }
-                for repetition in 1..=request.repetitions {
-                    active_point = Some((input_bytes,concurrency,repetition));
-                    trial(&request,&client,buffered,(input_bytes,concurrency,repetition),pid,
+        let nonce = result.provenance.as_ref().unwrap().workload.prompt_nonce.as_deref()
+            .ok_or("Cold Prompt provenance has no prompt nonce")?;
+        let nonce = nonce.to_owned();
+        let mut workload = BufferedWorkload {
+            request: effective, slots: Vec::new(), input_hashes: None, usage_undecided,
+        };
+        for concurrency_index in 0..workload.request.concurrencies.len() {
+            let concurrency = workload.request.concurrencies[concurrency_index];
+            for (input, base) in input_texts.iter().enumerate() {
+                let input_bytes = workload.request.prompt_bytes[input];
+                for repetition in 1..=workload.request.repetitions {
+                    let point = (input_bytes, concurrency, repetition);
+                    active_point = Some(point);
+                    workload.slots.clear();
+                    let mut hashes = Vec::with_capacity(concurrency as usize);
+                    for slot in 0..concurrency as usize {
+                        let text = corpus::cold_text(base, &nonce, point, slot);
+                        hashes.push(format!("{:x}", Sha256::digest(text.as_bytes())));
+                        workload.slots.push(point_request(
+                            &client, &url, &key, &ready_engine, text, &workload.request,
+                        )?);
+                    }
+                    workload.input_hashes = Some(hashes);
+                    trial(&mut workload,&client,point,pid,process_handle.as_ref(),
                         memory_scope,&cancel,&mut result,checkpoint.as_ref(),&progress).await?;
                 }
             }
         }
         Ok(())
     }).await.unwrap_or_else(|_| Err(AppError::timeout(match active_point {
-        Some((input,concurrency,0)) => format!("warmup b{input}/c{concurrency}/o{target}: benchmark exceeded its {timeout_minutes} minute timeout"),
         Some((input,concurrency,repetition)) => format!("point b{input}/c{concurrency}/o{target}, repetition {repetition}: benchmark exceeded its {timeout_minutes} minute timeout"),
         None => format!("benchmark exceeded its {timeout_minutes} minute timeout during launch"),
     })));

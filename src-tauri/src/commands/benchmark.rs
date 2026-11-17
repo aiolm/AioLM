@@ -6,7 +6,7 @@ use crate::{
     performance_bench,
     state::AppState,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, State};
@@ -22,14 +22,6 @@ pub(crate) async fn benchmark_history_list(
     })
     .await
     .map_err(AppError::from)?
-}
-
-#[tauri::command]
-pub(crate) async fn benchmark_history_import(records: Vec<Value>) -> Result<usize, AppError> {
-    let root = benchmark::data_root()?;
-    tokio::task::spawn_blocking(move || benchmark::store::import(&root, records))
-        .await
-        .map_err(AppError::from)?
 }
 
 /// Delete one local history record. Active runs are rejected by the store's
@@ -250,7 +242,7 @@ pub(crate) async fn run_performance_bench_with_progress(
     let journal = Arc::new(benchmark::store::RunJournal::begin(
         &root,
         json!({
-            "schemaVersion": 2, "id": request.run_id, "createdAt": created,
+            "schemaVersion": 3, "id": request.run_id, "createdAt": created,
             "model": cfg.active_model,
             "request": request, "result": initial,
         }),

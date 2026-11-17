@@ -1,7 +1,6 @@
 //! User-selected history deletion. A durable tombstone is committed before the
-//! journal is removed, so legacy localStorage originals kept for migration
-//! recovery can never re-import a deleted run. Upload receipts, recent-cache
-//! markers and sharing ownership records are never touched.
+//! journal is removed. Upload receipts, recent-cache markers and sharing
+//! ownership records are never touched.
 use super::{files, sync_parent, RunLock, StoreLock, ACTIVE_RUNS};
 use crate::error::AppError;
 use serde_json::json;
@@ -83,7 +82,7 @@ fn write_tombstone(root: &Path, run_id: &str) -> Result<(), AppError> {
 }
 
 /// Delete one local history record. Repeating the deletion, or deleting a run
-/// with no local journal, succeeds and still suppresses a later re-import.
+/// with no local journal, succeeds and reserves the run id.
 pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), AppError> {
     if run_id.is_empty() || run_id.len() > 128 {
         return Err(AppError::validation("invalid benchmark run id"));
@@ -115,6 +114,9 @@ pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), AppError> {
             "wait for the benchmark in the other application instance to finish before deleting it",
         )
     })?;
+    for path in &journals {
+        super::require_supported_journal(path)?;
+    }
     if !has_tombstone(root, run_id)? {
         write_tombstone(root, run_id)?;
     }
@@ -136,7 +138,7 @@ pub(crate) fn delete(root: &Path, run_id: &str) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::super::tests as fixtures;
-    use super::super::{acknowledge, import, list, RunJournal, UploadReceipt};
+    use super::super::{acknowledge, list, RunJournal, UploadReceipt};
     use super::*;
 
     fn ids(root: &Path) -> Vec<String> {
@@ -174,14 +176,11 @@ mod tests {
     }
 
     #[test]
-    fn deleting_one_record_keeps_others_and_legacy_reimport_cannot_resurrect_it() {
+    fn deleting_one_record_keeps_others_and_reserves_its_run_id() {
         let root = fixtures::root();
-        let legacy: Vec<_> = ["first", "selected", "third"]
-            .iter()
-            .enumerate()
-            .map(|(index, id)| fixtures::record(id, index as u64))
-            .collect();
-        assert_eq!(import(&root, legacy.clone()).unwrap(), 3);
+        for (index, id) in ["first", "selected", "third"].iter().enumerate() {
+            native(&root, id, index as u64);
+        }
         let kept = files(&root).unwrap();
         let untouched: Vec<_> = kept
             .iter()
@@ -193,17 +192,15 @@ mod tests {
         for (path, bytes) in &untouched {
             assert_eq!(&fs::read(path).unwrap(), bytes);
         }
-        // Startup migration re-reads the retained localStorage originals.
-        assert_eq!(import(&root, legacy).unwrap(), 0);
         assert_eq!(list(&root, 0, 100).unwrap().total, 2);
-        assert!(RunJournal::begin(&root, fixtures::record("selected", 9)).is_err());
+        assert!(RunJournal::begin(&root, fixtures::serving_record("selected", 9)).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn active_runs_cannot_be_deleted_in_this_or_another_instance() {
         let root = fixtures::root();
-        let journal = RunJournal::begin(&root, fixtures::record("running", 1)).unwrap();
+        let journal = RunJournal::begin(&root, fixtures::serving_record("running", 1)).unwrap();
         assert_eq!(
             delete(&root, "running").unwrap_err().kind,
             crate::error::ErrorKind::Busy
@@ -230,17 +227,13 @@ mod tests {
     #[test]
     fn repeated_and_missing_deletions_are_idempotent() {
         let root = fixtures::root();
-        import(&root, vec![fixtures::record("twice", 1)]).unwrap();
+        native(&root, "twice", 1);
         delete(&root, "twice").unwrap();
         let tombstone = fs::read(tombstone_path(&root, "twice")).unwrap();
         delete(&root, "twice").unwrap();
         assert_eq!(fs::read(tombstone_path(&root, "twice")).unwrap(), tombstone);
-        // A record still only in localStorage is suppressed before migration.
-        delete(&root, "never-imported").unwrap();
-        assert_eq!(
-            import(&root, vec![fixtures::record("never-imported", 2)]).unwrap(),
-            0
-        );
+        delete(&root, "never-created").unwrap();
+        assert!(RunJournal::begin(&root, fixtures::serving_record("never-created", 2)).is_err());
         assert_eq!(list(&root, 0, 20).unwrap().total, 0);
         assert_eq!(
             delete(&root, "").unwrap_err(),
@@ -258,8 +251,8 @@ mod tests {
         let root = fixtures::root();
         let outside = root.join("outside.jsonl");
         fs::write(&outside, b"synthetic").unwrap();
-        import(&root, vec![fixtures::record("../outside", 1)]).unwrap();
-        import(&root, vec![fixtures::record("neighbour", 2)]).unwrap();
+        native(&root, "../outside", 1);
+        native(&root, "neighbour", 2);
         delete(&root, "../outside").unwrap();
         delete(&root, "..\\..\\runs").unwrap();
         assert_eq!(fs::read(&outside).unwrap(), b"synthetic");
@@ -274,7 +267,7 @@ mod tests {
     #[test]
     fn interrupted_journal_removal_stays_hidden_and_retry_finishes_it() {
         let root = fixtures::root();
-        import(&root, vec![fixtures::record("interrupted", 1)]).unwrap();
+        native(&root, "interrupted", 1);
         let journal = files(&root).unwrap().remove(0);
         write_tombstone(&root, "interrupted").unwrap();
         assert!(journal.is_file());
@@ -334,6 +327,32 @@ mod tests {
             .join(format!("{}.json", digest("in-flight")))
             .exists());
         assert!(acknowledge(&root, "never-seen", receipt()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsupported_journal_deletion_fails_without_tombstone_or_disk_changes() {
+        let root = fixtures::root();
+        for version in [1, 2] {
+            let id = format!("unsupported-delete-{version}");
+            let mut record = fixtures::serving_record(&id, version);
+            record["schemaVersion"] = json!(version);
+            let path = root.join("runs").join(format!("{version:016}-{}.jsonl", digest(&id)));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut bytes = serde_json::to_vec(&json!({
+                "kind":"start","origin":"legacy","record":record
+            })).unwrap();
+            bytes.extend_from_slice(b"\nunsupported tail\n");
+            fs::write(&path, &bytes).unwrap();
+            assert_eq!(delete(&root, &id).unwrap_err(),
+                AppError::validation("unsupported benchmark record"));
+            assert!(!has_tombstone(&root, &id).unwrap());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        let page = list(&root, 0, 20).unwrap();
+        assert_eq!(page.total, 0);
+        assert!(page.records.is_empty());
+        assert!(page.warnings.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }

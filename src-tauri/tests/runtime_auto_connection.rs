@@ -168,20 +168,38 @@ async fn respond(
         (200, "application/json", "{\"status\":\"ok\"}".into())
     } else if path == "/v1/chat/completions" {
         let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        assert_ne!(value.pointer("/messages/0/content").and_then(Value::as_str), Some("Reply with OK."));
+        let measured = value
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.len() == 1024);
+        if measured {
+            benchmark_calls.fetch_add(1, Ordering::AcqRel);
+        }
         if value.get("stream_options").is_some() {
+            assert_eq!(value["stream_options"], json!({"include_usage":true}));
+            if measured {
+                assert_eq!(value["max_tokens"], 128);
+                assert_eq!(value["messages"][0]["content"].as_str().unwrap().len(), 1024);
+            }
             let body = "{\"error\":\"optional stream_options unsupported\"}";
             let response = format!("HTTP/1.1 400 Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
             let _ = socket.write_all(response.as_bytes()).await;
             return;
         }
-        let measured = value
-            .pointer("/messages/0/content")
-            .and_then(Value::as_str)
-            .is_some_and(|text| {
-                text.starts_with("Continue the following text. Do not summarize or explain.\n\n")
-            });
         if measured {
-            benchmark_calls.fetch_add(1, Ordering::AcqRel);
+            let body = value.as_object().unwrap();
+            assert_eq!(
+                body.len(),
+                5,
+                "no defaults, force controls, or usage request"
+            );
+            assert_eq!(body["max_tokens"], 128);
+            assert_eq!(body["temperature"], 0);
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+            assert_eq!(body["messages"][0]["role"], "user");
+            assert_eq!(body["messages"][0]["content"].as_str().unwrap().len(), 1024);
         }
         if value["model"] != MODEL {
             (
@@ -191,8 +209,12 @@ async fn respond(
             )
         } else if value["stream"] == true {
             stream_calls.fetch_add(1, Ordering::AcqRel);
-            let content = json!({"model":MODEL,"choices":[{"index":0,"delta":{"role":"assistant","content":"5"},"finish_reason":null}]});
-            let finish = json!({"model":MODEL,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}});
+            let content = json!({"model":MODEL,"choices":[{"index":0,"delta":{"role":"assistant","content":if measured { "short output" } else { "5" }},"finish_reason":null}]});
+            let mut finish =
+                json!({"model":MODEL,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]});
+            if !measured {
+                finish["usage"] = json!({"prompt_tokens":4,"completion_tokens":1,"total_tokens":5});
+            }
             (
                 200,
                 "text/event-stream",
@@ -332,31 +354,104 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
             .is_success(),
         "stopping the app-owned proxy must not stop the independently running service"
     );
+    let saved_configuration = fs::read(config::config_path()).unwrap();
     {
-        // An attached service declares no fixed-output control, so the
-        // benchmark is refused before any request; there is no cap fallback.
+        // The app owns only a proxy; Cold Prompt still supports the attached
+        // engine without restarting or claiming ownership of upstream compute.
         use aiolm_lib::performance_bench as bench;
         let request = bench::PerformanceBenchRequest {
             run_id: "attached-serving".into(),
             method: Default::default(),
             context_profile: "novel_ja".into(),
-            prompt_bytes: vec![256],
-            max_output_tokens: 1024,
+            prompt_bytes: vec![1024],
+            max_output_tokens: 128,
             concurrencies: vec![1, 2],
             repetitions: 1,
             warmup: false,
+            // Usage is requested; this upstream rejects the optional field.
             request_usage: true,
         };
-        let refused = bench::RuntimeInfo::prepare(&cfg, &request)
-            .await
-            .err()
-            .expect("an attached service cannot run a fixed-output benchmark");
-        assert_eq!(refused.kind, aiolm_lib::error::ErrorKind::Unavailable);
-        assert!(
-            refused.message.contains("fixed-output control"),
-            "{refused}"
+        // App updates replace the generated AioLM helper, not the user's
+        // engine. Admission stays read-only; launch adopts the current helper.
+        let registration_path = providers::registry::root()
+            .join(engine)
+            .join(runtime)
+            .join("registration.json");
+        let mut registration: Value =
+            serde_json::from_slice(&fs::read(&registration_path).unwrap()).unwrap();
+        registration["executable_sha256"] = json!("0".repeat(64));
+        registration["probe_sha256"] = json!("0".repeat(64));
+        let prior_build = serde_json::to_vec(&registration).unwrap();
+        fs::write(&registration_path, &prior_build).unwrap();
+        assert_eq!(
+            bench::admission(cfg.clone(), request.clone()).await.status,
+            "supported"
         );
-        assert_eq!(benchmark_calls.load(Ordering::Acquire), 0);
+        assert_eq!(fs::read(&registration_path).unwrap(), prior_build);
+        let artifact = registration["manifest"]["artifacts"][0].as_str().unwrap();
+        let original = fs::read(artifact).unwrap();
+        let mut changed = original.clone();
+        changed.push(b' ');
+        fs::write(artifact, changed).unwrap();
+        assert_ne!(
+            bench::admission(cfg.clone(), request.clone()).await.status,
+            "supported",
+            "an app update must not authorize changed connection artifacts"
+        );
+        fs::write(artifact, original).unwrap();
+        let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
+        let process = Arc::new(Mutex::new(None));
+        let messages = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observed = messages.clone();
+        let result = bench::run(
+            cfg.clone(),
+            request,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(move |event| {
+                if let Some(message) = event.message {
+                    observed.lock().unwrap().push(message);
+                }
+            }),
+            runtime,
+        )
+        .await;
+        assert_eq!(result.status, "complete", "{:?}", result.message);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(benchmark_calls.load(Ordering::Acquire), 4,
+            "one rejected first measured request, then three accepted requests; no workload warmup");
+        for row in &result.rows {
+            assert_eq!(row.output_bytes, 12 * u64::from(row.concurrency));
+            assert!(row.e2e_ms > 0.0);
+            assert_eq!(row.usage_status, "missing");
+            assert!(row.reported_prompt_tokens.is_none());
+            assert!(row.reported_completion_tokens.is_none());
+            assert!(row.prefill_tokens_per_second.is_none());
+            assert!(row.decode_tokens_per_second.is_none());
+            assert!(row.tpot_ms.is_none());
+            assert_eq!(row.input_sha256_by_request.len(), row.concurrency as usize);
+            assert!(row.peak_memory_bytes.is_none(), "an attached proxy is not owned compute");
+            assert_eq!(row.finish_reasons, vec!["stop"; row.concurrency as usize]);
+        }
+        let recorded = serde_json::to_value(&result).unwrap();
+        assert_eq!(recorded["provenance"]["method"]["version"], 5);
+        assert_eq!(recorded["provenance"]["workload"]["cache_policy"], "cold_prompt");
+        // The entirely rejected first measured batch freezes usage off.
+        assert_eq!(recorded["provenance"]["execution"]["memory_scope"], "unavailable");
+        assert_eq!(recorded["provenance"]["workload"]["request_usage"], false);
+        assert!(recorded["provenance"]["execution"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|setting| setting["name"] != "stream_options.include_usage"));
+        let hashes: Vec<_> = recorded["rows"].as_array().unwrap().iter()
+            .flat_map(|row| row["input_sha256_by_request"].as_array().unwrap()).collect();
+        assert_eq!(hashes.len(), 3);
+        assert_eq!(hashes.iter().map(|hash| hash.as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>().len(), 3);
+        assert!(process.lock().unwrap().is_none());
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
         assert!(client
             .get(format!("http://127.0.0.1:{upstream_port}/health"))
             .send()
@@ -365,6 +460,10 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
             .status()
             .is_success());
     }
+    assert_eq!(
+        fs::read(config::config_path()).unwrap(),
+        saved_configuration
+    );
     cli(&home.path, &["runtime", "remove", engine, runtime]).await;
     assert_eq!(fs::read(&user_file).unwrap(), b"existing user data");
     let saved = config::load_result().unwrap();
@@ -618,6 +717,94 @@ async fn managed_options_and_probe_cache_journey(home: &Path) {
         fs::read(directory.join("help/accepted.json")).unwrap(),
         accepted
     );
+    // Managed connections use one normal launch and retain ordinary readiness.
+    {
+        use aiolm_lib::performance_bench as bench;
+        let cfg = config::load_result().unwrap();
+        let saved = fs::read(config::config_path()).unwrap();
+        let http_log = folder.join("automatic-http-requests.jsonl");
+        let http_before = fs::read_to_string(&http_log).unwrap().lines().count();
+        let launch_count = launches().len();
+        let request = bench::PerformanceBenchRequest {
+            run_id: "managed-standard-serving".into(),
+            method: Default::default(),
+            context_profile: "novel_en".into(),
+            prompt_bytes: vec![1024],
+            max_output_tokens: 128,
+            concurrencies: vec![1, 2],
+            repetitions: 1,
+            warmup: false,
+            request_usage: false,
+        };
+        let runtime = bench::RuntimeInfo::prepare(&cfg, &request).await.unwrap();
+        let process = Arc::new(Mutex::new(None));
+        let result = bench::run(
+            cfg,
+            request,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(result.status, "complete", "{:?}", result.message);
+        assert_eq!(result.rows.len(), 2);
+        assert!(result
+            .rows
+            .iter()
+            .all(|row| row.output_bytes == 12 * u64::from(row.concurrency)
+                && row.e2e_ms > 0.0
+                && row.usage_status == "missing"
+                && row.reported_prompt_tokens.is_none()
+                && row.reported_completion_tokens.is_none()
+                && row.prefill_tokens_per_second.is_none()
+                && row.decode_tokens_per_second.is_none()
+                && row.tpot_ms.is_none()
+                && row.input_sha256_by_request.len() == row.concurrency as usize));
+        let recorded = serde_json::to_value(&result).unwrap();
+        assert_eq!(recorded["provenance"]["method"]["version"], 5);
+        assert_eq!(recorded["provenance"]["workload"]["request_usage"], false);
+        let bodies: Vec<Value> =
+            fs::read_to_string(folder.join("automatic-benchmark-requests.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        assert_eq!(bodies.len(), 3, "no generating benchmark warmup or usage probe");
+        for body in bodies {
+            assert_eq!(body.as_object().unwrap().len(), 5);
+            assert_eq!(body["model"], "aiolm-connection-0123456789abcdee");
+            assert_eq!(body["max_tokens"], 128);
+            assert_eq!(body["temperature"], 0);
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["messages"][0]["content"].as_str().unwrap().len(), 1024);
+        }
+        assert_eq!(launches().len(), launch_count + 1, "one engine load for all points");
+        let http: Vec<Value> = fs::read_to_string(&http_log).unwrap().lines()
+            .skip(http_before).map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(http.iter().map(|call| call["pid"].as_u64().unwrap())
+            .collect::<std::collections::BTreeSet<_>>().len(), 1,
+            "every point is served by the same normally launched engine");
+        let texts: Vec<_> = http.iter()
+            .filter(|call| call["body"]["max_tokens"] == 128)
+            .map(|call| call["body"]["messages"][0]["content"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts.len(), 3);
+        assert_eq!(texts.iter().collect::<std::collections::BTreeSet<_>>().len(), 3);
+        assert!(process.lock().unwrap().is_none());
+        let launched = launches();
+        let argv = launched.last().unwrap();
+        let port_index = argv.iter().position(|arg| arg == "--port").unwrap();
+        let bench_port: u16 = argv[port_index + 1].parse().unwrap();
+        assert!(std::net::TcpStream::connect(("127.0.0.1", bench_port)).is_err());
+        assert_eq!(fs::read(config::config_path()).unwrap(), saved);
+        assert_eq!(fs::read(&spec_path).unwrap(), spec);
+        assert_eq!(
+            fs::read(directory.join("help/accepted.json")).unwrap(),
+            accepted
+        );
+    }
     // Accepted evidence stays pinned; changed executable bytes never become
     // silently accepted or launchable through the automatic-owned exception.
     let mut changed_engine = fs::read(&engine_program).unwrap();

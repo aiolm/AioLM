@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiolm:benchmark:publication:1",
   "title": "AioLM benchmark publication request v1",
-  "description": "Exact publication wrapper. benchmark is a reviewed public snapshot; description_md is Markdown paragraphs/lists/HTTP(S) links/code blocks only, max 4000 Unicode codepoints. Legacy bare submissions are accepted with an empty description. Whole request UTF-8 must not exceed 4MiB; rows must not exceed 10000.",
+  "description": "Exact publication wrapper. benchmark is a reviewed public snapshot; description_md is Markdown paragraphs/lists/HTTP(S) links/code blocks only, max 4000 Unicode codepoints. Bare submissions are rejected. Whole request UTF-8 must not exceed 4MiB; rows must not exceed 10000.",
   "type": "object",
   "properties": {
     "benchmark": { "$ref": "./public-benchmark.schema.json" },

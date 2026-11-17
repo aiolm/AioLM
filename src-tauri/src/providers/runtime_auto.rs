@@ -1150,7 +1150,6 @@ pub async fn run_internal(args: &[String]) -> Result<(), crate::error::AppError>
                 chat: false,
                 tools: false,
                 stream_usage_supported: None,
-                fixed_output: None,
             },
         };
         println!(
@@ -1191,7 +1190,6 @@ pub async fn run_internal(args: &[String]) -> Result<(), crate::error::AppError>
                 tools: false,
                 // Core API verification proves no request control.
                 stream_usage_supported: None,
-                fixed_output: None,
             },
         };
         println!(
@@ -1539,23 +1537,20 @@ mod tests {
             spec.compute_ownership(),
             super::super::protocol::ComputeOwnership::Attached
         );
-        for windows in [false, true] {
-            let attached = ServingMetadata::for_platform(
-                PublicEngine::default(),
-                ArtifactFormat::Unknown,
-                spec.compute_ownership(),
-                windows,
-            );
-            assert_eq!(attached.topology, ServingTopology::Attached);
-            assert_eq!(attached.memory_scope, ServingMemoryScope::Unavailable);
-            assert_eq!(attached.model_format, ArtifactFormat::Unknown);
-            let public = serde_json::to_string(&attached).unwrap();
-            assert!(
-                !public.contains("auto-")
-                    && !public.contains("connection-")
-                    && !public.contains("43121")
-            );
-        }
+        let attached = ServingMetadata::from_observations(
+            PublicEngine::default(),
+            ArtifactFormat::Unknown,
+            spec.compute_ownership(),
+        );
+        assert_eq!(attached.topology, ServingTopology::Attached);
+        assert_eq!(attached.memory_scope, ServingMemoryScope::Unavailable);
+        assert_eq!(attached.model_format, ArtifactFormat::Unknown);
+        let public = serde_json::to_string(&attached).unwrap();
+        assert!(
+            !public.contains("auto-")
+                && !public.contains("connection-")
+                && !public.contains("43121")
+        );
         spec.target = Target::Managed {
             launch: registry::ProcessSpec {
                 program: "/synthetic/engine".into(),
@@ -1569,20 +1564,12 @@ mod tests {
             spec.compute_ownership(),
             super::super::protocol::ComputeOwnership::Descendant
         );
-        let unix = ServingMetadata::for_platform(
+        let metadata = ServingMetadata::from_observations(
             PublicEngine::default(),
             ArtifactFormat::Unknown,
             spec.compute_ownership(),
-            false,
         );
-        let windows = ServingMetadata::for_platform(
-            PublicEngine::default(),
-            ArtifactFormat::Unknown,
-            spec.compute_ownership(),
-            true,
-        );
-        assert_eq!(unix.memory_scope, ServingMemoryScope::OwnedProcessTree);
-        assert_eq!(windows.memory_scope, ServingMemoryScope::Unavailable);
+        assert_eq!(metadata.memory_scope, ServingMemoryScope::OwnedProcessTree);
     }
 
     #[test]

@@ -58,38 +58,24 @@ Upgrades keep your existing settings:
 - Settings profiles become shared profiles of their inference engine, keeping their names, values and prompts. Profiles and saved sessions that predate engine selection belong to llama.cpp. Each engine (llama.cpp, vLLM and MLX) receives its own default profile if it has none; an existing llama.cpp default is kept. Older settings that were not saved under a profile name are preserved in a named recovered profile. See [Settings profiles](model-settings.md#settings-profiles) and [Existing data and resources](model-settings.md#existing-data-and-resources) for how profiles behave after the upgrade.
 - Saved sessions keep their own execution settings and profile assignments.
 - Conversations that earlier releases kept in browser storage move into the `conversations` folder the first time the chat opens. A conversation already in the data folder is never overwritten, and the browser copies are removed only after every conversation has been found in the data folder. If the move is interrupted, it is tried again at the next start.
-- Benchmark results from earlier versions are imported the first time benchmark history opens; see [Local history](benchmark-sharing.md#local-history).
+- Pre-cutover benchmark journals are left untouched but hidden from history and pagination. Earlier browser benchmark records are no longer imported; see [Local history](benchmark-sharing.md#local-history).
 
-### 0.3.5 benchmark records
+### Single benchmark method
 
-Version 0.3.5 introduced the `openai-chat-serving@1` cap-based workload for
-connected streaming text-chat engines. These local schema2/public schema3
-records retain exact UTF-8 input bytes/hashes, observed text/reasoning timings,
-optional usage, as-configured cache and their original request cap.
+Only `openai-chat-serving@5` is supported. Local records and serving provenance
+use schema3; public submissions use schema4. Requests retain Cold Prompt
+input isolation, a fresh run nonce and per-slot input hashes. The output cap is
+1–128 tokens; desktop runs send 128 and measure each point once.
 
-Existing local schema1 journals and frozen schema1/2 publication bytes remain
-unchanged, including IDs, hashes and receipts. Their original token/PP/TG/TTFT/
-TPOT units stay in Legacy views/columns; they are not converted to byte results.
-Profile imports now choose and confirm a checked destination schema and retain
-existing user-edited imports for the same source/destination. No model paths,
-GPU IDs, installations or connections are restored from public settings.
+Results expose exactly eight metrics. Per-request prompt processing,
+generation speed and time per output token require engine usage evidence.
+Raw byte and token counts remain row evidence rather than display metrics.
 
-### Fixed-output measurements
-
-New runs use `openai-chat-serving@2`, with engine output-length control and an
-exact reported completion count for every request. The contract targets are
-128 and 1k/4k/8k/16k/32k/64k/128k/200k, where k=1024; new desktop runs use 128
-tokens, one sample per point and at most 8 concurrent requests. Unsupported controls or unverifiable
-counts fail instead of falling back to `@1`. Per-request count arrays are
-retained for replay/publication. Local serving schema2 and public schema3 stay
-in use; the method version distinguishes fixed output from historical caps.
-Existing `@1` payloads, journals, checksums and receipts are never rewritten.
-The website defaults to the new fixed-output scope and keeps `@1` explicit.
-
-
-Back up before downgrading: older releases may not understand local schema2
-journals or newly declared adapter metadata. Do not rewrite journals or frozen
-publication requests to make an older release accept them.
+Older journals and frozen requests are not converted or rewritten. Unsupported
+local journals stay on disk and direct operations reject them. Queued
+publications without a valid wrapper-only request body are discarded.
+Back up before downgrading: older releases may not understand schema3 journals.
+Do not relabel records or rewrite frozen publication requests.
 
 Journal replay preserves recorded floating-point timings exactly across restarts.
 

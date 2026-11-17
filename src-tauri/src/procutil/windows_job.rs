@@ -89,16 +89,20 @@ impl ProcessJob {
         unsafe { TerminateJobObject(self.handle(), 1) };
     }
 
-    fn member_ids(&self, deadline: Option<std::time::Instant>) -> io::Result<Vec<u32>> {
+    pub(super) fn member_ids(&self, deadline: Option<std::time::Instant>) -> io::Result<Vec<u32>> {
         let mut capacity = 1_usize;
-        for _ in 0..2 {
+        // The two DWORD counters occupy two words on 32-bit Windows and one
+        // on 64-bit Windows; reserve them separately from the PID slots.
+        let header_bytes = 2 * std::mem::size_of::<u32>();
+        let header_words = header_bytes.div_ceil(std::mem::size_of::<usize>());
+        for _ in 0..4 {
             if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "job member discovery deadline expired",
                 ));
             }
-            let mut buffer = vec![0_usize; capacity + 1];
+            let mut buffer = vec![0_usize; header_words + capacity];
             let mut returned = 0_u32;
             let queried = unsafe {
                 QueryInformationJobObject(
@@ -120,12 +124,17 @@ impl ProcessJob {
                 if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
                     return Err(error);
                 }
-                let required = returned as usize;
-                let required_capacity = required
-                    .saturating_sub(2 * std::mem::size_of::<u32>())
-                    .saturating_add(std::mem::size_of::<usize>() - 1)
-                    / std::mem::size_of::<usize>();
-                capacity = required_capacity.max(capacity.saturating_mul(2)).max(1);
+                // Windows fills NumberOfAssignedProcesses even when it cannot
+                // fit every PID. ReturnLength alone need not size the next
+                // snapshot, and engines may own many more than two workers.
+                let list = unsafe { &*(buffer.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST) };
+                let required_capacity = (returned as usize)
+                    .saturating_sub(header_bytes)
+                    .div_ceil(std::mem::size_of::<usize>());
+                capacity = (list.NumberOfAssignedProcesses as usize)
+                    .max(required_capacity)
+                    .max(capacity.saturating_mul(2))
+                    .max(1);
                 continue;
             }
             let list = unsafe { &*(buffer.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST) };
@@ -273,6 +282,12 @@ impl ProcessJob {
             return false;
         }
         let process = unsafe { OwnedHandle::from_raw_handle(process) };
+        self.contains_handle(&process)
+    }
+
+    /// Check the opened process object, not a PID that may have been reused
+    /// since the job snapshot. The caller retains this handle while sampling.
+    pub(super) fn contains_handle(&self, process: &impl AsRawHandle) -> bool {
         let mut member = 0;
         let queried =
             unsafe { IsProcessInJob(process.as_raw_handle(), self.handle(), &mut member) };

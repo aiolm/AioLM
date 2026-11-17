@@ -10,8 +10,9 @@ import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import type { AppStore } from '../../shared/state/store';
 import type { AppConfig } from '../../shared/api/types';
 import type { JsonValue } from '../../shared/config/tuningValidation';
-import type { ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { webcrypto } from 'node:crypto';
+import { servingBenchmark } from '../../testing/servingBenchmark';
+import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark';
 
 vi.mock('../../shared/api/benchmarkExplorer', () => ({
   openAiolmWebsite: vi.fn(async () => undefined), openBenchmarkExplorer: vi.fn(async () => undefined),
@@ -30,30 +31,15 @@ const stop = vi.fn();
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const });
 const batch = { ...schemaOption({ key: 'destination_batch', flag: '--batch', group: 'Runtime', target: 'launch', kind: { type: 'integer' } }), benchmark_public: known(true) };
 const checked = () => effectiveSchema([], [batch], { benchmark_names: { destination_batch: 'batch' } });
-const detail = { id: 'public-1', benchmark: { schema_version: 3,
-  runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
-  execution: { topology: 'attached', memory_scope: 'unavailable', settings: [
-    { target: 'launch', scope: [], name: 'batch', value: 16, unit: null, role: null },
-    { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
-  ] } } };
-const localRecord: ServingPerformanceBenchmarkRecord = {
-  schemaVersion: 2, id: 'local-run', createdAt: 1000, model: '/synthetic/private-model',
-  request: { run_id: 'local-run', method: { id: 'openai-chat-serving', version: 1 }, context_profile: 'novel_en',
-    prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false },
-  result: { run_id: 'local-run', status: 'failed', rows: [], args: ['--batch', '99', '--api-key', 'synthetic-secret'],
-    provenance: { schema_version: 2, app_version: '0.3.5', method: { id: 'openai-chat-serving', version: 1 },
-      workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'a'.repeat(64) }],
-        max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false, cache_policy: 'as_configured' },
-      runtime: { name: 'Fourth engine', version: null, backend: null, build: null, variant: null, plugin_version: null },
-      model: { format: 'unknown', status: 'unidentified', sha256: null, size_bytes: null }, recorded_model_label: 'Recorded model',
-      environment: { scope: 'aiolm_host', os: 'linux', arch: 'aarch64', cpu: { name: 'Example CPU', logical_cores: 8 },
-        installed_gpus: [], execution: { mode: 'unknown', selected_gpus: [], devices: [], selection_complete: false }, detection: '' },
-      execution: { topology: 'attached', memory_scope: 'unavailable', settings: [
-        { target: 'launch', scope: [], name: 'batch', value: 16, unit: null, role: null },
-      ] },
-    },
-  },
-};
+const publicRecord = servingBenchmark();
+publicRecord.result.provenance!.execution.settings.unshift({ target: 'launch', scope: [], name: 'batch', value: 16, unit: null, role: null });
+const detail = { id: 'public-1', benchmark: toPublicBenchmark(publicRecord, '00000000-0000-4000-8000-000000000005') } as unknown as JsonValue;
+const localRecord = servingBenchmark();
+localRecord.id = localRecord.request.run_id = localRecord.result.run_id = 'local-run';
+localRecord.result.status = 'failed';
+localRecord.result.rows = [];
+localRecord.result.args = ['--batch', '99', '--api-key', 'synthetic-secret'];
+localRecord.result.provenance!.execution.settings.unshift({ target: 'launch', scope: [], name: 'batch', value: 16, unit: null, role: null });
 function Harness() {
   const importer = useBenchmarkProfileImport(store);
   return <><BenchmarkExplorerActions listenerReady={importer.listenerReady} />
@@ -87,6 +73,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('public benchmark actions', () => {
+  it('creates a launch-only profile from a public detail after destination confirmation', async () => {
+    const record = servingBenchmark();
+    record.result.provenance!.execution.settings.unshift({ target: 'launch', scope: [], name: 'batch', value: 16, unit: null, role: null });
+    vi.mocked(api.readPublicBenchmark).mockResolvedValueOnce({
+      id: 'public-1', benchmark: toPublicBenchmark(record, '00000000-0000-4000-8000-000000000003'),
+    } as unknown as JsonValue);
+    render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
+    await openImport();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    await chooseRuntime();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create profile' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Profile created:');
+    const profile = cfg.settings_profiles!.entries.find(entry => entry.id.startsWith('profile-benchmark-'))!;
+    expect(profile.settings).toEqual({ provider_options: { 'custom.destination': { destination_batch: 16 } } });
+    expect(JSON.stringify(profile.settings)).not.toMatch(/max_tokens|temperature|stream|PRIVATE|synthetic/);
+  });
+
   it('opens the localized website and enables browsing after the import listener is ready', async () => {
     render(<I18nProvider initialLocale="ko"><Harness /></I18nProvider>);
     await waitFor(() => expect(screen.getByRole('button', { name: '공개 벤치마크 조회' })).toBeEnabled());

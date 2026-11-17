@@ -1,14 +1,13 @@
 export type {
-  BenchmarkCorpus, BenchmarkRunStatus, BenchmarkMetricRow, BenchmarkTrial, BenchmarkSummary,
-  PublicBenchmarkRow, PublicGpu, BenchmarkModelIdentity, BenchmarkModelMetadata, BenchmarkExecutionSettings,
-  PublicBenchmarkSubmission, LegacyPublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkReceipt,
-  ServingRuntimeIdentity, ServingWorkload, RecordedSetting, ServingExecution, BenchmarkConfiguration,
+  BenchmarkCorpus, BenchmarkRunStatus, BenchmarkEnvironment,
+  PublicGpu, BenchmarkModelIdentity, BenchmarkModelMetadata,
+  PublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkReceipt,
+  ServingRuntimeIdentity, ServingInput, ServingWorkload, RecordedSetting, ServingExecution, BenchmarkConfiguration,
   ServingBenchmarkModelIdentity, ServingBenchmarkRow, ServingAggregationRow, ServingMetricKey,
   ServingMetricStat, ServingBenchmarkPoint,
 } from './types.js';
-export { validatePublicBenchmark, validateBenchmarkReceipt, validateBenchmarkConfiguration, validateLegacyBenchmarkConfiguration } from './validate.js';
+export { validatePublicBenchmark, validateBenchmarkReceipt, validateBenchmarkConfiguration } from './validate.js';
 export {
-  summarizeBenchmarkTrials, summarizePublicBenchmarkRows,
   SERVING_METRIC_KEYS, servingMetricValues, summarizeServingPoints,
 } from './aggregation.js';
 export { publicBenchmarkSchema, benchmarkReceiptSchema, publicationSchema } from './schema.js';
@@ -16,7 +15,7 @@ export {
   DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS,
   validateDescriptionMd, validatePublicationRequest, normalizePublicationInput,
   serializePublicationRequest, parsePublicationSnapshot, countCodePoints, utf8ByteLength,
-  type BenchmarkPublicationRequest, type BenchmarkPublicationInput,
+  type BenchmarkPublicationRequest,
 } from './publication.js';
 export {
   RECOVERY_PREFIX, RECOVERY_MAX_FILE_BYTES, RECOVERY_FIXTURE,
@@ -32,4 +31,4 @@ export {
   type UploadSessionStatus, type UploadSessionPoll, type ServiceErrorBody,
 } from './service.js';
 export { formatRuntimeVersionLabel, type RuntimeVersionLabelInput } from './runtimeLabel.js';
-export { FIXED_OUTPUT_TOKENS, MAX_SERVING_OUTPUT_TOKENS, HISTORICAL_CAP_MAX_OUTPUT_TOKENS } from './fixedOutput.js';
+export const MAX_SERVING_OUTPUT_TOKENS = 128;

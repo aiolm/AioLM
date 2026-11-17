@@ -176,10 +176,6 @@ export function useBenchmarkProfileImport(store: AppStore) {
   return { notice, importing: !!pending, listenerReady, pendingSource: pending?.source ?? null, importDialog,
     dismissNotice: () => setNotice(null),
     importLocal: (record: PerformanceBenchmarkRecord) => {
-      if (record.schemaVersion === 2 && !record.result.provenance) {
-        setNotice({ error: true, text: copy.unavailableSettings });
-        return;
-      }
       return importProfile(`local-${record.id}`, async () => localBenchmarkProfileSource(record));
     } };
 }

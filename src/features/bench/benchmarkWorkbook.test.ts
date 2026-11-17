@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ValueType, Workbook, type Worksheet } from 'exceljs';
-import type { BenchmarkReport } from './benchmarkReport';
+import { benchmarkReport, type BenchmarkReport } from './benchmarkReport';
 import { benchmarkWorkbook } from './benchmarkWorkbook';
 import { defined } from '../../testing/assertDefined';
+import { servingBenchmark } from '../../testing/servingBenchmark';
 
 const LONG_MODEL = 'Synthetic-Instruct-70B-A8B-Preview-2507-UD-Q4_K_XL-Extra-Long-Model-Name-For-Wrapping';
 
@@ -32,6 +33,20 @@ async function reopen(input: BenchmarkReport = report): Promise<{ bytes: Uint8Ar
 }
 
 describe('benchmark workbook', () => {
+  it('keeps serving measurements numeric and unreported token metrics blank', async () => {
+    const serving = benchmarkReport([servingBenchmark()]);
+    const { sheet } = await reopen(serving);
+    const column = (key: string) => serving.columns.findIndex(value => value.key === key) + 1;
+    expect(sheet.getCell(2, column('method')).value).toBe('openai-chat-serving@5');
+    expect(sheet.getCell(1, column('max_output_tokens')).value).toBe('Max output token request');
+    expect(sheet.getCell(2, column('first_output_ms.median')).value).toBe(20);
+    expect(sheet.getCell(2, column('output_bytes_per_second.median')).value).toBe(60);
+    for (const key of ['prefill_tokens_per_second', 'decode_tokens_per_second', 'tpot_ms', 'reported_tokens_per_second']) {
+      expect(sheet.getCell(2, column(`${key}.median`)).value).toBeNull();
+    }
+    expect(JSON.stringify(sheet.getSheetValues())).not.toMatch(/PRIVATE|synthetic|private|diagnostic/);
+  });
+
   it('returns a zipped XLSX as a plain Uint8Array with a single worksheet', async () => {
     const { bytes, workbook } = await reopen();
     expect(Object.getPrototypeOf(bytes)).toBe(Uint8Array.prototype);

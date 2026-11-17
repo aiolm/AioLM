@@ -4,13 +4,20 @@ import { acknowledgeUploadedBenchmark, takeBenchmarkMaintenanceWarnings } from "
 import { invoke, isNativeRuntimeAvailable } from "../api/transport.ts";
 import type { QueuedBenchmark } from "./outbox.ts";
 import { defined } from "../../testing/assertDefined.ts";
+import { servingBenchmark } from "../../testing/servingBenchmark.ts";
+import { toPublicBenchmark } from "../contracts/benchmark/publicBenchmark.ts";
 
 vi.mock("../api/transport.ts", () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn() }));
 const receipt = { submission_id: "00000000-0000-4000-8000-000000000001", id: "synthetic-public" };
-const accepted = () => ({
-  id: receipt.submission_id, state: "sent", source: { runId: "synthetic-local-run" }, receipt,
-  destination: "https://synthetic.example/v1/benchmark-runs",
-}) as QueuedBenchmark;
+const accepted = (): QueuedBenchmark => {
+  const payload = toPublicBenchmark(servingBenchmark(), receipt.submission_id);
+  return {
+    id: receipt.submission_id, payload, requestBody: JSON.stringify({ benchmark: payload, description_md: "" }),
+    state: "sent", createdAt: 1000, attempts: 1, nextAttemptAt: 0,
+    source: { runId: "synthetic-local-run" }, receipt,
+    destination: "https://synthetic.example/v1/benchmark-runs",
+  };
+};
 
 beforeEach(() => {
   vi.clearAllMocks();

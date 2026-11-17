@@ -8,14 +8,11 @@ export const PUBLICATION_MAX_UTF8_BYTES = 4 * 1024 * 1024;
 /** Maximum measurement rows per request. */
 export const PUBLICATION_MAX_ROWS = 10000;
 
-/** New publication request: exact benchmark snapshot plus Markdown description. */
+/** Publication request: exact benchmark snapshot plus Markdown description. */
 export interface BenchmarkPublicationRequest {
   benchmark: PublicBenchmarkSubmission;
   description_md: string;
 }
-
-/** Legacy bare submission accepted with an empty description. */
-export type BenchmarkPublicationInput = BenchmarkPublicationRequest | PublicBenchmarkSubmission;
 
 const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -68,18 +65,15 @@ function isPublicationWrapper(value: unknown): value is BenchmarkPublicationRequ
   return keys.length === 2 && hasOwn(value, 'benchmark') && hasOwn(value, 'description_md');
 }
 
-/** Normalize wrapper or legacy bare submission; legacy keeps an empty description. */
+/** Validate the exact wrapper; bare submissions are not publication requests. */
 export function normalizePublicationInput(value: unknown): BenchmarkPublicationRequest {
-  if (isPublicationWrapper(value)) {
-    const benchmark = validatePublicBenchmark(value.benchmark);
-    const description_md = validateDescriptionMd(value.description_md);
-    return { benchmark, description_md };
-  }
-  const benchmark = validatePublicBenchmark(value);
-  return { benchmark, description_md: '' };
+  if (!isPublicationWrapper(value)) throw new Error('Invalid publication request.');
+  const benchmark = validatePublicBenchmark(value.benchmark);
+  const description_md = validateDescriptionMd(value.description_md);
+  return { benchmark, description_md };
 }
 
-/** Validate bounds shared by wrapper and legacy bodies. */
+/** Validate bounds for publication wrappers. */
 function validateAndSerializePublicationRequest(value: unknown): { request: BenchmarkPublicationRequest; serialized: string } {
   const request = normalizePublicationInput(value);
   if (request.benchmark.measurements.rows.length > PUBLICATION_MAX_ROWS) {

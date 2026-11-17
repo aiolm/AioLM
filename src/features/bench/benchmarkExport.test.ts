@@ -6,37 +6,59 @@ import { exportBenchmarkResults } from './benchmarkExport';
 import { loadAllBenchmarkHistory } from './benchmarkRepository';
 import type { PerformanceBenchmarkRecord, ServingPerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { defined } from '../../testing/assertDefined';
+import { servingBenchmark } from '../../testing/servingBenchmark';
 
 vi.mock('../../shared/api/transport', () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn(() => true) }));
 vi.mock('../../shared/api/providers', async original => ({ ...await original<typeof import('../../shared/api/providers')>(), modelArtifact: vi.fn() }));
 
-const record: PerformanceBenchmarkRecord = {
-  schemaVersion: 1, id: 'saved', createdAt: new Date(2025, 3, 5, 6, 7, 8).getTime(), model: 'models/예제.gguf', backend: 'cpu', build: 'b1',
-  request: { run_id: 'saved', context_profile: 'novel_ko', prompt_lengths: [1024], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true },
-  result: { run_id: 'saved', rows: [], status: 'failed', message: 'Synthetic failure', args: [], runtime_version: 'test', context_size: 4096, parallel: 1 },
-};
+const record: PerformanceBenchmarkRecord = servingBenchmark();
+record.id = record.request.run_id = record.result.run_id = 'saved';
+record.createdAt = new Date(2025, 3, 5, 6, 7, 8).getTime();
+record.model = 'models/예제.gguf';
+record.result.rows = [];
+record.result.status = 'failed';
+record.result.message = 'Synthetic failure';
+defined(record.result.provenance).recorded_model_label = '예제.gguf';
 
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(modelArtifact).mockReset(); vi.mocked(isNativeRuntimeAvailable).mockReturnValue(true); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('benchmark CSV delivery', () => {
+  it.each(['csv', 'xlsx'] as const)('delivers serving %s with observed byte rates and blank token metrics', async format => {
+    const saved = servingBenchmark();
+    vi.mocked(invoke).mockResolvedValue(true);
+    expect(await exportBenchmarkResults([saved], 'selected', format)).toBe('saved');
+    const [command, args] = defined(vi.mocked(invoke).mock.calls[0]);
+    expect(command).toBe(`benchmark_export_${format}`);
+    let headers: unknown[];
+    let values: unknown[];
+    if (format === 'csv') {
+      const rows = (args!.contents as string).trim().split('\r\n').map(line =>
+        [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map(match => defined(match[1]).replace(/""/g, '"')));
+      headers = defined(rows[0]);
+      values = defined(rows[1]);
+      expect(values[headers.indexOf('Total token throughput (tok/s) · median')]).toBe('');
+      expect(values[headers.indexOf('Observed output (B/s) · median')]).toBe('60');
+    } else {
+      const workbook = new Workbook();
+      await workbook.xlsx.load(new Uint8Array(args!.contents as number[]).buffer);
+      const sheet = defined(workbook.worksheets[0]);
+      headers = sheet.getRow(1).values as unknown[];
+      values = sheet.getRow(2).values as unknown[];
+      expect(sheet.getCell(2, headers.indexOf('Total token throughput (tok/s) · median')).value).toBeNull();
+      expect(sheet.getCell(2, headers.indexOf('Observed output (B/s) · median')).value).toBe(60);
+    }
+    expect(values[headers.indexOf('Method')]).toBe('openai-chat-serving@5');
+    expect(JSON.stringify(values)).not.toMatch(/PRIVATE|synthetic|private|diagnostic/);
+  });
+
   const snapshot = `/synthetic/external/snapshots/${'a'.repeat(40)}`;
-  const serving: ServingPerformanceBenchmarkRecord = {
-    schemaVersion: 2, id: 'serving', createdAt: record.createdAt, model: snapshot,
-    request: { run_id: 'serving', method: { id: 'openai-chat-serving', version: 1 }, context_profile: 'novel_en',
-      prompt_bytes: [4096], max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false },
-    result: { run_id: 'serving', rows: [], status: 'failed', args: ['--secret', 'PRIVATE'],
-      provenance: {
-        schema_version: 2, app_version: '0.3.5', method: { id: 'openai-chat-serving', version: 1 },
-        recorded_model_label: 'Frozen-model', runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
-        model: { format: 'unknown', status: 'unidentified', sha256: null, size_bytes: null },
-        workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'b'.repeat(64) }],
-          max_output_tokens: 128, concurrencies: [1], repetitions: 1, warmup: true, request_usage: false, cache_policy: 'as_configured' },
-        environment: { scope: 'aiolm_host', os: 'test', arch: 'test', cpu: { name: 'CPU', logical_cores: 1 },
-          installed_gpus: [], execution: { mode: 'unknown', selected_gpus: [], devices: [], selection_complete: false }, detection: 'test' },
-        execution: { topology: 'attached', memory_scope: 'unavailable', settings: [] },
-      } },
-  };
+  const serving: ServingPerformanceBenchmarkRecord = servingBenchmark();
+  serving.createdAt = record.createdAt;
+  serving.model = snapshot;
+  serving.result.rows = [];
+  serving.result.status = 'failed';
+  defined(serving.result.provenance).recorded_model_label = 'Frozen-model';
 
   it.each(['csv', 'xlsx'] as const)('uses the frozen label in %s even when the original model was replaced or deleted', async format => {
     vi.mocked(modelArtifact).mockRejectedValue(new Error('Model no longer exists'));
@@ -128,14 +150,17 @@ describe('benchmark CSV delivery', () => {
     ['models/...gguf', 'model'],
   ])('keeps model filenames portable without including local directories: %s', async (model, expected) => {
     vi.mocked(invoke).mockResolvedValue(true);
-    await exportBenchmarkResults([{ ...record, model }], 'selected', 'csv');
+    const selected = { ...record, model, result: { ...record.result,
+      provenance: { ...defined(record.result.provenance), recorded_model_label: model } } };
+    await exportBenchmarkResults([selected], 'selected', 'csv');
     expect(invoke).toHaveBeenCalledWith('benchmark_export_csv', {
       contents: expect.any(String) as unknown, fileName: `aiolm-benchmark_${expected}_2025-04-05_06-07-08.csv`,
     });
   });
 
   it('exports every history page, including results outside the visible page', async () => {
-    const older = { ...record, id: 'older', model: 'models/older.gguf' };
+    const older = { ...record, id: 'older', model: 'models/older.gguf', result: { ...record.result,
+      provenance: { ...defined(record.result.provenance), recorded_model_label: 'older.gguf' } } };
     vi.mocked(invoke).mockResolvedValueOnce({ records: [record], total: 2, next_offset: 1 })
       .mockResolvedValueOnce({ records: [older], total: 2, next_offset: null }).mockResolvedValueOnce(true);
     expect(await exportBenchmarkResults(await loadAllBenchmarkHistory(), 'all', 'csv')).toBe('saved');
@@ -149,7 +174,8 @@ describe('benchmark CSV delivery', () => {
 
   it.each([
     { selected: record, fileName: 'aiolm-benchmark_예제_2025-04-05_06-07-08.csv' },
-    { selected: { ...record, model: snapshot }, fileName: `aiolm-benchmark_${'a'.repeat(40)}_2025-04-05_06-07-08.csv` },
+    { selected: { ...record, model: snapshot, result: { ...record.result,
+      provenance: { ...defined(record.result.provenance), recorded_model_label: 'a'.repeat(40) } } }, fileName: `aiolm-benchmark_${'a'.repeat(40)}_2025-04-05_06-07-08.csv` },
   ])('starts the browser download $fileName in the user action without native reads and retains its URL until consumption', async ({ selected, fileName }) => {
     vi.mocked(isNativeRuntimeAvailable).mockReturnValue(false);
     vi.useFakeTimers();

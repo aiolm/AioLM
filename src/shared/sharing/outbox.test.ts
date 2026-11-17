@@ -1,19 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../api/http.ts";
-import type { LegacyPublicBenchmarkSubmission, PublicBenchmarkSubmission } from "../contracts/benchmark/publicBenchmark.ts";
+import { toPublicBenchmark, type PublicBenchmarkSubmission } from "../contracts/benchmark/publicBenchmark.ts";
 import { createBenchmarkOutbox, type BenchmarkLocalSource, type BenchmarkOutboxStore, type MeasurementActivity, type QueuedBenchmark, type SelectedEntryTransport } from "./outbox.ts";
 import { createIndexedDbOutbox } from "./indexedDbOutbox.ts";
 import { defined } from "../../testing/assertDefined.ts";
+import { servingBenchmark } from "../../testing/servingBenchmark.ts";
 
-const payload = (): LegacyPublicBenchmarkSubmission => ({
-  schema_version: 1, submission_id: "00000000-0000-4000-8000-000000000001", app_version: "0.1.9", method: null,
-  workload: { corpus: "novel_ko", corpus_version: null, corpus_sha256: null, prompt_lengths: [1024], generation_length: 128, batch_sizes: [2], repetitions: 1, warmup: true },
-  model: { status: "unidentified", sha256: null, size_bytes: null },
-  runtime: { name: "llama.cpp", version: "10840", backend: "cpu", build: "b10840" },
-  environment: null, execution: { context_size: 4096, parallel: 2, settings: null },
-  measurements: { status: "complete", rows: [{ prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0, ttft_ms: 100, tpot_ms: 10, pp_tps: 100, tg_tps: 100, e2e_ms: 1380, total_tps: 93, peak_memory_bytes: null, timing_source: "client", failed: false }] },
-});
+const payload = (): PublicBenchmarkSubmission => toPublicBenchmark(servingBenchmark(), "00000000-0000-4000-8000-000000000001");
 
 function fixture() {
   const rows = new Map<string, QueuedBenchmark>();
@@ -48,11 +42,11 @@ const firstId = "00000000-0000-4000-8000-000000000001";
 const secondId = "00000000-0000-4000-8000-000000000002";
 const destination = "https://example.test/v1/benchmark-runs";
 
-const benchmarkFor = (id = firstId): LegacyPublicBenchmarkSubmission => ({ ...payload(), submission_id: id });
+const benchmarkFor = (id = firstId): PublicBenchmarkSubmission => ({ ...payload(), submission_id: id });
 
-/** A bare row as earlier app versions persisted it in IndexedDB: no frozen wrapper bytes. */
-function legacyRow(f: Fixture, id = firstId, extra: Partial<QueuedBenchmark> = {}): QueuedBenchmark {
-  const row: QueuedBenchmark = { id, payload: benchmarkFor(id), state: "pending", createdAt: 1000, attempts: 0, nextAttemptAt: 0, ...extra };
+function queuedRow(f: Fixture, id = firstId, extra: Partial<QueuedBenchmark> = {}): QueuedBenchmark {
+  const benchmark = benchmarkFor(id);
+  const row: QueuedBenchmark = { id, payload: benchmark, requestBody: JSON.stringify({ benchmark, description_md: "" }), state: "pending", createdAt: 1000, attempts: 0, nextAttemptAt: 0, ...extra };
   f.rows.set(id, structuredClone(row));
   return row;
 }
@@ -70,9 +64,9 @@ describe("reviewed benchmark outbox", () => {
     const f = fixture(); const input = payload();
     await f.queue.enqueuePublication({ benchmark: input, description_md: "" });
     await f.queue.enqueuePublication({ benchmark: payload(), description_md: "" });
-    input.execution.parallel = 4;
+    input.runtime.name = "Changed engine";
     await expect(f.queue.enqueuePublication({ benchmark: input, description_md: "" })).rejects.toThrow("different reviewed payload");
-    expect((f.rows.get(firstId)?.payload as LegacyPublicBenchmarkSubmission).execution.parallel).toBe(2);
+    expect(f.rows.get(firstId)?.payload.runtime.name).toBe("Example engine");
     expect(f.rows.size).toBe(1);
     await expect(f.queue.enqueuePublication({ benchmark: { ...payload(), local_path: "private" } as unknown as PublicBenchmarkSubmission, description_md: "" }))
       .rejects.toThrow("Invalid public benchmark");
@@ -85,8 +79,8 @@ describe("reviewed benchmark outbox", () => {
     await expect(publish(queue)).rejects.toThrow("Quota exceeded");
   });
 
-  it("claims an existing bare entry atomically across workers and recovers an expired interrupted upload", async () => {
-    const f = fixture(); legacyRow(f);
+  it("claims an entry atomically across workers and recovers an expired interrupted upload", async () => {
+    const f = fixture(); queuedRow(f);
     const second = createBenchmarkOutbox(f.options);
     const submit = vi.fn(transport().submitSnapshot);
     await Promise.all([f.queue.dispatchSelected(firstId, transport(submit)), second.dispatchSelected(firstId, transport(submit))]);
@@ -97,11 +91,11 @@ describe("reviewed benchmark outbox", () => {
     await second.dispatchSelected(firstId, transport(submit));
     expect(submit).toHaveBeenCalledTimes(2);
     expect(defined(submit.mock.calls[1])[0]).toMatchObject({ id: firstId, payload: payload() });
-    expect(defined(submit.mock.calls[1])[0].requestBody).toBeUndefined();
+    expect(defined(submit.mock.calls[1])[0].requestBody).toBe(JSON.stringify({ benchmark: payload(), description_md: "" }));
   });
 
   it("waits for Retry-After and never retries a permanent rejection without a request", async () => {
-    const f = fixture(); legacyRow(f);
+    const f = fixture(); queuedRow(f);
     const submit = vi.fn<SelectedEntryTransport["submitSnapshot"]>()
       .mockRejectedValueOnce(new HttpError("http", "HTTP 429", true, 429, 20_000))
       .mockRejectedValueOnce(new HttpError("http", "HTTP 401", false, 401))
@@ -114,7 +108,7 @@ describe("reviewed benchmark outbox", () => {
   });
 
   it("pauses during measurement and aborts a running upload when a benchmark starts", async () => {
-    const f = fixture(); legacyRow(f); f.setActive(true);
+    const f = fixture(); queuedRow(f); f.setActive(true);
     const submit = vi.fn<SelectedEntryTransport["submitSnapshot"]>().mockImplementation(async (_entry, signal) => {
       f.setActive(true); expect(signal?.aborted).toBe(true);
       return new Promise(() => {});
@@ -124,8 +118,8 @@ describe("reviewed benchmark outbox", () => {
     expect(submit).toHaveBeenCalledOnce(); expect(f.rows.get(firstId)?.state).toBe("pending");
   });
 
-  it("binds retries of an existing bare entry to its original service", async () => {
-    const f = fixture(); legacyRow(f);
+  it("binds retries of an existing entry to its original service", async () => {
+    const f = fixture(); queuedRow(f);
     await f.queue.dispatchSelected(firstId, transport(async () => { throw new HttpError("network", "Unavailable", true); }));
     f.advance(100_000);
     const submit = vi.fn(transport().submitSnapshot);
@@ -135,7 +129,7 @@ describe("reviewed benchmark outbox", () => {
   });
 
   it("applies a server cooldown to other pending submissions and worker restarts", async () => {
-    const f = fixture(); legacyRow(f); legacyRow(f, secondId);
+    const f = fixture(); queuedRow(f); queuedRow(f, secondId);
     const submit = vi.fn<SelectedEntryTransport["submitSnapshot"]>().mockRejectedValueOnce(new HttpError("http", "Busy", true, 429, 5000)).mockImplementation(transport().submitSnapshot);
     await f.queue.dispatchSelected(firstId, transport(submit)); expect(submit).toHaveBeenCalledOnce();
     const restarted = createBenchmarkOutbox(f.options);
@@ -146,7 +140,7 @@ describe("reviewed benchmark outbox", () => {
   });
 
   it("does not count or overwrite a receipt after another worker recovers its lease", async () => {
-    const f = fixture(); legacyRow(f);
+    const f = fixture(); queuedRow(f);
     let deliver!: (value: { id: string; submission_id: string }) => void;
     let started!: () => void;
     const waiting = new Promise<void>((resolve) => { started = resolve; });
@@ -188,32 +182,34 @@ describe("reviewed benchmark outbox", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it("leaves source-less legacy receipts untouched and refuses to rewrap an attempted bare submission", async () => {
+  it.each([undefined, "not json", JSON.stringify(payload()), JSON.stringify({ benchmark: { ...payload(), schema_version: 3 }, description_md: "" })])(
+    "drops a queued entry with missing or invalid requestBody before dispatch: %s", async requestBody => {
+      const f = fixture();
+      const row = queuedRow(f);
+      f.rows.set(firstId, { ...row, requestBody } as unknown as QueuedBenchmark);
+      const submit = vi.fn(transport().submitSnapshot);
+      expect(await f.queue.dispatchSelected(firstId, transport(submit))).toBe(0);
+      expect(submit).not.toHaveBeenCalled();
+      expect(f.rows.has(firstId)).toBe(false);
+      expect(await f.queue.get(firstId)).toBeUndefined();
+    },
+  );
+
+  it("drops a body-less entry when restoring queued publication state", async () => {
     const f = fixture();
-    legacyRow(f, firstId, { state: "sent", attempts: 1, destination, receipt: { id: "legacy-receipt", submission_id: firstId } });
-    const original = structuredClone(f.rows.get(firstId));
-    const onAccepted = vi.fn(async () => undefined);
-    const queue = createBenchmarkOutbox({ ...f.options, onAccepted });
-    expect(await queue.reconcileAccepted()).toBe(0);
-    expect(onAccepted).not.toHaveBeenCalled();
-    await expect(publish(queue, firstId, { runId: "local-run" })).rejects.toThrow("already attempted as a legacy request");
-    const submit = vi.fn(transport().submitSnapshot);
-    expect(await queue.dispatchSelected(firstId, transport(submit))).toBe(0);
-    expect(submit).not.toHaveBeenCalled();
-    expect(f.rows.get(firstId)).toEqual(original);
+    const row = queuedRow(f);
+    const withoutBody: Partial<QueuedBenchmark> = { ...row };
+    delete withoutBody.requestBody;
+    f.rows.set(firstId, withoutBody as QueuedBenchmark);
+    expect(await f.queue.get(firstId)).toBeUndefined();
+    expect(f.rows.has(firstId)).toBe(false);
   });
 
-  it("wraps a never-attempted bare entry in place only for the same reviewed payload and local source", async () => {
-    const f = fixture(); legacyRow(f, firstId, { createdAt: 500 });
-    const changed = { ...payload(), execution: { ...payload().execution, parallel: 4 } };
-    await expect(f.queue.enqueuePublication({ benchmark: changed, description_md: "" })).rejects.toThrow("different reviewed payload");
-    expect(f.rows.get(firstId)?.requestBody).toBeUndefined();
-    const wrapped = await f.queue.enqueuePublication({ benchmark: payload(), description_md: "notes" }, { source: { runId: "local-run" } });
-    expect(wrapped).toMatchObject({ id: firstId, createdAt: 500, state: "pending", attempts: 0, descriptionMd: "notes", source: { runId: "local-run" }, localCachePolicy: "acknowledged-v1" });
-    expect(JSON.parse(wrapped.requestBody!)).toMatchObject({ benchmark: payload(), description_md: "notes" });
-    await expect(f.queue.enqueuePublication({ benchmark: payload(), description_md: "notes" }, { source: { runId: "other-run" } })).rejects.toThrow("different local benchmark");
+  it("rejects an oversized local source before persisting publication bytes", async () => {
+    const f = fixture();
     await expect(publish(f.queue, firstId, { runId: "x".repeat(129) })).rejects.toThrow("Invalid local benchmark source");
     await expect(publish(f.queue, firstId, { runId: "가".repeat(43) })).rejects.toThrow("Invalid local benchmark source");
+    expect(f.rows.size).toBe(0);
   });
 
   it("attaches an explicit local source to an accepted publication once without rebinding it", async () => {
@@ -296,7 +292,7 @@ describe("reviewed benchmark outbox", () => {
     expect(f.rows.get(firstId)?.localReconcileAt).toBeUndefined();
   });
 
-  it("retains the newest 100 acknowledged cache entries and protects legacy and unsent rows", async () => {
+  it("retains the newest 100 acknowledged cache entries and protects opted-out and unsent rows", async () => {
     const f = fixture();
     const template = await publish(f.queue, firstId, { runId: "local-template" });
     f.rows.clear();
@@ -304,7 +300,7 @@ describe("reviewed benchmark outbox", () => {
       const id = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
       f.rows.set(id, { ...template, id, source: { runId: `local-${index}` }, state: "sent", localAcknowledgedAt: index, receipt: { id: `accepted-${index}`, submission_id: id } });
     }
-    f.rows.set("legacy", { ...template, id: "legacy", state: "sent", localCachePolicy: undefined, localAcknowledgedAt: 0, receipt: { id: "legacy", submission_id: "legacy" } });
+    f.rows.set("opted-out", { ...template, id: "opted-out", state: "sent", localCachePolicy: undefined, localAcknowledgedAt: 0, receipt: { id: "opted-out", submission_id: "opted-out" } });
     f.rows.set("unlinked", { ...template, id: "unlinked", state: "sent", source: undefined, localCachePolicy: undefined, receipt: { id: "unlinked", submission_id: "unlinked" } });
     f.rows.set("pending", { ...template, id: "pending", state: "pending" });
     expect(await f.queue.pruneAcknowledged(5)).toBe(5);
@@ -313,7 +309,7 @@ describe("reviewed benchmark outbox", () => {
     expect(f.rows.size).toBe(103);
     expect(f.rows.has("00000000-0000-4000-8000-000000000007")).toBe(true);
     expect(f.rows.has("00000000-0000-4000-8000-000000000006")).toBe(false);
-    expect(f.rows.has("legacy") && f.rows.has("unlinked") && f.rows.has("pending")).toBe(true);
+    expect(f.rows.has("opted-out") && f.rows.has("unlinked") && f.rows.has("pending")).toBe(true);
   });
 
   it("rechecks the local source before pruning a queued cache candidate", async () => {
@@ -350,15 +346,15 @@ describe("reviewed benchmark outbox", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it("dispatches only the selected entry and sends an existing bare entry without inventing wrapper bytes", async () => {
+  it("dispatches only the selected entry with its frozen wrapper bytes", async () => {
     const f = fixture();
     await publish(f.queue);
-    legacyRow(f, secondId);
+    queuedRow(f, secondId);
     const submit = vi.fn(transport().submitSnapshot);
     expect(await f.queue.dispatchSelected(secondId, transport(submit))).toBe(1);
     expect(submit).toHaveBeenCalledOnce();
     expect(defined(submit.mock.calls[0])[0]).toMatchObject({ id: secondId, payload: benchmarkFor(secondId) });
-    expect(defined(submit.mock.calls[0])[0].requestBody).toBeUndefined();
+    expect(defined(submit.mock.calls[0])[0].requestBody).toBe(JSON.stringify({ benchmark: benchmarkFor(secondId), description_md: "" }));
     expect(f.rows.get(firstId)).toMatchObject({ state: "pending", attempts: 0 });
     expect(f.rows.get(secondId)).toMatchObject({ state: "sent", receipt: { id: "run-1", submission_id: secondId } });
   });

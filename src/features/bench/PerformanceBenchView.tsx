@@ -1,4 +1,3 @@
-import BenchmarkTableScroll from './BenchmarkTableScroll';
 import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
@@ -11,14 +10,12 @@ import ProgressBar from '../../shared/ui/ProgressBar';
 import StableLabel from '../../shared/ui/StableLabel';
 import { providerOf } from '../../shared/api/providers';
 import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
-import { benchmarkHistoryModelLabel, summarizePerformanceRows } from './performanceRecords';
+import { benchmarkHistoryModelLabel } from './performanceRecords';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { BenchmarkOwnedList } from './BenchmarkOwnedList';
 import { BenchmarkEnvironment } from './BenchmarkEnvironment';
 import { RecordedSettings, ServingResultTable } from './PublicBenchmarkSummary';
-import { benchmarkCopy } from './benchmarkCopy';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
-import { formatBenchmarkRuntimeVersion } from '../../shared/runtime/runtimeUtils';
 import { formatBytes, formatCpuCores } from '../../shared/lib/units';
 import BenchmarkExplorerActions from './BenchmarkExplorerActions';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
@@ -26,12 +23,6 @@ import type { usePerformanceBench } from './usePerformanceBench';
 import { CONCURRENCIES, CORPORA, OUTPUT_TOKENS, PROMPT_BYTES, TASK_ID, formatInputSize } from './performanceBenchConfig';
 
 const STATUS_TONES = { complete: 'success', partial: 'warning', cancelled: 'neutral', failed: 'danger' } as const;
-type Copy = ReturnType<typeof benchmarkCopy>;
-type Summary = ReturnType<typeof summarizePerformanceRows>[number];
-
-function numberLabel(value: number | null | undefined, copy: Copy, digits = 1): string {
-  return value == null || !Number.isFinite(value) ? copy.unavailable : value.toFixed(digits);
-}
 
 const startsOption = (token: string | undefined) => token !== undefined && /^--?[a-zA-Z]/.test(token);
 
@@ -54,37 +45,12 @@ function argumentLines(args: readonly string[]): string[] {
   return lines;
 }
 
-function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; copy: Copy }) {
-  if (!rows.length) return null;
-  return <section className="app-card app-card--flush performance-card performance-results" aria-labelledby={batch ? "perf-batch-title" : "perf-single-title"}>
-    <div className="performance-card-heading"><h3 id={batch ? "perf-batch-title" : "perf-single-title"}>{batch ? copy.batch : copy.single}</h3><Badge>{rows.length}</Badge></div>
-    <BenchmarkTableScroll label={batch ? copy.batch : copy.single} copy={copy}>
-      <table>
-        <caption className="sr-only">{batch ? copy.batch : copy.single}</caption>
-        <thead><tr>
-          <th scope="col">{copy.test}</th>{batch && <th scope="col">{copy.concurrency}</th>}<th scope="col">{copy.repeat}</th>
-          <th scope="col">{copy.ttft}<small>{copy.milliseconds}</small></th><th scope="col">{copy.tpot}<small>{copy.milliseconds}</small></th>
-          <th scope="col" className="performance-phase-heading" title={copy.ppHint}>{copy.pp}<small>{copy.tokens}</small></th><th scope="col" className="performance-phase-heading" title={copy.tgHint}>{copy.tg}<small>{copy.tokens}</small></th>
-          {batch && <th scope="col">{copy.speedup}</th>}<th scope="col">{copy.e2e}<small>{copy.seconds}</small></th><th scope="col" title={copy.throughputHint}>{copy.throughput}<small>{copy.tokens}</small></th><th scope="col" title={copy.memoryHint}>{copy.memory}</th>
-        </tr></thead>
-        <tbody>{rows.map((row) => <tr key={row.id}>
-          <th scope="row">{row.prompt_tokens.toLocaleString()} / {row.generation_length.toLocaleString()}{row.error && <span className="performance-row-error">{normalizeDisplayText(row.error)}</span>}</th>
-          {batch && <td>{row.concurrency}×</td>}<td>{row.samples}</td>
-          <td>{numberLabel(row.ttft_ms, copy)}</td><td>{numberLabel(row.tpot_ms, copy, 2)}</td><td>{numberLabel(row.pp_tps, copy)}</td>
-          <td className="performance-metric-primary">{numberLabel(row.tg_tps, copy)}{row.samples > 1 && row.tg_stddev != null && <small>± {numberLabel(row.tg_stddev, copy)}</small>}</td>
-          {batch && <td>{row.speedup == null ? copy.unavailable : `${row.speedup.toFixed(2)}×`}</td>}
-          <td>{row.error ? copy.unavailable : numberLabel(row.e2e_ms / 1000, copy, 2)}</td><td>{numberLabel(row.total_tps, copy)}</td><td>{row.peak_memory_bytes == null ? copy.unavailable : formatBytes(row.peak_memory_bytes)}</td>
-        </tr>)}</tbody>
-      </table>
-    </BenchmarkTableScroll>
-  </section>;
-}
 
 export function PerformanceBenchView({ controller }: { controller: ReturnType<typeof usePerformanceBench> }) {
   const {
     store, active, setupFormId, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions, promptBytes,
-    setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup, corpus, setCorpus, phase,
+    setPromptBytes, concurrencies, setConcurrencies, corpus, setCorpus, phase,
     progress, rows, record, history, historyOffset,
     historyLoading, historyError, historyWarnings, exporting, exportFormat, setExportFormat,
     exportNotice, setExportNotice, sharingRevision, setSharingRevision, sharingBusy, setSharingBusy,
@@ -93,9 +59,9 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
     copied, copying, device, setAdmissionRevision, resetCopied, busy,
     otherBenchmark, valid, serverRunning, targetDiffers,
     displayedTarget, displayedModel, blockingSessions, setupGaps, admission, canRun,
-    total, selectedRecord, localImportUnavailable, previousRecords, historyModelNames, exportAllDiffers,
-    visibleResult, provenance, selectedGpuLabel, modelHash, legacyRecord,
-    servingRecord, servingPoints, singleRows, batchRows, servingProvenance,
+    total, selectedRecord, localImportUnavailable, previousRecords, exportAllDiffers,
+    visibleResult, provenance, selectedGpuLabel, modelHash,
+    servingRecord, servingPoints, servingProvenance,
     modelSource, refreshSessions, loadHistory, editModel, stopSessions, cancel,
     run, toggle, statusLabel, progressMessage, copyResults,
     exportResults, deleteSelectedHistory,
@@ -122,9 +88,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
     {!setupGaps.length && !busy && admission?.status !== 'supported' && <FeedbackBanner tone={admission ? 'warning' : 'info'} className="performance-notice"
       action={modelSettings ? { label: copy.admissionConfigure, onClick: () => editModel('runtime') }
         : admission?.status === 'unknown' ? { label: modelCopy.retry, onClick: () => setAdmissionRevision(value => value + 1) } : undefined}>
-      <span role="status">{!admission ? copy.admissionPending : admission.status === 'unknown' ? copy.admissionUnknown
-        : admission.reason === 'fixed_output' ? copy.admissionFixedOutput
-        : admission.reason === 'stream_usage' ? copy.admissionUsage : copy.admissionRequest}</span>
+      <span role="status">{!admission ? copy.admissionPending : admission.status === 'unknown' ? copy.admissionUnknown : copy.admissionRequest}</span>
       {admission?.detail && <details><summary>{copy.details}</summary>{normalizeDisplayText(admission.detail)}</details>}
     </FeedbackBanner>}
     {serverRunning && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: copy.stopServer, disabled: store.busy, onClick: () => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught))) }}>{copy.stopHint}</FeedbackBanner>}
@@ -160,10 +124,9 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
               <div className="performance-chips">{CONCURRENCIES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={concurrencies.includes(value)} onChange={() => toggle(value, concurrencies, setConcurrencies)} /><span>{value}×</span></label>)}</div>
               <p id="performance-concurrency-hint" className="performance-hint">{copy.concurrencyHint}</p>
             </fieldset>
-            <label className="performance-toggle"><input type="checkbox" checked={warmup} onChange={event => setWarmup(event.target.checked)} /><span>{copy.warmup}</span></label>
             <div className="performance-fixed-workload">
-              <dl><div><dt>{copy.outputTokens}</dt><dd>{OUTPUT_TOKENS.toLocaleString()}</dd></div></dl>
-              <p className="performance-hint">{copy.fixedOutputConditions}</p>
+              <dl><div><dt>{copy.outputCap}</dt><dd>{OUTPUT_TOKENS.toLocaleString()}</dd></div></dl>
+              <p className="performance-hint">{copy.coldPromptConditions}</p>
             </div>
           </fieldset></div>
         </form>
@@ -175,8 +138,8 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
             {(history.length > 0 || rows.length > 0 || record || historyOffset !== null) && <div className="performance-history-controls">
               {previousRecords.length > 0 ? <label className="performance-history-select"><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy || exporting || deleting}
                 onChange={value => { setSelectedHistory(value); resetCopied(); setError(null); setExportNotice(null); setHistoryNotice(null); }}
-                options={[{ value: '', label: copy.current }, ...previousRecords.map((item, index) => ({ value: item.id,
-                  label: `${new Date(item.createdAt).toLocaleString()} · ${item.schemaVersion === 2 ? benchmarkHistoryModelLabel(item) || copy.unavailable : historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
+                options={[{ value: '', label: copy.current }, ...previousRecords.map((item) => ({ value: item.id,
+                  label: `${new Date(item.createdAt).toLocaleString()} · ${benchmarkHistoryModelLabel(item) || copy.unavailable} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
                   icon: <ModelIcon model={item.model} /> }))]} /></label> : <span className="performance-history-current">{copy.current}</span>}
               {historyOffset !== null && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
               {selectedRecord && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting || copying} aria-busy={copying} data-icon="copy" onClick={() => void copyResults()}><StableLabel value={copied ? copy.copied : copy.copy} labels={[copy.copy, copy.copied]} /></button>}
@@ -201,10 +164,10 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           </div>
           {historyLoading && <p role="status" className="performance-hint">{copy.historyLoading}</p>}
           {selectedRecord && <div className="performance-result-context">
-            <strong className="performance-result-model"><ModelIcon model={selectedRecord.model} />{selectedRecord.schemaVersion === 2 ? benchmarkHistoryModelLabel(selectedRecord) || copy.unavailable : <><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></>}</strong>
+            <strong className="performance-result-model"><ModelIcon model={selectedRecord.model} />{benchmarkHistoryModelLabel(selectedRecord) || copy.unavailable}</strong>
             <div className="performance-result-facts">
               <Badge tone={STATUS_TONES[selectedRecord.result.status]}>{statusLabel}</Badge>
-              <span>{selectedRecord.schemaVersion === 1 ? `${copy.legacy} · ${selectedRecord.backend} · ${formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}` : `${copy.method}: ${selectedRecord.request.method.id}@${selectedRecord.request.method.version}`} · {copy[selectedRecord.request.context_profile]}</span>
+              <span>{copy.method}: {selectedRecord.request.method.id}@{selectedRecord.request.method.version} · {copy[selectedRecord.request.context_profile]}</span>
               <span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>
             </div>
             {visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}
@@ -215,23 +178,18 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
           {historyWarnings && <FeedbackBanner tone="warning" className="performance-notice">{copy.historyWarning}</FeedbackBanner>}
           {exportNotice && <FeedbackBanner tone="success" className="performance-notice">{exportNotice}</FeedbackBanner>}
           {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
-          {legacyRecord ? <><ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} /></> : <ServingResultTable points={servingPoints} copy={copy} fixedOutput={!selectedRecord || selectedRecord.schemaVersion === 2 && selectedRecord.request.method.version === 2} />}
+          <ServingResultTable points={servingPoints} copy={copy} />
           {/* Reserve the result space whenever no table shows (idle, running before the first point, or failed), so later sections never jump. */}
-          {!(legacyRecord ? singleRows.length + batchRows.length : servingPoints.length) && <div className="app-card performance-results-empty"><EmptyState title={copy.emptyTitle} description={copy.empty} /></div>}
+          {!servingPoints.length && <div className="app-card performance-results-empty"><EmptyState title={copy.emptyTitle} description={copy.empty} /></div>}
           <div className="app-card app-card--flush performance-disclosures">
             {selectedRecord && <details className="performance-details"><summary>{copy.details}</summary><div className="performance-details-body"><dl className="performance-run-config">
               <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>
-              <div><dt>{selectedRecord.schemaVersion === 2 ? copy.inputBytes : copy.promptLengths}</dt><dd>{selectedRecord.schemaVersion === 2 ? selectedRecord.request.prompt_bytes.map(formatInputSize).join(" / ") : selectedRecord.request.prompt_lengths.map((value) => value.toLocaleString()).join(" / ")}</dd></div>
-              <div><dt>{selectedRecord.schemaVersion === 2 ? selectedRecord.request.method.version === 2 ? copy.outputTokens : copy.outputCap : copy.generation}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.max_output_tokens : selectedRecord.request.generation_length).toLocaleString()}</dd></div>
-              <div><dt>{copy.batchSizes}</dt><dd>{(selectedRecord.schemaVersion === 2 ? selectedRecord.request.concurrencies : [1, ...selectedRecord.request.batch_sizes]).map((value) => `${value}×`).join(" / ")}</dd></div>
+              <div><dt>{copy.inputBytes}</dt><dd>{selectedRecord.request.prompt_bytes.map(formatInputSize).join(" / ")}</dd></div>
+              <div><dt>{copy.outputCap}</dt><dd>{selectedRecord.request.max_output_tokens.toLocaleString()}</dd></div>
+              <div><dt>{copy.batchSizes}</dt><dd>{selectedRecord.request.concurrencies.map((value) => `${value}×`).join(" / ")}</dd></div>
               <div><dt>{copy.repetitions}</dt><dd>{selectedRecord.request.repetitions}</dd></div>
               <div><dt>{copy.warmup}</dt><dd>{selectedRecord.request.warmup ? copy.enabled : copy.disabled}</dd></div>
-              {legacyRecord && <>
-                <div><dt>{copy.contextSize}</dt><dd>{legacyRecord.result.context_size > 0 ? legacyRecord.result.context_size.toLocaleString() : copy.unavailable}</dd></div>
-                <div><dt>{copy.parallel}</dt><dd>{legacyRecord.result.parallel > 0 ? legacyRecord.result.parallel : copy.unavailable}</dd></div>
-                <div><dt>{copy.runtimeVersion}</dt><dd>{formatBenchmarkRuntimeVersion(legacyRecord.result, legacyRecord.build, copy.unavailable)}</dd></div>
-              </>}
-              {servingRecord && <><div><dt>{copy.requestUsage}</dt><dd>{servingRecord.request.request_usage ? copy.enabled : copy.disabled}</dd></div><div><dt>{copy.cachePolicy}</dt><dd>{copy.asConfigured}</dd></div></>}
+              {servingRecord && <><div><dt>{copy.requestUsage}</dt><dd>{(servingProvenance?.workload.request_usage ?? servingRecord.request.request_usage) ? copy.enabled : copy.disabled}</dd></div><div><dt>{copy.cachePolicy}</dt><dd>{servingProvenance ? copy.coldPrompt : copy.unavailable}</dd></div></>}
               {servingProvenance && <>
                 <div><dt>{copy.runtimeName}</dt><dd>{servingProvenance.runtime.name ?? copy.unavailable}</dd></div>
                 <div><dt>{copy.runtimeVersion}</dt><dd>{servingProvenance.runtime.version ?? copy.unavailable}</dd></div>
@@ -252,33 +210,27 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
               </>}
               <div><dt>{copy.executionDevice}</dt><dd>{provenance?.environment?.execution?.mode === 'cpu' ? 'CPU' : selectedGpuLabel || copy.unavailable}</dd></div>
               <div><dt>{copy.shareOs}</dt><dd>{provenance?.environment ? `${provenance.environment.os} · ${provenance.environment.arch}` : copy.unavailable}</dd></div>
-              <div><dt>{copy.processor}</dt><dd>{provenance?.environment?.cpu ? `${normalizeDisplayText(provenance.environment.cpu.name)} · ${formatCpuCores(provenance.environment.cpu)}` : copy.unavailable}</dd></div>
+              <div><dt>{copy.processor}</dt><dd>{provenance?.environment?.cpu ? `${normalizeDisplayText(provenance.environment.cpu.name ?? copy.unavailable)} · ${formatCpuCores(provenance.environment.cpu)}` : copy.unavailable}</dd></div>
               <div><dt>{copy.systemMemory}</dt><dd>{typeof provenance?.environment?.system_memory_bytes === 'number' ? formatBytes(provenance.environment.system_memory_bytes) : copy.unavailable}</dd></div>
               <div><dt>{copy.modelHash}</dt><dd>{typeof modelHash === 'string' ? modelHash : copy.unavailable}</dd></div>
             </dl>{servingProvenance && <><p>{copy.hostScope}</p><p>{copy.sourceHint}</p><h3 className="performance-details-heading">{copy.recordedSettings}</h3><RecordedSettings settings={servingProvenance.execution.settings} copy={copy} /></>}
-              {servingRecord && <dl className="performance-run-config">{servingRecord.result.rows.map(row => <div key={row.id}><dt>{formatInputSize(row.input_bytes)} / {row.concurrency}× / {row.max_output_tokens} · {row.repetition}</dt><dd>{copy.usageStatus}: {({ complete: copy.usageComplete, partial: copy.usagePartial, missing: copy.usageMissing, invalid: copy.usageInvalid })[row.usage_status]} · {copy.finishReasons}: {row.finish_reasons.join(' / ')}{row.reported_completion_tokens_by_request && <> · {copy.requestOutputTokens}: {row.reported_completion_tokens_by_request.map(value => value.toLocaleString()).join(' / ')}</>}</dd></div>)}</dl>}
+              {servingRecord && <dl className="performance-run-config">{servingRecord.result.rows.map(row => <div key={row.id}><dt>{formatInputSize(row.input_bytes)} / {row.concurrency}× / {row.max_output_tokens} · {row.repetition}</dt><dd>{copy.usageStatus}: {({ complete: copy.usageComplete, partial: copy.usagePartial, missing: copy.usageMissing, invalid: copy.usageInvalid })[row.usage_status]} · {copy.finishReasons}: {row.finish_reasons.join(' / ')}</dd></div>)}</dl>}
             </div></details>}
             {visibleResult && visibleResult.args.length > 0 && <details className="performance-details"><summary>{copy.effectiveArgs}</summary><div className="performance-details-body"><code>{argumentLines(visibleResult.args).join("\n")}</code></div></details>}
             <details className="performance-details"><summary>{copy.metrics}</summary><div className="performance-details-body"><dl className="performance-metric-guide">
-              {legacyRecord ? <>
-                <div><dt>{copy.ttft}</dt><dd>{copy.ttftHint}</dd></div>
-                <div><dt>{copy.tpot}</dt><dd>{copy.tpotHint}</dd></div>
-                <div><dt>{copy.pp}</dt><dd>{copy.ppHint}</dd></div>
-                <div><dt>{copy.tg}</dt><dd>{copy.tgHint}</dd></div>
-                <div><dt>{copy.throughput}</dt><dd>{copy.throughputHint}</dd></div>
-                <div><dt>{copy.memory}</dt><dd>{copy.memoryHint}</dd></div>
-                <div><dt>{copy.speedup}</dt><dd>{copy.speedupHint}</dd></div>
-              </> : <>
-                <div><dt>{copy.firstOutput}</dt><dd>{copy.firstOutputHint}</dd></div>
-                <div><dt>{copy.outputRate}</dt><dd>{copy.outputRateHint}</dd></div>
-                <div><dt>{copy.outputBytes}</dt><dd>{copy.emptyOutputHint}</dd></div>
-                <div><dt>{copy.memory}</dt><dd>{copy.servingMemoryHint}</dd></div>
-              </>}
-            </dl><p>{legacyRecord ? copy.metricsHint : copy.medianHint}</p></div></details>
+              <div><dt>{copy.firstOutput}</dt><dd>{copy.firstOutputHint}</dd></div>
+              <div><dt>{copy.prefillRate}</dt><dd>{copy.prefillRateHint}</dd></div>
+              <div><dt>{copy.decodeRate}</dt><dd>{copy.decodeRateHint}</dd></div>
+              <div><dt>{copy.tpot}</dt><dd>{copy.tpotHint}</dd></div>
+              <div><dt>{copy.reportedRate}</dt><dd>{copy.reportedRateHint}</dd></div>
+              <div><dt>{copy.outputRate}</dt><dd>{copy.outputRateHint}</dd></div>
+              <div><dt>{copy.e2e}</dt><dd>{copy.e2eHint}</dd></div>
+              <div><dt>{copy.memory}</dt><dd>{copy.servingMemoryHint}</dd></div>
+            </dl><p>{copy.medianHint}</p></div></details>
           </div>
         </section>
         <div className="performance-sharing">
-          {selectedRecord && (selectedRecord.schemaVersion === 1 || selectedRecord.result.status === 'complete'
+          {selectedRecord && (selectedRecord.result.status === 'complete'
             ? <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />
             : <section className="app-card performance-share-note" aria-labelledby="performance-share-note-title"><h3 id="performance-share-note-title">{copy.publicReview}</h3><p>{copy.servingShareIncomplete}</p></section>)}
           <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} revision={sharingRevision} />
@@ -287,7 +239,7 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
     </div>
     <ConfirmDialog open={!!pendingDelete} title={copy.deleteTitle} confirmLabel={copy.deleteHistory} busy={deleting}
       confirmDisabled={busy || otherBenchmark || exporting || sharingBusy || historyLoading}
-      description={<>{pendingDelete && <p><strong>{pendingDelete.schemaVersion === 2 ? benchmarkHistoryModelLabel(pendingDelete) || copy.unavailable : <ModelName model={pendingDelete.model} />}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
+      description={<>{pendingDelete && <p><strong>{benchmarkHistoryModelLabel(pendingDelete) || copy.unavailable}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
       onConfirm={() => void deleteSelectedHistory()} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </div>;
 }

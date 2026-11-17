@@ -1,6 +1,5 @@
 import { publicBenchmarkSchema, benchmarkReceiptSchema } from './schema.js';
-import { FIXED_OUTPUT_TOKENS } from './fixedOutput.js';
-import type { PublicBenchmarkSubmission, LegacyPublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkConfiguration, BenchmarkReceipt, RecordedSetting, ServingExecution } from './types.js';
+import type { PublicBenchmarkSubmission, ServingPublicBenchmarkSubmission, BenchmarkConfiguration, BenchmarkReceipt, RecordedSetting, ServingExecution } from './types.js';
 
 interface JsonSchema {
   type?: string | string[]; properties?: Record<string, JsonSchema>; required?: string[];
@@ -71,23 +70,6 @@ function assertSchema(value: unknown, spec: JsonSchema, path: string): void {
   }
 }
 
-function validateLegacyConfigurationRules(result: Pick<LegacyPublicBenchmarkSubmission, 'runtime' | 'execution'>, schemaVersion: 1 | 2): void {
-  const metal = result.runtime.variant === 'vllm-metal';
-  if (metal ? schemaVersion !== 2 || result.runtime.name !== 'vllm' || result.runtime.backend !== 'metal' || !result.runtime.plugin_version
-    : result.runtime.plugin_version !== undefined || result.runtime.name === 'vllm' && result.runtime.backend === 'metal') throw new Error('Invalid vllm-metal runtime identity.');
-  if (schemaVersion === 1 && result.runtime.name !== 'llama.cpp') throw new Error('Version 1 benchmarks describe llama.cpp measurements.');
-  if (schemaVersion === 2 && result.runtime.name !== 'llama.cpp' && result.execution.settings !== null) throw new Error('Python engines cannot carry llama.cpp execution settings.');
-}
-
-function validateLegacy(result: LegacyPublicBenchmarkSubmission): void {
-  validateLegacyConfigurationRules(result, result.schema_version);
-  const metal = result.runtime.variant === 'vllm-metal';
-  if (result.schema_version === 1 && (result.model.format !== undefined || result.method?.version === 2)) throw new Error('Version 1 benchmarks describe llama.cpp GGUF measurements.');
-  if (result.schema_version === 2) {
-    const formats = result.runtime.name === 'llama.cpp' ? ['gguf'] : metal ? ['hf-safetensors', 'mlx', 'gguf'] : result.runtime.name === 'vllm' ? ['hf-safetensors'] : ['hf-safetensors', 'mlx'];
-    if (!result.model.format || !formats.includes(result.model.format) || result.method && result.method.version !== 2 || result.runtime.name !== 'llama.cpp' && result.model.metadata != null) throw new Error('Invalid runtime/model format for version 2 benchmark.');
-  }
-}
 
 const asciiCompare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 function compareSettings(a: RecordedSetting, b: RecordedSetting): number {
@@ -112,69 +94,64 @@ function validateServing(result: ServingPublicBenchmarkSubmission): void {
   if (!ordered(workload.inputs.map(input => input.bytes)) || !ordered(workload.concurrencies) || workload.inputs.length * workload.concurrencies.length > 64) throw new Error('Invalid serving workload operating points.');
   validateExecution(execution);
   const requests = execution.settings.filter(setting => setting.target === 'request');
-  const fixed = result.method.version === 2;
-  const force = requests.find(setting => setting.name === 'ignore_eos' || setting.name === 'min_tokens');
-  if (fixed && (!workload.request_usage || !FIXED_OUTPUT_TOKENS.includes(workload.max_output_tokens)
-    || !force || (force.name === 'ignore_eos' ? force.value !== true : force.value !== workload.max_output_tokens))) {
-    throw new Error('Fixed-output benchmarks require a supported control, usage reporting and an exact preset target.');
-  }
   const expected = ['max_tokens', 'stream', ...(workload.request_usage ? ['stream_options.include_usage'] : []), 'temperature'];
-  if (fixed && force) expected.push(force.name);
   expected.sort(asciiCompare);
   if (requests.length !== expected.length || requests.some((setting, index) => setting.name !== expected[index]) || requests.find(setting => setting.name === 'max_tokens')?.value !== workload.max_output_tokens) throw new Error('Public request settings must describe the exact serving request.');
+  if (requests.some(setting =>
+    setting.scope.length !== 0 || setting.role !== null
+    || (setting.name === 'max_tokens'
+      ? setting.unit !== 'tokens' || !Number.isSafeInteger(setting.value)
+      : setting.unit !== null || setting.value !== (setting.name === 'temperature' ? 0 : true)))) {
+    throw new Error('Serving benchmarks require exactly max_tokens, stream, optional stream_options.include_usage and temperature.');
+  }
   const rows = result.measurements.rows;
   if (rows.length !== workload.inputs.length * workload.concurrencies.length * workload.repetitions) throw new Error('Incomplete serving measurement grid.');
-  const inputs = new Set(workload.inputs.map(input => input.bytes));
+  const inputs = new Map(workload.inputs.map(input => [input.bytes, input.sha256]));
   const concurrencies = new Set(workload.concurrencies);
   const seen = new Set<string>();
+  const requestHashes = new Set<string>();
   for (const row of rows) {
     const key = `${row.input_bytes}/${row.concurrency}/${row.max_output_tokens}/${row.repetition}`;
     if (!inputs.has(row.input_bytes) || !concurrencies.has(row.concurrency) || row.max_output_tokens !== workload.max_output_tokens || row.repetition > workload.repetitions || seen.has(key)) throw new Error('Invalid serving measurement grid membership.');
     seen.add(key);
-    if (!Number.isSafeInteger(row.content_bytes + row.reasoning_bytes) || row.output_bytes !== row.content_bytes + row.reasoning_bytes || row.finish_reasons.length !== row.concurrency) throw new Error('Invalid serving output byte counts or finish slots.');
-    const counts = row.reported_completion_tokens_by_request;
-    if (fixed && (!counts || counts.length !== row.concurrency
-      || counts.some(count => count !== workload.max_output_tokens)
-      || row.reported_completion_tokens !== workload.max_output_tokens * row.concurrency)) {
-      throw new Error('Fixed-output measurements require the exact reported token count for every request.');
+    const hashes = row.input_sha256_by_request;
+    if (hashes.length !== row.concurrency
+      || (row.concurrency === workload.concurrencies[0] && row.repetition === 1 && hashes[0] !== inputs.get(row.input_bytes))) {
+      throw new Error('Cold Prompt measurements require actual request input hashes matching the first workload point.');
     }
-    const counters = [row.reported_prompt_tokens, row.reported_completion_tokens, row.reported_cached_tokens];
-    const known = counters.filter(value => value !== null).length;
-    if ((row.usage_status === 'complete' && known !== 3) || (row.usage_status === 'partial' && known === 3) || ((row.usage_status === 'missing' || row.usage_status === 'invalid') && known !== 0) || (row.reported_cached_tokens !== null && row.reported_prompt_tokens !== null && row.reported_cached_tokens > row.reported_prompt_tokens)) throw new Error('Invalid serving reported usage.');
-    if ((row.content_bytes === 0 && row.first_content_ms !== null) || (row.reasoning_bytes === 0 && row.first_reasoning_ms !== null) || (row.output_bytes === 0 && row.first_output_ms !== null)) throw new Error('Empty serving output cannot have a first-output observation.');
+    for (const hash of hashes) {
+      if (requestHashes.has(hash)) throw new Error('Cold Prompt request inputs must be unique across the measurement grid.');
+      requestHashes.add(hash);
+    }
+    if (row.finish_reasons.length !== row.concurrency) throw new Error('Invalid serving finish slots.');
+    const known = [row.reported_prompt_tokens, row.reported_completion_tokens].filter(value => value !== null).length;
+    if ((row.usage_status === 'complete' && known !== 2)
+      || (row.usage_status === 'partial' && known === 2)
+      || ((row.usage_status === 'missing' || row.usage_status === 'invalid') && known !== 0)) throw new Error('Invalid serving reported usage.');
+    const rates = [row.prefill_tokens_per_second, row.decode_tokens_per_second, row.tpot_ms];
+    if ((row.first_output_ms === null && rates.some(value => value !== null))
+      || (row.reported_prompt_tokens === null && row.prefill_tokens_per_second !== null)
+      || (row.reported_completion_tokens === null && (row.decode_tokens_per_second !== null || row.tpot_ms !== null))
+      || rates.some(value => value !== null && !Number.isFinite(value))
+      || [row.decode_tokens_per_second, row.tpot_ms].some(value => value !== null && value <= 0)) {
+      throw new Error('Serving rates must match their usage evidence.');
+    }
+    if (row.output_bytes === 0 && row.first_output_ms !== null) throw new Error('Empty serving output cannot have a first-output observation.');
     if (execution.memory_scope === 'unavailable' && row.peak_memory_bytes !== null) throw new Error('Unavailable compute memory cannot carry a measurement.');
   }
 }
 
 /** Shared by public export, the upload queue, and HTTP boundary validation. */
 export function validatePublicBenchmark(value: unknown): PublicBenchmarkSubmission {
-  const version = value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>).schema_version : undefined;
-  if (version !== 1 && version !== 2 && version !== 3) throw new Error('Invalid public benchmark field: benchmark.schema_version');
-  // The published root oneOf has disjoint versions. Validate the declared branch
-  // directly so an invalid serving field is not replaced by a legacy branch error.
-  assertSchema(value, { $ref: version === 3 ? '#/$defs/serving' : '#/$defs/legacy' }, 'benchmark');
+  assertSchema(value, { $ref: '#/$defs/serving' }, 'benchmark');
   const result = value as PublicBenchmarkSubmission;
-  if (result.schema_version === 3) validateServing(result);
-  else validateLegacy(result);
+  validateServing(result);
   if ((result.model.status === 'sha256') !== (result.model.sha256 !== null)) throw new Error('Invalid public benchmark model identity.');
   const metadata = result.model.metadata;
   if (metadata?.artifact && (!metadata.repository || metadata.source === 'gguf')) throw new Error('A public model artifact requires a matched download repository.');
   return result;
 }
 
-/** Validate only an actual legacy runtime/execution projection; no fabricated measurements. */
-export function validateLegacyBenchmarkConfiguration(value: unknown, schemaVersion: 1 | 2): Pick<LegacyPublicBenchmarkSubmission, 'runtime' | 'execution'> {
-  const properties = contractSchema.$defs?.legacy.properties;
-  if (!properties?.runtime || !properties.execution || ![1, 2].includes(schemaVersion)) throw new Error('Unsupported legacy benchmark configuration.');
-  assertSchema(value, {
-    type: 'object', properties: { runtime: properties.runtime, execution: properties.execution },
-    required: ['runtime', 'execution'], additionalProperties: false,
-  }, 'configuration');
-  const result = value as Pick<LegacyPublicBenchmarkSubmission, 'runtime' | 'execution'>;
-  validateLegacyConfigurationRules(result, schemaVersion);
-  return result;
-}
 
 /** Validate a configuration projection without manufacturing a model or workload. */
 export function validateBenchmarkConfiguration(value: unknown): BenchmarkConfiguration {

@@ -57,6 +57,18 @@ impl ProcessHandle {
         self.0.job.contains(pid)
     }
 
+    /// Membership of an already-open process object, immune to PID reuse.
+    #[cfg(windows)]
+    pub(crate) fn contains_handle(&self, process: &impl std::os::windows::io::AsRawHandle) -> bool {
+        self.0.job.contains_handle(process)
+    }
+
+    /// Current members of this owned process tree (its job object).
+    #[cfg(windows)]
+    pub fn member_ids(&self) -> std::io::Result<Vec<u32>> {
+        self.0.job.member_ids(None)
+    }
+
     /// After termination, wait at most `limit` until no member of the tree
     /// is still exiting, so files it held are closed.
     #[cfg(windows)]

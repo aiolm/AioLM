@@ -1,7 +1,6 @@
 import type { Locale } from '../../shared/i18n/i18n';
-import { inferenceMetricCopy } from '../../shared/i18n/inferenceMetricCopy';
 import { modelDisplayName, normalizeDisplayText } from '../../shared/lib/displayPaths';
-import { SERVING_METRIC_KEYS, summarizePerformanceRows, summarizeServingPoints } from '../../shared/contracts/benchmark/aggregation';
+import { SERVING_METRIC_KEYS, summarizeServingPoints } from '../../shared/contracts/benchmark/aggregation';
 import { publicModelSource } from '../../shared/contracts/benchmark/publicBenchmark';
 import { benchmarkCopy } from './benchmarkCopy';
 import { visibleBenchmarkRecords } from './benchmarkCancellation';
@@ -22,10 +21,10 @@ const identityLabels: Record<Locale, string[]> = {
   zh: ['测量时间', '测量方法', '输入单位', '运行时名称', '运行时版本', '运行时后端', '运行时构建', '运行时变体', '插件版本', '模型格式', '模型身份状态', '模型 SHA256', '模型大小 (bytes)', '模型仓库', '模型修订 (非权重 SHA)', '应用版本', '执行拓扑', '内存观测范围', '公开设置'],
 };
 const metricLabels: Record<Locale, string[]> = {
-  en: ['First output (ms)', 'First content (ms)', 'First reasoning (ms)', 'Batch duration (ms)', 'Content (bytes)', 'Reasoning (bytes)', 'Observed output (bytes)', 'Observed output (B/s)', 'Reported prompt tokens', 'Reported completion tokens', 'Reported cached tokens', 'Reported tokens/s', 'Peak process RAM (bytes)'],
-  ko: ['첫 출력 (ms)', '첫 본문 (ms)', '첫 reasoning (ms)', '배치 소요 시간 (ms)', '본문 (bytes)', 'Reasoning (bytes)', '관측 출력 (bytes)', '관측 출력 (B/s)', '보고된 입력 토큰', '보고된 출력 토큰', '보고된 캐시 토큰', '보고된 tok/s', '최대 프로세스 RAM (bytes)'],
-  ja: ['最初の出力 (ms)', '最初の本文 (ms)', '最初の reasoning (ms)', 'バッチ所要時間 (ms)', '本文 (bytes)', 'Reasoning (bytes)', '観測出力 (bytes)', '観測出力 (B/s)', '報告入力トークン', '報告出力トークン', '報告キャッシュトークン', '報告 tok/s', '最大プロセス RAM (bytes)'],
-  zh: ['首次输出 (ms)', '首次正文 (ms)', '首次 reasoning (ms)', '批次耗时 (ms)', '正文 (bytes)', 'Reasoning (bytes)', '观测输出 (bytes)', '观测输出 (B/s)', '报告输入 token', '报告输出 token', '报告缓存 token', '报告 tok/s', '进程峰值 RAM (bytes)'],
+  en: ['First output (ms)', 'Prompt processing per request (tok/s)', 'Generation speed per request (tok/s)', 'Time per output token (ms)', 'Total token throughput (tok/s)', 'Observed output (B/s)', 'Batch duration (ms)', 'Peak process RAM (bytes)'],
+  ko: ['첫 출력 (ms)', '요청당 입력 처리 속도 (tok/s)', '요청당 생성 속도 (tok/s)', '출력 토큰당 시간 (ms)', '전체 토큰 처리량 (tok/s)', '관측 출력 (B/s)', '배치 소요 시간 (ms)', '최대 프로세스 RAM (bytes)'],
+  ja: ['最初の出力 (ms)', 'リクエストあたりの入力処理速度 (tok/s)', 'リクエストあたりの生成速度 (tok/s)', '出力トークンあたりの時間 (ms)', '全体トークン処理量 (tok/s)', '観測出力 (B/s)', 'バッチ所要時間 (ms)', '最大プロセス RAM (bytes)'],
+  zh: ['首次输出 (ms)', '每请求输入处理速度 (tok/s)', '每请求生成速度 (tok/s)', '每输出令牌时间 (ms)', '总令牌吞吐量 (tok/s)', '观测输出 (B/s)', '批次耗时 (ms)', '进程峰值 RAM (bytes)'],
 };
 const pointLabels: Record<Locale, string[]> = {
   en: ['Input UTF8 bytes', 'Max output token request', 'Concurrency', 'Samples'],
@@ -53,76 +52,56 @@ const finite = (value: number | null | undefined) => value != null && Number.isF
 /** One data projection for CSV, XLSX and Markdown. No live model/runtime lookups or argv parsing. */
 export function benchmarkReport(records: PerformanceBenchmarkRecord[], locale: Locale = 'en'): BenchmarkReport {
   const copy = benchmarkCopy(locale);
-  const legacyColumns = [
-    ['prompt_tokens', copy.promptLengths], ['generation_length', copy.generation], ['ttft_ms', `${copy.ttft} (ms)`],
-    ['tpot_ms', `${copy.tpot} (ms)`], ['pp_tps', `${copy.pp} (tok/s)`], ['tg_tps', `${copy.tg} (tok/s)`],
-    ['tg_stddev', `${inferenceMetricCopy(locale).decodeDeviation} (tok/s)`], ['speedup', copy.speedup],
-    ['e2e_seconds', `${copy.e2e} (${copy.seconds})`], ['total_tps', `${copy.throughput} (tok/s)`],
-    ['peak_memory_gib', `${copy.memory} (GiB)`],
-  ] as const;
-  const onlyFixedOutput = records.length > 0 && records.every(record => record.schemaVersion === 2 && record.request.method.version === 2);
   const columns: Array<BenchmarkReport['columns'][number] & { key: string }> = [
     { key: 'recorded_model_label', label: copy.shareModel, width: 42 },
     // Each locale defines one label per identity key, in the same order.
     ...identityKeys.map((key, index) => ({ key, label: identityLabels[locale][index]!, width: key === 'execution.settings' ? 60 : 24, ...(key === 'model.size_bytes' ? { numFmt: '#,##0' } : {}) })),
+    { key: 'workload.corpus', label: copy.corpus, width: 20 },
+    { key: 'workload.cache_policy', label: copy.cachePolicy, width: 24 },
+    { key: 'workload.prompt_nonce', label: copy.promptNonce, width: 36 },
     // Each locale defines the four point labels in this key order.
-    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: index === 1 && onlyFixedOutput ? copy.outputTokens : pointLabels[locale][index]!, width: 20, numFmt: '#,##0' })),
+    ...['input_bytes', 'max_output_tokens', 'concurrency', 'samples'].map((key, index) => ({ key, label: pointLabels[locale][index]!, width: 20, numFmt: '#,##0' })),
     ...SERVING_METRIC_KEYS.flatMap((key, index) => ['median', 'min', 'max', 'samples'].map((stat, statIndex) => ({
       key: `${key}.${stat}`, label: `${metricLabels[locale][index]} · ${statLabels[locale][statIndex]}`, width: 24,
       numFmt: stat === 'samples' ? '#,##0' : '#,##0.###############',
     }))),
-    ...legacyColumns.map(([key, label]) => ({ key: `legacy.${key}`, label: `${copy.legacy} · ${label}`, width: 26, numFmt: '#,##0.###############' })),
     { key: 'status', label: copy.shareStatus, width: 14 },
   ];
   const rows: BenchmarkReport['rows'] = [];
   for (const record of visibleBenchmarkRecords(records)) {
     const p = record.result.provenance;
-    const serving = record.schemaVersion === 2 ? record.result.provenance : undefined;
-    const legacy = record.schemaVersion === 1 ? record : undefined;
-    const runtime = serving?.runtime;
+    const runtime = p?.runtime;
     const model = p?.model;
     const source = model ? publicModelSource(model) : undefined;
-    const method = p?.method ?? (record.schemaVersion === 2 ? record.request.method : undefined);
+    const method = p?.method ?? record.request.method;
     const values: Record<string, string | number | null> = {
       recorded_model_label: displayLabel(record), measured_at: measuredAt(record.createdAt),
-      method: method ? `${method.id}@${method.version}` : null, input_unit: record.schemaVersion === 2 ? 'utf8_bytes' : 'tokens',
-      'runtime.name': runtime?.name ?? null, 'runtime.version': runtime?.version ?? legacy?.result.runtime_version ?? null,
-      'runtime.backend': runtime?.backend ?? legacy?.backend ?? null, 'runtime.build': runtime?.build ?? legacy?.build ?? null,
-      'runtime.variant': runtime?.variant ?? legacy?.result.runtime_variant ?? null,
-      'runtime.plugin_version': runtime?.plugin_version ?? legacy?.result.runtime_plugin_version ?? null,
+      method: `${method.id}@${method.version}`, input_unit: 'utf8_bytes',
+      'runtime.name': runtime?.name ?? null, 'runtime.version': runtime?.version ?? null,
+      'runtime.backend': runtime?.backend ?? null, 'runtime.build': runtime?.build ?? null,
+      'runtime.variant': runtime?.variant ?? null,
+      'runtime.plugin_version': runtime?.plugin_version ?? null,
       'model.format': model?.format ?? null, 'model.status': model?.status ?? null, 'model.sha256': model?.sha256 ?? null,
       'model.size_bytes': finite(model?.size_bytes), 'model.repository': source?.repository ?? null, 'model.revision': source?.revision ?? null,
-      app_version: p?.app_version ?? null, 'execution.topology': serving?.execution.topology ?? null,
-      'execution.memory_scope': serving?.execution.memory_scope ?? null,
-      'execution.settings': serving ? JSON.stringify(serving.execution.settings) : null,
+      app_version: p?.app_version ?? null, 'execution.topology': p?.execution.topology ?? null,
+      'execution.memory_scope': p?.execution.memory_scope ?? null,
+      'execution.settings': p ? JSON.stringify(p.execution.settings) : null,
+      'workload.corpus': p?.workload.corpus ?? null,
+      'workload.cache_policy': p?.workload.cache_policy ?? null,
+      'workload.prompt_nonce': p?.workload.prompt_nonce ?? null,
     };
     const status = { complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[record.result.status];
     const append = (point: Record<string, string | number | null> = {}, pointStatus = status) => {
       rows.push(columns.map(column => (column.key === 'status' ? pointStatus : point[column.key] ?? values[column.key] ?? null)));
     };
-    if (record.schemaVersion === 2) {
-      const points = summarizeServingPoints(record.result.rows);
-      if (!points.length) append();
-      for (const point of points) {
-        const cells: Record<string, number | null> = { input_bytes: point.input_bytes, max_output_tokens: point.max_output_tokens, concurrency: point.concurrency, samples: point.samples };
-        for (const key of SERVING_METRIC_KEYS) {
-          for (const stat of ['median', 'min', 'max', 'samples'] as const) cells[`${key}.${stat}`] = finite(point[key]?.[stat]);
-        }
-        append(cells);
+    const points = summarizeServingPoints(record.result.rows);
+    if (!points.length) append();
+    for (const point of points) {
+      const cells: Record<string, number | null> = { input_bytes: point.input_bytes, max_output_tokens: point.max_output_tokens, concurrency: point.concurrency, samples: point.samples };
+      for (const key of SERVING_METRIC_KEYS) {
+        for (const stat of ['median', 'min', 'max', 'samples'] as const) cells[`${key}.${stat}`] = finite(point[key]?.[stat]);
       }
-    } else {
-      const points = summarizePerformanceRows(record.result.rows);
-      if (!points.length) append();
-      for (const point of points) append({
-        concurrency: point.concurrency, samples: point.samples,
-        'legacy.prompt_tokens': point.prompt_tokens, 'legacy.generation_length': point.generation_length,
-        'legacy.ttft_ms': finite(point.ttft_ms), 'legacy.tpot_ms': finite(point.tpot_ms),
-        'legacy.pp_tps': finite(point.pp_tps), 'legacy.tg_tps': finite(point.tg_tps),
-        'legacy.tg_stddev': point.samples > 1 ? finite(point.tg_stddev) : null,
-        'legacy.speedup': point.concurrency > 1 ? finite(point.speedup) : null,
-        'legacy.e2e_seconds': point.error ? null : finite(point.e2e_ms / 1000), 'legacy.total_tps': finite(point.total_tps),
-        'legacy.peak_memory_gib': point.peak_memory_bytes == null ? null : finite(point.peak_memory_bytes / 1024 ** 3),
-      }, point.error ? copy.failed : status);
+      append(cells);
     }
   }
   return { sheetName: copy.shareResults, columns, rows };

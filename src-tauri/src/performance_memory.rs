@@ -7,12 +7,13 @@
 //! Linux uses the kernel's lightweight RSS counter, whose asynchronous accounting
 //! can lag actual residency; walking all model pages would perturb the benchmark.
 //!
-//! Python engines do their work in child processes (vLLM's engine core and
-//! workers), so on Linux and macOS each sample adds the resident memory of every
-//! other member of the server's own process group, which the launcher creates
-//! with the server as its leader. Pages shared between members are counted once
-//! per member. A member that leaves the group, and any process on Windows other
-//! than the server itself, is not counted.
+//! Python engines and launch helpers do their work in child processes (vLLM's
+//! engine core and workers, an automatic connection's engine), so on Linux and
+//! macOS each sample adds the resident memory of every other member of the
+//! server's own process group, which the launcher creates with the server as
+//! its leader. On Windows each sample sums the working sets of every member of
+//! the server's owned job object. Pages shared between members are counted
+//! once per member. A member that leaves the group is not counted.
 //!
 //! Metal's unified memory does not turn RSS into a full GPU allocation counter.
 //! MLX active/cache/peak counters are local to the worker holding its allocator;
@@ -37,7 +38,9 @@ pub(crate) struct PeakMemorySampler {
 
 impl PeakMemorySampler {
     /// Start immediately before a measurement, after model loading and warmup.
-    pub(crate) fn start(pid: u32) -> Self {
+    /// `tree` is the server's owned process tree; Windows needs it to include
+    /// descendants and otherwise reads only the root process.
+    pub(crate) fn start(pid: u32, tree: Option<crate::procutil::ProcessHandle>) -> Self {
         #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         {
             let (stop, receiver) = std::sync::mpsc::channel();
@@ -45,7 +48,13 @@ impl PeakMemorySampler {
             let worker = std::thread::Builder::new()
                 .name("benchmark-memory".into())
                 .spawn(move || {
-                    let mut process = ProcessMemoryReader::open(pid)?;
+                    #[cfg(windows)]
+                    let mut process = ProcessMemoryReader::open(pid, tree)?;
+                    #[cfg(not(windows))]
+                    let mut process = {
+                        drop(tree);
+                        ProcessMemoryReader::open(pid)?
+                    };
                     sample(|| process.current(), receiver, ready)
                 })
                 .ok();
@@ -59,7 +68,7 @@ impl PeakMemorySampler {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            let _ = pid;
+            let _ = (pid, tree);
             Self {}
         }
     }
@@ -119,8 +128,11 @@ fn sample(
 
 #[cfg(windows)]
 mod windows {
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
 
     // Layout from psapi.h. SIZE_T follows the target pointer width. Declaring
     // this small binding avoids adding another windows-sys feature to the app.
@@ -149,33 +161,68 @@ mod windows {
         ) -> i32;
     }
 
-    pub(super) struct ProcessMemoryReader(HANDLE);
+    /// The root process handle, plus the owned job when descendants count.
+    pub(super) struct ProcessMemoryReader(OwnedHandle, Option<crate::procutil::ProcessHandle>);
 
-    impl ProcessMemoryReader {
-        pub(super) fn open(pid: u32) -> Option<Self> {
-            // SAFETY: Read-only access, a scalar PID, and no inherited handle.
-            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-            (!handle.is_null()).then(|| Self(handle))
-        }
+    fn working_set(handle: HANDLE) -> Option<u64> {
+        let mut counters = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            ..Default::default()
+        };
+        let size = counters.cb;
+        // SAFETY: The caller owns the open handle, and counters is a writable
+        // repr(C) buffer whose exact size is passed to the API.
+        let success = unsafe { K32GetProcessMemoryInfo(handle, &mut counters, size) };
+        (success != 0).then_some(counters.working_set_size as u64)
+    }
 
-        pub(super) fn current(&mut self) -> Option<u64> {
-            let mut counters = ProcessMemoryCounters {
-                cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
-                ..Default::default()
-            };
-            let size = counters.cb;
-            // SAFETY: The handle stays owned by this reader, and counters is a
-            // writable repr(C) buffer whose exact size is passed to the API.
-            let success = unsafe { K32GetProcessMemoryInfo(self.0, &mut counters, size) };
-            (success != 0).then_some(counters.working_set_size as u64)
+    fn open_process(pid: u32) -> Option<OwnedHandle> {
+        // SAFETY: Read-only access, a scalar PID, and no inherited handle.
+        let handle = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, 0, pid)
+        };
+        if handle.is_null() {
+            None
+        } else {
+            // SAFETY: This successful OpenProcess handle is owned exactly once.
+            Some(unsafe { OwnedHandle::from_raw_handle(handle) })
         }
     }
 
-    impl Drop for ProcessMemoryReader {
-        fn drop(&mut self) {
-            // SAFETY: This reader exclusively owns the successful OpenProcess
-            // handle and closes it once, on the same sampling thread.
-            unsafe { CloseHandle(self.0) };
+    impl ProcessMemoryReader {
+        pub(super) fn open(pid: u32, tree: Option<crate::procutil::ProcessHandle>) -> Option<Self> {
+            let handle = open_process(pid)?;
+            if tree.as_ref().is_some_and(|tree| !tree.contains_handle(&handle)) {
+                return None;
+            }
+            Some(Self(handle, tree))
+        }
+
+        /// Sum only readable, live members of the owned job. Membership is
+        /// checked on each retained handle before reading its working set:
+        /// an exiting member's reused PID must never charge another process.
+        pub(super) fn current(&mut self) -> Option<u64> {
+            let Some(tree) = &self.1 else {
+                return working_set(self.0.as_raw_handle());
+            };
+            if !tree.contains_handle(&self.0) {
+                return None;
+            }
+            let members = tree.member_ids().ok()?;
+            let mut total = None;
+            for member in members {
+                let handle = open_process(member)?;
+                if !tree.contains_handle(&handle) {
+                    continue;
+                }
+                if let Some(bytes) = working_set(handle.as_raw_handle()) {
+                    total = Some(total.unwrap_or(0_u64).checked_add(bytes)?);
+                } else if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
+                    // A live but unreadable member is not a measured zero.
+                    return None;
+                }
+            }
+            total
         }
     }
 }
@@ -360,7 +407,7 @@ mod tests {
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     #[test]
     fn samples_current_process_even_when_finished_immediately() {
-        let sampler = PeakMemorySampler::start(std::process::id());
+        let sampler = PeakMemorySampler::start(std::process::id(), None);
         assert!(sampler.finish().is_some_and(|bytes| bytes > 0));
     }
 
@@ -368,13 +415,22 @@ mod tests {
     #[test]
     fn unavailable_process_has_no_memory_measurement() {
         // PID 0 cannot represent the benchmark server on any supported OS.
-        assert_eq!(PeakMemorySampler::start(0).finish(), None);
+        assert_eq!(PeakMemorySampler::start(0, None).finish(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unrelated_process_is_not_measured_as_an_owned_job_member() {
+        let unrelated = std::process::id();
+        let empty_job = crate::procutil::ProcessHandle::empty_for_test();
+        assert!(super::windows::ProcessMemoryReader::open(unrelated, Some(empty_job.clone())).is_none());
+        assert_eq!(PeakMemorySampler::start(unrelated, Some(empty_job)).finish(), None);
     }
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     #[test]
     fn unsupported_platform_has_no_memory_measurement() {
-        assert_eq!(PeakMemorySampler::start(std::process::id()).finish(), None);
+        assert_eq!(PeakMemorySampler::start(std::process::id(), None).finish(), None);
     }
 
     #[test]
@@ -427,7 +483,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
             members = group_members(pid);
         }
-        let sampled = PeakMemorySampler::start(pid).finish();
+        let sampled = PeakMemorySampler::start(pid, None).finish();
         // SAFETY: signals only the process group this test created.
         unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
         let _ = leader.wait();
@@ -437,6 +493,49 @@ mod tests {
         );
         assert!(!members.contains(&pid));
         assert!(sampled.is_some_and(|bytes| bytes > 0));
+    }
+
+    /// An engine started by a launch helper is a member of the helper's owned
+    /// job, so its working set counts toward the measured tree.
+    #[cfg(windows)]
+    #[test]
+    fn a_descendant_in_the_owned_job_is_a_measured_member() {
+        use std::io::BufRead;
+        let mut command = crate::procutil::std_command("powershell");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','$b = New-Object byte[] 268435456; for ($i = 0; $i -lt $b.Length; $i += 4096) { $b[$i] = 1 }; Start-Sleep -Seconds 60') -WindowStyle Hidden -PassThru; 1..2 | ForEach-Object { Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 60') -WindowStyle Hidden }; [Console]::Out.WriteLine($child.Id); Start-Sleep -Seconds 60"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut owned = crate::procutil::OwnedChild::spawn(&mut command).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(owned.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant: u32 = line.trim().parse().unwrap();
+        let tree = owned.process_handle().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (mut root_only, mut with_tree) = (None, None);
+        // Wait until the descendant has touched its 256 MiB allocation.
+        while std::time::Instant::now() < deadline {
+            root_only = PeakMemorySampler::start(owned.id(), None).finish();
+            with_tree = PeakMemorySampler::start(owned.id(), Some(tree.clone())).finish();
+            if with_tree.zip(root_only).is_some_and(|(tree, root)| tree >= root + (200 << 20)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        let members = tree.member_ids();
+        owned.terminate();
+        let exited = tree.wait_exited(std::time::Duration::from_secs(5));
+        let members = members.unwrap();
+        assert!(exited, "all owned test workers must exit before assertions");
+        assert!(members.contains(&descendant), "the descendant joined the owned job");
+        assert!(members.len() >= 4, "the job snapshot includes every worker, not only two slots");
+        assert!(
+            with_tree.zip(root_only).is_some_and(|(tree, root)| tree >= root + (200 << 20)),
+            "tree {with_tree:?} must include the descendant beyond root {root_only:?}"
+        );
     }
 
     #[test]

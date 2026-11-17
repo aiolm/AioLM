@@ -29,28 +29,13 @@ impl Default for Budget {
     }
 }
 
-impl Budget {
-    /// A forced request may legitimately stream `target` tokens: scale the
-    /// wall time per started 1024 tokens and add 1 KiB of SSE per token.
-    pub(super) fn fixed_output(target: u32) -> Self {
-        Self {
-            timeout: REQUEST_TIMEOUT * super::budget_units(target),
-            response_bytes: MAX_RESPONSE_BYTES
-                .saturating_add((target as usize).saturating_mul(1024)),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct Measurement {
-    pub content_bytes: u64,
-    pub reasoning_bytes: u64,
+    pub output_bytes: u64,
     pub first_output_ms: Option<f64>,
-    pub first_content_ms: Option<f64>,
-    pub first_reasoning_ms: Option<f64>,
+    pub e2e_ms: f64,
     pub reported_prompt_tokens: Option<u64>,
     pub reported_completion_tokens: Option<u64>,
-    pub reported_cached_tokens: Option<u64>,
     pub usage_status: String,
     pub finish_reason: String,
     pub finished: Instant,
@@ -64,7 +49,6 @@ enum Usage {
     Counters {
         prompt: Option<u64>,
         completion: Option<u64>,
-        cached: Option<u64>,
     },
 }
 
@@ -80,19 +64,6 @@ impl Usage {
             let prompt = counter(object.get("prompt_tokens"))?;
             let completion = counter(object.get("completion_tokens"))?;
             let total = counter(object.get("total_tokens"))?;
-            let cached = match object
-                .get("prompt_tokens_details")
-                .filter(|value| !value.is_null())
-            {
-                Some(details) => counter(details.as_object().ok_or(())?.get("cached_tokens"))?,
-                None => None,
-            };
-            if cached
-                .zip(prompt)
-                .is_some_and(|(cached, prompt)| cached > prompt)
-            {
-                return Err(());
-            }
             if let Some(total) = total {
                 if prompt.is_some_and(|n| n > total) || completion.is_some_and(|n| n > total) {
                     return Err(());
@@ -106,29 +77,24 @@ impl Usage {
             Ok(Self::Counters {
                 prompt,
                 completion,
-                cached,
             })
         };
         parse().unwrap_or(Self::Invalid)
     }
 
-    fn fields(&self) -> (Option<u64>, Option<u64>, Option<u64>, &'static str) {
+    fn fields(&self) -> (Option<u64>, Option<u64>, &'static str) {
         match *self {
-            Self::Missing => (None, None, None, "missing"),
-            Self::Invalid => (None, None, None, "invalid"),
-            Self::Counters {
-                prompt,
-                completion,
-                cached,
-            } => {
-                let status = if prompt.is_some() && completion.is_some() && cached.is_some() {
+            Self::Missing => (None, None, "missing"),
+            Self::Invalid => (None, None, "invalid"),
+            Self::Counters { prompt, completion } => {
+                let status = if prompt.is_some() && completion.is_some() {
                     "complete"
-                } else if prompt.is_some() || completion.is_some() || cached.is_some() {
+                } else if prompt.is_some() || completion.is_some() {
                     "partial"
                 } else {
                     "missing"
                 };
-                (prompt, completion, cached, status)
+                (prompt, completion, status)
             }
         }
     }
@@ -254,16 +220,13 @@ impl Observed {
             (Some(content), Some(reasoning)) => Some(content.min(reasoning)),
             (content, reasoning) => content.or(reasoning),
         };
-        let (prompt, completion, cached, status) = self.usage.fields();
+        let (prompt, completion, status) = self.usage.fields();
         Ok(Measurement {
-            content_bytes: self.content_bytes,
-            reasoning_bytes: self.reasoning_bytes,
+            output_bytes: self.content_bytes + self.reasoning_bytes,
             first_output_ms: latency(first_output),
-            first_content_ms: latency(self.first_content),
-            first_reasoning_ms: latency(self.first_reasoning),
+            e2e_ms: finished.duration_since(started).as_secs_f64() * 1000.0,
             reported_prompt_tokens: prompt,
             reported_completion_tokens: completion,
-            reported_cached_tokens: cached,
             usage_status: status.into(),
             finish_reason: self.finish_reason.unwrap_or("not_reported").into(),
             finished,
@@ -294,14 +257,36 @@ impl CompletionStream {
     }
 }
 
+#[derive(Debug)]
+pub(super) enum RequestOutcome {
+    Complete(Measurement),
+    UsageRejected(u16),
+}
+
 /// Execute a buffered request cloned without reserializing its input. Only a
 /// fully DONE-terminated request yields an observation; failures have no row.
+#[cfg(test)]
 pub(super) async fn request(
     client: &reqwest::Client,
     request: &reqwest::Request,
     cancel: &AtomicBool,
     budget: Budget,
 ) -> Result<Measurement, AppError> {
+    match request_outcome(client, request, cancel, budget, false).await? {
+        RequestOutcome::Complete(measurement) => Ok(measurement),
+        RequestOutcome::UsageRejected(_) => unreachable!("ordinary requests never negotiate usage"),
+    }
+}
+
+/// Only an undecided first workload batch may classify HTTP 400/422 as an
+/// optional-usage rejection. Accepted streams always become real observations.
+pub(super) async fn request_outcome(
+    client: &reqwest::Client,
+    request: &reqwest::Request,
+    cancel: &AtomicBool,
+    budget: Budget,
+    negotiate_usage: bool,
+) -> Result<RequestOutcome, AppError> {
     let started = Instant::now();
     let work = async {
         let request = request
@@ -311,6 +296,12 @@ pub(super) async fn request(
             .execute(request)
             .await
             .map_err(|error| request_error("benchmark request failed", error))?;
+        if negotiate_usage
+            && matches!(response.status().as_u16(), 400 | 422)
+        {
+            // Do not buffer a rejection body or wait for its connection to close.
+            return Ok(RequestOutcome::UsageRejected(response.status().as_u16()));
+        }
         if !response.status().is_success() {
             return Err(AppError::unavailable(format!(
                 "benchmark HTTP {}",
@@ -345,7 +336,10 @@ pub(super) async fn request(
                 break;
             }
         }
-        stream.complete(started).map_err(AppError::unavailable)
+        stream
+            .complete(started)
+            .map(RequestOutcome::Complete)
+            .map_err(AppError::unavailable)
     };
     tokio::select! {
         biased;
@@ -403,7 +397,7 @@ mod tests {
             }))
         );
         let row = measured(body.as_bytes()).unwrap();
-        assert_eq!(row.content_bytes, 6);
+        assert_eq!(row.output_bytes, 6);
         assert_eq!(row.finish_reason, "stop");
     }
 
@@ -427,23 +421,21 @@ mod tests {
             .push(b"data: [DONE]\n\n", started + Duration::from_millis(200))
             .unwrap());
         let row = stream.complete(started).unwrap();
-        assert_eq!((row.content_bytes, row.reasoning_bytes), (6, 6));
+        assert_eq!(row.output_bytes, 12);
         assert_eq!(row.first_output_ms, Some(50.0));
-        assert_eq!(row.first_content_ms, Some(100.0));
-        assert_eq!(row.first_reasoning_ms, Some(50.0));
+        assert_eq!(row.e2e_ms, 200.0);
         assert_eq!(
             row.finished.duration_since(started),
             Duration::from_millis(200)
         );
-        assert_eq!((row.content_bytes + row.reasoning_bytes) as f64 / 0.2, 60.0);
+        assert_eq!(row.output_bytes as f64 / 0.2, 60.0);
         assert_eq!(row.usage_status, "missing");
         assert_eq!(
             (
                 row.reported_prompt_tokens,
                 row.reported_completion_tokens,
-                row.reported_cached_tokens
             ),
-            (None, None, None)
+            (None, None)
         );
         assert_eq!(row.finish_reason, "not_reported");
     }
@@ -458,28 +450,21 @@ mod tests {
                 stream.push(&wire.as_bytes()[..split], now).unwrap();
                 stream.push(&wire.as_bytes()[split..], now).unwrap();
                 let row = stream.complete(now).unwrap();
-                assert_eq!((row.content_bytes, row.reasoning_bytes), (6, 6));
+                assert_eq!(row.output_bytes, 12);
             }
             let mut stream = CompletionStream::default();
             for byte in wire.bytes() {
                 stream.push(&[byte], now).unwrap();
             }
-            assert_eq!(stream.complete(now).unwrap().content_bytes, 6);
+            assert_eq!(stream.complete(now).unwrap().output_bytes, 12);
         }
     }
 
     #[test]
     fn done_alone_is_known_empty_output_without_model_reason_or_usage() {
         let row = measured(b"data: [DONE]\n\n").unwrap();
-        assert_eq!((row.content_bytes, row.reasoning_bytes), (0, 0));
-        assert_eq!(
-            (
-                row.first_output_ms,
-                row.first_content_ms,
-                row.first_reasoning_ms
-            ),
-            (None, None, None)
-        );
+        assert_eq!(row.output_bytes, 0);
+        assert_eq!(row.first_output_ms, None);
         assert_eq!(row.finish_reason, "not_reported");
         assert_eq!(row.usage_status, "missing");
     }
@@ -497,9 +482,8 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        assert_eq!((row.content_bytes, row.reasoning_bytes), (0, 6));
+        assert_eq!(row.output_bytes, 6);
         assert!(row.first_output_ms.is_some());
-        assert!(row.first_content_ms.is_none());
         let row = measured(
             format!(
                 "{}data: [DONE]\n\n",
@@ -508,7 +492,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        assert_eq!(row.content_bytes, 16);
+        assert_eq!(row.output_bytes, 16);
     }
 
     #[test]
@@ -536,9 +520,8 @@ mod tests {
             (
                 row.reported_prompt_tokens,
                 row.reported_completion_tokens,
-                row.reported_cached_tokens
             ),
-            (Some(4), Some(1), Some(0))
+            (Some(4), Some(1))
         );
         for (reason, expected) in [
             (json!("content_filter"), "content_filter"),
@@ -563,14 +546,10 @@ mod tests {
     fn usage_snapshots_replace_without_backfill_and_null_is_ignored() {
         let full = json!({"prompt_tokens":4,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":1}});
         for (last, status, counters) in [
-            (Value::Null, "complete", (Some(4), Some(2), Some(1))),
-            (
-                json!({"completion_tokens":1}),
-                "partial",
-                (None, Some(1), None),
-            ),
-            (json!({}), "missing", (None, None, None)),
-            (json!(false), "invalid", (None, None, None)),
+            (Value::Null, "complete", (Some(4), Some(2))),
+            (json!({"completion_tokens":1}), "partial", (None, Some(1))),
+            (json!({}), "missing", (None, None)),
+            (json!(false), "invalid", (None, None)),
         ] {
             let data = format!(
                 "{}{}data: [DONE]\n\n",
@@ -583,7 +562,6 @@ mod tests {
                 (
                     row.reported_prompt_tokens,
                     row.reported_completion_tokens,
-                    row.reported_cached_tokens
                 ),
                 counters
             );
@@ -602,14 +580,13 @@ mod tests {
             (
                 row.reported_prompt_tokens,
                 row.reported_completion_tokens,
-                row.reported_cached_tokens
             ),
-            (Some(7), Some(3), Some(0))
+            (Some(7), Some(3))
         );
     }
 
     #[test]
-    fn usage_requires_safe_counters_consistent_totals_and_bounded_cache() {
+    fn usage_requires_safe_counters_and_consistent_totals_but_ignores_cache() {
         for usage in [
             json!([]),
             json!("invalid"),
@@ -617,13 +594,11 @@ mod tests {
             json!({"completion_tokens":1.5}),
             json!({"prompt_tokens":null}),
             json!({"completion_tokens":9_007_199_254_740_992_u64}),
-            json!({"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}),
             json!({"prompt_tokens":1,"completion_tokens":2,"total_tokens":4}),
             json!({"prompt_tokens":2,"total_tokens":1}),
             json!({"completion_tokens":2,"total_tokens":1}),
             json!({"prompt_tokens":MAX_SAFE_INTEGER,"completion_tokens":1,"total_tokens":MAX_SAFE_INTEGER}),
             json!({"prompt_tokens":u64::MAX,"completion_tokens":1,"total_tokens":0}),
-            json!({"prompt_tokens_details":{"cached_tokens":"0"}}),
         ] {
             let row = with_usage(usage);
             assert_eq!(row.usage_status, "invalid");
@@ -631,9 +606,8 @@ mod tests {
                 (
                     row.reported_prompt_tokens,
                     row.reported_completion_tokens,
-                    row.reported_cached_tokens
                 ),
-                (None, None, None)
+                (None, None)
             );
         }
         let row = with_usage(
@@ -643,8 +617,14 @@ mod tests {
         assert_eq!(row.usage_status, "complete");
         let row = with_usage(json!({"completion_tokens":0}));
         assert_eq!(row.reported_completion_tokens, Some(0));
-        assert_eq!(row.reported_cached_tokens, None);
         assert_eq!(row.usage_status, "partial");
+        for cached in [json!(2), json!("invalid"), Value::Null] {
+            let row = with_usage(json!({"prompt_tokens":1,"completion_tokens":2,
+                "prompt_tokens_details":{"cached_tokens":cached}}));
+            assert_eq!(row.usage_status, "complete");
+            assert_eq!(row.reported_prompt_tokens, Some(1));
+            assert_eq!(row.reported_completion_tokens, Some(2));
+        }
     }
 
     #[test]
@@ -693,53 +673,13 @@ mod tests {
         let comment = format!(":{}\n", " ".repeat(EVENT_LIMIT - 1));
         stream.push(comment.as_bytes(), now).unwrap();
         stream.push(b"data: [DONE]\n\n", now).unwrap();
-        assert_eq!(stream.complete(now).unwrap().content_bytes, 0);
+        assert_eq!(stream.complete(now).unwrap().output_bytes, 0);
         let mut stream = CompletionStream::default();
         let comment = format!(":{}\n", " ".repeat(4094));
         for _ in 0..MAX_RESPONSE_BYTES / comment.len() {
             stream.push(comment.as_bytes(), now).unwrap();
         }
         assert!(stream.push(b"x", now).is_err());
-    }
-
-    #[test]
-    fn fixed_output_budgets_scale_per_started_kib_but_keep_event_limits() {
-        let minutes = |n: u64| Duration::from_secs(n * 60);
-        assert_eq!(Budget::default().response_bytes, MAX_RESPONSE_BYTES);
-        assert_eq!(
-            Budget::fixed_output(1024),
-            Budget {
-                timeout: minutes(5),
-                response_bytes: MAX_RESPONSE_BYTES + 1024 * 1024
-            }
-        );
-        assert_eq!(
-            Budget::fixed_output(204_800),
-            Budget {
-                timeout: minutes(1000),
-                response_bytes: MAX_RESPONSE_BYTES + 204_800 * 1024
-            }
-        );
-        assert_eq!(super::super::run_timeout(1024), minutes(30));
-        assert_eq!(super::super::run_timeout(204_800), minutes(6000));
-
-        // Beyond the generic 8 MiB response budget but within the 1k target budget.
-        let now = Instant::now();
-        let comment = format!(":{}\n", " ".repeat(4094));
-        let lines = MAX_RESPONSE_BYTES / comment.len() + 16;
-        let mut generic = CompletionStream::default();
-        assert!((0..lines).any(|_| generic.push(comment.as_bytes(), now).is_err()));
-        let mut fixed = CompletionStream::new(Budget::fixed_output(1024).response_bytes);
-        for _ in 0..lines {
-            fixed.push(comment.as_bytes(), now).unwrap();
-        }
-        assert!(fixed.push(b"data: [DONE]\n\n", now).unwrap());
-        assert!(fixed.complete(now).is_ok());
-
-        // The largest target budget never relaxes the per-line/per-event limits.
-        use crate::providers::sse::EVENT_LIMIT;
-        let mut largest = CompletionStream::new(Budget::fixed_output(204_800).response_bytes);
-        assert!(largest.push(&vec![b'x'; EVENT_LIMIT + 1], now).is_err());
     }
 
     async fn fixture_request(socket: &mut tokio::net::TcpStream) {
@@ -828,13 +768,12 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(
-            row.content_bytes, 1,
+            row.output_bytes, 1,
             "early EOS below the request cap succeeds"
         );
         assert_eq!(row.finish_reason, "stop");
         assert_eq!(row.reported_prompt_tokens, Some(4));
         assert_eq!(row.reported_completion_tokens, Some(1));
-        assert_eq!(row.reported_cached_tokens, None);
         fixture.abort();
     }
 
@@ -865,34 +804,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_deadline_and_cancellation_discard_unfinished_output() {
-        let partial = event(json!({"choices":[{"delta":{"content":"partial"}}]})).into_bytes();
-        let (client, prepared, fixture) = http_fixture(200, partial.clone(), true).await;
-        let timeout = request(
+    async fn first_batch_classifies_only_optional_field_rejections() {
+        for status in [400, 422, 401, 403, 404, 408, 409, 429, 500, 503] {
+            let (client, prepared, fixture) =
+                http_fixture(status, b"rejected".to_vec(), true).await;
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true),
+            )
+            .await
+            .expect("HTTP failures must not wait for the rejection body to finish");
+            if matches!(status, 400 | 422) {
+                assert!(matches!(result.unwrap(), RequestOutcome::UsageRejected(code) if code == status));
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Unavailable);
+                assert!(error.message.contains(&status.to_string()));
+            }
+            fixture.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn first_batch_returns_accepted_measurements_and_requires_bounded_valid_streams() {
+        let (client, prepared, fixture) =
+            http_fixture(200, b"data: [DONE]\n\n".to_vec(), true).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true),
+        )
+        .await
+        .expect("DONE must not wait for EOF")
+        .unwrap();
+        assert!(matches!(outcome, RequestOutcome::Complete(measurement) if measurement.output_bytes == 0 && measurement.reported_completion_tokens.is_none()));
+        fixture.abort();
+        for body in [
+            b"data: {}\n\n".to_vec(),
+            b"data: invalid\n\ndata: [DONE]\n\n".to_vec(),
+            b"event: error\ndata: unavailable\n\n".to_vec(),
+        ] {
+            let (client, prepared, fixture) = http_fixture(200, body, false).await;
+            assert_eq!(
+                request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::Unavailable
+            );
+            fixture.await.unwrap();
+        }
+        let (client, prepared, fixture) =
+            http_fixture(200, b": padding\n\ndata: [DONE]\n\n".to_vec(), true).await;
+        let error = request_outcome(
             &client,
             &prepared,
             &AtomicBool::new(false),
-            Budget {
-                timeout: Duration::from_millis(100),
-                ..Budget::default()
-            },
+            Budget { response_bytes: 8, ..Budget::default() },
+            true,
         )
         .await
         .unwrap_err();
-        assert_eq!(timeout, AppError::timeout("benchmark request timed out"));
+        assert_eq!(error.kind, ErrorKind::Unavailable);
         fixture.abort();
-        let (client, prepared, fixture) = http_fixture(200, partial, true).await;
-        let cancel = AtomicBool::new(false);
-        let operation = request(&client, &prepared, &cancel, Budget::default());
-        let stop = async {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            cancel.store(true, Ordering::Release);
-        };
-        let (result, ()) = tokio::join!(operation, stop);
-        assert_eq!(
-            result.unwrap_err(),
-            AppError::cancelled("benchmark cancelled")
-        );
-        fixture.abort();
+    }
+
+    #[tokio::test]
+    async fn request_deadline_and_cancellation_discard_unfinished_output() {
+        for negotiate_usage in [false, true] {
+            let partial = event(json!({"choices":[{"delta":{"content":"partial"}}]})).into_bytes();
+            let (client, prepared, fixture) = http_fixture(200, partial.clone(), true).await;
+            let timeout = request_outcome(
+                &client,
+                &prepared,
+                &AtomicBool::new(false),
+                Budget {
+                    timeout: Duration::from_millis(100),
+                    ..Budget::default()
+                },
+                negotiate_usage,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(timeout, AppError::timeout("benchmark request timed out"));
+            fixture.abort();
+            let (client, prepared, fixture) = http_fixture(200, partial, true).await;
+            let cancel = AtomicBool::new(false);
+            let operation = request_outcome(&client, &prepared, &cancel, Budget::default(), negotiate_usage);
+            let stop = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cancel.store(true, Ordering::Release);
+            };
+            let (result, ()) = tokio::join!(operation, stop);
+            assert_eq!(
+                result.unwrap_err(),
+                AppError::cancelled("benchmark cancelled")
+            );
+            fixture.abort();
+        }
     }
 }

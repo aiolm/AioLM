@@ -10,6 +10,8 @@ import { createBenchmarkOutbox, type BenchmarkOutboxStore, type QueuedBenchmark 
 import { HttpError } from '../../shared/api/http';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import type { PublicBenchmarkSubmission } from '@aiolm/benchmark-contracts';
+import { servingBenchmark } from '../../testing/servingBenchmark';
+import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark';
 
 // Shared feedback banners read the active locale for their dismiss label.
 const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
@@ -34,14 +36,7 @@ vi.mock('../../shared/api/benchmarkSharing', async (importOriginal) => {
   };
 });
 
-const snapshot = (): PublicBenchmarkSubmission => ({
-  schema_version: 1, submission_id: '00000000-0000-4000-8000-000000000001', app_version: '0.1.9', method: null,
-  workload: { corpus: 'novel_ko', corpus_version: null, corpus_sha256: null, prompt_lengths: [1024], generation_length: 128, batch_sizes: [2], repetitions: 1, warmup: true },
-  model: { status: 'unidentified', sha256: null, size_bytes: null },
-  runtime: { name: 'llama.cpp', version: '10840', backend: 'cpu', build: 'b10840' },
-  environment: null, execution: { context_size: 4096, parallel: 2, settings: null },
-  measurements: { status: 'complete', rows: [{ prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0, ttft_ms: 100, tpot_ms: 10, pp_tps: 100, tg_tps: 100, e2e_ms: 1380, total_tps: 93, peak_memory_bytes: null, timing_source: 'client', failed: false }] },
-});
+const snapshot = (): PublicBenchmarkSubmission => toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001');
 
 function memoryOutbox() {
   const rows = new Map<string, QueuedBenchmark>();
@@ -156,18 +151,6 @@ describe('publish flow', () => {
     expect(await engine.get(id)).toMatchObject({ state: 'sent', credentialRef: 'cred-1' });
   });
 
-  it('refuses attempted legacy entries before any native binding', async () => {
-    const { rows, engine } = memoryOutbox();
-    const id = snapshot().submission_id;
-    rows.set(id, { id, payload: snapshot(), state: 'pending', createdAt: 0, attempts: 2, nextAttemptAt: 0 });
-    render(<BenchmarkPublishPanel snapshot={snapshot()} description="new notes" sourceRunId="performance-1" busy={false} copy={benchmarkCopy('en')} outbox={engine} />);
-    await clickPublish();
-    await screen.findByRole('alert');
-    expect(sharing.benchmarkSharingPrepare).not.toHaveBeenCalled();
-    const kept = await engine.get(id);
-    expect(kept?.requestBody).toBeUndefined();
-    expect(kept?.payload).toEqual(snapshot());
-  });
 
   it('cancels a hung verification and cleans up without errors', async () => {
     const { engine } = memoryOutbox();

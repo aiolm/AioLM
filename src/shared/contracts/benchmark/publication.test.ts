@@ -1,39 +1,29 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { BenchmarkPublicationRequest } from '@aiolm/benchmark-contracts';
 import { createPublicationController, type PublicationNative } from '../../sharing/publicationController.ts';
 import { createBenchmarkOutbox, type BenchmarkOutboxStore, type MeasurementActivity, type QueuedBenchmark } from '../../sharing/outbox.ts';
-import { createPublicationBody } from './publication.ts';
+import { createPublicationBody, parseStoredPublicationBody } from './publication.ts';
+import { toPublicBenchmark } from './publicBenchmark.ts';
+import { servingBenchmark } from '../../../testing/servingBenchmark.ts';
 
 const submissionId = '00000000-0000-4000-8000-000000000001';
+const benchmarkFixture = toPublicBenchmark(servingBenchmark(), submissionId);
 
 function requestFixture(rowCount = 1, description_md = ''): BenchmarkPublicationRequest {
-  return {
-    benchmark: {
-      schema_version: 1, submission_id: submissionId, app_version: '0.1.9', method: null,
-      workload: { corpus: 'novel_ko', corpus_version: null, corpus_sha256: null, prompt_lengths: [1024], generation_length: 128, batch_sizes: [1], repetitions: 1, warmup: true },
-      model: { status: 'unidentified', sha256: null, size_bytes: null },
-      runtime: { name: 'llama.cpp', version: null, backend: 'cpu', build: 'synthetic' },
-      environment: null, execution: { context_size: 4096, parallel: 1, settings: null },
-      measurements: { status: 'complete', rows: Array.from({ length: rowCount }, (_, index) => ({
-        prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: index + 1,
-        completion_tokens: 128, cached_tokens: 0, ttft_ms: 100, tpot_ms: 10, pp_tps: 100,
-        tg_tps: 100, e2e_ms: 1380, total_tps: 93, peak_memory_bytes: null,
-        timing_source: 'client', failed: false,
-      })) },
-    },
-    description_md,
-  };
-}
-
-function countStringify<T>(run: () => T): { value: T; count: number } {
-  const stringify = vi.spyOn(JSON, 'stringify');
-  try {
-    return { value: run(), count: stringify.mock.calls.length };
-  } finally {
-    stringify.mockRestore();
-  }
+  const benchmark = structuredClone(benchmarkFixture);
+  const repetitions = Math.min(100, rowCount);
+  benchmark.workload.repetitions = repetitions;
+  benchmark.workload.inputs = Array.from({ length: Math.min(64, Math.ceil(rowCount / repetitions)) }, (_, index) => ({
+    bytes: 4096 + index * 256, sha256: (index * repetitions + 1).toString(16).padStart(64, '0'),
+  }));
+  const row = benchmarkFixture.measurements.rows[0]!;
+  benchmark.measurements.rows = Array.from({ length: rowCount }, (_, index) => ({
+    ...row, input_bytes: 4096 + Math.floor(index / repetitions) * 256, repetition: index % repetitions + 1,
+    input_sha256_by_request: [(index + 1).toString(16).padStart(64, '0')],
+  }));
+  return { benchmark, description_md };
 }
 
 function outboxFixture() {
@@ -58,12 +48,6 @@ function outboxFixture() {
 }
 
 describe('publication body normalization', () => {
-  it('keeps one exact serialization for a large reviewed payload', () => {
-    const counted = countStringify(() => createPublicationBody(requestFixture(1000)));
-    expect(counted.count).toBe(1);
-    expect(counted.value.submissionId).toBe(submissionId);
-  });
-
   it('keeps controller native bytes, durable bytes, hash input, and identity aligned', async () => {
     const fixture = outboxFixture();
     let preparedBody = '';
@@ -78,19 +62,10 @@ describe('publication body normalization', () => {
     };
     const controller = createPublicationController({ measurement: fixture.measurement, outbox: fixture.outbox, native });
     const request = requestFixture(1000);
-    const counted = await (async () => {
-      const stringify = vi.spyOn(JSON, 'stringify');
-      try {
-        const result = await controller.prepare(request, { runId: 'synthetic-run' });
-        return { result, count: stringify.mock.calls.length };
-      } finally {
-        stringify.mockRestore();
-      }
-    })();
+    const prepared = await controller.prepare(request, { runId: 'synthetic-run' });
     const stored = fixture.rows.get(submissionId);
     const direct = createPublicationBody(request);
-    expect(counted.count).toBe(3);
-    expect(counted.result.destination).toBe('https://example.test/v1/benchmark-runs');
+    expect(prepared.destination).toBe('https://example.test/v1/benchmark-runs');
     expect(preparedBody).toBe(direct.body);
     expect(stored?.requestBody).toBe(direct.body);
     expect(stored?.payload).toEqual(request.benchmark);
@@ -123,9 +98,15 @@ describe('publication validation boundaries', () => {
   it.each([
     ['description over the 4000-codepoint limit', requestFixture(1, 'x'.repeat(4001)), 'Publication description exceeds 4000 characters.'],
     ['row count over the public schema limit', requestFixture(10001), 'Invalid public benchmark field: benchmark.measurements.rows'],
-    ['an unknown wrapper key', { ...requestFixture(), unexpected: true }, 'Invalid public benchmark field: benchmark'],
+    ['an unknown wrapper key', { ...requestFixture(), unexpected: true }, 'Invalid publication request.'],
   ])('rejects %s before emitting a body', (_name, value, error) => {
     expect(() => createPublicationBody(value)).toThrow(error);
+  });
+
+  it('rejects a bare benchmark both as a publication and as a stored snapshot', () => {
+    const benchmark = requestFixture().benchmark;
+    expect(() => createPublicationBody(benchmark as unknown as BenchmarkPublicationRequest)).toThrow();
+    expect(() => parseStoredPublicationBody(JSON.stringify(benchmark))).toThrow();
   });
 
   it('ignores a wrapper prototype serializer when freezing user bytes', () => {

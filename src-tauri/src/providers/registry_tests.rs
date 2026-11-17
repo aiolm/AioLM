@@ -195,90 +195,6 @@ fn manifests_and_probes_reject_unsafe_or_non_strict_public_observations() {
     }
 }
 #[test]
-fn fixed_output_declarations_need_a_matching_request_option_and_usage() {
-    let declared = |control: &str, kind: Value, usage: Value| {
-        let mut manifest = example();
-        manifest.options.push(ExternalOption {
-            scope: None,
-            key: control.into(),
-            flag: None,
-            kind,
-            target: "request".into(),
-            group: options_group(),
-            runtime_default: None,
-        });
-        validate_manifest(&manifest).unwrap();
-        let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-        probe["capabilities"]["fixed_output"] = control.into();
-        probe["capabilities"]["stream_usage_supported"] = usage;
-        let probe: ProbeResult = serde_json::from_value(probe).unwrap();
-        validate_probe_result(&probe, &manifest, Some("selected"))
-    };
-    let toggle = serde_json::json!({"type":"toggle"});
-    let range = serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS});
-    declared("ignore_eos", toggle.clone(), true.into()).unwrap();
-    declared(
-        "ignore_eos",
-        serde_json::json!({"type":"flag"}),
-        true.into(),
-    )
-    .unwrap();
-    declared("min_tokens", range.clone(), true.into()).unwrap();
-    declared(
-        "min_tokens",
-        serde_json::json!({"type":"integer","min":0,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[-1]}),
-        true.into(),
-    )
-    .unwrap();
-    for usage in [Value::Null, false.into()] {
-        let error = declared("ignore_eos", toggle.clone(), usage).unwrap_err();
-        assert!(error.contains("stream_usage_supported"), "{error}");
-    }
-    for (control, kind) in [
-        ("ignore_eos", range.clone()),
-        ("min_tokens", toggle.clone()),
-        (
-            "min_tokens",
-            serde_json::json!({"type":"integer","min":1,"max":32768}),
-        ),
-        (
-            "min_tokens",
-            serde_json::json!({"type":"integer","min":1,"max":32768,"sentinel_values":[MAX_FIXED_OUTPUT_TOKENS]}),
-        ),
-        (
-            "min_tokens",
-            serde_json::json!({"type":"integer","min":1024,"max":MAX_FIXED_OUTPUT_TOKENS,"sentinel_values":[1]}),
-        ),
-        (
-            "min_tokens",
-            serde_json::json!({"type":"integer","min":1,"max":MAX_FIXED_OUTPUT_TOKENS,"choices":[1024]}),
-        ),
-        (
-            "min_tokens",
-            serde_json::json!({"type":"number","min":0,"max":MAX_FIXED_OUTPUT_TOKENS}),
-        ),
-    ] {
-        assert!(declared(control, kind, true.into()).is_err(), "{control}");
-    }
-    // Without the request option the declaration cannot be honored.
-    let mut probe = serde_json::to_value(metadata_probe()).unwrap();
-    probe["capabilities"]["fixed_output"] = "min_tokens".into();
-    probe["capabilities"]["stream_usage_supported"] = true.into();
-    let probe: ProbeResult = serde_json::from_value(probe).unwrap();
-    let error = validate_probe_result(&probe, &example(), Some("selected")).unwrap_err();
-    assert!(error.contains("request option"), "{error}");
-    // Unknown controls are not accepted, and absent stays unsupported.
-    let mut unknown = serde_json::to_value(metadata_probe()).unwrap();
-    unknown["capabilities"]["fixed_output"] = "max_tokens".into();
-    assert!(serde_json::from_value::<ProbeResult>(unknown).is_err());
-    let absent = metadata_probe();
-    assert_eq!(absent.capabilities.fixed_output, None);
-    validate_probe_result(&absent, &example(), Some("selected")).unwrap();
-    assert!(!serde_json::to_string(&absent)
-        .unwrap()
-        .contains("fixed_output"));
-}
-#[test]
 fn manifest_artifacts_allow_256_paths_within_both_serialized_budgets() {
     // A pinned Strata build on a system ROCm declares 189 library paths
     // (every alias of its library folder plus the loader-resolved nested
@@ -990,7 +906,7 @@ fn catalog_reuses_one_inventory_without_changing_host_recovery_order_or_freshnes
         serde_json::json!({"id":record.manifest.engine_id,
             "engine":record.manifest.display_name,"server":"openai-v1",
             "availability":availability,"options":options,"managed_version":null,
-            "kind":"external-process","capabilities":{"benchmark":"unsupported",
+            "kind":"external-process","capabilities":{"benchmark":"openai-chat-serving@5",
                 "deep_verification":"unsupported","portable":"unsupported"}})
     }
 

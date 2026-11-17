@@ -70,3 +70,30 @@ GROUP BY station ORDER BY samples DESC;
     }
     output
 }
+
+/// The run nonce and point identity precede all shared corpus material.
+pub(super) const COLD_PREFIX_BYTES: usize = 66;
+
+pub(super) fn cold_prefix(
+    nonce: &str,
+    (bytes, concurrency, repetition): (u32, u32, u32),
+    slot: usize,
+) -> String {
+    use sha2::{Digest, Sha256};
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let identity = format!("{nonce}:{bytes}:{concurrency}:{repetition}:{slot}");
+    format!("{}{:x}\n", ALPHABET[slot] as char, Sha256::digest(identity.as_bytes()))
+}
+
+/// Consume neither the shared base nor an additional copy of the finished text.
+pub(super) fn cold_text(
+    base: &str,
+    nonce: &str,
+    point: (u32, u32, u32),
+    slot: usize,
+) -> String {
+    let mut text = String::with_capacity(point.0 as usize);
+    text.push_str(&cold_prefix(nonce, point, slot));
+    text.push_str(base);
+    text
+}

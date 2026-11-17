@@ -49,6 +49,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     let adapter_source = area.path.join("adapter-source.txt");
     fs::write(&adapter_source, b"synthetic adapter source").unwrap();
     let program = PathBuf::from(env!("CARGO_BIN_EXE_fake-llama-server"));
+    let receipt = area.path.join("registered-serving-requests.jsonl");
     let process = ProcessSpec {
         program: program.to_string_lossy().into_owned(),
         args: vec![],
@@ -93,6 +94,8 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
                 "{host}".into(),
                 "--port".into(),
                 "{port}".into(),
+                "--benchmark-receipt".into(),
+                receipt.to_string_lossy().into_owned(),
             ],
             ..process
         },
@@ -255,44 +258,21 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
             run_id: "registered-common-serving".into(),
             method: Default::default(),
             context_profile: "novel_en".into(),
-            prompt_bytes: vec![256],
-            max_output_tokens: 1024,
+            prompt_bytes: vec![1024],
+            max_output_tokens: 128,
             concurrencies: vec![1, 2],
             repetitions: 1,
             warmup: false,
-            request_usage: true,
+            request_usage: false,
         };
-        // Without a declared force control the adapter is refused explicitly;
-        // there is no cap-mode fallback.
-        let refused = bench::RuntimeInfo::prepare(&selection, &request)
-            .await
-            .err()
-            .expect("an undeclared adapter cannot run fixed output");
-        assert_eq!(refused.kind, aiolm_lib::error::ErrorKind::Unavailable);
-        assert!(
-            refused.message.contains("fixed-output control"),
-            "{refused}"
+        // Neither the registration nor the probe declares usage support.
+        // Standard streaming chat admission is sufficient.
+        assert_eq!(
+            bench::admission(selection.clone(), request.clone())
+                .await
+                .status,
+            "supported"
         );
-        // The same engine, registered with an explicit `ignore_eos` declaration
-        // and its matching request option.
-        let mut fixed = manifest.clone();
-        fixed.runtime_id = "fixture-fixed".into();
-        fixed.probe.args[2] = fixed.runtime_id.clone();
-        fixed.probe.args.push("--adapter-probe-fixed-output".into());
-        fixed.options.push(
-            serde_json::from_value(serde_json::json!({
-                "key": "ignore_eos", "kind": {"type": "toggle"}, "target": "request"
-            }))
-            .unwrap(),
-        );
-        let fixed_source = area.path.join("fixed-output.json");
-        fs::write(&fixed_source, serde_json::to_vec(&fixed).unwrap()).unwrap();
-        providers::registry::register(&fixed_source, None)
-            .await
-            .unwrap();
-        selection.active_runtime = "fixture-fixed".into();
-        providers::adapter::refresh(&selection, None).await.unwrap();
-        providers::execution::validate(&selection).unwrap();
         let runtime = bench::RuntimeInfo::prepare(&selection, &request)
             .await
             .unwrap();
@@ -309,23 +289,58 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         .await;
         assert_eq!(result.status, "complete", "{:?}", result.message);
         assert_eq!(result.rows.len(), 2);
-        assert!(result.rows.iter().all(|row| row.output_bytes
-            == 1024 * u64::from(row.concurrency)
-            && row.reported_completion_tokens == Some(1024 * u64::from(row.concurrency))
-            && row.reported_completion_tokens_by_request
-                == Some(vec![1024; row.concurrency as usize])
-            && row.reported_cached_tokens.is_none()
-            && row.usage_status == "partial"
-            && row.peak_memory_bytes.is_none()
-            && row.finish_reasons == vec!["length"; row.concurrency as usize]));
+        assert!(result
+            .rows
+            .iter()
+            .all(|row| row.output_bytes == 12 * u64::from(row.concurrency)
+                && row.e2e_ms > 0.0
+                && row.reported_prompt_tokens.is_none()
+                && row.reported_completion_tokens.is_none()
+                && row.prefill_tokens_per_second.is_none()
+                && row.decode_tokens_per_second.is_none()
+                && row.tpot_ms.is_none()
+                && row.input_sha256_by_request.len() == row.concurrency as usize
+                && row.usage_status == "missing"
+                && row.peak_memory_bytes.is_none()
+                && row.finish_reasons == vec!["stop"; row.concurrency as usize]));
         let recorded = serde_json::to_value(&result).unwrap();
-        assert!(recorded["provenance"]["execution"]["settings"]
+        assert_eq!(recorded["provenance"]["method"]["version"], 5);
+        assert_eq!(recorded["provenance"]["workload"]["request_usage"], false);
+        let settings: Vec<_> = recorded["provenance"]["execution"]["settings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|setting| setting["target"] == "request"
-                && setting["name"] == "ignore_eos"
-                && setting["value"] == true));
+            .filter(|setting| setting["target"] == "request")
+            .map(|setting| (setting["name"].as_str().unwrap(), setting["value"].clone()))
+            .collect();
+        assert_eq!(
+            settings,
+            [
+                ("max_tokens", serde_json::json!(128)),
+                ("stream", serde_json::json!(true)),
+                ("temperature", serde_json::json!(0)),
+            ]
+        );
+        let calls: Vec<serde_json::Value> = fs::read_to_string(&receipt)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|call: &serde_json::Value| {
+                call["body"]["messages"][0]["content"]
+                    .as_str()
+                    .is_some_and(|text| text.len() == 1024)
+            })
+            .collect();
+        assert_eq!(calls.len(), 3);
+        for call in calls {
+            let body = call["body"].as_object().unwrap();
+            assert_eq!(body.len(), 5);
+            assert_eq!(body["model"], "fake-model");
+            assert_eq!(body["max_tokens"], 128);
+            assert_eq!(body["temperature"], 0);
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["messages"][0]["content"].as_str().unwrap().len(), 1024);
+        }
         assert_eq!(
             recorded["provenance"]["runtime"]["name"],
             serde_json::Value::Null
@@ -341,7 +356,6 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
             serde_json::Value::Null
         );
         assert!(process.lock().unwrap().is_none());
-        providers::registry::remove(engine, "fixture-fixed").unwrap();
         providers::adapter::refresh(&cfg, None).await.unwrap();
     }
     fs::write(&adapter_source, b"changed adapter source").unwrap();

@@ -8,11 +8,13 @@ import { webcrypto } from 'node:crypto';
 import type { AppConfig } from '../../shared/api/types';
 import { applySettingsProfile } from '../../shared/config/settingsProfiles';
 import { defined } from '../../testing/assertDefined';
+import { servingBenchmark } from '../../testing/servingBenchmark';
+import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark';
 
 vi.mock('../../shared/api/runtimeHelp', async importOriginal => ({ ...await importOriginal<object>(), runtimeHelpResolvePlan: vi.fn(async () => ({ argv: [], request: {} })) }));
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const });
 const setting = (name: string, value: RecordedSetting['value'], extra: Partial<RecordedSetting> = {}): RecordedSetting => ({ target: 'launch', scope: [], name, value, unit: null, role: null, ...extra });
-const source = (settings: RecordedSetting[]): BenchmarkProfileSource => ({ source_schema_version: 3, source_omissions: false,
+const source = (settings: RecordedSetting[]): BenchmarkProfileSource => ({ source_schema_version: 4, source_omissions: false,
   runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
   execution: { topology: 'unknown', memory_scope: 'unavailable', settings: [...settings].sort((a, b) =>
     a.target === b.target ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.target < b.target ? -1 : 1) } });
@@ -42,6 +44,21 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('destination-checked benchmark profiles', () => {
+  it('imports serving launch configuration without copying request descriptors', async () => {
+    const record = servingBenchmark();
+    record.result.provenance!.execution.settings.unshift(setting('batch', 16));
+    const published = toPublicBenchmark(record, '00000000-0000-4000-8000-000000000003');
+    const projected = publicBenchmarkProfileSource({ id: 'serving', benchmark: published }, 'serving');
+    const dest = destination([option('local_batch')], { local_batch: 'batch' });
+    const before = structuredClone(dest.cfg);
+    const { profile, omitted } = await benchmarkSettingsProfile(projected, 'serving', dest);
+    expect(profile.settings).toEqual({ provider_options: { 'custom.destination': { local_batch: 16 } } });
+    expect(omitted).toBe(false);
+    expect(runtimeHelpResolvePlan).toHaveBeenCalledWith(dest.effective.schema, [], [{ key: 'local_batch', values: [16] }]);
+    expect(dest.cfg).toEqual(before);
+    expect(JSON.stringify(profile.settings)).not.toMatch(/max_tokens|temperature|stream|PRIVATE|synthetic/);
+  });
+
   it('restores a typed launch setting by public name, independent of the source engine identity', async () => {
     const dest = destination([option('local_batch', { scope: ['serve'], unit: known('count') })], { local_batch: 'batch' }, { scope: ['serve'] });
     const { profile, omitted } = await benchmarkSettingsProfile(source([setting('batch', 16, { scope: ['serve'], unit: 'count' }),
@@ -173,37 +190,12 @@ describe('destination-checked benchmark profiles', () => {
     await expect(benchmarkSettingsProfile(source([setting('batch', 16)]), 'failed', dest)).rejects.toThrow('schema service unavailable');
   });
 
-  it('keeps destination-specific IDs and explicitly reports legacy omissions without parsing raw arguments', async () => {
-    const projected = publicBenchmarkProfileSource({ id: 'legacy', benchmark: { schema_version: 1,
-      runtime: { name: 'llama.cpp', version: null, backend: null, build: null },
-      execution: { context_size: 4096, parallel: 2, settings: null, effective_args: ['--batch-size', '1024'] } } }, 'legacy');
+  it('keeps destination-specific IDs and rejects mismatched source identities', async () => {
     const dest = destination([], {});
-    expect((await benchmarkSettingsProfile(projected, 'legacy', dest)).omitted).toBe(true);
-    expect(projected.execution.settings.some(entry => entry.name === 'batch-size')).toBe(false);
     const first = await benchmarkSettingsProfile(source([]), 'same', dest);
     const second = await benchmarkSettingsProfile(source([]), 'same', { ...dest, cfg: { ...dest.cfg, active_provider: 'vllm' } });
     expect(first.profile.id).not.toBe(second.profile.id);
-    expect(() => publicBenchmarkProfileSource({ id: 'other', benchmark: {} }, 'legacy')).toThrow();
+    expect(() => publicBenchmarkProfileSource({ id: 'other', benchmark: {} }, 'serving')).toThrow();
   });
 
-  it.each([64, 65])('retains safe legacy settings when tensor split has %i entries without changing the source', length => {
-    const split = Array.from({ length }, () => 1);
-    const detail = { id: 'legacy-array', benchmark: { schema_version: 1,
-      runtime: { name: 'llama.cpp', version: null, backend: null, build: null },
-      execution: { context_size: 4096, parallel: 2, effective_args: ['--threads', '8'],
-        settings: { gpu_layers: null, threads: 8, threads_batch: null, flash_attention: 'on',
-          cache_type_k: null, cache_type_v: null, split_mode: null, tensor_split: split } } } };
-    const frozen = JSON.stringify(detail);
-    const normalized = publicBenchmarkProfileSource(detail, detail.id);
-    expect(normalized.source_schema_version).toBe(1);
-    expect(normalized.source_omissions).toBe(true);
-    expect(normalized.execution.settings).toEqual([
-      setting('ctx-size', 4096, { unit: 'tokens', role: 'context.total_tokens' }),
-      setting('flash-attn', 'on'),
-      setting('parallel', 2, { unit: 'count', role: 'concurrency.capacity' }),
-      ...(length === 64 ? [setting('tensor-split', split, { unit: 'ratio' })] : []),
-      setting('threads', 8, { unit: 'threads' }),
-    ]);
-    expect(JSON.stringify(detail)).toBe(frozen);
-  });
 });

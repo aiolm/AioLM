@@ -1,6 +1,6 @@
 //! Server acceptance is durable independently of the disposable recent cache.
 //! Candidate markers bound normal pruning to the recent cache, while permanent
-//! receipts prevent legacy imports from resurrecting an evicted local journal.
+//! receipts prevent an evicted run id from being reused.
 use super::{
     files, replay_run, sync_parent, JournalOrigin, RunLock, StoreLock, ACTIVE_RUNS,
     MAX_JOURNAL_BYTES,
@@ -290,6 +290,15 @@ fn acknowledge_at_with_durability(
         return Err(AppError::validation("invalid benchmark run id"));
     }
     let _lock = StoreLock::acquire(root)?;
+    let digest = format!("{:x}.jsonl", Sha256::digest(run_id.as_bytes()));
+    let path = files(root)?.into_iter().find(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(&digest))
+    });
+    if let Some(path) = &path {
+        super::require_supported_journal(path)?;
+    }
     let accepted_path = receipt_path(root, run_id);
     if let Some(existing) = read_accepted(&accepted_path)? {
         if existing.receipt != receipt {
@@ -307,12 +316,7 @@ fn acknowledge_at_with_durability(
             ensure_durable,
         ));
     }
-    let digest = format!("{:x}.jsonl", Sha256::digest(run_id.as_bytes()));
-    let Some(path) = files(root)?.into_iter().find(|path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(&digest))
-    }) else {
+    let Some(path) = path else {
         if !super::deletions::has_tombstone(root, run_id)? {
             return Err(AppError::not_found(
                 "the local benchmark recovery record was not found",
@@ -547,7 +551,7 @@ fn prune_cache_with_durability(
 #[cfg(test)]
 mod tests {
     use super::super::tests as fixtures;
-    use super::super::{encoded, import, list, record_digest, Entry, RunJournal};
+    use super::super::{encoded, list, record_digest, Entry, RunJournal};
     use super::*;
 
     fn receipt(index: usize) -> UploadReceipt {
@@ -734,8 +738,10 @@ mod tests {
         let unuploaded = native(&root, "unuploaded", 0, "complete");
         let interrupted = native(&root, "interrupted", 1, "interrupted");
         let failed = native(&root, "failed", 2, "failed");
-        import(&root, vec![fixtures::record("legacy", 3)]).unwrap();
-        let old = fixtures::record("existing", 4);
+        let mut old = fixtures::serving_record("existing", 4);
+        old["result"]["rows"] = json!([fixtures::serving_row()]);
+        old["result"]["status"] = json!("complete");
+        old["result"]["message"] = Value::Null;
         let existing = root
             .join("runs")
             .join(format!("{:016}-{}", 4, record_digest(&old)));
@@ -751,7 +757,7 @@ mod tests {
             .unwrap(),
         );
         fs::write(&existing, bytes).unwrap();
-        for (index, id) in ["interrupted", "failed", "legacy", "existing"]
+        for (index, id) in ["interrupted", "failed", "existing"]
             .iter()
             .enumerate()
         {
@@ -771,14 +777,10 @@ mod tests {
         assert!(failed.exists());
         assert!(existing.exists());
         let page = list(&root, 100, 100).unwrap();
-        assert_eq!(page.total, 105);
-        assert!(page.records.iter().any(|record| record["id"] == "legacy"));
+        assert_eq!(page.total, 104);
+        assert!(page.records.iter().any(|record| record["id"] == "existing"));
         assert!(has_tombstone(&root, "cache-0").unwrap());
-        assert_eq!(
-            import(&root, vec![fixtures::record("cache-0", 100)]).unwrap(),
-            0
-        );
-        assert!(RunJournal::begin(&root, fixtures::record("cache-0", 999)).is_err());
+        assert!(RunJournal::begin(&root, fixtures::serving_record("cache-0", 999)).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -791,7 +793,7 @@ mod tests {
                 .unwrap(),
             AppError::not_found("the local benchmark recovery record was not found")
         );
-        let journal = RunJournal::begin(&root, fixtures::record("active", 1)).unwrap();
+        let journal = RunJournal::begin(&root, fixtures::serving_record("active", 1)).unwrap();
         assert_eq!(
             acknowledge_at(&root, "active", receipt(1), 10)
                 .err()
@@ -885,10 +887,7 @@ mod tests {
             fs::read(receipt_path(&root, "evicted")).unwrap(),
             receipt_bytes
         );
-        assert_eq!(
-            import(&root, vec![fixtures::record("evicted", 1)]).unwrap(),
-            0
-        );
+        assert!(RunJournal::begin(&root, fixtures::serving_record("evicted", 1)).is_err());
         assert_eq!(list(&root, 0, 20).unwrap().total, 0);
         fs::remove_dir_all(root).unwrap();
     }
@@ -934,6 +933,58 @@ mod tests {
         assert_eq!(maintenance.pruned, 1);
         assert!(!journal.exists());
         assert_eq!(fs::read(&receipt_file).unwrap(), visible);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsupported_journal_cannot_be_acknowledged_or_changed() {
+        let root = fixtures::root();
+        let id = "unsupported-receipt";
+        let mut record = fixtures::serving_record(id, 1);
+        record["schemaVersion"] = json!(2);
+        let path = root.join("runs").join(format!("{:016}-{}", 1, record_digest(&record)));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&json!({
+            "kind":"start","origin":"legacy","record":record
+        })).unwrap();
+        let mut bytes = bytes;
+        bytes.extend_from_slice(b"\nunsupported tail\n");
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
+            AppError::validation("unsupported benchmark record"));
+        assert!(!receipt_path(&root, id).exists());
+        assert!(!candidate_path(&root, id).exists());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let accepted = AcceptedUpload {
+            schema_version: 1,
+            run_id: id.into(),
+            receipt: receipt(1),
+            acknowledged_at: 5,
+            candidate: None,
+        };
+        let receipt_bytes = serde_json::to_vec(&accepted).unwrap();
+        crate::config::atomic_write(&receipt_path(&root, id), &receipt_bytes).unwrap();
+        assert_eq!(acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
+            AppError::validation("unsupported benchmark record"));
+        assert_eq!(fs::read(receipt_path(&root, id)).unwrap(), receipt_bytes);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn torn_tail_after_native_finish_never_authorizes_eviction() {
+        let root = fixtures::root();
+        let id = "torn-after-finish";
+        let path = native(&root, id, 1, "complete");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"{\"kind\":\"trial\",");
+        fs::write(&path, &bytes).unwrap();
+        acknowledge_at(&root, id, receipt(1), 10).unwrap();
+        let accepted = read_accepted(&receipt_path(&root, id)).unwrap().unwrap();
+        assert!(accepted.candidate.is_none());
+        assert!(!candidate_path(&root, id).exists());
+        assert_eq!(prune_cache(&root, 0, |path| fs::remove_file(path)).pruned, 0);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
     }
 

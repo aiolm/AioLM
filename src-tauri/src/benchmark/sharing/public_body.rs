@@ -73,71 +73,6 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Value, serde_json::Error> {
     serde_json::from_slice::<UniqueValue>(bytes).map(|value| value.0)
 }
 
-const PRIVATE_OPTIONS: &[&str] = &[
-    "-m",
-    "--model",
-    "-mu",
-    "--model-url",
-    "-md",
-    "--model-draft",
-    "--spec-draft-model",
-    "-mm",
-    "--mmproj",
-    "-mmu",
-    "--mmproj-url",
-    "-hf",
-    "-hfr",
-    "--hf-repo",
-    "-hff",
-    "--hf-file",
-    "-hft",
-    "--hf-token",
-    "--lora",
-    "--lora-scaled",
-    "--control-vector",
-    "--control-vector-scaled",
-    "--grammar-file",
-    "-jf",
-    "--json-schema-file",
-    "--chat-template-file",
-    "-lcs",
-    "--lookup-cache-static",
-    "-lcd",
-    "--lookup-cache-dynamic",
-    "--log-file",
-    "--log-prompts-dir",
-    "--slot-save-path",
-    "--media-path",
-    "--models-dir",
-    "--models-preset",
-    "--video-ffmpeg-dir",
-    "--ui-config-file",
-    "--webui-config-file",
-    "--mcp-servers-config",
-    "--api-key",
-    "--api-key-file",
-    "--ssl-key-file",
-    "--ssl-cert-file",
-    "--host",
-    "--port",
-    "--path",
-    "--api-prefix",
-    "-a",
-    "--alias",
-    "--served-model-name",
-    "--embedding-model",
-    "--draft-model",
-    "--adapter-path",
-    "--lora-modules",
-    "--speculative-config",
-    "--download-dir",
-    "--tokenizer",
-    "--chat-template",
-    "--model-loader-extra-config",
-    "-r",
-    "--reverse-prompt",
-];
-
 fn safe_label(text: &str, limit: usize) -> bool {
     !text.is_empty()
         && text.encode_utf16().count() <= limit
@@ -147,48 +82,6 @@ fn safe_label(text: &str, limit: usize) -> bool {
                 '\\' | '/' | ':' | '@' | '\u{0000}'..='\u{001f}' | '\u{007f}'
             )
         })
-}
-
-fn strip_ascii_suffix<'a>(text: &'a str, suffix: &str) -> Option<&'a str> {
-    let start = text.len().checked_sub(suffix.len())?;
-    text.get(start..)?
-        .eq_ignore_ascii_case(suffix)
-        .then(|| &text[..start])
-}
-
-fn secret_option(name: &str) -> bool {
-    let name = name
-        .strip_prefix("--")
-        .or_else(|| name.strip_prefix('-'))
-        .unwrap_or(name);
-    let stem = strip_ascii_suffix(name, "-file")
-        .or_else(|| strip_ascii_suffix(name, "_file"))
-        .unwrap_or(name);
-    [
-        "api-key",
-        "api_key",
-        "apikey",
-        "key",
-        "token",
-        "secret",
-        "password",
-        "passphrase",
-        "credential",
-        "authorization",
-        "auth",
-    ]
-    .iter()
-    .any(|suffix| {
-        strip_ascii_suffix(stem, suffix)
-            .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with(['-', '_']))
-    })
-}
-
-fn public_argument(token: &Value) -> bool {
-    token.as_str().is_some_and(|token| {
-        let name = token.split('=').next().unwrap_or(token);
-        safe_label(token, 128) && !PRIVATE_OPTIONS.contains(&name) && !secret_option(name)
-    })
 }
 
 fn repository(text: &str) -> bool {
@@ -283,17 +176,7 @@ fn public_value(value: &Value, shape: &Value, schema: &Value) -> bool {
                 return false;
             };
             fields.iter().all(|(key, value)| {
-                properties.get(key).is_some_and(|shape| {
-                    if key == "effective_args"
-                        && !value.is_null()
-                        && !value.as_array().is_some_and(|args| {
-                            args.len() <= 256 && args.iter().all(public_argument)
-                        })
-                    {
-                        return false;
-                    }
-                    public_value(value, shape, schema)
-                })
+                properties.get(key).is_some_and(|shape| public_value(value, shape, schema))
             })
         }
         Value::Array(values) => {
@@ -318,6 +201,12 @@ fn public_value(value: &Value, shape: &Value, schema: &Value) -> bool {
             match shape.get("pattern").and_then(Value::as_str) {
                 Some(pattern) if pattern.contains("(?!.*\\.\\.)") => repository(text),
                 Some(pattern) if pattern.ends_with("[gG][gG][uU][fF]$") => artifact(text),
+                Some("^[a-f0-9]{32}$") => {
+                    text.len() == 32
+                        && text
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                }
                 Some("^[a-f0-9]{40}$") => {
                     text.len() == 40
                         && text
@@ -360,10 +249,10 @@ pub(crate) fn validate(value: &Value) -> Result<(), SharingError> {
         value.as_object().is_some_and(|root| {
             root.keys()
                 .all(|key| matches!(key.as_str(), "benchmark" | "description_md"))
-        }) && value.get("description_md").is_none_or(Value::is_string)
+        }) && value.get("description_md").is_some_and(Value::is_string)
             && public_value(benchmark, schema, schema)
     } else {
-        public_value(value, schema, schema)
+        false
     };
     if accepted {
         Ok(())
@@ -398,7 +287,7 @@ mod tests {
         assert!(validate(&json!({"benchmark": {
             "submission_id": "123e4567-e89b-42d3-a456-000000000001",
             "model": {"metadata": {"repository": "example/model", "artifact": "weights/model.gguf", "base_models": ["example/base"]}},
-            "execution": {"effective_args": ["--threads", "8", "--flash-attn=on"]}
+            "execution": {"settings": [{"target":"launch","scope":[],"name":"threads","value":8,"unit":"threads","role":null}]}
         }, "description_md": "Reviewed [source](https://example.invalid)."})).is_ok());
     }
 
@@ -409,53 +298,56 @@ mod tests {
             json!({"model": {"recorded_model_label": "synthetic"}}),
             json!({"measurements": {"rows": [{"error": "private diagnostics"}]}}),
             json!({"environment": {"cpu": {"serial": "synthetic"}}}),
+            json!({"execution": {"effective_args": ["--threads", "8"]}}),
         ] {
-            assert!(validate(&private).is_err(), "{private}");
+            assert!(validate(&json!({"benchmark": private, "description_md": ""})).is_err(), "{private}");
         }
         assert!(validate(&json!({"benchmark": {}, "local_fingerprint": "synthetic"})).is_err());
     }
 
     #[test]
-    fn every_private_runtime_option_is_rejected() {
-        for option in PRIVATE_OPTIONS {
-            for args in [
-                json!([option, "synthetic"]),
-                json!([format!("{option}=synthetic")]),
-            ] {
-                assert!(
-                    validate(&json!({"execution": {"effective_args": args}})).is_err(),
-                    "{option}"
-                );
-            }
+    fn reviewed_cold_prompt_body_round_trip_preserves_nonce_and_dispatched_hashes() {
+        let body = json!({"benchmark": {
+            "schema_version": 4,
+            "method": {"id": "openai-chat-serving", "version": 5},
+            "workload": {
+                "corpus": "novel_en", "corpus_version": 2,
+                "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
+                "max_output_tokens": 128, "concurrencies": [2], "repetitions": 1,
+                "warmup": false, "request_usage": false, "cache_policy": "cold_prompt",
+                "prompt_nonce": "0123456789abcdef0123456789abcdef"
+            },
+            "execution": {"topology": "attached", "memory_scope": "unavailable",
+                "settings": crate::benchmark::provenance::common_request_settings(128, false)},
+            "measurements": {"status": "complete", "rows": [{
+                "input_bytes": 256, "max_output_tokens": 128, "concurrency": 2,
+                "repetition": 1, "input_sha256_by_request": ["a".repeat(64), "b".repeat(64)],
+                "prefill_tokens_per_second": null, "decode_tokens_per_second": null, "tpot_ms": null
+            }]}
+        }, "description_md": "Reviewed benchmark."});
+        let encoded = serde_json::to_vec(&body).unwrap();
+        let reviewed = parse(&encoded).unwrap();
+        validate(&reviewed).unwrap();
+        assert_eq!(reviewed, body);
+        assert_eq!(serde_json::to_vec(&reviewed).unwrap(), encoded);
+        for nonce in ["a".repeat(31), "a".repeat(33), "A".repeat(32), "g".repeat(32)] {
+            let mut invalid = body.clone();
+            invalid["benchmark"]["workload"]["prompt_nonce"] = json!(nonce);
+            assert!(validate(&invalid).is_err());
         }
-    }
-
-    #[test]
-    fn secret_option_shapes_and_unsafe_argument_tokens_are_rejected() {
-        for token in [
-            "--custom-api-key",
-            "--provider_token=synthetic",
-            "--db-password-file",
-            "--auth",
-            "--key",
-            "--secret",
-            "--passphrase",
-            "--credential",
-            "--authorization",
-            "/synthetic/model",
-            "C:\\synthetic\\model",
-            "https://example.invalid",
-            "user@example.invalid",
-            "line\nbreak",
-            "",
+        for hashes in [
+            json!(["a".repeat(63)]),
+            json!(["A".repeat(64)]),
+            json!(["C:\\private"]),
+            json!(vec!["a".repeat(64); 65]),
         ] {
-            assert!(
-                validate(&json!({"execution": {"effective_args": [token]}})).is_err(),
-                "{token}"
-            );
+            let mut invalid = body.clone();
+            invalid["benchmark"]["measurements"]["rows"][0]["input_sha256_by_request"] = hashes;
+            assert!(validate(&invalid).is_err());
         }
-        assert!(validate(&json!({"execution": {"effective_args": vec!["x"; 257]}})).is_err());
-        assert!(validate(&json!({"execution": {"effective_args": ["x".repeat(129)]}})).is_err());
+        let mut private = body;
+        private["benchmark"]["workload"]["inputs"][0]["text"] = json!("private prompt");
+        assert!(validate(&private).is_err());
     }
 
     #[test]
@@ -467,7 +359,7 @@ mod tests {
             json!({"model": {"metadata": {"artifact": "/synthetic/model.gguf"}}}),
             json!({"model": {"source": {"repository": "C:\\synthetic"}}}),
         ] {
-            assert!(validate(&private).is_err(), "{private}");
+            assert!(validate(&json!({"benchmark": private, "description_md": ""})).is_err(), "{private}");
         }
     }
 }

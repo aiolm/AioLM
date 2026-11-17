@@ -172,12 +172,6 @@ export function BenchmarkPublishPanel({ snapshot, description, sourceRunId, busy
         setError(copy.publishDeleted);
         return;
       }
-      // A previously attempted legacy bare entry keeps its exact body for the
-      // legacy path; surface the conflict before any native binding mutation.
-      if (existing && !existing.requestBody && (existing.attempts > 0 || existing.state === 'sending' || existing.state === 'sent')) {
-        setError(copy.legacyConflict);
-        return;
-      }
       // Reuse the frozen queued body on retry and restart; bind exactly once.
       let destination = existing?.destination
         ?? (existing?.origin ? `${existing.origin.replace(/\/+$/, '')}/v1/benchmark-runs` : undefined);

@@ -207,11 +207,9 @@ struct Prepared {
     destination: String,
 }
 
-/// Bounded structural probe: the body must be a JSON object shaped either as
-/// the wrapper (`benchmark.submission_id`) or the legacy bare submission
-/// (`submission_id`), naming exactly the requested UUID. Full public-schema
-/// validation stays server-side; native privacy checks reject fields excluded
-/// from the public projection. The exact original bytes still define the hash.
+/// Bounded structural probe: only a wrapper naming the requested UUID is valid.
+/// Full public-schema validation stays server-side; native privacy checks reject
+/// fields excluded from the public projection. Original bytes define the hash.
 fn probe_body_submission(bytes: &[u8], submission_id: &str) -> Result<(), SharingError> {
     const NOT_A_REQUEST: &str = "The publication body is not a valid publication request.";
     const MISMATCH: &str = "The publication body does not match the requested submission.";
@@ -220,16 +218,10 @@ fn probe_body_submission(bytes: &[u8], submission_id: &str) -> Result<(), Sharin
     let root = value
         .as_object()
         .ok_or_else(|| SharingError::binding_conflict_msg(NOT_A_REQUEST))?;
-    let bound = if let Some(benchmark) = root.get("benchmark") {
-        benchmark
-            .get("submission_id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| SharingError::binding_conflict_msg(MISMATCH))?
-    } else {
-        root.get("submission_id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| SharingError::binding_conflict_msg(MISMATCH))?
-    };
+    let bound = root.get("benchmark")
+        .and_then(|benchmark| benchmark.get("submission_id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| SharingError::binding_conflict_msg(MISMATCH))?;
     if bound != submission_id {
         return Err(SharingError::binding_conflict_msg(MISMATCH));
     }
@@ -1091,10 +1083,6 @@ mod tests {
         format!(r#"{{"benchmark":{{"submission_id":"{id}"}},"description_md":"hello"}}"#)
     }
 
-    fn legacy_body(id: &str) -> String {
-        format!(r#"{{"submission_id":"{id}","measurements":{{"rows":[]}}}}"#)
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn prepare_privileged_work_keeps_operation_gate_until_vault_returns() {
         let state = Arc::new(AppState::default());
@@ -1495,15 +1483,14 @@ mod tests {
         let root = benchmarks();
         let id = submission(3);
         let vault = MockVault::open();
-        // Legacy bare bodies bind when the id matches.
-        prepare(&vault, &root, &id, &legacy_body(&id));
+        prepare(&vault, &root, &id, &wrapper_body(&id));
         // Mismatched ids, non-objects, missing ids and non-JSON are refused
         // before any key or binding is created.
         let fresh = MockVault::open();
         let decoy = submission(999);
         for (tag, body) in [
             (30, wrapper_body(&decoy)),
-            (31, legacy_body(&decoy)),
+            (31, format!(r#"{{"submission_id":"{decoy}"}}"#)),
             (32, r#"{"description_md":"no ids"}"#.to_string()),
             (33, r#"[1,2,3]"#.to_string()),
             (34, "not json at all".to_string()),

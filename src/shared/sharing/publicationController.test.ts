@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPublicationController } from './publicationController.ts';
 import type { MeasurementActivity } from './outbox.ts';
 import { defined } from '../../testing/assertDefined.ts';
+import { servingBenchmark } from '../../testing/servingBenchmark.ts';
+import { toPublicBenchmark } from '../contracts/benchmark/publicBenchmark.ts';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
@@ -138,14 +140,7 @@ describe('hung native calls', () => {
 
 describe('prepare abort race', () => {
   const requestFixture = () => ({
-    benchmark: {
-      schema_version: 1 as const, submission_id: '00000000-0000-4000-8000-000000000001', app_version: null, method: null,
-      workload: { corpus: 'novel_en' as const, corpus_version: null, corpus_sha256: null, prompt_lengths: [1024], generation_length: 128, batch_sizes: [1], repetitions: 1, warmup: false },
-      model: { status: 'unidentified' as const, sha256: null, size_bytes: null },
-      runtime: { name: 'llama.cpp' as const, version: null, backend: null, build: null },
-      environment: null, execution: { context_size: 4096, parallel: 1, settings: null },
-      measurements: { status: 'complete' as const, rows: [] },
-    },
+    benchmark: toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001'),
     description_md: 'notes',
   });
 

@@ -25,7 +25,7 @@ export function createPublicationBody(request: BenchmarkPublicationRequest): { b
   return { body, submissionId: normalized.benchmark.submission_id };
 }
 
-/** Parse a stored exact snapshot; legacy bare bodies keep an empty description. */
+/** Parse a stored exact wrapper snapshot without changing its request bytes. */
 export function parseStoredPublicationBody(body: string): BenchmarkPublicationRequest {
   return parsePublicationSnapshot(body);
 }

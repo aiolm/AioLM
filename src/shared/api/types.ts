@@ -2,7 +2,7 @@ import type { StreamDelta } from "./sse.ts";
 import type { JsonObject } from "../config/tuningValidation.ts";
 import type { ExecutionSettings, SessionExecutionSettings } from '../config/executionSettings';
 import type { SettingsProfileLibrary } from '../config/settingsProfiles';
-import type { ServingBenchmarkRow, ServingWorkload, ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
+import type { BenchmarkEnvironment, ServingBenchmarkRow, ServingWorkload, ServingRuntimeIdentity, ServingExecution } from '@aiolm/benchmark-contracts';
 
 export interface AppConfig {
   active_provider?: import('./providers').ProviderId;
@@ -380,68 +380,6 @@ export interface RuntimeCapabilities {
 
 export type BenchmarkContextProfile = "code_python" | "code_mixed" | "novel_ko" | "novel_en" | "novel_ja";
 
-/** Read-only workload shape retained for historical cold-prompt measurements. */
-export interface LegacyPerformanceBenchmarkRequest {
-  run_id: string;
-  prompt_lengths: number[];
-  generation_length: number;
-  batch_sizes: number[];
-  repetitions: number;
-  context_profile: BenchmarkContextProfile;
-  warmup: boolean;
-}
-
-/** Read-only token measurements from the retired cold-prompt runner. */
-export interface LegacyPerformanceBenchmarkRow {
-  id: string;
-  prompt_tokens: number;
-  generation_length: number;
-  concurrency: number;
-  repetition: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  ttft_ms: number | null;
-  tpot_ms: number | null;
-  /** Aggregate prompt tokens / time until every request has emitted its first token. */
-  pp_tps: number | null;
-  /** Output tokens excluding each first token / observed batch decode interval. */
-  tg_tps: number | null;
-  e2e_ms: number;
-  /** Total output tokens / complete trial wall time (includes prefill). */
-  total_tps: number | null;
-  /** Sampled child-process resident RAM, not GPU VRAM. */
-  peak_memory_bytes: number | null;
-  timing_source: "server" | "client";
-  error?: string | null;
-}
-
-export interface LegacyPerformanceBenchmarkResult {
-  provider?: import('./providers').ProviderId;
-  model_format?: import('./providers').ModelArtifact['format'];
-  runtime_accelerator?: string;
-  runtime_variant?: string;
-  runtime_plugin_version?: string;
-  run_id: string;
-  rows: LegacyPerformanceBenchmarkRow[];
-  status: "complete" | "partial" | "cancelled" | "failed";
-  message?: string | null;
-  /** Effective server arguments with credentials removed. */
-  args: string[];
-  runtime_version: string;
-  context_size: number;
-  parallel: number;
-  /** Absent on older records; unknown provenance must not be reconstructed later. */
-  provenance?: LegacyPerformanceBenchmarkProvenance;
-}
-
-export interface BenchmarkGpuSnapshot {
-  name: string;
-  vendor: string;
-  vram_mb: number | null;
-  driver: string | null;
-  integrated: boolean;
-}
-
 export interface BenchmarkModelIdentity {
   status: 'sha256' | 'unidentified' | 'multipart';
   sha256: string | null;
@@ -453,43 +391,10 @@ export interface BenchmarkModelIdentity {
   metadata?: import('@aiolm/benchmark-contracts').BenchmarkModelMetadata | null;
 }
 
-export interface LegacyPerformanceBenchmarkProvenance {
-  schema_version: 1;
-  app_version: string;
-  method: { id: 'cold-prompt-serving'; version: 1 };
-  corpus: { profile: string; version: 1; sha256: string };
-  model: BenchmarkModelIdentity;
-  execution_config?: {
-    gpu_layers: number | null;
-    threads: number | null;
-    threads_batch: number | null;
-    flash_attention: string | null;
-    cache_type_k: string | null;
-    cache_type_v: string | null;
-    split_mode: string | null;
-    tensor_split: number[] | null;
-  };
-  environment: {
-    os: string;
-    arch: string;
-    cpu: CpuInfo;
-    /** OS-reported physical RAM at measurement launch, not process peak memory. */
-    system_memory_bytes?: number | null;
-    installed_gpus: BenchmarkGpuSnapshot[];
-    execution: {
-      mode: 'cpu' | 'selected' | 'automatic' | 'unknown';
-      selected_gpus: BenchmarkGpuSnapshot[];
-      devices: string[];
-      selection_complete: boolean;
-    };
-    detection: string;
-  };
-}
-
-/** Current runs use fixed-output v2; historical cap-based v1 requests remain readable. */
+/** The single Cold Prompt streaming-chat measurement method. */
 export interface PerformanceBenchmarkRequest {
   run_id: string;
-  method: { id: 'openai-chat-serving'; version: 1 | 2 };
+  method: { id: 'openai-chat-serving'; version: 5 };
   context_profile: BenchmarkContextProfile;
   prompt_bytes: number[];
   max_output_tokens: number;
@@ -501,7 +406,7 @@ export interface PerformanceBenchmarkRequest {
 
 export interface PerformanceBenchmarkAdmission {
   status: 'supported' | 'unsupported' | 'unknown';
-  reason: 'ready' | 'fixed_output' | 'stream_usage' | 'request' | 'configuration';
+  reason: 'ready' | 'request' | 'configuration';
   detail?: string;
 }
 
@@ -511,13 +416,17 @@ export interface PerformanceBenchmarkRow extends ServingBenchmarkRow {
 }
 
 export interface PerformanceBenchmarkProvenance {
-  schema_version: 2;
+  schema_version: 3;
   app_version: string;
-  method: { id: 'openai-chat-serving'; version: 1 | 2 };
+  method: { id: 'openai-chat-serving'; version: 5 };
   workload: ServingWorkload;
   runtime: ServingRuntimeIdentity;
   model: BenchmarkModelIdentity;
-  environment: LegacyPerformanceBenchmarkProvenance['environment'] & { scope: 'aiolm_host' };
+  environment: BenchmarkEnvironment & {
+    scope: 'aiolm_host';
+    execution: BenchmarkEnvironment['execution'] & { devices: string[] };
+    detection: string;
+  };
   execution: ServingExecution;
   /** Private display label frozen at launch, never a public model identity. */
   recorded_model_label: string;

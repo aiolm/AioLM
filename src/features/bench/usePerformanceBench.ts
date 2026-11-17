@@ -7,7 +7,7 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { isServerRunning } from '../../shared/lib/serverLifecycle';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
-import { readPerformanceHistory, summarizePerformanceRows, summarizeServingPoints } from './performanceRecords';
+import { readPerformanceHistory, summarizeServingPoints } from './performanceRecords';
 import { exportBenchmarkResults, type BenchmarkExportFormat } from './benchmarkExport';
 import { performanceMarkdown } from './performanceMarkdown';
 import { deleteBenchmarkHistoryRecord, initializeBenchmarkHistory, loadAllBenchmarkHistory, loadBenchmarkHistoryPage, rememberBenchmarkResult } from './benchmarkRepository';
@@ -27,7 +27,6 @@ import { runSetupGaps } from '../../shared/runtime/runReadiness';
 import { useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { useBenchmarkProfileImport } from './BenchmarkExplorerActions';
 import { benchmarkExplorerCopy } from './benchmarkExplorerCopy';
-import { useModelNames } from '../../shared/ui/ModelName';
 import { OUTPUT_TOKENS, REPETITIONS, TASK_ID } from './performanceBenchConfig';
 import { usePerformanceConditions } from './usePerformanceConditions';
 
@@ -109,7 +108,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const defaultTarget = useMemo(() => store.cfg ? benchmarkTarget(store.cfg) : null, [store.cfg]);
   const target = useMemo(() => store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget, [store.cfg, targetApplication, defaultTarget]);
   const targetConfig = target?.config ?? null;
-  const { promptBytes, setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup,
+  const { promptBytes, setPromptBytes, concurrencies, setConcurrencies,
     corpus, setCorpus, valid, total, admission, setAdmissionRevision, toggle } = usePerformanceConditions(targetConfig, active, busy);
   const model = targetConfig?.active_model ?? "";
   const targetDiffers = !!defaultTarget && !!target && (defaultTarget.application.profile_id !== target.application.profile_id
@@ -125,23 +124,18 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     : [];
   const canRun = admission?.status === 'supported' && !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
-  const localImportUnavailable = selectedRecord?.schemaVersion === 2 && !selectedRecord.result.provenance;
+  const localImportUnavailable = !!selectedRecord && !selectedRecord.result.provenance;
   const copyTargetRef = useRef({ record: selectedRecord, locale });
   copyTargetRef.current = { record: selectedRecord, locale };
   const previousRecords = history.filter(item => item.id !== record?.id);
-  const historyModelNames = useModelNames(previousRecords.map(item => item.schemaVersion === 1 ? item.model : ''));
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0]?.id !== selectedRecord?.id);
   const visibleResult = selectedHistory && selectedRecord ? selectedRecord.result : result;
   const provenance = selectedRecord?.result.provenance;
   const selectedGpus = provenance?.environment?.execution?.selected_gpus;
   const selectedGpuLabel = Array.isArray(selectedGpus) ? selectedGpus.map(gpu => typeof gpu?.name === 'string' ? gpu.name : '').filter(Boolean).join(' · ') : '';
   const modelHash = provenance?.model?.sha256;
-  const legacyRecord = selectedRecord?.schemaVersion === 1 ? selectedRecord : null;
-  const servingRecord = selectedRecord?.schemaVersion === 2 ? selectedRecord : null;
-  const summary = useMemo(() => legacyRecord ? summarizePerformanceRows(legacyRecord.result.rows) : [], [legacyRecord]);
+  const servingRecord = selectedRecord;
   const servingPoints = useMemo(() => summarizeServingPoints(servingRecord ? servingRecord.result.rows : rows), [servingRecord, rows]);
-  const singleRows = summary.filter((row) => row.concurrency === 1);
-  const batchRows = summary.filter((row) => row.concurrency > 1);
   const servingProvenance = servingRecord?.result.provenance;
   const modelSource = servingProvenance ? publicModelSource(servingProvenance.model) : undefined;
 
@@ -221,7 +215,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     const snapshot = structuredClone(benchmarkTarget(store.getConfig?.() ?? store.cfg, targetApplication));
     const cfg = snapshot.config;
     const runId = `performance-${crypto.randomUUID()}`;
-    const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 2 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: OUTPUT_TOKENS, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions: REPETITIONS, warmup, request_usage: true };
+    const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 5 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: OUTPUT_TOKENS, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions: REPETITIONS, warmup: false, request_usage: true };
     const createdAt = Date.now();
     setRunTarget(snapshot);
     activeRef.current = true;
@@ -259,7 +253,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
       void store.refreshStatus();
     }
     finalResult = withoutCancelledTrials(finalResult);
-    const saved: PerformanceBenchmarkRecord = { schemaVersion: 2, id: runId, createdAt, model: cfg.active_model, request, result: finalResult };
+    const saved: PerformanceBenchmarkRecord = { schemaVersion: 3, id: runId, createdAt, model: cfg.active_model, request, result: finalResult };
     // A rejected admission is not a failed measurement. Genuine returned
     // failures (including zero-row failures after start) remain recordable.
     const unstarted = !executionReturned && !finalResult.rows.length;
@@ -343,7 +337,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   return {
     store, active, setupFormId, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions,
-    promptBytes, setPromptBytes, concurrencies, setConcurrencies, warmup, setWarmup,
+    promptBytes, setPromptBytes, concurrencies, setConcurrencies,
     corpus, setCorpus,
     phase, progress, rows, record, history,
     historyOffset, historyLoading, historyError, historyWarnings, exporting, exportFormat,
@@ -353,9 +347,9 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     storageError, copied, copying, device, setAdmissionRevision, resetCopied,
     busy, otherBenchmark, valid, serverRunning,
     targetDiffers, displayedTarget, displayedModel, blockingSessions, setupGaps, admission,
-    canRun, total, selectedRecord, localImportUnavailable, previousRecords, historyModelNames,
+    canRun, total, selectedRecord, localImportUnavailable, previousRecords,
     exportAllDiffers, visibleResult, provenance, selectedGpuLabel, modelHash,
-    legacyRecord, servingRecord, servingPoints, singleRows, batchRows,
+    servingRecord, servingPoints,
     servingProvenance, modelSource, refreshSessions, loadHistory, editModel, stopSessions,
     cancel, run, toggle, statusLabel, progressMessage,
     copyResults, exportResults, deleteSelectedHistory,

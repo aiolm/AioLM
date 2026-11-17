@@ -14,12 +14,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 const MAX_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 static ACTIVE_RUNS: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
@@ -54,7 +53,6 @@ enum Entry {
 #[serde(rename_all = "lowercase")]
 enum JournalOrigin {
     Native,
-    Legacy,
 }
 
 fn encoded(entry: &Entry) -> Result<Vec<u8>, String> {
@@ -74,100 +72,6 @@ fn metadata(result: &PerformanceBenchResult) -> Value {
     value
 }
 
-fn valid_row(row: &Value) -> bool {
-    let nonnegative = |value: &Value| {
-        value
-            .as_f64()
-            .is_some_and(|number| number.is_finite() && number >= 0.0)
-    };
-    row.get("id")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty())
-        && [
-            "prompt_tokens",
-            "generation_length",
-            "concurrency",
-            "repetition",
-        ]
-        .iter()
-        .all(|name| {
-            row.get(*name)
-                .and_then(Value::as_u64)
-                .is_some_and(|number| number > 0)
-        })
-        && ["completion_tokens", "cached_tokens", "e2e_ms"]
-            .iter()
-            .all(|name| row.get(*name).is_some_and(nonnegative))
-        && [
-            "ttft_ms",
-            "tpot_ms",
-            "pp_tps",
-            "tg_tps",
-            "total_tps",
-            "peak_memory_bytes",
-        ]
-        .iter()
-        .all(|name| {
-            row.get(*name)
-                .is_some_and(|value| value.is_null() || nonnegative(value))
-        })
-        && row
-            .get("timing_source")
-            .and_then(Value::as_str)
-            .is_some_and(|value| ["client", "server"].contains(&value))
-        && row
-            .get("error")
-            .is_none_or(|value| value.is_null() || value.is_string())
-}
-
-// Read-only legacy request contract. Never used to launch a new benchmark.
-#[derive(Debug, Deserialize)]
-struct LegacyRequest {
-    run_id: String,
-    prompt_lengths: Vec<u32>,
-    generation_length: u32,
-    #[serde(default)]
-    batch_sizes: Vec<u32>,
-    repetitions: u32,
-    context_profile: String,
-    warmup: bool,
-}
-
-impl LegacyRequest {
-    fn validate(&self) -> Result<(), String> {
-        if self.run_id.is_empty() || self.run_id.len() > 128 {
-            return Err("benchmark run_id must contain 1 to 128 bytes".into());
-        }
-        if self.prompt_lengths.is_empty()
-            || self.prompt_lengths.len() > 16
-            || self
-                .prompt_lengths
-                .iter()
-                .any(|n| !(1..=200_000).contains(n))
-        {
-            return Err("select 1 to 16 prompt lengths between 1 and 200000 tokens".into());
-        }
-        if !(1..=4096).contains(&self.generation_length) || !(1..=10).contains(&self.repetitions) {
-            return Err("generation length must be 1 to 4096 and repetitions 1 to 10".into());
-        }
-        if self.batch_sizes.len() > 3 || self.batch_sizes.iter().any(|n| ![2, 4, 8].contains(n)) {
-            return Err("batch sizes must be selected from 2, 4 and 8".into());
-        }
-        if ![
-            "code_python",
-            "code_mixed",
-            "novel_ko",
-            "novel_en",
-            "novel_ja",
-        ]
-        .contains(&self.context_profile.as_str())
-        {
-            return Err("unknown benchmark context profile".into());
-        }
-        let _ = self.warmup;
-        Ok(())
-    }
-}
 
 fn valid_serving_row(value: &Value) -> bool {
     crate::performance_bench::PerformanceBenchRow::deserialize(value)
@@ -217,17 +121,21 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
     {
         return Err("benchmark record and request do not match".into());
     }
-    // Fixed-output rows must carry exact per-request evidence; historical cap
-    // rows never acquire it.
-    let fixed_output =
-        request.method.version == crate::performance_bench::FIXED_OUTPUT_METHOD_VERSION;
-    for row in rows {
-        let row = crate::performance_bench::PerformanceBenchRow::deserialize(row)
-            .map_err(|e| e.to_string())?;
-        if (fixed_output && !row.validate_fixed_output(request.max_output_tokens))
-            || (!fixed_output && row.reported_completion_tokens_by_request.is_some())
-        {
-            return Err("serving trial does not match its measurement method".into());
+    let mut input_hashes = HashSet::new();
+    for value in rows {
+        let hashes = value["input_sha256_by_request"]
+            .as_array().ok_or("cold prompt trial is missing request input hashes")?;
+        if hashes.len() != value["concurrency"].as_u64().unwrap() as usize {
+            return Err("cold prompt input hashes do not match the request slots".into());
+        }
+        for hash in hashes {
+            let hash = hash.as_str().ok_or("invalid cold prompt input hash")?;
+            if hash.len() != 64
+                || !hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || !input_hashes.insert(hash)
+            {
+                return Err("cold prompt request input hashes must be valid and globally unique".into());
+            }
         }
     }
     let mut points = HashSet::new();
@@ -261,9 +169,23 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
             || workload.max_output_tokens != request.max_output_tokens
             || workload.repetitions != request.repetitions
             || workload.warmup != request.warmup
-            || workload.request_usage != request.request_usage
+            // Usage may be frozen off after the first batch negotiates it.
+            || (workload.request_usage && !request.request_usage)
         {
             return Err("serving provenance does not match the requested workload".into());
+        }
+        let first_concurrency = request.concurrencies[0];
+        for row in rows {
+            if row["concurrency"].as_u64() == Some(u64::from(first_concurrency))
+                && row["repetition"].as_u64() == Some(1)
+            {
+                let input = workload.inputs.iter().find(|input| {
+                    row["input_bytes"].as_u64() == Some(u64::from(input.bytes))
+                }).ok_or("cold prompt trial has no input descriptor")?;
+                if row["input_sha256_by_request"][0].as_str() != Some(input.sha256.as_str()) {
+                    return Err("cold prompt input descriptor does not match the first request".into());
+                }
+            }
         }
         if provenance.execution.memory_scope
             == crate::providers::protocol::ServingMemoryScope::Unavailable
@@ -323,90 +245,10 @@ fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, AppError> {
 }
 
 fn validate_record(record: &Value) -> Result<(), String> {
-    if record.get("schemaVersion").and_then(Value::as_u64) == Some(2) {
-        return validate_serving_record(record);
+    if record.get("schemaVersion").and_then(Value::as_u64) != Some(3) {
+        return Err("unsupported benchmark record".into());
     }
-    let id = record
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("benchmark record is missing its id")?;
-    if id.is_empty()
-        || id.len() > 128
-        || record.get("schemaVersion").and_then(Value::as_u64) != Some(1)
-        || !record
-            .get("createdAt")
-            .and_then(Value::as_u64)
-            .is_some_and(|value| value <= 8_640_000_000_000_000)
-        || ["model", "backend", "build"]
-            .iter()
-            .any(|name| !record.get(*name).is_some_and(Value::is_string))
-    {
-        return Err("invalid benchmark record envelope".into());
-    }
-    let request = LegacyRequest::deserialize(
-        record
-            .get("request")
-            .ok_or("benchmark request is missing")?,
-    )
-    .map_err(|error| error.to_string())?;
-    request.validate()?;
-    if let Some(value) = record.pointer("/result/provenance") {
-        let provenance = super::provenance::BenchmarkProvenance::deserialize(value)
-            .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
-        provenance.validate(&request.context_profile)?;
-    }
-    for name in ["runtime_variant", "runtime_plugin_version"] {
-        if record
-            .get("result")
-            .and_then(|result| result.get(name))
-            .is_some_and(|value| {
-                !value.is_null()
-                    && !value.as_str().is_some_and(|text| {
-                        !text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control)
-                    })
-            })
-        {
-            return Err(format!("invalid benchmark {name}"));
-        }
-    }
-    if request.run_id != id
-        || record.pointer("/result/run_id").and_then(Value::as_str) != Some(id)
-        || !record
-            .pointer("/result/rows")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| rows.len() <= 640 && rows.iter().all(valid_row))
-        || !record
-            .pointer("/result/args")
-            .and_then(Value::as_array)
-            .is_some_and(|args| args.iter().all(Value::is_string))
-        || !record
-            .pointer("/result/runtime_version")
-            .is_some_and(Value::is_string)
-        || ["context_size", "parallel"].iter().any(|name| {
-            record
-                .get("result")
-                .and_then(|result| result.get(*name))
-                .and_then(Value::as_u64)
-                .is_none()
-        })
-        || record
-            .pointer("/result/message")
-            .is_some_and(|value| !value.is_null() && !value.is_string())
-        || !record
-            .pointer("/result/status")
-            .and_then(Value::as_str)
-            .is_some_and(|status| ["complete", "partial", "failed", "cancelled"].contains(&status))
-    {
-        return Err("benchmark record and request do not match".into());
-    }
-    if serde_json::to_vec(record)
-        .map_err(|error| error.to_string())?
-        .len()
-        > MAX_RECORD_BYTES
-    {
-        return Err("benchmark record exceeds the storage size limit".into());
-    }
-    Ok(())
+    validate_serving_record(record)
 }
 
 fn record_digest(record: &Value) -> String {
@@ -428,68 +270,12 @@ fn existing_digests(root: &Path) -> Result<HashSet<String>, AppError> {
         .collect())
 }
 
-// Constructors stay inside this module so a path decision requires evidence
-// that the exact immutable record passed the complete validator.
-// Revisit this proof if validation gains external freshness checks or other
-// non-pure dependencies.
-mod validated {
-    use super::{validate_record, Value};
-
-    pub(super) struct Record(Value);
-    pub(super) struct RecordRef<'a>(&'a Value);
-
-    pub(super) fn batch(records: Vec<Value>) -> Result<impl Iterator<Item = Record>, String> {
-        if records.len() > 100 {
-            return Err("import at most 100 benchmark records at a time".into());
-        }
-        // This is eager: every supplied record is checked before returning
-        // the owning iterator, including duplicates and tombstoned ids.
-        for record in &records {
-            validate_record(record)?;
-        }
-        Ok(records.into_iter().map(Record))
-    }
-
-    impl Record {
-        pub(super) fn view(&self) -> RecordRef<'_> {
-            RecordRef(&self.0)
-        }
-
-        pub(super) fn into_value(self) -> Value {
-            self.0
-        }
-    }
-
-    impl<'a> RecordRef<'a> {
-        pub(super) fn check(record: &'a Value) -> Result<Self, String> {
-            validate_record(record)?;
-            Ok(Self(record))
-        }
-
-        pub(super) fn value(self) -> &'a Value {
-            self.0
-        }
-    }
-}
-
 fn path_for(
     root: &Path,
     record: &Value,
     existing: &HashSet<String>,
 ) -> Result<Option<PathBuf>, AppError> {
-    path_for_validated(
-        root,
-        validated::RecordRef::check(record).map_err(AppError::validation)?,
-        existing,
-    )
-}
-
-fn path_for_validated(
-    root: &Path,
-    record: validated::RecordRef<'_>,
-    existing: &HashSet<String>,
-) -> Result<Option<PathBuf>, AppError> {
-    let record = record.value();
+    validate_record(record).map_err(AppError::validation)?;
     let digest = record_digest(record);
     let id = record["id"].as_str().expect("validated id");
     if existing.contains(&digest)
@@ -657,7 +443,36 @@ fn replay(path: &Path) -> Result<Value, String> {
     Ok(replay_run(path)?.record)
 }
 
+/// Inspect only the start line: unsupported journals remain untouched and are
+/// excluded before pagination without decoding historical rows or provenance.
+fn supported_journal(path: &Path) -> Result<bool, AppError> {
+    let file = File::open(path).map_err(|error| AppError::from_io(&error))?;
+    let mut line = Vec::new();
+    BufReader::new(file)
+        .take(MAX_JOURNAL_BYTES + 1)
+        .read_until(b'\n', &mut line)
+        .map_err(|error| AppError::from_io(&error))?;
+    if !line.ends_with(b"\n") || line.len() as u64 > MAX_JOURNAL_BYTES {
+        return Err(AppError::validation("benchmark journal has no complete start event"));
+    }
+    let start: Value = serde_json::from_slice(&line).map_err(|error| {
+        AppError::validation(format!("benchmark journal contains a corrupt event: {error}"))
+    })?;
+    if start["kind"] != "start" {
+        return Err(AppError::validation("benchmark journal has no complete start event"));
+    }
+    Ok(start.pointer("/record/schemaVersion").and_then(Value::as_u64) == Some(3))
+}
+
+fn require_supported_journal(path: &Path) -> Result<(), AppError> {
+    if !supported_journal(path)? {
+        return Err(AppError::validation("unsupported benchmark record"));
+    }
+    Ok(())
+}
+
 fn replay_run(path: &Path) -> Result<ReplayedRun, AppError> {
+    require_supported_journal(path)?;
     let mut bytes = Vec::new();
     File::open(path)
         .map_err(|error| AppError::from_io(&error))?
@@ -699,16 +514,7 @@ fn replay_run(path: &Path) -> Result<ReplayedRun, AppError> {
             }
             Entry::Trial { row } => {
                 finished = false;
-                let serving = record
-                    .as_ref()
-                    .and_then(|r| r.get("schemaVersion"))
-                    .and_then(Value::as_u64)
-                    == Some(2);
-                if !(if serving {
-                    valid_serving_row(&row)
-                } else {
-                    valid_row(&row)
-                }) {
+                if !valid_serving_row(&row) {
                     return Err(AppError::validation(
                         "benchmark journal contains an invalid trial",
                     ));
@@ -783,6 +589,7 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
                 !RunLock::journal_digest(path)
                     .is_ok_and(|digest| active_digests.contains(digest) || deleted.contains(digest))
             })
+            .filter(|path| !matches!(supported_journal(path), Ok(false)))
             .collect::<Vec<_>>()
     };
     let total = paths.len();
@@ -823,289 +630,25 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
     })
 }
 
-pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, AppError> {
-    let records = validated::batch(records).map_err(AppError::validation)?;
-    let _lock = StoreLock::acquire(root)?;
-    let mut imported = 0;
-    let mut existing = existing_digests(root)?;
-    for record in records {
-        let Some(path) = path_for_validated(root, record.view(), &existing)? else {
-            continue;
-        };
-        let record = record.into_value();
-        let digest = record_digest(&record);
-        record["result"]
-            .as_object()
-            .ok_or("benchmark result is missing")?;
-        let start = Entry::Start {
-            record,
-            origin: Some(JournalOrigin::Legacy),
-        };
-        let mut bytes = encoded(&start)?;
-        let Entry::Start { mut record, .. } = start else {
-            unreachable!("import encoded a start event");
-        };
-        let mut result = record
-            .get_mut("result")
-            .expect("checked benchmark result")
-            .take();
-        drop(record);
-        result
-            .as_object_mut()
-            .expect("checked benchmark result")
-            .remove("rows");
-        bytes.extend(encoded(&Entry::Finish { result })?);
-        crate::config::atomic_write(&path, &bytes)?;
-        sync_parent(&path)?;
-        existing.insert(digest);
-        imported += 1;
-    }
-    Ok(imported)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::performance_bench::PerformanceBenchRow;
-    #[test]
-    fn import_batch_boundaries_keep_preflight_errors_and_empty_scan_effects() {
-        let parent = root();
-        let capped = parent.join("capped");
-        assert_eq!(
-            import(&capped, vec![Value::Null; 101]).unwrap_err(),
-            AppError::validation("import at most 100 benchmark records at a time")
-        );
-        assert!(!capped.exists());
-
-        let rejected = parent.join("first-error");
-        let mut invalid = record("first-error", 1);
-        invalid["request"]["generation_length"] = json!(0);
-        assert_eq!(
-            import(&rejected, vec![invalid, Value::Null]).unwrap_err(),
-            AppError::validation("generation length must be 1 to 4096 and repetitions 1 to 10")
-        );
-        assert!(!rejected.exists());
-
-        let maximum = parent.join("maximum");
-        let records = (0..100u64)
-            .map(|index| record(&format!("maximum-{index}"), index))
-            .collect();
-        assert_eq!(import(&maximum, records).unwrap(), 100);
-        let page = list(&maximum, 0, 100).unwrap();
-        assert_eq!(page.total, 100);
-        assert_eq!(page.records.len(), 100);
-        assert_eq!(page.next_offset, None);
-        assert!(page.warnings.is_empty());
-
-        let empty = parent.join("empty");
-        assert_eq!(import(&empty, vec![]).unwrap(), 0);
-        assert!(empty.join(".store.lock").is_file());
-        assert!(!empty.join("runs").exists());
-        let blocker = empty.join("runs");
-        fs::write(&blocker, b"preserved scan blocker").unwrap();
-        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
-        assert_eq!(
-            import(&empty, vec![]).unwrap_err(),
-            AppError::internal(format!("cannot read benchmark history: {io_error}"))
-        );
-        assert_eq!(fs::read(&blocker).unwrap(), b"preserved scan blocker");
-        // Remove only files this test requested; unexpected residue must survive.
-        for index in 0..100u64 {
-            let digest = record_digest(&record(&format!("maximum-{index}"), index));
-            fs::remove_file(maximum.join("runs").join(format!("{index:016}-{digest}"))).unwrap();
-            fs::remove_file(
-                maximum
-                    .join("run-locks")
-                    .join(format!("{}.lock", digest.strip_suffix(".jsonl").unwrap())),
-            )
-            .unwrap();
-        }
-        fs::remove_dir(maximum.join("runs")).unwrap();
-        fs::remove_dir(maximum.join("run-locks")).unwrap();
-        fs::remove_file(maximum.join(".store.lock")).unwrap();
-        fs::remove_dir(maximum).unwrap();
-        fs::remove_file(blocker).unwrap();
-        fs::remove_file(empty.join(".store.lock")).unwrap();
-        fs::remove_dir(empty).unwrap();
-        fs::remove_dir(parent).unwrap();
-    }
-
-    #[test]
-    fn import_enforces_exact_record_size_and_preserves_unknown_padding() {
-        let parent = root();
-        let destination = parent.join("size-boundary");
-        let mut input = record("size-boundary", 7);
-        input["unknown-padding"] = json!("");
-        let overhead = serde_json::to_vec(&input).unwrap().len();
-        assert!(overhead < MAX_RECORD_BYTES);
-        input["unknown-padding"] = json!("x".repeat(MAX_RECORD_BYTES - overhead));
-        let original = serde_json::to_vec(&input).unwrap();
-        assert_eq!(original.len(), MAX_RECORD_BYTES);
-
-        let mut oversized = input.clone();
-        oversized["unknown-padding"] =
-            json!(format!("{}x", input["unknown-padding"].as_str().unwrap()));
-        assert_eq!(
-            serde_json::to_vec(&oversized).unwrap().len(),
-            MAX_RECORD_BYTES + 1
-        );
-        assert_eq!(
-            import(&destination, vec![oversized.clone()]).unwrap_err(),
-            AppError::validation("benchmark record exceeds the storage size limit")
-        );
-        assert!(!destination.exists());
-
-        assert_eq!(import(&destination, vec![input.clone()]).unwrap(), 1);
-        let journal = destination
-            .join("runs")
-            .join(format!("{:016}-{}", 7, record_digest(&input)));
-        let bytes = fs::read(&journal).unwrap();
-        let first_line = bytes.split(|byte| *byte == b'\n').next().unwrap();
-        let start: Value = serde_json::from_slice(first_line).unwrap();
-        assert_eq!(start["kind"], "start");
-        assert_eq!(start["origin"], "legacy");
-        assert_eq!(serde_json::to_vec(&start["record"]).unwrap(), original);
-        let page = list(&destination, 0, 100).unwrap();
-        assert_eq!(page.total, 1);
-        assert_eq!(page.records.len(), 1);
-        assert_eq!(page.next_offset, None);
-        assert!(page.warnings.is_empty());
-        // A new imported record has display state but no accepted receipt.
-        let mut displayed = input.clone();
-        displayed["localState"] = json!("recovery");
-        assert_eq!(page.records, vec![displayed]);
-
-        assert_eq!(
-            import(&destination, vec![oversized]).unwrap_err(),
-            AppError::validation("benchmark record exceeds the storage size limit")
-        );
-        assert_eq!(fs::read(&journal).unwrap(), bytes);
-        fs::remove_file(journal).unwrap();
-        fs::remove_dir(destination.join("runs")).unwrap();
-        fs::remove_file(
-            destination
-                .join("run-locks")
-                .join(format!("{:x}.lock", Sha256::digest(b"size-boundary"))),
-        )
-        .unwrap();
-        fs::remove_dir(destination.join("run-locks")).unwrap();
-        fs::remove_file(destination.join(".store.lock")).unwrap();
-        fs::remove_dir(destination).unwrap();
-        fs::remove_dir(parent).unwrap();
-    }
-
-    #[test]
-    fn native_scan_order_and_both_replay_validation_gates_remain_independent() {
-        let parent = root();
-        let native = parent.join("native");
-        fs::create_dir(&native).unwrap();
-        let blocker = native.join("runs");
-        fs::write(&blocker, b"native scan blocker").unwrap();
-        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
-        let mut invalid = record("native-invalid", 1);
-        invalid["request"]["generation_length"] = json!(0);
-        let native_error = match RunJournal::begin(&native, invalid) {
-            Err(error) => error,
-            Ok(journal) => {
-                drop(journal);
-                panic!("invalid native input was accepted");
-            }
-        };
-        assert_eq!(
-            native_error,
-            AppError::internal(format!("cannot read benchmark history: {io_error}"))
-        );
-        assert!(native.join(".store.lock").is_file());
-        assert_eq!(fs::read(&blocker).unwrap(), b"native scan blocker");
-
-        let replay_root = parent.join("replay");
-        let runs = replay_root.join("runs");
-        fs::create_dir_all(&runs).unwrap();
-        let good = record("invalid-start", 11);
-        let mut bad_start = good.clone();
-        bad_start["result"]["parallel"] = json!("invalid");
-        let mut first_bytes = encoded(&Entry::Start {
-            record: bad_start,
-            origin: Some(JournalOrigin::Legacy),
-        })
-        .unwrap();
-        // This valid Finish would repair parallel if Start validation were removed.
-        first_bytes.extend(
-            encoded(&Entry::Finish {
-                result: good["result"].clone(),
-            })
-            .unwrap(),
-        );
-        let first_path = runs.join(format!("{:016}-{}", 11, record_digest(&good)));
-        fs::write(&first_path, &first_bytes).unwrap();
-
-        let second = record("invalid-finish", 12);
-        let mut bad_finish = second["result"].clone();
-        bad_finish["parallel"] = json!("invalid");
-        let mut second_bytes = encoded(&Entry::Start {
-            record: second.clone(),
-            origin: Some(JournalOrigin::Legacy),
-        })
-        .unwrap();
-        second_bytes.extend(encoded(&Entry::Finish { result: bad_finish }).unwrap());
-        let second_path = runs.join(format!("{:016}-{}", 12, record_digest(&second)));
-        fs::write(&second_path, &second_bytes).unwrap();
-
-        let page = list(&replay_root, 0, 100).unwrap();
-        assert_eq!(page.total, 2);
-        assert!(page.records.is_empty());
-        assert_eq!(page.next_offset, None);
-        let warning = "a benchmark record could not be read and was preserved: benchmark record and request do not match";
-        assert_eq!(page.warnings, vec![warning.to_owned(), warning.to_owned()]);
-        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
-        assert_eq!(fs::read(&second_path).unwrap(), second_bytes);
-        fs::remove_file(blocker).unwrap();
-        fs::remove_file(native.join(".store.lock")).unwrap();
-        fs::remove_dir(native).unwrap();
-        fs::remove_file(first_path).unwrap();
-        fs::remove_file(second_path).unwrap();
-        fs::remove_dir(runs).unwrap();
-        for id in ["invalid-start", "invalid-finish"] {
-            fs::remove_file(
-                replay_root
-                    .join("run-locks")
-                    .join(format!("{:x}.lock", Sha256::digest(id.as_bytes()))),
-            )
-            .unwrap();
-        }
-        fs::remove_dir(replay_root.join("run-locks")).unwrap();
-        fs::remove_file(replay_root.join(".store.lock")).unwrap();
-        fs::remove_dir(replay_root).unwrap();
-        fs::remove_dir(parent).unwrap();
-    }
-
     pub(super) fn root() -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("aiolm-benchmark-store-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
     }
-    pub(super) fn record(id: &str, created: u64) -> Value {
-        json!({ "schemaVersion": 1, "id": id, "createdAt": created, "model": "synthetic.gguf", "backend": "cpu", "build": "synthetic",
-            "request": { "run_id": id, "prompt_lengths": [16], "generation_length": 8, "batch_sizes": [], "repetitions": 1, "context_profile": "novel_en", "warmup": false },
-            "result": { "run_id": id, "rows": [], "status": "complete", "message": null, "args": [], "runtime_version": "synthetic", "context_size": 256, "parallel": 1 } })
-    }
-    pub(super) fn row() -> Value {
-        json!({"id":"synthetic-trial", "prompt_tokens":16, "generation_length":8,
-            "concurrency":1,"repetition":1,"completion_tokens":8,"cached_tokens":0,
-            "ttft_ms":1.0,"tpot_ms":1.0,"pp_tps":100.0,"tg_tps":10.0,
-            "e2e_ms":8.0,"total_tps":1.0,"peak_memory_bytes":null,
-            "timing_source":"client","error":null})
-    }
-
     pub(super) fn serving_row() -> PerformanceBenchRow {
         serde_json::from_value(json!({"id":"synthetic-trial", "input_bytes":256,
-            "max_output_tokens":1024,"concurrency":1,"repetition":1,
-            "first_output_ms":1.0,"first_content_ms":1.0,"first_reasoning_ms":null,
-            "e2e_ms":8.0,"content_bytes":2,"reasoning_bytes":0,"output_bytes":2,
-            "reported_prompt_tokens":null,"reported_completion_tokens":1024,
-            "reported_completion_tokens_by_request":[1024],"reported_cached_tokens":null,
-            "usage_status":"partial","finish_reasons":["length"],"peak_memory_bytes":null,
+            "max_output_tokens":128,"concurrency":1,"repetition":1,
+            "input_sha256_by_request":["a".repeat(64)],
+            "first_output_ms":1.0,"e2e_ms":8.0,"output_bytes":2,
+            "reported_prompt_tokens":null,"reported_completion_tokens":null,
+            "prefill_tokens_per_second":null,"decode_tokens_per_second":null,"tpot_ms":null,
+            "usage_status":"missing","finish_reasons":["stop"],"peak_memory_bytes":null,
             "timing_source":"client","failed":false,"error":null}))
         .unwrap()
     }
@@ -1114,16 +657,25 @@ mod tests {
         let cfg = crate::config::AppConfig::default();
         let request = PerformanceBenchRequest {
             run_id: id.into(),
-            method: Default::default(),
+            method: crate::performance_bench::ServingMethod {
+                id: "openai-chat-serving".into(),
+                version: crate::performance_bench::METHOD_VERSION,
+            },
             context_profile: "novel_en".into(),
             prompt_bytes: vec![256],
-            max_output_tokens: 1024,
+            max_output_tokens: 128,
             concurrencies: vec![1],
             repetitions: 1,
             warmup: false,
             request_usage: true,
         };
-        let (workload, _) = crate::performance_bench::prepare_inputs(&request);
+        let workload = serde_json::from_value(json!({
+            "corpus":"novel_en","corpus_version":2,
+            "inputs":[{"bytes":256,"sha256":"a".repeat(64)}],
+            "max_output_tokens":128,"concurrencies":[1],"repetitions":1,
+            "warmup":false,"request_usage":true,"cache_policy":"cold_prompt",
+            "prompt_nonce":"0123456789abcdef0123456789abcdef"
+        })).unwrap();
         let model = serde_json::from_value(
             json!({"status":"unidentified","sha256":null,"size_bytes":null}),
         )
@@ -1142,241 +694,23 @@ mod tests {
             workload,
             None,
             "Synthetic model".into(),
-            crate::providers::protocol::FixedOutputControl::IgnoreEos,
         ));
         result
     }
 
     pub(super) fn serving_record(id: &str, created: u64) -> Value {
-        json!({"schemaVersion":2,"id":id,"createdAt":created,"model":"synthetic.model",
-            "request":{"run_id":id,"method":{"id":"openai-chat-serving","version":2},
-                "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":1024,
+        json!({"schemaVersion":3,"id":id,"createdAt":created,"model":"synthetic.model",
+            "request":{"run_id":id,"method":{"id":"openai-chat-serving","version":5},
+                "context_profile":"novel_en","prompt_bytes":[256],"max_output_tokens":128,
                 "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":true},
             "result":serving_result(id)})
     }
 
-    /// A record written by the historical cap method (`@1`) before fixed output.
-    pub(super) fn cap_serving_record(id: &str, created: u64) -> Value {
-        let mut record = serving_record(id, created);
-        record["request"]["method"]["version"] = json!(1);
-        record["request"]["max_output_tokens"] = json!(128);
-        record["request"]["request_usage"] = json!(false);
-        let provenance = &mut record["result"]["provenance"];
-        provenance["method"]["version"] = json!(1);
-        provenance["workload"]["max_output_tokens"] = json!(128);
-        provenance["workload"]["request_usage"] = json!(false);
-        provenance["execution"]["settings"] = json!(
-            super::super::provenance::common_request_settings(128, false, None)
-        );
-        let mut row = serving_row();
-        row.max_output_tokens = 128;
-        row.reported_completion_tokens = None;
-        row.reported_completion_tokens_by_request = None;
-        row.usage_status = "missing".into();
-        row.finish_reasons = vec!["stop".into()];
-        record["result"]["rows"] = json!([row]);
-        record["result"]["status"] = json!("complete");
-        record["result"]["message"] = Value::Null;
-        record
-    }
-
-    #[test]
-    fn serving_maximum_grid_replays_after_finish() {
-        struct Directory(PathBuf);
-        impl Drop for Directory {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
-            }
-        }
-        let root = root();
-        let _directory = Directory(root.clone());
-        let mut initial = serving_record("maximum-serving-grid", 1);
-        initial["request"]["prompt_bytes"] = json!((256..320).collect::<Vec<_>>());
-        initial["request"]["concurrencies"] = json!([64]);
-        initial["request"]["repetitions"] = json!(100);
-        initial["request"]["max_output_tokens"] = json!(204_800);
-        let mut result = serving_result("maximum-serving-grid");
-        let provenance = result.provenance.as_mut().unwrap();
-        provenance.workload.inputs = (256..320)
-            .map(|bytes| crate::benchmark::provenance::ServingInput {
-                bytes,
-                sha256: "a".repeat(64),
-            })
-            .collect();
-        provenance.workload.concurrencies = vec![64];
-        provenance.workload.repetitions = 100;
-        provenance.workload.max_output_tokens = 204_800;
-        provenance.execution.settings = super::super::provenance::common_request_settings(
-            204_800,
-            true,
-            Some(crate::providers::protocol::FixedOutputControl::IgnoreEos),
-        );
-        initial["result"] = serde_json::to_value(&result).unwrap();
-        let journal = RunJournal::begin(&root, initial).unwrap();
-        for input in 256..320 {
-            for repetition in 1..=100 {
-                let mut row = serving_row();
-                row.id = format!("b{input}-c64-r{repetition}");
-                row.input_bytes = input;
-                row.concurrency = 64;
-                row.repetition = repetition;
-                row.content_bytes = 128;
-                row.output_bytes = 128;
-                row.finish_reasons = vec!["not_reported".into(); 64];
-                row.reported_completion_tokens = Some(204_800 * 64);
-                row.reported_completion_tokens_by_request = Some(vec![204_800; 64]);
-                row.max_output_tokens = 204_800;
-                result.rows.push(row);
-            }
-        }
-        result.status = "complete";
-        result.message = None;
-        journal.finish(&result).unwrap();
-        let path = journal.path.clone();
-        drop(journal);
-        let restored = replay(&path).unwrap();
-        assert_eq!(restored["result"]["status"], "complete");
-        assert_eq!(
-            restored["result"]["rows"],
-            serde_json::to_value(&result.rows).unwrap()
-        );
-    }
-    #[test]
-    fn import_validates_a_later_duplicate_before_creating_the_store() {
-        let parent = root();
-        let destination = parent.join("absent-import");
-        let first = record("same-id", 1);
-        let mut invalid = record("same-id", 2);
-        invalid["request"]["generation_length"] = json!(0);
-        assert_eq!(
-            import(&destination, vec![first, invalid]).unwrap_err(),
-            AppError::validation("generation length must be 1 to 4096 and repetitions 1 to 10")
-        );
-        assert!(!destination.exists());
-        fs::remove_dir(parent).unwrap();
-    }
-
-    #[test]
-    fn import_keeps_original_request_and_provenance_representations() {
-        let root = root();
-        let mut input = record("original-values", 7);
-        input["request"]["prompt_lengths"] = json!([32, 16, 16]);
-        input["request"]["batch_sizes"] = json!([8, 2, 2]);
-        input["request"]["extension"] = serde_json::from_str::<Value>(
-            r#"{"integer":18446744073709551615,"float":1.0,"zero":-0.0,"nested":["한글",null]}"#,
-        )
-        .unwrap();
-        input["result"]["provenance"] = json!({
-            "schema_version": 1, "app_version": "synthetic",
-            "method": {"id": "cold-prompt-serving", "version": 1},
-            "corpus": {"profile": "novel_en", "version": 1, "sha256": "a".repeat(64)},
-            "model": {"status": "unidentified", "format": "gguf",
-                "metadata": {"format": "GGUF", "name": "Synthetic", "base_models": [], "source": "gguf"}},
-            "environment": {"os": "synthetic", "arch": "synthetic",
-                "cpu": {"name": "synthetic", "logical_cores": 1},
-                "installed_gpus": [], "execution": {"mode": "cpu", "selected_gpus": [],
-                    "devices": [], "selection_complete": true}, "detection": "synthetic"},
-            "execution_config": {"threads": -1, "tensor_split": [1.0, -0.0]},
-            "extension": input["request"]["extension"].clone()
-        });
-        let original_bytes = serde_json::to_vec(&input).unwrap();
-        let request_bytes = serde_json::to_vec(&input["request"]).unwrap();
-        let provenance_bytes = serde_json::to_vec(&input["result"]["provenance"]).unwrap();
-        // The journal keeps the supplied values, including unknown fields and Number kinds.
-        let mut result = input["result"].clone();
-        result.as_object_mut().unwrap().remove("rows");
-        let mut expected = encoded(&Entry::Start {
-            record: input.clone(),
-            origin: Some(JournalOrigin::Legacy),
-        })
-        .unwrap();
-        expected.extend(encoded(&Entry::Finish { result }).unwrap());
-        assert_eq!(import(&root, vec![input.clone(), input]).unwrap(), 1);
-        let path = files(&root).unwrap().remove(0);
-        assert_eq!(fs::read(&path).unwrap(), expected);
-        assert_eq!(
-            serde_json::to_vec(&replay_run(&path).unwrap().record).unwrap(),
-            original_bytes
-        );
-        let page = list(&root, 0, 10).unwrap();
-        assert!(page.warnings.is_empty());
-        assert_eq!(page.records.len(), 1);
-        assert_eq!(
-            serde_json::to_vec(&page.records[0]["request"]).unwrap(),
-            request_bytes
-        );
-        assert_eq!(
-            serde_json::to_vec(&page.records[0]["result"]["provenance"]).unwrap(),
-            provenance_bytes
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn duplicates_and_tombstones_do_not_hide_deserialization_errors_or_native_validation() {
-        let root = root();
-        let valid = record("retained-id", 1);
-        assert_eq!(import(&root, vec![valid.clone()]).unwrap(), 1);
-        let path = files(&root).unwrap().remove(0);
-        let bytes = fs::read(&path).unwrap();
-        let mut malformed = valid.clone();
-        // A floating point JSON Number must not silently become a typed u32.
-        malformed["request"]["generation_length"] = json!(8.0);
-        let expected = serde_json::from_value::<LegacyRequest>(malformed["request"].clone())
-            .unwrap_err()
-            .to_string();
-        let mut malformed_provenance = valid.clone();
-        malformed_provenance["result"]["provenance"] = json!({});
-        let expected_provenance = format!(
-            "invalid benchmark provenance: {}",
-            serde_json::from_value::<super::super::provenance::BenchmarkProvenance>(json!({}))
-                .unwrap_err()
-        );
-        assert_eq!(
-            import(&root, vec![malformed.clone()]).unwrap_err(),
-            AppError::validation(expected.clone())
-        );
-        assert_eq!(
-            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
-            AppError::validation(expected_provenance.clone())
-        );
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        delete(&root, "retained-id").unwrap();
-        assert_eq!(import(&root, vec![valid]).unwrap(), 0);
-        assert_eq!(
-            import(&root, vec![malformed.clone()]).unwrap_err(),
-            AppError::validation(expected.clone())
-        );
-        assert_eq!(
-            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
-            AppError::validation(expected_provenance.clone())
-        );
-        assert!(files(&root).unwrap().is_empty());
-        // Fresh ids make native validation independent of duplicate/tombstone rejection.
-        for (mut input, expected) in [
-            (malformed, expected),
-            (malformed_provenance, expected_provenance),
-        ] {
-            input["id"] = json!("standalone-native");
-            input["request"]["run_id"] = json!("standalone-native");
-            input["result"]["run_id"] = json!("standalone-native");
-            let native_error = match RunJournal::begin(&root, input) {
-                Ok(journal) => {
-                    drop(journal);
-                    panic!("invalid native input was accepted");
-                }
-                Err(error) => error,
-            };
-            assert_eq!(native_error, AppError::validation(expected));
-            assert!(files(&root).unwrap().is_empty());
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
 
     #[test]
     fn metadata_updates_preserve_unknown_values_and_persisted_rows() {
-        let mut stored = Some(record("metadata", 7));
-        let persisted_rows = json!([row()]);
+        let mut stored = Some(serving_record("metadata", 7));
+        let persisted_rows = json!([serving_row()]);
         stored.as_mut().unwrap()["result"]["rows"] = persisted_rows.clone();
         let extension = json!({"nested": [null, {"é": "漢字"}], "enabled": true});
         for (index, incoming_rows) in [
@@ -1418,7 +752,7 @@ mod tests {
             assert!(missing.is_none());
         }
         for incoming in [Value::Null, json!(false), json!("invalid"), json!([])] {
-            let mut stored = Some(record("metadata", 7));
+            let mut stored = Some(serving_record("metadata", 7));
             let before = stored.clone();
             assert_eq!(
                 update_result(&mut stored, incoming).unwrap_err(),
@@ -1429,141 +763,72 @@ mod tests {
     }
 
     #[test]
-    fn import_keeps_original_start_and_exact_finish_metadata_bytes() {
+    fn unsupported_journals_are_hidden_before_pagination_and_byte_identical() {
         let root = root();
-        for row_count in [0, 1, 640] {
-            for position in 0..3 {
-                let id = format!("import-metadata-{row_count}-{position}");
-                let mut original = record(&id, (row_count * 3 + position) as u64);
-                original["unknown-root"] =
-                    json!({"text": "e\u{301}😀", "integer": 9007199254740993u64});
-                let mut persisted_row = json!(row());
-                persisted_row["unknown-row"] = json!({"rows": [true, null], "unsigned": u64::MAX});
-                let persisted_rows: Vec<_> = (0..row_count)
-                    .map(|index| {
-                        let mut value = persisted_row.clone();
-                        value["id"] = json!(format!("trial-{index}"));
-                        value
-                    })
-                    .collect();
-                let mut fields = vec![
-                    ("a", json!({"rows": [null, {"한글": "漢字"}]})),
-                    ("run_id", json!(&id)),
-                    ("status", json!("complete")),
-                    ("message", Value::Null),
-                    ("args", json!([])),
-                    ("runtime_version", json!("synthetic")),
-                    ("context_size", json!(256)),
-                    ("parallel", json!(1)),
-                    (
-                        "z",
-                        json!({"min": i64::MIN, "max": u64::MAX, "large": 9007199254740993u64,
-                        "float": 1.0f64, "negative_zero": -0.0f64, "empty": {}, "nullable": null}),
-                    ),
-                ];
-                let at = [0, fields.len() / 2, fields.len()][position];
-                fields.insert(at, ("rows", json!(persisted_rows)));
-                original["result"] = Value::Object(
-                    fields
-                        .into_iter()
-                        .map(|(key, value)| (key.into(), value))
-                        .collect(),
-                );
-
-                // Reference the journal protocol: untouched Start, then clone/remove Finish.
-                // Removal on the actual Map retains both supported backend orderings.
-                let mut expected_result = original["result"].clone();
-                expected_result.as_object_mut().unwrap().remove("rows");
-                let mut expected = encoded(&Entry::Start {
-                    record: original.clone(),
-                    origin: Some(JournalOrigin::Legacy),
-                })
-                .unwrap();
-                expected.extend(
-                    encoded(&Entry::Finish {
-                        result: expected_result,
-                    })
-                    .unwrap(),
-                );
-
-                assert_eq!(import(&root, vec![original.clone()]).unwrap(), 1);
-                let path = path_for(&root, &original, &HashSet::new())
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(fs::read(&path).unwrap(), expected);
-                let page = list(&root, 0, 100).unwrap();
-                assert!(page.warnings.is_empty());
-                let stored = page.records.iter().find(|value| value["id"] == id).unwrap();
-                assert_eq!(
-                    serde_json::to_vec(&stored["result"]).unwrap(),
-                    serde_json::to_vec(&original["result"]).unwrap()
-                );
-                assert_eq!(stored["unknown-root"], original["unknown-root"]);
-                assert_eq!(import(&root, vec![original]).unwrap(), 0);
-                assert_eq!(fs::read(path).unwrap(), expected);
-            }
+        for index in 0..3 {
+            let id = format!("supported-{index}");
+            drop(RunJournal::begin(&root, serving_record(&id, index)).unwrap());
+        }
+        let runs = root.join("runs");
+        let mut unsupported = Vec::new();
+        for version in [1, 2] {
+            let mut old = serving_record(&format!("unsupported-{version}"), 100 + version);
+            old["schemaVersion"] = json!(version);
+            let path = runs.join(format!("{:016}-{}", 100 + version, record_digest(&old)));
+            let mut bytes = serde_json::to_vec(&json!({
+                "kind":"start","origin":"legacy","record":old
+            })).unwrap();
+            // The unread tail is intentionally not decodable by the new reader.
+            bytes.extend_from_slice(b"\nold unsupported event\n{\"torn\":");
+            fs::write(&path, &bytes).unwrap();
+            unsupported.push((path, bytes));
+        }
+        let first = list(&root, 0, 2).unwrap();
+        assert_eq!(first.total, 3);
+        assert_eq!(first.records.len(), 2);
+        assert_eq!(first.next_offset, Some(2));
+        assert_eq!(first.records[0]["id"], "supported-2");
+        assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+        let last = list(&root, 2, 2).unwrap();
+        assert_eq!(last.records.len(), 1);
+        assert_eq!(last.total, 3);
+        assert_eq!(last.next_offset, None);
+        assert!(last.warnings.is_empty());
+        for (path, bytes) in unsupported {
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(replay_run(&path).err().unwrap(),
+                AppError::validation("unsupported benchmark record"));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
         }
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn import_keeps_prior_journal_after_failure_and_retries_remaining_records() {
+    fn history_paginates_all_supported_runs_and_rejects_duplicate_ids() {
         let root = root();
-        let first = record("first", 7);
-        let second = record("second", 7);
-        let third = record("third", 7);
-        let path = |value: &Value| path_for(&root, value, &HashSet::new()).unwrap().unwrap();
-        let first_path = path(&first);
-        let second_path = path(&second);
-        let third_path = path(&third);
-        fs::create_dir_all(&second_path).unwrap();
-        let batch = vec![first, second, third];
-
-        assert!(import(&root, batch.clone()).is_err());
-        let first_bytes = fs::read(&first_path).unwrap();
-        assert!(second_path.is_dir());
-        assert!(!third_path.exists());
-        let page = list(&root, 0, 100).unwrap();
-        assert_eq!(page.total, 1);
-        assert_eq!(page.records[0]["id"], "first");
-        assert!(page.warnings.is_empty());
-
-        fs::remove_dir(&second_path).unwrap();
-        assert_eq!(import(&root, batch.clone()).unwrap(), 2);
-        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
-        assert!(second_path.is_file() && third_path.is_file());
-        assert_eq!(import(&root, batch).unwrap(), 0);
-        let page = list(&root, 0, 100).unwrap();
-        assert_eq!(page.total, 3);
-        assert_eq!(page.records.len(), 3);
-        assert!(page.warnings.is_empty());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn history_keeps_more_than_twenty_runs_and_import_preserves_native_ids() {
-        let root = root();
-        assert_eq!(list(&root, 0, 20).unwrap().total, 0);
-        let records: Vec<_> = (0..25)
-            .map(|index| record(&format!("synthetic-{index}"), index))
-            .collect();
-        assert_eq!(import(&root, records.clone()).unwrap(), 25);
-        assert_eq!(import(&root, records).unwrap(), 0);
-        let page = list(&root, 0, 20).unwrap();
-        assert_eq!(page.total, 25);
-        assert_eq!(page.next_offset, Some(20));
-        assert_eq!(page.records[0]["createdAt"], 24);
-        assert_eq!(list(&root, 20, 20).unwrap().records.len(), 5);
+        for index in 0..25 {
+            let id = format!("supported-{index}");
+            drop(RunJournal::begin(&root, serving_record(&id, index)).unwrap());
+            assert!(RunJournal::begin(&root, serving_record(&id, index + 100)).is_err());
+        }
+        let first = list(&root, 0, 20).unwrap();
+        assert_eq!(first.total, 25);
+        assert_eq!(first.records.len(), 20);
+        assert_eq!(first.records[0]["createdAt"], 24);
+        assert_eq!(first.next_offset, Some(20));
+        let last = list(&root, 20, 20).unwrap();
+        assert_eq!(last.records.len(), 5);
+        assert_eq!(last.next_offset, None);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn interrupted_run_recovers_complete_trials_and_ignores_torn_tail() {
         let root = root();
-        let journal = RunJournal::begin(&root, record("interrupted", 10)).unwrap();
+        let journal = RunJournal::begin(&root, serving_record("interrupted", 10)).unwrap();
         let path = files(&root).unwrap().remove(0);
         drop(journal);
         let mut file = OpenOptions::new().append(true).open(path).unwrap();
-        file.write_all(&encoded(&Entry::Trial { row: json!(row()) }).unwrap())
+        file.write_all(&encoded(&Entry::Trial { row: json!(serving_row()) }).unwrap())
             .unwrap();
         file.write_all(b"{\"kind\":\"finish\",\"result\":").unwrap();
         file.sync_all().unwrap();
@@ -1574,35 +839,6 @@ mod tests {
             page.records[0]["result"]["rows"].as_array().unwrap().len(),
             1
         );
-        fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn ids_cannot_escape_store_and_import_rejects_mismatched_records() {
-        let root = root();
-        import(&root, vec![record("../../synthetic", 0)]).unwrap();
-        assert_eq!(files(&root).unwrap().len(), 1);
-        let mut invalid = record("a", 0);
-        invalid["result"]["run_id"] = json!("b");
-        assert!(import(&root, vec![invalid]).is_err());
-        let mut invalid_provenance = record("invalid-provenance", 1);
-        invalid_provenance["result"]["provenance"] = json!({ "schema_version": 1 });
-        assert!(import(&root, vec![invalid_provenance.clone()]).is_err());
-        let path = root
-            .join("runs")
-            .join("0000000000000001-invalid-provenance.jsonl");
-        fs::write(
-            &path,
-            encoded(&Entry::Start {
-                record: invalid_provenance,
-                origin: None,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        let history = list(&root, 0, 20).unwrap();
-        assert_eq!(history.records.len(), 1);
-        assert_eq!(history.warnings.len(), 1);
-        assert!(path.exists());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1635,10 +871,54 @@ mod tests {
         assert_eq!(reopened.records[0]["result"]["status"], "complete");
         assert_eq!(
             reopened.records[0]["result"]["provenance"]["schema_version"],
-            2
+            3
         );
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn usage_downgrade_is_durable_before_any_trial_and_after_completion() {
+        let root = root();
+        let id = "usage-downgrade";
+        let initial = serving_record(id, 10);
+        let row = serving_row();
+        let mut result = serving_result(id);
+        let journal = RunJournal::begin(&root, initial).unwrap();
+
+        let provenance = result.provenance.as_mut().unwrap();
+        provenance.workload.request_usage = false;
+        provenance.execution.settings =
+            super::super::provenance::common_request_settings(128, false);
+        journal.checkpoint(&result).unwrap();
+        let prepared = replay(&journal.path).unwrap();
+        assert_eq!(prepared["request"]["request_usage"], true);
+        assert_eq!(prepared["result"]["provenance"]["workload"]["request_usage"], false);
+        assert_eq!(prepared["result"]["rows"], json!([]));
+        assert_eq!(
+            prepared["result"]["provenance"]["execution"]["settings"],
+            json!(super::super::provenance::common_request_settings(128, false))
+        );
+
+        result.rows.push(row);
+        journal.checkpoint(&result).unwrap();
+        let measured = replay(&journal.path).unwrap();
+        assert_eq!(measured["request"]["request_usage"], true);
+        assert_eq!(measured["result"]["provenance"]["workload"]["request_usage"], false);
+        assert_eq!(measured["result"]["rows"].as_array().unwrap().len(), 1);
+        result.status = "complete";
+        result.message = None;
+        journal.finish(&result).unwrap();
+        drop(journal);
+        let reopened = list(&root, 0, 20).unwrap();
+        assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
+        assert_eq!(reopened.total, 1);
+        assert_eq!(reopened.records[0]["request"]["request_usage"], true);
+        assert_eq!(
+            reopened.records[0]["result"]["provenance"]["workload"]["request_usage"],
+            false
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn serving_identity_and_formats_survive_interrupted_and_finished_history() {
         use crate::providers::artifacts::ArtifactFormat;
@@ -1694,27 +974,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn history_accepts_legacy_identity_and_rejects_malformed_plugin_labels() {
-        let legacy = record("synthetic-metal-labels", 10);
-        assert!(validate_record(&legacy).is_ok());
-        let mut metal = legacy.clone();
-        metal["result"]["runtime_variant"] = json!("vllm-metal");
-        metal["result"]["runtime_plugin_version"] = json!("0.30.0");
-        assert!(validate_record(&metal).is_ok());
-        for bad in [
-            json!(7),
-            json!(""),
-            json!("0.30.0\nspoofed"),
-            json!("x".repeat(257)),
-        ] {
-            for field in ["runtime_variant", "runtime_plugin_version"] {
-                let mut malformed = metal.clone();
-                malformed["result"][field] = bad.clone();
-                assert!(validate_record(&malformed).is_err(), "{field}: {bad}");
-            }
-        }
-    }
-    #[test]
     fn write_failures_are_reported_without_losing_prior_measurements() {
         let root = root();
         let initial = serving_record("failed-write", 10);
@@ -1740,7 +999,7 @@ mod tests {
     #[test]
     fn corrupt_record_does_not_hide_other_history_and_is_preserved() {
         let root = root();
-        import(&root, vec![record("good", 1)]).unwrap();
+        drop(RunJournal::begin(&root, serving_record("good", 1)).unwrap());
         let corrupt = root.join("runs").join("0000000000000002-corrupt.jsonl");
         fs::write(&corrupt, b"corrupt\n").unwrap();
         let history = list(&root, 0, 20).unwrap();
@@ -1757,7 +1016,7 @@ mod serving_validation_tests {
     use super::*;
 
     #[test]
-    fn local_two_rejects_invalid_usage_empty_channel_timings_and_non_grid_trials() {
+    fn current_rows_reject_invalid_usage_rates_and_non_grid_trials() {
         let mut complete = tests::serving_record("validated-serving", 1);
         complete["result"]["rows"] = json!([tests::serving_row()]);
         complete["result"]["status"] = json!("complete");
@@ -1766,12 +1025,11 @@ mod serving_validation_tests {
         for mutation in [
             ("reported_prompt_tokens", json!(9_007_199_254_740_992u64)),
             ("usage_status", json!("complete")),
-            ("first_reasoning_ms", json!(0.0)),
-            ("output_bytes", json!(3)),
+            ("content_bytes", json!(2)),
+            ("prefill_tokens_per_second", json!(100.0)),
             ("max_output_tokens", json!(64)),
             ("peak_memory_bytes", json!(1)),
             ("finish_reasons", json!([])),
-            ("failed", json!(true)),
         ] {
             let mut invalid = complete.clone();
             invalid["result"]["rows"][0][mutation.0] = mutation.1;
@@ -1787,62 +1045,102 @@ mod serving_validation_tests {
         validate_record(&incomplete).unwrap();
     }
 
-    #[test]
-    fn fixed_output_rows_need_exact_per_request_counts_and_cap_history_stays_readable() {
-        let mut fixed = tests::serving_record("fixed-evidence", 1);
-        let mut pair = tests::serving_row();
-        pair.concurrency = 2;
-        pair.finish_reasons = vec!["length".into(); 2];
-        pair.reported_completion_tokens = Some(2048);
-        pair.reported_completion_tokens_by_request = Some(vec![1024, 1024]);
-        fixed["request"]["concurrencies"] = json!([2]);
-        fixed["result"]["provenance"]["workload"]["concurrencies"] = json!([2]);
-        fixed["result"]["rows"] = json!([pair]);
-        fixed["result"]["status"] = json!("complete");
-        fixed["result"]["message"] = Value::Null;
-        validate_record(&fixed).unwrap();
-        let restored: crate::performance_bench::PerformanceBenchRow =
-            serde_json::from_value(fixed["result"]["rows"][0].clone()).unwrap();
-        assert_eq!(
-            restored.reported_completion_tokens_by_request,
-            Some(vec![1024, 1024])
-        );
-        for (label, counts, total) in [
-            (
-                "unequal counts with a matching total",
-                json!([1023, 1025]),
-                json!(2048),
-            ),
-            ("early EOS in one slot", json!([1024, 1000]), json!(2024)),
-            ("overrun", json!([1024, 1025]), json!(2049)),
-            ("missing evidence", Value::Null, json!(2048)),
-            ("one count for two slots", json!([2048]), json!(2048)),
-            ("unknown aggregate", json!([1024, 1024]), Value::Null),
-        ] {
-            let mut invalid = fixed.clone();
-            invalid["result"]["rows"][0]["reported_completion_tokens_by_request"] = counts;
-            invalid["result"]["rows"][0]["reported_completion_tokens"] = total;
-            assert!(validate_record(&invalid).is_err(), "{label}");
-        }
-        let mut wrong_method = fixed.clone();
-        wrong_method["result"]["provenance"]["method"]["version"] = json!(1);
-        assert!(validate_record(&wrong_method).is_err());
+    fn cold_prompt_record() -> Value {
+        let mut record = tests::serving_record("cold-prompt-round-trip", 4);
+        record["request"]["concurrencies"] = json!([1, 2]);
+        record["request"]["repetitions"] = json!(2);
+        let provenance = &mut record["result"]["provenance"];
+        provenance["workload"]["concurrencies"] = json!([1, 2]);
+        provenance["workload"]["repetitions"] = json!(2);
+        provenance["workload"]["inputs"][0]["sha256"] = json!("a".repeat(64));
+        let template = json!(tests::serving_row());
+        record["result"]["rows"] = json!([
+            (1, 1, vec!["a".repeat(64)]),
+            (1, 2, vec!["b".repeat(64)]),
+            (2, 1, vec!["c".repeat(64), "d".repeat(64)]),
+            (2, 2, vec!["e".repeat(64), "f".repeat(64)]),
+        ].into_iter().map(|(concurrency, repetition, hashes)| {
+            let mut row = template.clone();
+            row["id"] = json!(format!("c{concurrency}-r{repetition}"));
+            row["concurrency"] = json!(concurrency);
+            row["repetition"] = json!(repetition);
+            row["finish_reasons"] = json!(vec!["stop"; concurrency]);
+            row["input_sha256_by_request"] = json!(hashes);
+            row
+        }).collect::<Vec<_>>());
+        record["result"]["status"] = json!("complete");
+        record["result"]["message"] = Value::Null;
+        record
+    }
 
-        let cap = tests::cap_serving_record("historical-cap", 2);
-        validate_record(&cap).unwrap();
-        let mut forged = cap.clone();
-        forged["result"]["rows"][0]["reported_completion_tokens"] = json!(128);
-        forged["result"]["rows"][0]["reported_completion_tokens_by_request"] = json!([128]);
-        forged["result"]["rows"][0]["usage_status"] = json!("partial");
-        assert!(
-            validate_record(&forged).is_err(),
-            "a cap record never acquires fixed-output evidence"
-        );
+    #[test]
+    fn store_round_trip_retains_all_point_hashes() {
+        let cold = cold_prompt_record();
+        let mut cold = cold;
+        cold["request"]["request_usage"] = json!(false);
+        cold["result"]["provenance"]["workload"]["request_usage"] = json!(false);
+        cold["result"]["provenance"]["execution"]["settings"] =
+            json!(super::super::provenance::common_request_settings(128, false));
         let root = tests::root();
-        assert_eq!(import(&root, vec![cap.clone(), fixed.clone()]).unwrap(), 2);
+        for cap in [1, 128] {
+            let mut boundary = cold.clone();
+            boundary["request"]["max_output_tokens"] = json!(cap);
+            boundary["result"]["provenance"]["workload"]["max_output_tokens"] = json!(cap);
+            boundary["result"]["provenance"]["execution"]["settings"] =
+                json!(super::super::provenance::common_request_settings(cap, false));
+            for row in boundary["result"]["rows"].as_array_mut().unwrap() {
+                row["max_output_tokens"] = json!(cap);
+            }
+            validate_record(&boundary).unwrap();
+        }
+        let mut downgraded = cold.clone();
+        downgraded["request"]["request_usage"] = json!(true);
+        validate_record(&downgraded).unwrap();
+        for (pointer, value) in [
+            ("/result/provenance/workload/prompt_nonce", Value::Null),
+            ("/result/provenance/workload/prompt_nonce", json!("a".repeat(31))),
+            ("/result/provenance/workload/prompt_nonce", json!("A".repeat(32))),
+            ("/result/provenance/workload/corpus_version", json!(1)),
+            ("/result/provenance/workload/cache_policy", json!("as_configured")),
+            ("/result/provenance/workload/warmup", json!(true)),
+            ("/result/provenance/workload/request_usage", json!(true)),
+            ("/result/provenance/workload/inputs/0/sha256", json!("0".repeat(64))),
+            ("/result/rows/0/input_sha256_by_request", Value::Null),
+            ("/result/rows/0/input_sha256_by_request", json!([])),
+            ("/result/rows/0/input_sha256_by_request", json!(["A".repeat(64)])),
+            ("/result/rows/2/input_sha256_by_request", json!(["c".repeat(64)])),
+            ("/result/rows/2/input_sha256_by_request", json!(["c".repeat(64), "c".repeat(64)])),
+            ("/result/rows/2/input_sha256_by_request", json!(["a".repeat(64), "d".repeat(64)])),
+        ] {
+            let mut invalid = cold.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_record(&invalid).is_err(), "{pointer}");
+        }
+        let mut missing = cold.clone();
+        missing["result"]["rows"][0].as_object_mut().unwrap().remove("input_sha256_by_request");
+        assert!(validate_record(&missing).is_err());
+        for topology in ["owned", "attached", "unknown"] {
+            let mut supported = cold.clone();
+            supported["result"]["provenance"]["execution"]["topology"] = json!(topology);
+            validate_record(&supported).unwrap();
+        }
+        let mut initial = cold.clone();
+        initial["result"]["rows"] = json!([]);
+        initial["result"]["status"] = json!("failed");
+        let journal = RunJournal::begin(&root, initial).unwrap();
+        let mut result = tests::serving_result("cold-prompt-round-trip");
+        result.provenance = Some(serde_json::from_value(cold["result"]["provenance"].clone()).unwrap());
+        result.rows = serde_json::from_value(cold["result"]["rows"].clone()).unwrap();
+        result.status = "complete";
+        result.message = None;
+        journal.finish(&result).unwrap();
+        drop(journal);
         let page = list(&root, 0, 10).unwrap();
         assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-        assert_eq!(page.total, 2);
-        let _ = fs::remove_dir_all(&root);
+        let mut expected = cold;
+        expected["localState"] = json!("recovery");
+        assert_eq!(page.records, vec![expected]);
+        fs::remove_dir_all(root).unwrap();
     }
+
 }

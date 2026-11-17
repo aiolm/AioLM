@@ -11,7 +11,7 @@ export function createNativeSelectedTransport(destination: string): SelectedEntr
     async submitSnapshot(entry: QueuedBenchmark, signal?: AbortSignal) {
       if (signal?.aborted) throw new HttpError("aborted", "Upload interrupted.");
       // Exact persisted body; never re-serialize the parsed payload for dispatch.
-      const body = entry.requestBody ?? JSON.stringify(entry.payload);
+      const body = entry.requestBody;
       let onAbort: (() => void) | undefined;
       try {
         const response = await Promise.race([

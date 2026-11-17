@@ -15,13 +15,11 @@ so an interrupted run keeps the measurements it completed. A damaged record is
 kept and reported without hiding the rest of the history. History loads in
 pages of at most 100 runs.
 
-Serving history replay follows the journal's 16 MiB budget, so a valid large
-concurrency/repetition grid is not rejected by the older 4 MiB local-record
-ceiling. Legacy local records and public publication retain their 4 MiB limits.
-
-Results that earlier versions kept in browser storage are imported the first
-time history opens. The original browser data is left unchanged, and an
-interrupted import is safe to retry.
+History replay follows the journal's 16 MiB budget. Only local schema3 journals
+are listed and counted. Pre-cutover files remain untouched on disk and are
+silently hidden; direct operations reject them as unsupported. Browser history
+uses a new storage key and never imports older browser records. Public
+publication retains its separate 4 MiB limit.
 
 Excel, CSV and Markdown exports contain a readable results report without local
 paths. See [Benchmarks](benchmarks.md) for measurement details, exports and
@@ -29,31 +27,38 @@ deletion.
 
 ## Versioned public contracts
 
-`@aiolm/benchmark-contracts` 0.12.0 accepts legacy schema1/2 snapshots and
-schema3 cap-based `openai-chat-serving@1` unchanged through the same `/v1` API,
-and adds fixed-output `openai-chat-serving@2` with per-request count evidence.
-Contract 0.12.0 adds the 128-token fixed-output target the desktop app now runs;
-a website must deploy 0.12.0 before it accepts those uploads.
-Schema3 identifies inputs by exact UTF-8 byte count and SHA-256, not token
-length. Its runtime identity has six nullable fields and permits any safe
-engine name, including an unknown name. Model format is independent of engine.
+`@aiolm/benchmark-contracts` 0.15.0 accepts only `openai-chat-serving@5`
+with public schema4. The `/v1` publication body is always
+`{ benchmark, description_md }`; bare submissions and historical methods are
+rejected. A website must deploy the matching contract before accepting uploads.
 
-Serving measurements preserve observed content and reasoning bytes separately.
-First-output timings and end-to-end batch time are client observations.
-Method `@2` requires the exact selected output count for every request and
-retains those reported counts in launch-slot order; prompt/cache counts may
-remain unknown. Historical `@1` keeps optional token/cache counters. Output B/s
-and reported tok/s use end-to-end time, not decode-only timing. Zero duration or
-a non-finite rate stays unavailable. Repeated measurements use per-metric
-median/min/max/sample count; missing observations are not zero. Fixed and cap
-methods remain separate comparison scopes.
+Requests cap output at 1–128 tokens without forced generation and never warm up
+the measured inputs. Corpus2 records a fresh `prompt_nonce` per run and actual
+`input_sha256_by_request` for every row. First-point input descriptors remain
+actual first-slot prompt hashes. The engine starts once with normal readiness;
+loading and readiness are excluded from row timing. Input isolation is not
+proof of zero engine cache reuse.
 
-Schema3 settings are bounded, typed public facts with explicit target, scope,
-unit and semantic role. Host snapshots are marked `aiolm_host`; attached or
-unknown compute cannot attribute proxy RAM to the inference engine. HF repository
-and revision identify provenance, not a weight digest or proof of unmodified
-weights. Frozen legacy payloads, IDs, hashes and receipts are never upgraded in
-place.
+Optional `stream_options.include_usage=true` is negotiated on the first actual
+measured batch, without a separate usage-check inference. Only an all-HTTP-400/422
+rejection permits resending that batch without the field; mixed acceptance and
+rejection fails. Provenance records the effective usage request and exact
+matching request descriptors. Valid unsolicited response counters are preserved.
+
+Each operating point exposes exactly eight metrics: first output, prompt
+processing per request, generation speed per request, time per output token,
+total token throughput, output byte throughput, batch end-to-end time and peak
+owned process-tree RAM. Token-derived per-request metrics require engine usage;
+missing evidence stays unavailable. Raw output bytes and prompt/completion
+counts remain row inputs, not displayed metrics. See [Benchmarks](benchmarks.md)
+for formulas and aggregation.
+
+Public settings are bounded, typed facts with explicit target, scope, unit and
+semantic role. Host snapshots are marked `aiolm_host`; attached or unknown
+compute cannot attribute proxy RAM to the inference engine. HF repository and
+revision identify provenance, not a weight digest or proof of unmodified
+weights. Different run nonces and input hashes are expected and excluded from
+comparison identity; corpus, input sizes, cap, grid and settings must match.
 
 ## What a shared result contains
 
@@ -62,7 +67,7 @@ identity, model identity and format (plus declared metadata for GGUF models),
 the recorded engine identity, typed execution settings and an AioLM-host
 hardware snapshot (including logical and, when known, physical CPU cores).
 
-Schema3 contains no local filenames or paths, raw launch arguments, error
+Schema4 contains no local filenames or paths, raw launch arguments, error
 messages, machine fingerprints, persistent device identifiers or local
 provider/connection IDs. Adapter annotations must explicitly opt safe settings
 into publication; masking runs before typed capture. Model/host/port/auth and
@@ -73,8 +78,8 @@ machine or runtime defaults.
 Any connected text-streaming engine can publish through the same path. Public
 name, version, backend, build, variant and plugin version are independent nullable
 observations, never reconstructed from process names or local IDs. Missing
-identity, model format, settings or token/cache counters does not prevent sharing
-a complete successful workload. Legacy snapshots retain their original fields.
+identity, model format, settings or token counters does not prevent sharing
+a complete successful workload.
 
 New runs collect a complete single-file GGUF SHA-256 before timing, on a blocking
 worker with a 64 GiB file-size and 60-second collection bound. An unchanged local
@@ -98,9 +103,9 @@ When you compare results, keep these limits in mind:
 
 - A selected GPU records how the run was configured, not proof that every layer
   ran there. CPU mode, explicit selection and automatic placement stay distinct.
-- Compare only matching methods, exact input bytes/hashes, output caps, corpus,
-  concurrency, warmup and usage-request conditions. Byte rates and legacy token
-  rates have different units. As-configured cache is not a cold-cache guarantee.
+- Compare matching input sizes, output caps, corpus, concurrency, usage-request
+  conditions and recorded settings. Nonces and hashes are reproducibility
+  evidence, not comparison identity; input isolation is not a cache-state proof.
 - For GGUF models, declared metadata states what the file says about itself; it
   does not prove identical tensors or quality. A complete SHA-256 distinguishes exact files when
   available; multipart models have no single digest.

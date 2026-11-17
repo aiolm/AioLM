@@ -11,6 +11,7 @@ import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { snapshotModelName } from '../../shared/api/providers';
 import type { SnapshotDisplayName } from '../../shared/api/providers';
 import { effectiveSchema } from '../../testing/effectiveSchema';
+import { servingBenchmark } from '../../testing/servingBenchmark';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true, listen: vi.fn(async () => () => undefined) }));
@@ -41,11 +42,17 @@ vi.mock('../../shared/api/index', () => ({
 vi.mock('./benchmarkRepository', () => ({ deleteBenchmarkHistoryRecord: vi.fn(), initializeBenchmarkHistory: vi.fn(), loadBenchmarkHistoryPage: vi.fn(), rememberBenchmarkResult: vi.fn(), loadAllBenchmarkHistory: vi.fn() }));
 vi.mock('./benchmarkExport', () => ({ exportBenchmarkResults: vi.fn() }));
 
-const recovered: PerformanceBenchmarkRecord = {
-  schemaVersion: 1, id: 'recovered', createdAt: 1, model: 'models/recovered.gguf', backend: 'cpu', build: 'b1',
-  request: { run_id: 'recovered', context_profile: 'novel_en', prompt_lengths: [1024], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true },
-  result: { run_id: 'recovered', rows: [], status: 'partial', message: 'Recovered interrupted run', args: [], runtime_version: '1', context_size: 4096, parallel: 1 },
-};
+function historyRecord(id = 'recovered', model = `models/${id}.gguf`): PerformanceBenchmarkRecord {
+  const saved = servingBenchmark();
+  saved.id = saved.request.run_id = saved.result.run_id = id;
+  saved.model = model;
+  saved.result.status = 'partial';
+  saved.result.rows = [];
+  saved.result.message = 'Recovered interrupted run';
+  saved.result.provenance!.recorded_model_label = `${id}.gguf`;
+  return saved;
+}
+const recovered = historyRecord();
 const store = { cfg: testConfig, status: { state: 'stopped' }, busy: false, refreshStatus: vi.fn(), stop: vi.fn() } as unknown as AppStore;
 const renderPanel = (selectedStore = store) => render(<I18nProvider initialLocale="en"><BenchPanel store={selectedStore} /></I18nProvider>);
 
@@ -64,23 +71,23 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('native benchmark history UI', () => {
 
-  it('uses declared snapshot names in history, result and deletion while exporting the original record', async () => {
-    vi.mocked(snapshotModelName).mockResolvedValue(declaredLabel('converted-model-4bit'));
-    const saved = { ...recovered, model: externalSnapshot };
+  it('uses the frozen snapshot label in history, result and deletion while exporting the original record', async () => {
+    const saved = historyRecord('recovered', externalSnapshot);
+    saved.result.provenance!.recorded_model_label = 'Frozen snapshot model';
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [saved], total: 1, next_offset: null });
     renderPanel();
     fireEvent.click(await screen.findByRole('combobox', { name: 'Result history' }));
-    const option = await screen.findByRole('option', { name: /converted-model-4bit/ });
+    const option = await screen.findByRole('option', { name: /Frozen snapshot model/ });
     expect(option).not.toHaveTextContent('a'.repeat(40));
     fireEvent.click(option);
-    expect(screen.getByRole('combobox', { name: 'Result history' })).toHaveTextContent('converted-model-4bit');
-    expect(await screen.findByText('converted-model-4bit', { exact: true })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Result history' })).toHaveTextContent('Frozen snapshot model');
+    expect(await screen.findByText('Frozen snapshot model', { exact: true })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Export result' }));
     await screen.findByText('File saved.');
     expect(exportBenchmarkResults).toHaveBeenCalledExactlyOnceWith([saved], 'selected', 'xlsx', 'en');
     fireEvent.click(screen.getByRole('button', { name: 'Delete result' }));
     const dialog = screen.getByRole('dialog', { name: 'Delete this result?' });
-    await waitFor(() => expect(dialog).toHaveTextContent('converted-model-4bit'));
+    expect(dialog).toHaveTextContent('Frozen snapshot model');
     expect(dialog).not.toHaveTextContent('a'.repeat(40));
     expect(repository.deleteBenchmarkHistoryRecord).not.toHaveBeenCalled();
     expect(saved.model).toBe(externalSnapshot);
@@ -113,7 +120,7 @@ describe('native benchmark history UI', () => {
   });
 
   it('waits for confirmed native deletion and refreshes the history cursor without losing older results', async () => {
-    const older = { ...recovered, id: 'older', model: 'models/older.gguf' };
+    const older = historyRecord('older');
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [recovered], total: 2, next_offset: 1 });
     vi.mocked(repository.loadBenchmarkHistoryPage).mockResolvedValue({ records: [older], total: 1, next_offset: null });
     let finish!: () => void;
@@ -161,9 +168,9 @@ describe('native benchmark history UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete result' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete result' }));
     await screen.findByText('Result deleted.');
-    await screen.findByText(/History could not be loaded or migrated/);
+    await screen.findByText(/History could not be loaded/);
     expect(screen.queryByText('Recovered interrupted run')).not.toBeInTheDocument();
-    vi.mocked(repository.loadBenchmarkHistoryPage).mockResolvedValueOnce({ records: [{ ...recovered, id: 'older', model: 'models/older.gguf' }], total: 1, next_offset: null });
+    vi.mocked(repository.loadBenchmarkHistoryPage).mockResolvedValueOnce({ records: [historyRecord('older')], total: 1, next_offset: null });
     fireEvent.click(screen.getByRole('button', { name: 'Load older results' }));
     await waitFor(() => expect(repository.loadBenchmarkHistoryPage).toHaveBeenLastCalledWith(0));
     expect(await screen.findByRole('combobox', { name: 'Result history' })).toBeEnabled();
@@ -182,7 +189,7 @@ describe('native benchmark history UI', () => {
 
   it('loads older pages using the native cursor and keeps recovered records selectable', async () => {
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [recovered], total: 2, next_offset: 1 });
-    const older = { ...recovered, id: 'older', model: 'models/older.gguf' };
+    const older = historyRecord('older');
     vi.mocked(repository.loadBenchmarkHistoryPage).mockResolvedValue({ records: [older], total: 2, next_offset: null });
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Load older results' }));
@@ -202,17 +209,17 @@ describe('native benchmark history UI', () => {
     expect(screen.queryByText('Stored on this device')).not.toBeInTheDocument();
   });
 
-  it('offers retry after native migration failure without replacing history with browser defaults', async () => {
+  it('offers retry after native history failure without replacing history with browser defaults', async () => {
     vi.mocked(repository.initializeBenchmarkHistory).mockRejectedValueOnce(new Error('disk unavailable'));
     renderPanel();
-    expect(await screen.findByRole('alert')).toHaveTextContent('History could not be loaded or migrated');
+    expect(await screen.findByRole('alert')).toHaveTextContent('History could not be loaded');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('combobox', { name: 'Result history' })).toBeInTheDocument();
     expect(repository.initializeBenchmarkHistory).toHaveBeenCalledTimes(2);
   });
 
   it('exports the selected record and all saved records through the save dialog', async () => {
-    const older = { ...recovered, id: 'older', model: 'models/older.gguf' };
+    const older = historyRecord('older');
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [recovered], total: 2, next_offset: 1 });
     vi.mocked(repository.loadAllBenchmarkHistory).mockResolvedValue([recovered, older]);
     renderPanel();
@@ -251,7 +258,7 @@ describe('native benchmark history UI', () => {
     fireEvent.click(screen.getByRole('option', { name: /recovered.gguf/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Export result' }));
     expect((await screen.findByText('Could not export the file. Permission denied')).closest('[role="alert"]')).toBeVisible();
-    expect(screen.queryByText(/History could not be loaded or migrated/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/History could not be loaded/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Export result' })).toBeEnabled();
   });
 });

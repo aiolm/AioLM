@@ -5,11 +5,10 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { benchmarkCopy } from './benchmarkCopy';
 import { dispatchSelectedBenchmark, enqueuePublicationBenchmark, getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox';
-import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
+import { servingBenchmark } from '../../testing/servingBenchmark';
 import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import { serializePublicationRequest } from '@aiolm/benchmark-contracts';
 import { PublicBenchmarkSummary } from './PublicBenchmarkSummary';
-import type { ServingPublicBenchmarkSubmission } from '@aiolm/benchmark-contracts';
 import { defined } from '../../testing/assertDefined';
 
 // Shared feedback banners read the active locale for their dismiss label.
@@ -17,12 +16,8 @@ const English = ({ children }: { children: ReactNode }) => <I18nProvider initial
 const render = (ui: ReactElement) => renderView(ui, { wrapper: English });
 
 vi.mock('../../shared/sharing/benchmarkOutbox', () => ({ enqueuePublicationBenchmark: vi.fn(), getQueuedBenchmark: vi.fn(async () => undefined), dispatchSelectedBenchmark: vi.fn(async () => 0), retryQueuedBenchmark: vi.fn(async () => undefined) }));
-const saved: PerformanceBenchmarkRecord = {
-  schemaVersion: 1, id: 'performance-00000000-0000-4000-8000-000000000001', createdAt: 1,
-  model: '/private/model.gguf', backend: 'cpu', build: 'b1',
-  request: { run_id: 'performance-00000000-0000-4000-8000-000000000001', context_profile: 'novel_en', prompt_lengths: [1024], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true },
-  result: { run_id: 'performance-00000000-0000-4000-8000-000000000001', rows: [{ id: 'sample', prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0, ttft_ms: 40, tpot_ms: 10, pp_tps: 100, tg_tps: 100, e2e_ms: 1400, total_tps: 95, peak_memory_bytes: null, timing_source: 'client', error: null }], status: 'complete', args: ['--private-token', 'secret'], message: null, runtime_version: '1', context_size: 4096, parallel: 1 },
-};
+const saved = servingBenchmark();
+saved.id = saved.request.run_id = saved.result.run_id = 'performance-00000000-0000-4000-8000-000000000001';
 beforeEach(() => {
   vi.clearAllMocks();
   // Pin the queue lookup default every test: per-test overrides must not leak
@@ -37,71 +32,96 @@ async function waitForShare() {
 }
 
 describe('public benchmark review', () => {
-  it('renders serving channel observations and metric-specific median samples without inventing token usage', () => {
-    const observed = {
-      input_bytes: 4096, max_output_tokens: 128, concurrency: 1, repetition: 1,
-      first_output_ms: 50, first_content_ms: 100, first_reasoning_ms: 50, e2e_ms: 200,
-      content_bytes: 6, reasoning_bytes: 6, output_bytes: 12, reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null,
-      usage_status: 'missing' as const, finish_reasons: ['not_reported' as const], peak_memory_bytes: null, timing_source: 'client' as const, failed: false as const,
-    };
-    const snapshot: ServingPublicBenchmarkSubmission = {
-      schema_version: 3, submission_id: '00000000-0000-4000-8000-000000000001', app_version: '0.3.5',
-      method: { id: 'openai-chat-serving', version: 1 },
-      runtime: { name: 'sglang', version: '1', backend: null, build: null, variant: 'community', plugin_version: null },
-      model: { format: 'hf-safetensors', status: 'unidentified', sha256: null, size_bytes: null,
-        source: { kind: 'huggingface', repository: 'example/model', revision: 'a'.repeat(40) } },
-      workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'b'.repeat(64) }], max_output_tokens: 128,
-        concurrencies: [1], repetitions: 2, warmup: true, request_usage: false, cache_policy: 'as_configured' },
-      environment: null, execution: { topology: 'attached', memory_scope: 'unavailable', settings: [
-        { target: 'launch', scope: [], name: 'batch', value: 0, unit: 'count', role: null },
-        { target: 'launch', scope: ['serve'], name: 'cache', value: false, unit: null, role: null },
-        { target: 'request', scope: [], name: 'max_tokens', value: 128, unit: 'tokens', role: null },
-        { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
-        { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
-      ] },
-      measurements: { status: 'complete', rows: [observed, { ...observed, repetition: 2, e2e_ms: 400, first_output_ms: 100, first_reasoning_ms: null, content_bytes: 12, reasoning_bytes: 0 }] },
-    };
+  it.each(['en', 'ko', 'ja', 'zh'] as const)('shows isolated Cold Prompt inputs in %s review', locale => {
+    const record = servingBenchmark();
+    const copy = benchmarkCopy(locale);
+    render(<PublicBenchmarkSummary snapshot={toPublicBenchmark(record, '00000000-0000-4000-8000-000000000004')} copy={copy} />);
+    expect(screen.getByText(copy.coldPrompt)).toBeVisible();
+    expect(screen.queryByText(copy.asConfigured)).not.toBeInTheDocument();
+    expect(screen.getByText(record.result.provenance!.workload.prompt_nonce)).toBeVisible();
+    const table = screen.getByRole('table', { name: copy.shareResults });
+    expect(within(table).getByText('60.0')).toBeVisible();
+    expect(within(table).getAllByText(copy.unavailable).length).toBeGreaterThan(0);
+  });
+
+  it('reviews completion without publishing or inventing token observations', async () => {
+    render(<PublicBenchmarkReview record={servingBenchmark()} busy={false} copy={benchmarkCopy('en')} />);
+    await waitForShare();
+    const summary = screen.getByLabelText('Shared details');
+    expect(summary).toHaveTextContent('openai-chat-serving@5');
+    expect(summary).toHaveTextContent('Maximum output token request');
+    const table = within(summary).getByRole('table', { name: 'Results' });
+    expect(within(table).getByRole('columnheader', { name: /Total token throughput/ })).toBeVisible();
+    expect(within(table).getAllByText('N/A').length).toBeGreaterThan(0);
+    expect(within(table).getByText('60.0')).toBeVisible();
+    expect(summary).not.toHaveTextContent(/PRIVATE|synthetic|private|diagnostic/);
+    expect(enqueuePublicationBenchmark).not.toHaveBeenCalled();
+    expect(dispatchSelectedBenchmark).not.toHaveBeenCalled();
+  });
+
+
+  it('renders per-metric median samples without inventing token usage', () => {
+    const snapshot = toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001');
+    const observed = defined(snapshot.measurements.rows[0]);
+    observed.first_output_ms = 50;
+    snapshot.runtime.name = 'sglang';
+    snapshot.model.source = { kind: 'huggingface', repository: 'example/model', revision: 'a'.repeat(40) };
+    snapshot.workload.repetitions = 2;
+    snapshot.execution.settings.unshift(
+      { target: 'launch', scope: [], name: 'batch', value: 0, unit: 'count', role: null },
+      { target: 'launch', scope: ['serve'], name: 'cache', value: false, unit: null, role: null },
+    );
+    snapshot.measurements.rows.push({ ...observed, repetition: 2, input_sha256_by_request: ['b'.repeat(64)], e2e_ms: 400, first_output_ms: null });
     render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('en')} />);
     const summary = screen.getByLabelText('Shared details');
     const table = within(summary).getByRole('table', { name: 'Results' });
     const cells = within(defined(within(table).getAllByRole('row')[1])).getAllByRole('cell');
-    expect(cells[6]).toHaveTextContent('45.0');
-    expect(cells[6]).toHaveTextContent('30.0 – 60.0 · n=2');
-    expect(cells[4]).toHaveTextContent('50.0 – 50.0 · n=1');
-    expect(cells[7]).toHaveTextContent('N/A');
+    expect(cells[7]).toHaveTextContent('45.0');
+    expect(cells[7]).toHaveTextContent('30.0 – 60.0 · n=2');
+    expect(cells[2]).toHaveTextContent('50.0 – 50.0 · n=1');
+    expect(cells[6]).toHaveTextContent('N/A');
     expect(summary).toHaveTextContent('sglang');
     expect(summary).toHaveTextContent('example/model');
     expect(summary).toHaveTextContent('a'.repeat(40));
     expect(summary).toHaveTextContent('A source revision is not a weight SHA-256');
     expect(summary).toHaveTextContent('Launch · batch0 count');
     expect(summary).toHaveTextContent('Launch · serve / cachefalse');
-    expect(within(table).queryByRole('columnheader', { name: /TTFT|TPOT/ })).not.toBeInTheDocument();
   });
 
-  it('keeps a completed zero-byte serving stream distinct from missing first-output and token observations', () => {
-    const snapshot: ServingPublicBenchmarkSubmission = {
-      schema_version: 3, submission_id: '00000000-0000-4000-8000-000000000001', app_version: null, method: { id: 'openai-chat-serving', version: 1 },
-      runtime: { name: null, version: null, backend: null, build: null, variant: null, plugin_version: null },
-      model: { format: 'unknown', status: 'unidentified', sha256: null, size_bytes: null },
-      workload: { corpus: 'novel_en', corpus_version: 1, inputs: [{ bytes: 4096, sha256: 'b'.repeat(64) }], max_output_tokens: 128,
-        concurrencies: [1], repetitions: 1, warmup: false, request_usage: false, cache_policy: 'as_configured' },
-      environment: null, execution: { topology: 'unknown', memory_scope: 'unavailable', settings: [
-        { target: 'request', scope: [], name: 'max_tokens', value: 128, unit: 'tokens', role: null },
-        { target: 'request', scope: [], name: 'stream', value: true, unit: null, role: null },
-        { target: 'request', scope: [], name: 'temperature', value: 0, unit: null, role: null },
-      ] },
-      measurements: { status: 'complete', rows: [{ input_bytes: 4096, max_output_tokens: 128, concurrency: 1, repetition: 1,
-        first_output_ms: null, first_content_ms: null, first_reasoning_ms: null, e2e_ms: 200, content_bytes: 0, reasoning_bytes: 0, output_bytes: 0,
-        reported_prompt_tokens: null, reported_completion_tokens: null, reported_cached_tokens: null, usage_status: 'missing',
-        finish_reasons: ['not_reported'], peak_memory_bytes: null, timing_source: 'client', failed: false }] },
-    };
+  it('keeps zero output throughput distinct from unavailable timing and token observations', () => {
+    const snapshot = toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001');
+    Object.assign(defined(snapshot.measurements.rows[0]), { first_output_ms: null, output_bytes: 0 });
     render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('en')} />);
     const cells = within(defined(within(screen.getByRole('table', { name: 'Results' })).getAllByRole('row')[1])).getAllByRole('cell');
     expect(cells[2]).toHaveTextContent('N/A');
-    expect(cells[6]).toHaveTextContent('0.0 – 0.0 · n=1');
-    expect(cells[7]).toHaveTextContent('N/A');
-    expect(cells[10]).toHaveTextContent('0.0 – 0.0 · n=1');
+    expect(cells[7]).toHaveTextContent('0.0 – 0.0 · n=1');
+    expect(cells[6]).toHaveTextContent('N/A');
     expect(screen.getByLabelText('Shared details')).toHaveTextContent('valid zero-byte output');
+  });
+
+  it('shows reported token metrics and owned memory', () => {
+    const record = servingBenchmark();
+    record.request.request_usage = record.result.provenance!.workload.request_usage = true;
+    record.result.provenance!.execution = {
+      topology: 'owned', memory_scope: 'owned_process_tree',
+      settings: [...record.result.provenance!.execution.settings,
+        { target: 'request' as const, scope: [], name: 'stream_options.include_usage', value: true, unit: null, role: null }]
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+    };
+    Object.assign(defined(record.result.rows[0]), {
+      reported_prompt_tokens: 55, reported_completion_tokens: 24,
+      prefill_tokens_per_second: 2750, decode_tokens_per_second: 127.7777777778, tpot_ms: 180 / 23,
+      usage_status: 'complete', peak_memory_bytes: 1073741824,
+    });
+    const snapshot = toPublicBenchmark(record, '00000000-0000-4000-8000-000000000001');
+    render(<PublicBenchmarkSummary snapshot={snapshot} copy={benchmarkCopy('ko')} />);
+    const cells = within(defined(within(screen.getByRole('table')).getAllByRole('row')[1])).getAllByRole('cell');
+    expect(cells[2]).toHaveTextContent('20.0');
+    expect(cells[3]).toHaveTextContent('2750.0');
+    expect(cells[4]).toHaveTextContent('127.8');
+    expect(cells[5]).toHaveTextContent('7.8');
+    expect(cells[6]).toHaveTextContent('120.0');
+    expect(cells[9]).toHaveTextContent('1.00 GiB');
   });
 
   it('prepares a review only when opened and never publishes automatically', async () => {
@@ -115,7 +135,7 @@ describe('public benchmark review', () => {
     expect(dispatchSelectedBenchmark).not.toHaveBeenCalled();
   });
 
-  it('shows a human-readable summary without local paths, raw hashes, IDs or JSON', async () => {
+  it('shows a human-readable summary without local paths, private diagnostics, IDs or JSON', async () => {
     render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
     await waitForShare();
     const summary = screen.getByLabelText('Shared details');

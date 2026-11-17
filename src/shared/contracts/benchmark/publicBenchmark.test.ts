@@ -1,31 +1,29 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
-import { summarizePublicBenchmarkRows } from './aggregation';
-import type { LegacyPerformanceBenchmarkProvenance as PerformanceBenchmarkProvenance, LegacyPerformanceBenchmarkResult as PerformanceBenchmarkResult } from '../../api/types';
+import { summarizeServingPoints } from './aggregation';
+import type { PerformanceBenchmarkProvenance, PerformanceBenchmarkResult } from '../../api/types';
 import type { BenchmarkModelMetadata } from '@aiolm/benchmark-contracts';
 import { defined } from '../../../testing/assertDefined';
+import { servingBenchmark } from '../../../testing/servingBenchmark';
 
 const submissionId = '00000000-0000-4000-8000-000000000001';
-const sample = (provenance?: PerformanceBenchmarkProvenance) => ({
-  backend: 'cuda', build: 'b1234', model: '/private/models/owner-secret.gguf', device: { fingerprint: 'owner-device-identifier' },
-  request: { run_id: 'owner-private-id', context_profile: 'novel_en' as const, prompt_lengths: [1024], generation_length: 128, batch_sizes: [2], repetitions: 1, warmup: true },
-  result: {
-    run_id: 'owner-private-id', status: 'complete', message: '/private/secret.log failed', args: ['--api-key', 'private-token', '-m', '/private/secret.gguf'],
-    runtime_version: '1234', context_size: 4096, parallel: 2, provenance,
-    rows: [{ id: 'private-trial-id', prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1,
-      completion_tokens: 128, cached_tokens: 0, ttft_ms: 40, tpot_ms: 10, pp_tps: 100, tg_tps: 100,
-      e2e_ms: 1400, total_tps: 95, peak_memory_bytes: null, timing_source: 'client', error: null }],
-  } satisfies PerformanceBenchmarkResult,
-});
+const sample = (snapshot: PerformanceBenchmarkProvenance = provenance()) => {
+  const record = servingBenchmark();
+  record.result.provenance = snapshot;
+  return record;
+};
 const gpu = (name: string) => ({ name, vendor: 'Example GPU vendor', vram_mb: 8192, driver: 'driver 1.0', integrated: false });
 function provenance(): PerformanceBenchmarkProvenance {
-  return {
-    schema_version: 1, app_version: '0.1.9', method: { id: 'cold-prompt-serving', version: 1 },
-    corpus: { profile: 'novel_en', version: 1, sha256: 'a'.repeat(64) }, model: { status: 'sha256', sha256: 'b'.repeat(64), size_bytes: 123456 },
-    environment: { os: 'linux', arch: 'x86_64', cpu: { name: 'Example CPU', logical_cores: 16 }, installed_gpus: [gpu('GPU A'), gpu('GPU B')],
-      execution: { mode: 'selected', selected_gpus: [gpu('GPU B')], devices: ['private-stable-id'], selection_complete: true }, detection: 'private detector diagnostic' },
+  const p = servingBenchmark().result.provenance!;
+  p.model = { format: 'gguf', status: 'sha256', sha256: 'b'.repeat(64), size_bytes: 123456 };
+  p.environment = {
+    scope: 'aiolm_host', os: 'linux', arch: 'x86_64', cpu: { name: 'Example CPU', logical_cores: 16 },
+    installed_gpus: [gpu('GPU A'), gpu('GPU B')],
+    execution: { mode: 'selected', selected_gpus: [gpu('GPU B')], devices: ['private-stable-id'], selection_complete: true },
+    detection: 'private detector diagnostic',
   };
+  return p;
 }
 
 const metadata = (): BenchmarkModelMetadata => ({
@@ -36,41 +34,17 @@ const metadata = (): BenchmarkModelMetadata => ({
 });
 
 describe('public benchmark boundary', () => {
-  it.each(['vllm', 'mlx-vlm'] as const)('publishes %s identity and format without private interpreter, snapshot or companion arguments', provider => {
-    const original = sample(provenance());
-    const result = toPublicBenchmark({ ...original, result: { ...original.result, provider,
-      model_format: provider === 'vllm' ? 'hf-safetensors' : 'mlx', runtime_version: provider === 'vllm' ? '0.31.0' : '0.7.6', runtime_accelerator: provider === 'vllm' ? 'cuda' : 'metal',
-      args: ['/synthetic/private/python', '-m', 'engine.server', 'serve', '/synthetic/private/model', '--host', '127.0.0.1', '--port', '9090',
-        '--embedding-model', '/synthetic/private/encoder', '--adapter-path', '/synthetic/private/adapter', '--speculative-config', '{"model":"/synthetic/private/draft"}', '--max-model-len', '8192'],
-    } }, submissionId);
-    expect(result.schema_version).toBe(2);
-    expect(result.runtime).toMatchObject({ name: provider, backend: provider === 'vllm' ? 'cuda' : 'metal' });
-    expect(result.model.format).toBe(provider === 'vllm' ? 'hf-safetensors' : 'mlx');
-    expect(result.execution.settings).toBeNull();
-    expect(result.method?.version).toBe(2);
-    expect(result.execution.effective_args).toEqual(['--max-model-len', '8192']);
-    expect(JSON.stringify(result)).not.toContain('/synthetic');
-    expect(() => validatePublicBenchmark({ ...result, schema_version: 1 })).toThrow();
-    expect(() => validatePublicBenchmark({ ...result, model: { ...result.model, format: 'gguf' } })).toThrow();
-    const withoutPrefix = toPublicBenchmark({ ...original, result: { ...original.result, provider, model_format: 'hf-safetensors', args: ['/synthetic/private/python', 'credential-token'] } }, submissionId);
-    expect(withoutPrefix.execution).not.toHaveProperty('effective_args');
-  });
-  it.each(['hf-safetensors', 'mlx', 'gguf'] as const)('publishes the measured vllm-metal plugin and %s format independently of Linux vLLM', format => {
-    const original = sample(provenance());
-    const result = toPublicBenchmark({ ...original, result: { ...original.result, provider: 'vllm', model_format: format,
-      runtime_version: '0.30.0', runtime_accelerator: 'metal', runtime_variant: 'vllm-metal', runtime_plugin_version: '0.30.0',
-    } }, submissionId);
-    expect(result.runtime).toEqual({ name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' });
+  it.each(['hf-safetensors', 'mlx', 'gguf'] as const)('publishes the frozen engine and %s model identity without local arguments', format => {
+    const record = sample();
+    record.result.provenance!.runtime = { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' };
+    record.result.provenance!.model.format = format;
+    record.result.args = ['/private/python', '--api-key', 'private-secret'];
+    const result = toPublicBenchmark(record, submissionId);
+    expect(result.schema_version).toBe(4);
+    expect(result.method.version).toBe(5);
+    expect(result.runtime).toEqual(record.result.provenance!.runtime);
     expect(result.model.format).toBe(format);
-    expect(result.execution.settings).toBeNull();
-    expect(result.model).not.toHaveProperty('metadata');
-    for (const runtime of [{ ...result.runtime, name: 'mlx-vlm' }, { ...result.runtime, backend: 'cuda' },
-      { ...result.runtime, plugin_version: undefined }, { ...result.runtime, variant: undefined }, { ...result.runtime, plugin_version: '/private/plugin' }]) {
-      expect(() => validatePublicBenchmark({ ...result, runtime })).toThrow();
-    }
-    expect(() => validatePublicBenchmark({ ...result, schema_version: 1 })).toThrow();
-    expect(() => validatePublicBenchmark({ ...result, model: { ...result.model, metadata: metadata() } })).toThrow();
-    expect(JSON.stringify(result)).not.toMatch(/private|owner-secret/);
+    expect(JSON.stringify(result)).not.toContain('private');
   });
   it('rejects incomplete runs and failed measurements without changing the local record', () => {
     for (const status of ['partial', 'failed', 'cancelled'] as const) {
@@ -107,25 +81,6 @@ describe('public benchmark boundary', () => {
     }
   });
 
-  it('publishes the llama.cpp release the run measured, taken from the version banner', () => {
-    const record = sample(provenance());
-    // What a runtime probe records now: one comparable line, release first.
-    const named = { ...record, result: { ...record.result, runtime_version: '0.3.0-dev (build 10638, commit bf9421646)' } };
-    expect(toPublicBenchmark(named, submissionId).runtime.version).toBe('0.3.0-dev (build 10638, commit bf9421646)');
-
-    // A record stored before that normalization existed carries the whole
-    // banner. Its version line survives instead of the field publishing null.
-    const banner = { ...record, result: { ...record.result, runtime_version: 'version: 0.3.0-dev (build 10638, commit bf9421646)\nbuilt with Clang 20.1.8 for x86_64' } };
-    expect(toPublicBenchmark(banner, submissionId).runtime.version).toBe('0.3.0-dev (build 10638, commit bf9421646)');
-
-    // Diagnostics with no version line publish no version at all rather than
-    // something assembled out of the build directory or the build tag.
-    const diagnostics = { ...record, result: { ...record.result, runtime_version: 'built with Clang 20.1.8\nloaded from /home/owner/runtimes/b10638-cuda' } };
-    const published = toPublicBenchmark(diagnostics, submissionId);
-    expect(published.runtime.version).toBeNull();
-    expect(published.runtime.build).toBe('b1234');
-    expect(JSON.stringify(published)).not.toContain('/home/owner');
-  });
 
   it('shares only the RAM capacity captured with the measurement and validates its unit', () => {
     const p = provenance();
@@ -149,7 +104,7 @@ describe('public benchmark boundary', () => {
     expect(result.model.metadata?.base_models).not.toBe(p.model.metadata.base_models);
   });
 
-  it('keeps missing model metadata absent on old records and accepts an explicit null', () => {
+  it('keeps absent model metadata absent and accepts an explicit null', () => {
     const result = toPublicBenchmark(sample(provenance()), submissionId);
     expect(result.model).not.toHaveProperty('metadata');
     result.model.metadata = null;
@@ -195,72 +150,26 @@ describe('public benchmark boundary', () => {
     const result = toPublicBenchmark(source, submissionId);
     expect(JSON.stringify(result)).not.toMatch(/private|owner|fingerprint|stable_id|diagnostic/);
     expect(result.environment?.execution.selected_gpus.map(item => item.name)).toEqual(['GPU B']);
-    expect(result.measurements.rows[0]).toMatchObject({ failed: false, tg_tps: 100, peak_memory_bytes: null });
-    expect(source.result.args).toContain('private-token');
+    expect(result.measurements.rows[0]).toMatchObject({ failed: false, output_bytes: 12, tpot_ms: null, peak_memory_bytes: null });
+    expect(source.result.args).toContain('PRIVATE-CREDENTIAL');
     expect(result.model.sha256).toBe('b'.repeat(64));
   });
 
-  it('publishes the measured launch options so a reader can reproduce the tuning setup', () => {
-    const source = sample(provenance());
-    source.result.args = ['--ctx-size', '8192', '--flash-attn', 'auto', '--sleep-idle-seconds', '-1',
-      '--cache-type-k=q8_0', '--cont-batching', '--no-webui'];
-    const result = toPublicBenchmark(source, submissionId);
-    // Ordered tokens: an option keeps the value it was given, a switch stands alone.
-    expect(result.execution.effective_args).toEqual(['--ctx-size', '8192', '--flash-attn', 'auto',
-      '--sleep-idle-seconds', '-1', '--cache-type-k=q8_0', '--cont-batching', '--no-webui']);
-    expect(validatePublicBenchmark(result)).toBe(result);
-  });
-
-  it('drops every launch option naming a file, an address or a credential together with its value', () => {
-    const source = sample(provenance());
-    source.result.args = ['--model', 'C:\\Users\\owner\\models\\private.gguf', '--host', '127.0.0.1', '--port', '54321',
-      '--api-key', 'private-token', '--mmproj', '/private/projector.gguf', '--lora', '/private/adapter.gguf',
-      '--alias', 'owner-private-alias', '--ctx-size', '4096'];
-    const result = toPublicBenchmark(source, submissionId);
-    expect(result.execution.effective_args).toEqual(['--ctx-size', '4096']);
-    expect(JSON.stringify(result)).not.toMatch(/private|owner|127\.0\.0\.1|54321/);
-  });
-
-  it('drops an unknown option whose value still reads as a path, so a newer runtime cannot leak one', () => {
-    const source = sample(provenance());
-    source.result.args = ['--future-cache-dir', '/home/owner/cache', '--future-endpoint', 'https://private.test',
-      '--future-account', 'owner@example.test', '--threads', '8'];
-    const result = toPublicBenchmark(source, submissionId);
-    expect(result.execution.effective_args).toEqual(['--threads', '8']);
-  });
-
-  it('drops an option named as a credential, whose value no pattern can tell from a setting', () => {
-    const source = sample(provenance());
-    // A secret is ordinary short text; only the option name identifies it.
-    source.result.args = ['--future-token', 'private1234', '--registry-password', 'private1234',
-      '--hf-token', 'private1234', '--ssl-key-file', 'private1234', '--top-k', '40', '--keep', '0', '--cache-type-k', 'q8_0'];
-    const result = toPublicBenchmark(source, submissionId);
-    expect(result.execution.effective_args).toEqual(['--top-k', '40', '--keep', '0', '--cache-type-k', 'q8_0']);
-  });
-
-  it('reports no launch options rather than an empty list when the record carried none', () => {
-    const source = sample(provenance());
-    source.result.args = [];
-    const result = toPublicBenchmark(source, submissionId);
-    expect(result.execution).not.toHaveProperty('effective_args');
-    expect(validatePublicBenchmark(result)).toBe(result);
-  });
-
-  it('rejects a launch option token that a publisher could not have produced', () => {
-    const result = toPublicBenchmark(sample(provenance()), submissionId);
-    for (const invalid of [['--model', '/private/model.gguf'], ['a'.repeat(129)], [''], ['bad\nvalue'], [1024]]) {
-      expect(() => validatePublicBenchmark({ ...result, execution: { ...result.execution, effective_args: invalid } })).toThrow();
-    }
-  });
-
-  it('keeps legacy identity, method and environment unknown instead of using current hardware', () => {
-    const result = toPublicBenchmark(sample(), submissionId);
-    expect(result.environment).toBeNull();
-    expect(result.method).toBeNull();
-    expect(result.app_version).toBeNull();
-    expect(result.model).toEqual({ status: 'unidentified', sha256: null, size_bytes: null });
-    expect(result.workload.corpus_version).toBeNull();
-    expect(result.execution.settings).toBeNull();
+  it('copies exactly the serving row fields and leaves private and removed fields behind', () => {
+    const record = sample();
+    const row = defined(record.result.rows[0]);
+    Object.assign(row, { content_bytes: 12, reported_cached_tokens: 0, local_path: '/private/row' });
+    const before = structuredClone(record);
+    const published = defined(toPublicBenchmark(record, submissionId).measurements.rows[0]);
+    expect(Object.keys(published).sort()).toEqual([
+      'input_bytes', 'max_output_tokens', 'concurrency', 'repetition', 'input_sha256_by_request',
+      'first_output_ms', 'e2e_ms', 'output_bytes', 'reported_prompt_tokens', 'reported_completion_tokens',
+      'prefill_tokens_per_second', 'decode_tokens_per_second', 'tpot_ms', 'usage_status', 'finish_reasons',
+      'peak_memory_bytes', 'timing_source', 'failed',
+    ].sort());
+    expect(published.input_sha256_by_request).not.toBe(row.input_sha256_by_request);
+    expect(published.finish_reasons).not.toBe(row.finish_reasons);
+    expect(record).toEqual(before);
   });
 
   it('records CPU and multiple selected GPUs without substituting the first installed GPU', () => {
@@ -276,10 +185,7 @@ describe('public benchmark boundary', () => {
     p.environment.cpu.name = 'owner@example.test';
     defined(p.environment.installed_gpus[0]).driver = 'C:\\private\\driver';
     const source = sample(p);
-    source.result.runtime_version = 'version 1234\nbuild at /private/build';
-    source.build = 'https://private.test';
     const result = toPublicBenchmark(source, submissionId);
-    expect(result.runtime.version).toBeNull(); expect(result.runtime.build).toBeNull();
     expect(result.environment?.cpu.name).toBeNull(); expect(defined(result.environment?.installed_gpus[0]).driver).toBeNull();
   });
 
@@ -288,28 +194,20 @@ describe('public benchmark boundary', () => {
     expect(validatePublicBenchmark(valid)).toBe(valid);
     expect(() => validatePublicBenchmark({ ...valid, args: ['secret'] })).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, runtime: { ...valid.runtime, path: '/private' } })).toThrow();
-    expect(() => validatePublicBenchmark(JSON.parse(JSON.stringify(valid).replace('"schema_version":1', '"schema_version":1,"__proto__":{"secret":"private"}')))).toThrow();
+    expect(() => validatePublicBenchmark(JSON.parse(JSON.stringify(valid).replace('"schema_version":4', '"schema_version":4,"__proto__":{"secret":"private"}')))).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, constructor: 'private' })).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, submission_id: 'private-id' })).toThrow();
     expect(() => validatePublicBenchmark({ ...valid, model: { status: 'sha256', sha256: null, size_bytes: 1 } })).toThrow();
-    defined(valid.measurements.rows[0]).tg_tps = Number.POSITIVE_INFINITY;
+    defined(valid.measurements.rows[0]).first_output_ms = Number.POSITIVE_INFINITY;
     expect(() => validatePublicBenchmark(valid)).toThrow();
   });
 
-  it('reuses identical metric aggregation for public rows without private trial identifiers', () => {
+  it('reuses identical aggregation for the public evidence without private trial identifiers', () => {
     const result = toPublicBenchmark(sample(), submissionId);
-    const base = { ...defined(result.measurements.rows[0]), failed: false, tg_tps: 100 };
-    const rows = summarizePublicBenchmarkRows([base, { ...base, concurrency: 2, tg_tps: 180 }, { ...base, repetition: 2, failed: true }]);
-    expect(rows.find(row => row.concurrency === 2)?.speedup).toBe(1.8);
-    expect(rows.find(row => row.error)?.samples).toBe(0);
-  });
-
-  it('preserves explicit runtime automatic and inherited thread settings as minus one', () => {
-    const p = provenance();
-    p.execution_config = { gpu_layers: -1, threads: -1, threads_batch: -1, flash_attention: null, cache_type_k: null, cache_type_v: null, split_mode: null, tensor_split: null };
-    const result = toPublicBenchmark(sample(p), submissionId);
-    expect(result.execution.settings).toMatchObject({ gpu_layers: -1, threads: -1, threads_batch: -1 });
-    result.execution.settings!.threads = -2;
-    expect(() => validatePublicBenchmark(result)).toThrow();
+    const row = defined(result.measurements.rows[0]);
+    expect(summarizeServingPoints([row])[0]).toMatchObject({
+      samples: 1, first_output_ms: { median: 20, min: 20, max: 20, samples: 1 },
+      output_bytes_per_second: { median: 60, min: 60, max: 60, samples: 1 },
+    });
   });
 });

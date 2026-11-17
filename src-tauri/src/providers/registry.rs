@@ -3,10 +3,7 @@
 use super::{
     artifacts::Modalities,
     launch::{EngineCommand, Readiness},
-    protocol::{
-        ComputeOwnership, EngineInfo, FixedOutputControl, PublicEngine, ServingMetadata,
-        MAX_FIXED_OUTPUT_TOKENS,
-    },
+    protocol::{ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
     ProviderId,
 };
 use crate::{config::AppConfig, error::AppError};
@@ -178,62 +175,6 @@ pub struct Capabilities {
     pub tools: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_usage_supported: Option<bool>,
-    /// Explicit opt-in: the request control this engine honors to generate
-    /// exactly `max_tokens` tokens. It must match a declared request option of
-    /// the right kind and requires streamed usage support.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fixed_output: Option<FixedOutputControl>,
-}
-
-/// A custom fixed-output declaration is accepted only with the request option
-/// that carries it (flag/toggle for `ignore_eos`, an integer range covering
-/// every fixed target for `min_tokens`) and streamed usage support.
-fn validate_fixed_output(
-    capabilities: &Capabilities,
-    manifest: &RuntimeManifest,
-) -> Result<(), String> {
-    let Some(control) = capabilities.fixed_output else {
-        return Ok(());
-    };
-    let field = control.field_name();
-    if capabilities.stream_usage_supported != Some(true) {
-        return Err(format!(
-            "adapter probe declares fixed_output `{field}` without stream_usage_supported: true; exact output counts could not be verified"
-        ));
-    }
-    let option = manifest
-        .options
-        .iter()
-        .find(|option| option.key == field && option.target == "request")
-        .ok_or_else(|| {
-            format!(
-                "adapter probe declares fixed_output `{field}` but the manifest has no `{field}` request option"
-            )
-        })?;
-    let kind = option.kind["type"].as_str().unwrap_or("");
-    let accepted = match control {
-        FixedOutputControl::IgnoreEos => matches!(kind, "flag" | "toggle"),
-        FixedOutputControl::MinTokens => {
-            kind == "integer"
-                && option.kind.get("choices").is_none()
-                && numeric_range(&option.kind).is_some_and(|mut range| {
-                    // Sentinels cannot establish support for the intervening output targets.
-                    range.sentinel_values.clear();
-                    range.contains(1.0) && range.contains(f64::from(MAX_FIXED_OUTPUT_TOKENS))
-                })
-        }
-    };
-    if !accepted {
-        return Err(match control {
-            FixedOutputControl::IgnoreEos => format!(
-                "adapter fixed_output `{field}` request option must be a flag or toggle"
-            ),
-            FixedOutputControl::MinTokens => format!(
-                "adapter fixed_output `{field}` request option must be an integer accepting 1 to {MAX_FIXED_OUTPUT_TOKENS}"
-            ),
-        });
-    }
-    Ok(())
 }
 
 /// The probe must resolve the exact selected model, rather than promote the
@@ -1196,7 +1137,7 @@ fn validate_probe_result(
     {
         return Err("adapter probe reports invalid tasks".into());
     }
-    validate_fixed_output(&probe.capabilities, manifest)
+    Ok(())
 }
 pub(crate) fn load_manifest(source: &Path) -> Result<RuntimeManifest, AppError> {
     let manifest = bounded_json(source)?;
@@ -1599,12 +1540,12 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
         .collect()
 }
 pub fn catalog() -> Vec<Value> {
+    let benchmark = format!("openai-chat-serving@{}", crate::performance_bench::METHOD_VERSION);
     let inventory = registrations();
     let mut seen = std::collections::BTreeSet::new();
     inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| {
-        // Fixed-output measurement needs the probe's explicit control
-        // declaration; the selected model's probe still decides each session.
-        let benchmark = if r.probe.as_ref().is_some_and(|p| p.capabilities.fixed_output.is_some()) { "openai-chat-serving@2" } else { "unsupported" };
+        // All adapters expose the common benchmark; model-specific chat
+        // support and configuration are checked by read-only admission.
         serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":benchmark,"deep_verification":"unsupported","portable":"unsupported"}})
     }).collect()
 }
@@ -1630,7 +1571,9 @@ pub fn serving_metadata(manifest: &RuntimeManifest, probe: &ProbeResult) -> Serv
 
 pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
     let r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
-    check_files(&r)?;
+    // Generated helpers follow the app build; engine-side artifacts stay pinned.
+    // This read-only path must agree with inventory before launch refreshes them.
+    check_inventory_files(&r).map_err(AppError::validation)?;
     let (p, model_fingerprint) = match cached_probe(&r, cfg)? {
         Some(cached) => (cached.result?, cached.fingerprint),
         None => {
@@ -1691,10 +1634,6 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
         speech_model_type: None,
         serving_metadata: Some(serving_metadata(&r.manifest, &p)),
         stream_usage_supported: p.capabilities.stream_usage_supported,
-        fixed_output: p
-            .capabilities
-            .fixed_output
-            .filter(|_| p.capabilities.tasks.iter().any(|task| task == "generate")),
         upstream_model: upstream.clone(),
         modalities: p.capabilities.modalities,
         tasks: p.capabilities.tasks,

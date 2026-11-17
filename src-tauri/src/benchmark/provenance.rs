@@ -3,7 +3,6 @@ use super::identity::ModelIdentity;
 use crate::{
     config::AppConfig,
     hardware::{DeviceProfile, GpuDevice},
-    providers::protocol::FixedOutputControl,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,125 +53,6 @@ pub(crate) struct Method {
     pub version: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct Corpus {
-    pub profile: String,
-    pub version: u32,
-    pub sha256: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct ExecutionConfig {
-    pub gpu_layers: Option<i64>,
-    pub threads: Option<i64>,
-    pub threads_batch: Option<i64>,
-    pub flash_attention: Option<String>,
-    pub cache_type_k: Option<String>,
-    pub cache_type_v: Option<String>,
-    pub split_mode: Option<String>,
-    pub tensor_split: Option<Vec<f32>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct BenchmarkProvenance {
-    pub schema_version: u32,
-    pub app_version: String,
-    pub method: Method,
-    pub corpus: Corpus,
-    pub model: ModelIdentity,
-    pub environment: Environment,
-    #[serde(default)]
-    pub execution_config: ExecutionConfig,
-}
-
-impl BenchmarkProvenance {
-    /// Snapshots are never hashed, so a snapshot format with a digest is forged;
-    /// the fingerprint and revision keep the shapes the app writes.
-    fn snapshot_identity_valid(&self) -> bool {
-        use crate::providers::artifacts::ArtifactFormat;
-        let model = &self.model;
-        let snapshot = matches!(
-            model.format,
-            Some(ArtifactFormat::HfSafetensors | ArtifactFormat::Mlx)
-        );
-        (!snapshot || (model.status == "unidentified" && model.sha256.is_none()))
-            && model.local_fingerprint.as_deref().is_none_or(|value| {
-                value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
-            && model.revision.as_deref().is_none_or(|value| {
-                (1..=128).contains(&value.len())
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-/".contains(&byte))
-            })
-    }
-
-    pub(crate) fn validate(&self, profile: &str) -> Result<(), String> {
-        let digest =
-            |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
-        let model_valid = match self.model.status.as_str() {
-            "sha256" => {
-                self.model.sha256.as_deref().is_some_and(digest) && self.model.size_bytes.is_some()
-            }
-            "unidentified" => self.model.sha256.is_none(),
-            "multipart" => self.model.sha256.is_none() && self.model.size_bytes.is_none(),
-            _ => false,
-        } && self.snapshot_identity_valid()
-            && self
-                .model
-                .metadata
-                .as_ref()
-                // Records written before model metadata existed carry none, and
-                // stay valid; one that carries metadata must carry a usable shape.
-                .is_none_or(super::model_metadata::BenchmarkModelMetadata::is_valid);
-        if self.schema_version != 1
-            || self.method.id != "cold-prompt-serving"
-            || self.method.version != 1
-            || self.corpus.version != 1
-            || self.corpus.profile != profile
-            || !digest(&self.corpus.sha256)
-            || !model_valid
-            || !["cpu", "selected", "automatic", "unknown"]
-                .contains(&self.environment.execution.mode.as_str())
-            || self.environment.installed_gpus.len() > 64
-            || self
-                .environment
-                .system_memory_bytes
-                .is_some_and(|value| value == 0 || value > 9_007_199_254_740_991)
-            || self.environment.execution.selected_gpus.len() > 64
-            || self
-                .environment
-                .cpu
-                .physical_cores
-                .is_some_and(|value| value == 0)
-            || self
-                .execution_config
-                .gpu_layers
-                .is_some_and(|value| value < -1)
-            || self
-                .execution_config
-                .threads
-                .is_some_and(|value| value < -1)
-            || self
-                .execution_config
-                .threads_batch
-                .is_some_and(|value| value < -1)
-            || self
-                .execution_config
-                .tensor_split
-                .as_ref()
-                .is_some_and(|values| {
-                    values.len() > 64
-                        || values
-                            .iter()
-                            .any(|value| !value.is_finite() || *value < 0.0)
-                })
-        {
-            return Err("invalid or unsupported benchmark provenance".into());
-        }
-        Ok(())
-    }
-}
 
 /// New runs freeze the common HTTP workload independently of engine tokenizers.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -194,6 +74,8 @@ pub(crate) struct ServingWorkload {
     pub warmup: bool,
     pub request_usage: bool,
     pub cache_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_nonce: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -237,7 +119,7 @@ pub(crate) struct ServingBenchmarkProvenance {
     pub recorded_model_label: String,
 }
 
-/// New captures always freeze the fixed-output method and its force control.
+/// New captures freeze Cold Prompt without force or usage-probe controls.
 pub(crate) fn capture_serving(
     _cfg: &AppConfig,
     profile: &DeviceProfile,
@@ -245,7 +127,6 @@ pub(crate) fn capture_serving(
     workload: ServingWorkload,
     metadata: Option<&crate::providers::protocol::ServingMetadata>,
     recorded_model_label: String,
-    control: FixedOutputControl,
 ) -> ServingBenchmarkProvenance {
     use crate::providers::{
         artifacts::ArtifactFormat,
@@ -272,17 +153,13 @@ pub(crate) fn capture_serving(
         model.metadata = None;
     }
     model.format = Some(format);
-    let settings = common_request_settings(
-        workload.max_output_tokens,
-        workload.request_usage,
-        Some(control),
-    );
+    let settings = common_request_settings(workload.max_output_tokens, workload.request_usage);
     ServingBenchmarkProvenance {
-        schema_version: 2,
+        schema_version: 3,
         app_version: env!("CARGO_PKG_VERSION").into(),
         method: Method {
             id: "openai-chat-serving".into(),
-            version: crate::performance_bench::FIXED_OUTPUT_METHOD_VERSION,
+            version: crate::performance_bench::METHOD_VERSION,
         },
         workload,
         runtime: metadata
@@ -474,14 +351,8 @@ pub(crate) fn capture_serving_gpu_execution(
     }
 }
 
-/// The exact common request in the persisted ASCII order of names. A
-/// fixed-output request (`@2`) adds exactly one force descriptor; a historical
-/// cap request (`@1`) has none.
-pub(crate) fn common_request_settings(
-    cap: u32,
-    request_usage: bool,
-    force: Option<FixedOutputControl>,
-) -> Vec<RecordedSetting> {
+/// The exact common request in the persisted ASCII order of names.
+pub(crate) fn common_request_settings(cap: u32, request_usage: bool) -> Vec<RecordedSetting> {
     use serde_json::json;
     let mut entries = vec![
         ("max_tokens", json!(cap), Some("tokens".to_owned())),
@@ -491,13 +362,6 @@ pub(crate) fn common_request_settings(
         entries.push(("stream_options.include_usage", json!(true), None));
     }
     entries.push(("temperature", json!(0), None));
-    if let Some(control) = force {
-        let unit = match control {
-            FixedOutputControl::IgnoreEos => None,
-            FixedOutputControl::MinTokens => Some("tokens".to_owned()),
-        };
-        entries.push((control.field_name(), control.value(cap), unit));
-    }
     entries.sort_by(|left, right| left.0.cmp(right.0));
     entries
         .into_iter()
@@ -513,7 +377,7 @@ pub(crate) fn common_request_settings(
 }
 
 impl ServingWorkload {
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self, method_version: u32) -> Result<(), String> {
         let ordered = |values: &[u32]| values.windows(2).all(|pair| pair[0] < pair[1]);
         if ![
             "code_python",
@@ -523,8 +387,14 @@ impl ServingWorkload {
             "novel_ja",
         ]
         .contains(&self.corpus.as_str())
-            || self.corpus_version != 1
-            || self.cache_policy != "as_configured"
+            || method_version != crate::performance_bench::METHOD_VERSION
+            || self.corpus_version != 2
+            || self.cache_policy != "cold_prompt"
+            || self.warmup
+            || !self.prompt_nonce.as_deref().is_some_and(|nonce| {
+                nonce.len() == 32
+                    && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
             || self.inputs.is_empty()
             || self.inputs.len() > 64
             || self.concurrencies.is_empty()
@@ -558,22 +428,12 @@ impl ServingWorkload {
 }
 
 impl ServingBenchmarkProvenance {
-    /// The force control frozen in a fixed-output (`@2`) request descriptor.
-    pub(crate) fn fixed_output_control(&self) -> Option<FixedOutputControl> {
-        FixedOutputControl::ALL.into_iter().find(|control| {
-            self.execution
-                .settings
-                .iter()
-                .any(|setting| setting.target == "request" && setting.name == control.field_name())
-        })
-    }
-
     pub(crate) fn validate(&self, profile: &str) -> Result<(), String> {
         use crate::providers::{
             artifacts::ArtifactFormat,
             protocol::{ServingMemoryScope, ServingTopology},
         };
-        self.workload.validate()?;
+        self.workload.validate(self.method.version)?;
         self.runtime.validate()?;
         let model = &self.model;
         let model_valid = match model.status.as_str() {
@@ -586,21 +446,9 @@ impl ServingBenchmarkProvenance {
             "unidentified" | "multipart" => model.sha256.is_none(),
             _ => false,
         };
-        use crate::performance_bench::{
-            CAP_METHOD_MAX_OUTPUT_TOKENS, CAP_METHOD_VERSION, FIXED_OUTPUT_METHOD_VERSION,
-            FIXED_OUTPUT_TOKENS,
-        };
-        let method_workload = match self.method.version {
-            CAP_METHOD_VERSION => self.workload.max_output_tokens <= CAP_METHOD_MAX_OUTPUT_TOKENS,
-            FIXED_OUTPUT_METHOD_VERSION => {
-                FIXED_OUTPUT_TOKENS.contains(&self.workload.max_output_tokens)
-                    && self.workload.request_usage
-            }
-            _ => false,
-        };
-        if self.schema_version != 2
+        if self.schema_version != 3
             || self.method.id != "openai-chat-serving"
-            || !method_workload
+            || self.method.version != crate::performance_bench::METHOD_VERSION
             || self.workload.corpus != profile
             || self.environment.scope != "aiolm_host"
             || !model_valid
@@ -694,20 +542,10 @@ impl ServingBenchmarkProvenance {
             .filter(|setting| setting.target == "request")
             .cloned()
             .collect();
-        // A cap record never acquires a force descriptor; a fixed-output
-        // record carries exactly one declared control.
-        let force = match self.method.version {
-            CAP_METHOD_VERSION => None,
-            _ => Some(
-                self.fixed_output_control()
-                    .ok_or("fixed-output provenance has no force descriptor")?,
-            ),
-        };
         if requests
             != common_request_settings(
                 self.workload.max_output_tokens,
                 self.workload.request_usage,
-                force,
             )
         {
             return Err("serving settings do not describe the common request".into());
@@ -743,40 +581,23 @@ mod tests {
             fingerprint: "private-fingerprint".into(),
         }
     }
-    fn legacy_fixture() -> BenchmarkProvenance {
-        let profile = profile();
-        BenchmarkProvenance {
-            schema_version: 1,
-            app_version: "legacy-app".into(),
-            method: Method {
-                id: "cold-prompt-serving".into(),
-                version: 1,
-            },
-            corpus: Corpus {
-                profile: "novel_en".into(),
-                version: 1,
-                sha256: "a".repeat(64),
-            },
-            model: serde_json::from_value(json!({
-                "status":"unidentified","sha256":null,"size_bytes":null
-            }))
-            .unwrap(),
-            execution_config: ExecutionConfig::default(),
-            environment: Environment {
-                os: profile.os,
-                arch: profile.arch,
-                cpu: profile.cpu,
-                system_memory_bytes: None,
-                installed_gpus: vec![],
-                execution: Execution {
-                    mode: "automatic".into(),
-                    selected_gpus: vec![],
-                    devices: vec![],
-                    selection_complete: false,
-                },
-                detection: profile.detection,
-            },
-        }
+    fn model() -> ModelIdentity {
+        serde_json::from_value(json!({
+            "status":"unidentified","sha256":null,"size_bytes":null
+        })).unwrap()
+    }
+
+    fn serving_fixture(request_usage: bool) -> ServingBenchmarkProvenance {
+        let workload = serde_json::from_value(json!({
+            "corpus":"novel_en", "corpus_version":2,
+            "inputs":[{"bytes":256,"sha256":"a".repeat(64)}],
+            "max_output_tokens":128,"concurrencies":[1],"repetitions":1,
+            "warmup":false,"request_usage":request_usage,"cache_policy":"cold_prompt",
+            "prompt_nonce":"0123456789abcdef0123456789abcdef"
+        })).unwrap();
+        capture_serving(
+            &AppConfig::default(), &profile(), model(), workload, None, "Recorded model".into()
+        )
     }
 
     #[test]
@@ -788,26 +609,14 @@ mod tests {
             .iter()
             .map(|gpu| gpu.stable_id.clone())
             .collect();
-        let workload = serde_json::from_value(json!({
-            "corpus": "novel_en",
-            "corpus_version": 1,
-            "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
-            "max_output_tokens": 1024,
-            "concurrencies": [1],
-            "repetitions": 1,
-            "warmup": false,
-            "request_usage": true,
-            "cache_policy": "as_configured"
-        }))
-        .unwrap();
+        let workload = serving_fixture(false).workload;
         let provenance = capture_serving(
             &cfg,
             &profile,
-            legacy_fixture().model,
+            model(),
             workload,
             None,
             "Recorded model".into(),
-            FixedOutputControl::IgnoreEos,
         );
         assert_eq!(provenance.environment.host.execution.mode, "unknown");
         assert!(provenance
@@ -937,268 +746,108 @@ mod tests {
     }
 
     #[test]
-    fn model_metadata_rides_along_and_records_written_without_it_stay_valid() {
-        let mut provenance = legacy_fixture();
-        provenance.corpus.sha256 = "a".repeat(64);
-        provenance.model.metadata = Some(super::super::model_metadata::BenchmarkModelMetadata {
-            format: "GGUF".into(),
-            name: Some("Synthetic 7B".into()),
-            architecture: Some("llama".into()),
-            size_label: Some("7B".into()),
-            quantization: Some("Q4_K_M".into()),
-            file_type: Some(15),
-            quantized_by: Some("synthetic-quantizer".into()),
-            repository: Some("synthetic-org/synthetic-model".into()),
-            base_models: vec!["synthetic-base/synthetic-weights".into()],
-            artifact: Some("quantized/synthetic.gguf".into()),
-            source: "gguf+huggingface".into(),
-        });
-        assert!(provenance.validate("novel_en").is_ok());
-
-        let encoded = serde_json::to_value(&provenance).unwrap();
-
-        // A record written before metadata existed carries none and is still a
-        // valid record; the field is optional, not newly required.
-        let mut legacy = encoded.clone();
-        legacy
-            .pointer_mut("/model")
-            .and_then(Value::as_object_mut)
-            .unwrap()
-            .remove("metadata");
-        let legacy: BenchmarkProvenance = serde_json::from_value(legacy).unwrap();
-        assert!(legacy.model.metadata.is_none());
-        assert!(legacy.validate("novel_en").is_ok());
-
-        // A shape this build would not have produced is refused rather than
-        // published: an artifact path can only come from a download.
-        let mut forged = encoded;
-        *forged.pointer_mut("/model/metadata/source").unwrap() = json!("gguf");
-        assert!(serde_json::from_value::<BenchmarkProvenance>(forged)
-            .unwrap()
-            .validate("novel_en")
-            .is_err());
-    }
-
-    #[test]
-    fn a_described_shard_still_refuses_to_claim_the_whole_model_digest() {
-        let mut provenance = legacy_fixture();
-        provenance.corpus.sha256 = "a".repeat(64);
-        provenance.model = ModelIdentity {
-            status: "multipart".into(),
-            sha256: None,
-            size_bytes: None,
-            format: None,
-            revision: None,
-            repository: None,
-            local_fingerprint: None,
-            metadata: Some(super::super::model_metadata::BenchmarkModelMetadata {
-                format: "GGUF".into(),
-                name: Some("Synthetic 70B".into()),
-                architecture: Some("llama".into()),
-                size_label: Some("70B".into()),
-                quantization: Some("Q6_K".into()),
-                file_type: Some(18),
-                quantized_by: None,
-                repository: Some("synthetic-org/synthetic-model".into()),
-                base_models: vec![],
-                artifact: None,
-                source: "gguf".into(),
-            }),
-        };
-        // Describing a shard is not identifying the model it belongs to.
-        assert!(provenance.validate("novel_en").is_ok());
-        assert!(provenance.model.sha256.is_none());
-        assert!(provenance.model.size_bytes.is_none());
-    }
-
-    #[test]
-    fn a_snapshot_identity_cannot_claim_a_digest_or_a_malformed_fingerprint() {
-        use crate::providers::artifacts::ArtifactFormat;
-        let mut provenance = legacy_fixture();
-        provenance.corpus.sha256 = "a".repeat(64);
-        provenance.model.format = Some(ArtifactFormat::Mlx);
-        provenance.model.size_bytes = Some(4096);
-        provenance.model.revision = Some("0123456789abcdef0123456789abcdef01234567".into());
-        provenance.model.local_fingerprint = Some("b".repeat(64));
-        assert!(provenance.validate("novel_en").is_ok());
-
-        let mut forged = provenance.clone();
-        forged.model.status = "sha256".into();
-        forged.model.sha256 = Some("c".repeat(64));
-        assert!(forged.validate("novel_en").is_err());
-        let mut malformed = provenance.clone();
-        malformed.model.local_fingerprint = Some("not-a-fingerprint".into());
-        assert!(malformed.validate("novel_en").is_err());
-        let mut injected = provenance;
-        injected.model.revision = Some("main\nrevision".into());
-        assert!(injected.validate("novel_en").is_err());
-    }
-
-    #[test]
-    fn physical_cores_travel_with_the_thread_count_and_stay_optional() {
-        let mut provenance = legacy_fixture();
-        provenance.corpus.sha256 = "a".repeat(64);
-        assert_eq!(provenance.environment.cpu.physical_cores, Some(4));
-        assert_eq!(provenance.environment.cpu.logical_cores, 8);
-        assert!(provenance.validate("novel_en").is_ok());
-
-        let encoded = serde_json::to_value(&provenance).unwrap();
-        assert_eq!(
-            encoded.pointer("/environment/cpu/physical_cores"),
-            Some(&json!(4))
-        );
-
-        // A record written before the count was collected carries no field and
-        // remains a valid record.
-        let mut legacy = encoded.clone();
-        legacy
-            .pointer_mut("/environment/cpu")
-            .and_then(Value::as_object_mut)
-            .unwrap()
-            .remove("physical_cores");
-        let legacy: BenchmarkProvenance = serde_json::from_value(legacy).unwrap();
-        assert!(legacy.environment.cpu.physical_cores.is_none());
-        assert!(legacy.validate("novel_en").is_ok());
-
-        // Zero cores is a detection bug, not a machine; it is refused instead
-        // of being published as a measured fact.
-        let mut impossible = encoded;
-        *impossible
-            .pointer_mut("/environment/cpu/physical_cores")
-            .unwrap() = json!(0);
-        assert!(serde_json::from_value::<BenchmarkProvenance>(impossible)
-            .unwrap()
-            .validate("novel_en")
-            .is_err());
-    }
-
-    fn serving_fixture(
-        version: u32,
-        cap: u32,
-        force: Option<FixedOutputControl>,
-    ) -> ServingBenchmarkProvenance {
-        let workload = serde_json::from_value(json!({
-            "corpus": "novel_en", "corpus_version": 1,
-            "inputs": [{"bytes": 256, "sha256": "a".repeat(64)}],
-            "max_output_tokens": cap, "concurrencies": [1], "repetitions": 1,
-            "warmup": false, "request_usage": true, "cache_policy": "as_configured"
-        }))
-        .unwrap();
-        let mut provenance = capture_serving(
-            &AppConfig::default(),
-            &profile(),
-            legacy_fixture().model,
-            workload,
-            None,
-            "Recorded model".into(),
-            FixedOutputControl::IgnoreEos,
-        );
-        provenance.method.version = version;
-        provenance.execution.settings = common_request_settings(cap, true, force);
-        provenance
-    }
-
-    #[test]
-    fn fixed_output_descriptors_are_exact_sorted_and_cap_records_stay_readable() {
-        use FixedOutputControl::{IgnoreEos, MinTokens};
-        let names = |settings: &[RecordedSetting]| {
-            settings
-                .iter()
-                .map(|setting| setting.name.clone())
-                .collect::<Vec<_>>()
-        };
-        let ignore = common_request_settings(1024, true, Some(IgnoreEos));
-        assert_eq!(
-            names(&ignore),
-            [
-                "ignore_eos",
-                "max_tokens",
-                "stream",
-                "stream_options.include_usage",
-                "temperature"
-            ]
-        );
-        assert_eq!((&ignore[0].value, &ignore[0].unit), (&json!(true), &None));
-        let min = common_request_settings(204_800, true, Some(MinTokens));
-        assert_eq!(
-            names(&min),
-            [
-                "max_tokens",
-                "min_tokens",
-                "stream",
-                "stream_options.include_usage",
-                "temperature"
-            ]
-        );
-        assert_eq!(min[1].value, json!(204_800));
-        assert_eq!(min[1].unit.as_deref(), Some("tokens"));
-
-        for (cap, control) in [(1024, IgnoreEos), (204_800, MinTokens)] {
-            let provenance = serving_fixture(2, cap, Some(control));
+    fn common_request_descriptors_are_exact_and_usage_is_optional() {
+        for request_usage in [false, true] {
+            let provenance = serving_fixture(request_usage);
             provenance.validate("novel_en").unwrap();
+            let names: Vec<_> = provenance.execution.settings.iter()
+                .map(|setting| setting.name.as_str()).collect();
+            let expected = if request_usage {
+                vec!["max_tokens", "stream", "stream_options.include_usage", "temperature"]
+            } else {
+                vec!["max_tokens", "stream", "temperature"]
+            };
+            assert_eq!(names, expected);
             let restored: ServingBenchmarkProvenance =
                 serde_json::from_value(serde_json::to_value(&provenance).unwrap()).unwrap();
             restored.validate("novel_en").unwrap();
-            assert_eq!(restored.fixed_output_control(), Some(control));
         }
-
-        // A historical cap record keeps its arbitrary limit and never gains a force.
-        let mut cap = serving_fixture(1, 128, None);
-        cap.workload.request_usage = false;
-        cap.execution.settings = common_request_settings(128, false, None);
-        cap.validate("novel_en").unwrap();
-        assert_eq!(cap.fixed_output_control(), None);
-
-        let mut no_usage = serving_fixture(2, 1024, Some(IgnoreEos));
-        no_usage.workload.request_usage = false;
-        no_usage.execution.settings = common_request_settings(1024, false, Some(IgnoreEos));
-        let mut wrong_value = serving_fixture(2, 4096, Some(MinTokens));
-        wrong_value.execution.settings[1].value = json!(1024);
-        let mut two_forces = serving_fixture(2, 1024, Some(MinTokens));
-        two_forces.execution.settings.insert(
-            0,
-            common_request_settings(1024, true, Some(IgnoreEos)).remove(0),
-        );
-        let mut unsorted = serving_fixture(2, 1024, Some(IgnoreEos));
-        unsorted.execution.settings.rotate_left(1);
-        for (label, provenance) in [
-            ("missing force", serving_fixture(2, 1024, None)),
-            (
-                "non-preset target",
-                serving_fixture(2, 1000, Some(IgnoreEos)),
-            ),
-            (
-                "cap claiming force",
-                serving_fixture(1, 1024, Some(IgnoreEos)),
-            ),
-            ("cap above its range", serving_fixture(1, 131_072, None)),
-            ("unknown method", serving_fixture(3, 1024, Some(IgnoreEos))),
-            ("usage disabled", no_usage),
-            ("wrong force value", wrong_value),
-            ("two forces", two_forces),
-            ("unsorted", unsorted),
+        let standard = serving_fixture(false);
+        for (index, value, unit, scope, role) in [
+            (0, json!(127), Some("tokens".to_owned()), vec![], None),
+            (0, json!(128), None, vec![], None),
+            (1, json!(false), None, vec![], None),
+            (2, json!(0.5), None, vec![], None),
+            (2, json!(0), None, vec!["sampling".to_owned()], None),
+            (2, json!(0), None, vec![], Some("path".to_owned())),
         ] {
-            assert!(provenance.validate("novel_en").is_err(), "{label}");
+            let mut invalid = standard.clone();
+            let setting = &mut invalid.execution.settings[index];
+            setting.value = value;
+            setting.unit = unit;
+            setting.scope = scope;
+            setting.role = role;
+            assert!(invalid.validate("novel_en").is_err());
         }
+        let mut extra_usage = standard;
+        extra_usage.execution.settings = common_request_settings(128, true);
+        assert!(extra_usage.validate("novel_en").is_err());
     }
 
     #[test]
-    fn provenance_validation_rejects_unknown_versions_and_inconsistent_identity() {
-        let mut provenance = legacy_fixture();
-        provenance.corpus.sha256 = "a".repeat(64);
-        assert!(provenance.validate("novel_en").is_ok());
+    fn provenance_requires_current_method_nonce_and_cold_workload() {
+        use crate::providers::protocol::{ServingMemoryScope, ServingTopology};
+        let mut provenance = serving_fixture(false);
+        assert_eq!(provenance.schema_version, 3);
+        assert_eq!(provenance.method.version, 5);
+        for cap in [1, 128] {
+            provenance.workload.max_output_tokens = cap;
+            provenance.execution.settings = common_request_settings(cap, false);
+            provenance.validate("novel_en").unwrap();
+        }
+        for topology in [ServingTopology::Owned, ServingTopology::Attached, ServingTopology::Unknown] {
+            provenance.execution.topology = topology;
+            provenance.execution.memory_scope = ServingMemoryScope::Unavailable;
+            provenance.validate("novel_en").unwrap();
+        }
+        for (pointer, value) in [
+            ("/schema_version", json!(2)),
+            ("/method/version", json!(4)),
+            ("/workload/prompt_nonce", Value::Null),
+            ("/workload/prompt_nonce", json!("a".repeat(31))),
+            ("/workload/prompt_nonce", json!("a".repeat(33))),
+            ("/workload/prompt_nonce", json!("A".repeat(32))),
+            ("/workload/prompt_nonce", json!("g".repeat(32))),
+            ("/workload/corpus_version", json!(1)),
+            ("/workload/cache_policy", json!("as_configured")),
+            ("/workload/warmup", json!(true)),
+            ("/workload/max_output_tokens", json!(129)),
+        ] {
+            let mut invalid = serde_json::to_value(&provenance).unwrap();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
+                .unwrap().validate("novel_en").is_err(), "{pointer}");
+        }
         assert!(provenance.validate("code_python").is_err());
-        provenance.schema_version = 2;
-        assert!(provenance.validate("novel_en").is_err());
-        provenance.schema_version = 1;
-        provenance.model.status = "sha256".into();
-        assert!(provenance.validate("novel_en").is_err());
-        provenance.model.status = "unidentified".into();
-        let mut value = serde_json::to_value(&provenance).unwrap();
-        value.as_object_mut().unwrap().remove("execution_config");
-        assert!(serde_json::from_value::<BenchmarkProvenance>(value)
-            .unwrap()
-            .validate("novel_en")
-            .is_ok());
+    }
+
+    #[test]
+    fn serving_model_identity_and_metadata_are_validated() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let provenance = serving_fixture(false);
+        let mut identified = provenance.clone();
+        identified.model.format = Some(ArtifactFormat::Gguf);
+        identified.model.status = "sha256".into();
+        identified.model.sha256 = Some("a".repeat(64));
+        identified.model.size_bytes = Some(4096);
+        identified.validate("novel_en").unwrap();
+        let mut invalid = identified.clone();
+        invalid.model.sha256 = Some("A".repeat(64));
+        assert!(invalid.validate("novel_en").is_err());
+        for format in [ArtifactFormat::HfSafetensors, ArtifactFormat::Mlx] {
+            let mut snapshot = provenance.clone();
+            snapshot.model.format = Some(format);
+            snapshot.validate("novel_en").unwrap();
+            snapshot.model.status = "sha256".into();
+            snapshot.model.sha256 = Some("a".repeat(64));
+            assert!(snapshot.validate("novel_en").is_err());
+        }
+        let mut invalid = serde_json::to_value(identified).unwrap();
+        invalid["model"]["metadata"] = json!({
+            "format":"GGUF","source":"gguf","base_models":[],
+            "artifact":"quantized/model.gguf"
+        });
+        assert!(serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
+            .unwrap().validate("novel_en").is_err());
     }
 }

@@ -8,6 +8,7 @@ import {
   type BenchmarkReceipt,
   type PublicBenchmarkSubmission,
 } from "@aiolm/benchmark-contracts";
+import { parseStoredPublicationBody } from "../contracts/benchmark/publication.ts";
 
 export interface BenchmarkLocalSource { runId: string }
 
@@ -30,8 +31,8 @@ export interface QueuedBenchmark {
   localReconcileAt?: number;
   /** Only newly linked entries opt into the acknowledged local-cache retention policy. */
   localCachePolicy?: "acknowledged-v1";
-  /** Exact frozen publication bytes for new explicit publishing; legacy entries omit this. */
-  requestBody?: string;
+  /** Exact frozen publication wrapper bytes. */
+  requestBody: string;
   /** SHA-256 hex of requestBody, bound to the upload session. */
   bodySha256?: string;
   /** Optional description snapshot; never mutated after binding. */
@@ -117,14 +118,6 @@ export interface MeasurementActivity {
   subscribe(listener: () => void): () => void;
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
 
 /** Dispatch is explicit. Enqueuing or reading history never starts network activity. */
 export function createBenchmarkOutbox(options: {
@@ -141,6 +134,16 @@ export function createBenchmarkOutbox(options: {
   const uuid = options.uuid ?? (() => crypto.randomUUID());
   const random = options.random ?? Math.random;
   const acknowledgements = new Map<string, Promise<boolean>>();
+  const supported = (entry: QueuedBenchmark | undefined): boolean => {
+    if (!entry || typeof entry.requestBody !== "string") return false;
+    try {
+      parseStoredPublicationBody(entry.requestBody);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const discardUnsupported = (id: string) => store.mutate(id, entry => supported(entry) ? entry : undefined);
 
   const needsAcknowledgement = (entry: QueuedBenchmark) => entry.state === "sent" && !!entry.source && !!entry.receipt && entry.localAcknowledgedAt === undefined;
   const sameAcceptance = (current: QueuedBenchmark | undefined, expected: QueuedBenchmark) => !!current
@@ -189,13 +192,14 @@ export function createBenchmarkOutbox(options: {
     const entries = await store.list({ pendingAcknowledgement: true, dueBefore: now(), limit: maxItems });
     let acknowledged = 0;
     for (const entry of entries) {
+      if (!supported(entry)) { await discardUnsupported(entry.id); continue; }
       if (measurement.isActive()) break;
       if (await acknowledge(entry)) acknowledged += 1;
     }
     return acknowledged;
   };
 
-  /** Keep the newest 100 opted-in, acknowledged submissions; legacy and unsent entries are protected. */
+  /** Keep the newest 100 opted-in, acknowledged submissions; other unsent entries are protected. */
   const pruneAcknowledged = async (maxItems = 100): Promise<number> => {
     if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > 100) throw new RangeError("Invalid cache cleanup batch size.");
     if (measurement.isActive()) return 0;
@@ -203,6 +207,7 @@ export function createBenchmarkOutbox(options: {
     try {
       const entries = await store.list({ acknowledgedCache: true, skip: 100, limit: maxItems });
       for (const candidate of entries) {
+        if (!supported(candidate)) { await discardUnsupported(candidate.id); continue; }
         if (measurement.isActive()) break;
         let deleted = false;
         await store.mutate(candidate.id, current => {
@@ -230,6 +235,7 @@ export function createBenchmarkOutbox(options: {
   const claimForDestination = async (id: string, destination: string, signal?: AbortSignal): Promise<{ entry: QueuedBenchmark; token: string } | undefined> => {
     const token = uuid();
     const claimed = await store.mutate(id, (entry) => {
+      if (!entry || !supported(entry)) return undefined;
       if (measurement.isActive() || signal?.aborted) return entry;
       if (!entry || entry.state === "sent" || entry.state === "rejected" || entry.nextAttemptAt > now()) return entry;
       if (entry.state === "sending" && (entry.leaseUntil ?? 0) > now()) return entry;
@@ -317,7 +323,7 @@ export function createBenchmarkOutbox(options: {
   };
 
   return {
-    /** Explicit publication with frozen exact bytes; legacy attempted rows are never auto-wrapped. */
+    /** Explicit publication with frozen exact wrapper bytes. */
     async enqueuePublication(this: void, request: BenchmarkPublicationRequest, options: PublicationEnqueueOptions = {}): Promise<QueuedBenchmark> {
       const normalized = normalizePublicationInput(request);
       const body = serializePublicationRequest(normalized);
@@ -330,49 +336,30 @@ export function createBenchmarkOutbox(options: {
       }
       const localSource = options.source ? { runId: options.source.runId } : undefined;
       const result = await store.mutate(submissionId, (current) => {
-        if (current) {
-          if (current.requestBody !== undefined) {
-            if (current.requestBody !== body) throw new Error("This submission ID already belongs to a different reviewed payload.");
-            if (options.credentialRef !== undefined && current.credentialRef !== undefined && current.credentialRef !== options.credentialRef) {
-              throw new Error("This submission is already bound to a different credential.");
-            }
-            if (options.origin !== undefined && current.origin !== undefined && current.origin !== options.origin) {
-              throw new Error("This submission is already bound to a different destination.");
-            }
-            if (options.bodySha256 !== undefined && current.bodySha256 !== undefined && current.bodySha256 !== options.bodySha256) {
-              throw new Error("This submission is already bound to a different body hash.");
-            }
-            if (localSource && current.source && current.source.runId !== localSource.runId) throw new Error("This submission ID already belongs to a different local benchmark.");
-            const next = { ...current };
-            let changed = false;
-            if (options.credentialRef !== undefined && next.credentialRef === undefined) { next.credentialRef = options.credentialRef; changed = true; }
-            if (options.origin !== undefined && next.origin === undefined) { next.origin = options.origin; changed = true; }
-            if (options.bodySha256 !== undefined && next.bodySha256 === undefined) { next.bodySha256 = options.bodySha256; changed = true; }
-            if (localSource && !next.source) {
-              next.source = localSource;
-              if (!next.localCachePolicy) next.localCachePolicy = "acknowledged-v1";
-              if (next.state === "sent" && next.receipt && next.localAcknowledgedAt === undefined && next.localReconcileAt === undefined) next.localReconcileAt = 0;
-              changed = true;
-            }
-            return changed ? next : current;
+        if (current && supported(current)) {
+          if (current.requestBody !== body) throw new Error("This submission ID already belongs to a different reviewed payload.");
+          if (options.credentialRef !== undefined && current.credentialRef !== undefined && current.credentialRef !== options.credentialRef) {
+            throw new Error("This submission is already bound to a different credential.");
           }
-          // Legacy row: preserve shape unless it never attempted dispatch.
-          const attempted = current.attempts > 0 || current.state === "sending" || current.state === "sent";
-          if (attempted) throw new Error("This submission was already attempted as a legacy request and cannot be rewrapped automatically.");
-          if (canonicalJson(current.payload) !== canonicalJson(normalized.benchmark)) {
-            throw new Error("This submission ID already belongs to a different reviewed payload.");
+          if (options.origin !== undefined && current.origin !== undefined && current.origin !== options.origin) {
+            throw new Error("This submission is already bound to a different destination.");
+          }
+          if (options.bodySha256 !== undefined && current.bodySha256 !== undefined && current.bodySha256 !== options.bodySha256) {
+            throw new Error("This submission is already bound to a different body hash.");
           }
           if (localSource && current.source && current.source.runId !== localSource.runId) throw new Error("This submission ID already belongs to a different local benchmark.");
-          return {
-            ...current,
-            payload: normalized.benchmark,
-            requestBody: body,
-            ...(options.bodySha256 ? { bodySha256: options.bodySha256 } : {}),
-            ...(normalized.description_md ? { descriptionMd: normalized.description_md } : {}),
-            ...(options.credentialRef ? { credentialRef: options.credentialRef } : {}),
-            ...(options.origin ? { origin: options.origin } : {}),
-            ...(localSource && !current.source ? { source: localSource, localCachePolicy: "acknowledged-v1" as const } : {}),
-          };
+          const next = { ...current };
+          let changed = false;
+          if (options.credentialRef !== undefined && next.credentialRef === undefined) { next.credentialRef = options.credentialRef; changed = true; }
+          if (options.origin !== undefined && next.origin === undefined) { next.origin = options.origin; changed = true; }
+          if (options.bodySha256 !== undefined && next.bodySha256 === undefined) { next.bodySha256 = options.bodySha256; changed = true; }
+          if (localSource && !next.source) {
+            next.source = localSource;
+            if (!next.localCachePolicy) next.localCachePolicy = "acknowledged-v1";
+            if (next.state === "sent" && next.receipt && next.localAcknowledgedAt === undefined && next.localReconcileAt === undefined) next.localReconcileAt = 0;
+            changed = true;
+          }
+          return changed ? next : current;
         }
         return {
           id: submissionId, payload: normalized.benchmark, state: "pending", createdAt: now(), attempts: 0, nextAttemptAt: 0,
@@ -388,12 +375,14 @@ export function createBenchmarkOutbox(options: {
     },
     async get(this: void, id: string): Promise<QueuedBenchmark | undefined> {
       if (typeof id !== "string" || !id) throw new Error("Invalid submission lookup.");
-      return store.get(id);
+      const entry = await store.get(id);
+      return entry && !supported(entry) ? discardUnsupported(id) : entry;
     },
     reconcileAccepted,
     pruneAcknowledged,
     async retry(this: void, id: string): Promise<void> {
       await store.mutate(id, (entry) => {
+        if (!entry || !supported(entry)) return undefined;
         if (!entry || entry.state !== "rejected") return entry;
         // Terminal deletes never dispatch again, even on explicit retry.
         if (isTerminalEntry(entry)) return entry;

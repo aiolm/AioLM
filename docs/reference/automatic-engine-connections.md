@@ -131,7 +131,10 @@ model. Changed engine files or model files require fresh model evidence.
   exits first, the error shows the end of the engine's own output.
 - AioLM records checksums of the engine's executable, scripts and connection
   data. If those external files change, register the engine again. After an
-  AioLM update, AioLM revalidates its own connection helper.
+  AioLM update, read-only inventory and benchmark admission retain valid model
+  evidence. The next probe or launch adopts the running app helper after
+  rechecking all pinned engine and connection artifacts; it does not require
+  removing and registering an unchanged engine again.
 
 Engines that need their own protocol, credentials, ambiguous model IDs or
 container creation are not connected automatically. A server already running in
@@ -246,23 +249,15 @@ replace streaming or selected-model checks.
 Normal chat requests add `stream_options.include_usage` automatically only when
 this declaration is true. Unknown or false support leaves that optional field
 out, while an explicit user-supplied `stream_options` value takes precedence.
-Fixed-output benchmarks always request usage and require it to be reported.
-
-`capabilities.fixed_output` is an optional, explicit opt-in naming the request
-field the engine honors to generate exactly `max_tokens` tokens:
-`"ignore_eos"` (sent as `true`) or `"min_tokens"` (sent as the same target as
-`max_tokens`). The probe is rejected unless `stream_usage_supported` is `true`
-and the manifest declares a `request` option with that key: a `flag` or
-`toggle` for `ignore_eos`, or an `integer` without `choices` whose ordinary range
-accepts every value from 1 through 204800 for `min_tokens`. Out-of-range
-`sentinel_values` cannot fill gaps in that interval. A model without the
-`generate` task does not offer it. Missing means unsupported: AioLM never infers this control from an
-engine name, its help output or automatic API verification, and automatic
-connections leave it absent. The declaration only lets the benchmark send the
-field; every request must still report exactly the requested completion-token
-count, and an early stop, overrun or missing count fails the run. Built-in
-llama.cpp sessions use `ignore_eos`, built-in vLLM 0.4.0 or later uses
-`min_tokens`, and vllm-metal and mlx-vlm have no fixed-output control.
+Benchmarks negotiate this optional field on the first actual measurement batch
+when the declaration is true or unknown. An explicit
+false declaration omits it from the start. Only when every request in that first
+batch is rejected with HTTP 400/422 may it be resent once without the field;
+subsequent requests omit it and provenance records false. Mixed accepted/rejected
+requests fail rather than replaying accepted work. Authentication and other
+server failures are not usage fallbacks. No separate usage-check inference or
+measured-workload warmup is sent; readiness verification may still infer.
+The standard API cannot guarantee a reset of attached or unknown external caches.
 
 
 Streaming verification and benchmarks require a blank-line-terminated
@@ -270,13 +265,13 @@ Streaming verification and benchmarks require a blank-line-terminated
 LF, CRLF and CR line endings are accepted; a completed event does not require
 the server to close its socket.
 
-Direct and descendant compute are owned topology. On Unix their memory scope
-is the owned process tree; on Windows only a known direct compute root can
-report root-process memory. Descendant/helper compute on Windows, attached
-services, and unknown compute have unavailable memory attribution. An automatic
-attached proxy reports attached topology and unknown model format; its own
-memory is not inference-engine memory. Owned automatic launch helpers report
-descendant compute, not their proxy root.
+Direct and descendant compute are owned topology. Their memory scope is the
+owned process tree: a process group on Unix or verified job members on Windows,
+including compute launched by an owned helper. Attached services and unknown
+compute have unavailable memory attribution. An automatic attached proxy reports
+attached topology and unknown model format; its own memory is not inference-engine
+memory or VRAM. Owned automatic launch helpers report descendant compute, not
+their proxy root.
 
 ### Creating a manifest for your own llama.cpp build
 
@@ -300,10 +295,10 @@ or the helper, remove the registration and register again.
 ### Limits
 
 A registered engine is used for chat, projects, document search, MCP tools and
-the API server to the extent its probe reports. Fixed-output benchmark admission
-requires a declared output control and streamed completion-token reporting.
-The catalog advertises `openai-chat-serving@2` only when declared; generated
-automatic connections without that declaration remain unsupported for benchmarking.
+the API server to the extent its probe reports. The catalog advertises common
+`openai-chat-serving@5` capability regardless of optional usage declarations.
+Read-only benchmark admission checks the selected model's actual streaming
+text-chat support and configuration without launching or probing controls.
 Numerical verification against a CPU reference and portable runtime archives
 remain unavailable for external engines. Unknown public identity, model format,
 or compute attribution is not replaced with a built-in engine identity.

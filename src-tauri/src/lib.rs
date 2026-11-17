@@ -342,7 +342,6 @@ pub fn run() {
             commands::benchmark::performance_bench_admission,
             commands::benchmark::bench_cancel,
             commands::benchmark::benchmark_history_list,
-            commands::benchmark::benchmark_history_import,
             commands::benchmark::benchmark_history_delete,
             commands::benchmark::benchmark_export_csv,
             commands::benchmark::benchmark_export_xlsx,

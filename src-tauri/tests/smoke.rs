@@ -48,7 +48,7 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     );
     let model = aiolm_lib::branding::env_var("AIOLM_SMOKE_MODEL").expect("set smoke model");
     let mut cfg = cfg_with(&model);
-    // Room for the prompt plus one forced 1024-token answer per parallel slot;
+    // Room for the prompt plus a 128-token output cap per parallel slot;
     // this is the test's private launch, never a saved user setting.
     cfg.ctx_size = 8192;
     if let Ok(gpu_id) = std::env::var("AIOLM_BENCH_SMOKE_GPU") {
@@ -76,12 +76,12 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
         run_id: "smoke-cancel".into(),
         method: Default::default(),
         prompt_bytes: vec![1024],
-        max_output_tokens: 1024,
+        max_output_tokens: 128,
         concurrencies: vec![1, 2],
         repetitions: 1,
         context_profile: "code_python".into(),
-        warmup: true,
-        request_usage: true,
+        warmup: false,
+        request_usage: false,
     };
     let runtime = performance_bench::RuntimeInfo::prepare(&cfg, &request)
         .await
@@ -118,10 +118,11 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     assert!(completed.error.is_none(), "{:?}", completed.error);
     assert_eq!(completed.input_bytes, 1024);
     assert_eq!(completed.timing_source, "client");
+    assert_eq!(completed.max_output_tokens, 128);
+    assert_eq!(completed.input_sha256_by_request.len(), completed.concurrency as usize);
     assert_eq!(
-        completed.reported_completion_tokens_by_request,
-        Some(vec![1024]),
-        "a real ignore_eos run reports exactly the target"
+        serde_json::to_value(&result).unwrap()["provenance"]["method"]["version"],
+        5
     );
     println!(
         "[smoke] cancelled benchmark retained {} rows",

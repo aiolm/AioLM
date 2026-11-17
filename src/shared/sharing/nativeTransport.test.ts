@@ -9,10 +9,13 @@ vi.mock('../api/benchmarkSharing.ts', async (importOriginal) => {
 import { benchmarkSharingCancel, benchmarkSharingSubmit } from '../api/benchmarkSharing.ts';
 import { createNativeSelectedTransport } from './nativeTransport.ts';
 import type { QueuedBenchmark } from './outbox.ts';
+import { servingBenchmark } from '../../testing/servingBenchmark.ts';
+import { toPublicBenchmark } from '../contracts/benchmark/publicBenchmark.ts';
 
 const entry = (overrides: Partial<QueuedBenchmark> = {}): QueuedBenchmark => ({
   id: '00000000-0000-4000-8000-000000000001',
-  payload: { submission_id: '00000000-0000-4000-8000-000000000001' } as QueuedBenchmark['payload'],
+  payload: toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001'),
+  requestBody: JSON.stringify({ benchmark: toPublicBenchmark(servingBenchmark(), '00000000-0000-4000-8000-000000000001'), description_md: '' }),
   state: 'pending',
   createdAt: 1000,
   attempts: 0,

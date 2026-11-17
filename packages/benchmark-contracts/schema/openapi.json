@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AioLM Benchmark Sharing API",
-    "version": "2.2.0",
-    "description": "Service-neutral contract. Server URL and authentication are supplied by the website integration. Retried uploads with an identical Idempotency-Key and payload return the same stored result; reuse with a different payload returns 409. POST /v1/benchmark-runs accepts a publication wrapper or a bare submission with an empty description; bare input does not bypass owner/permit checks. Original measurements and environment are immutable after acceptance; only the current description changes via expected_revision. Contract 0.11.0 added openai-chat-serving@2 fixed-output measurements: supported engine controls, exact preset targets through 204800 tokens, mandatory completion-count reporting and per-request token-count evidence; contract 0.12.0 adds the 128-token preset. Cap-based openai-chat-serving@1 remains historical and is not reinterpreted as fixed output. AioLM is a GUI adapter, not the inference engine. Runtime identity is six required nullable safe labels, not a builtin engine allowlist. Workloads identify exact input UTF-8 bytes and SHA256, requested output tokens, concurrency and repetitions. Measurements are client-observed content/reasoning bytes and response times; token/cache counters are self-reported, and non-completion counters may remain unknown in fixed-output mode. Cache policy is as-configured, not verified cold. Public settings are bounded, typed, privacy-reviewed launch/request entries; raw arguments and machine-local identifiers are excluded. Host environment explicitly identifies scope aiolm_host, and unavailable compute memory is never attributed to an upstream engine. Public schema 3 requires a complete, unique workload grid without failed rows. Legacy schema 1/2 snapshots, cap-based schema 3 snapshots and frozen request bytes remain accepted without conversion under their existing engine/format/method rules. Schema 1 describes llama.cpp GGUF; schema 2 retains vLLM/MLX identities and the vllm-metal plugin identity. Model source repository/revision is provenance, not proof of a weight hash or unmodified weights. Deploy contract 0.12.0 acceptance before enabling 128-token fixed-output uploads; all API paths remain /v1."
+    "version": "3.0.0",
+    "description": "Service-neutral contract 0.15.0 for the single openai-chat-serving@5 benchmark method, using public schema 4. Server URL and authentication are supplied by the website integration. Retried uploads with an identical Idempotency-Key and payload return the same stored result; reuse with a different payload returns 409. POST /v1/benchmark-runs accepts only the exact { benchmark, description_md } publication wrapper. Original measurements and environment are immutable after acceptance; only the current description changes via expected_revision. Cold Prompt uses corpus_version 2, cache_policy cold_prompt, warmup false and a required fresh 32-character lowercase-hex prompt_nonce. Every actual point/request has distinct prompt input, recorded as input_sha256_by_request in launch-slot order. Each row has exactly concurrency hashes, all request hashes are unique across the complete grid, and each workload input sha256 matches its first slot at minimum concurrency and repetition 1. Cold Prompt means fresh user prompt prefixes, not cold inference or verified empty caches. Model loading and readiness are excluded from row timing. Standard streaming chat requests use max_tokens from 1 through 128, stream true and temperature zero, without forced generation. Optional stream_options.include_usage=true is negotiated on the first actual batch; only an all-HTTP-400/422 rejection permits one resend without usage, while mixed acceptance/rejection fails. Recorded workload.request_usage and exact request descriptors describe the effective requests. Each operating point exposes exactly eight metrics in order: first_output_ms (mean per-request time to first content or reasoning byte, ms), prefill_tokens_per_second (mean per-request prompt tokens divided by first-output latency, tok/s), decode_tokens_per_second (mean per-request generation speed after first output, tok/s), tpot_ms (mean per-request time per output token after the first, ms), reported_tokens_per_second (batch total reported completion tokens divided by batch duration, tok/s), output_bytes_per_second (batch total output bytes divided by batch duration, B/s), e2e_ms (batch makespan through the last DONE, ms), peak_memory_bytes (sampled owned process-tree RAM, bytes). Token metrics require engine-reported usage and remain null without the necessary evidence. Early completion, zero-byte completed output and absent or invalid usage remain valid observations. AioLM is a GUI adapter, not the inference engine. Runtime identity is six required nullable safe labels. Public settings are bounded, typed, privacy-reviewed launch/request entries; raw arguments and machine-local identifiers are excluded. Host environment identifies scope aiolm_host, and unavailable compute memory is never attributed to an upstream engine. Public submissions require a complete, unique workload grid without failed rows. Historical methods, schemas and bare publication bodies are rejected. Model source repository/revision is provenance, not proof of a weight hash or unmodified weights. All API paths remain /v1."
   },
   "paths": {
     "/v1/upload-sessions": {
@@ -188,7 +188,7 @@
     "/v1/benchmark-runs": {
       "post": {
         "operationId": "submitBenchmark",
-        "description": "Accepts wrapper or legacy body. Hashes EXACT incoming request bytes. Same ID+owner+body returns existing receipt 200 even without fresh permit or quota; wrong owner rejected; changed body 409; deleted submission with correct owner 410 submission_deleted. New creation validates permit and consumes it, writes run+chunks, charges quotas in ONE transaction, returns 201 receipt. Whole request UTF-8 <=4MiB; rows paged in chunks of 1000, at most 10000 rows.",
+        "description": "Accepts only the publication wrapper. Hashes EXACT incoming request bytes. Same ID+owner+body returns existing receipt 200 even without fresh permit or quota; wrong owner rejected; changed body 409; deleted submission with correct owner 410 submission_deleted. New creation validates permit and consumes it, writes run+chunks, charges quotas in ONE transaction, returns 201 receipt. Whole request UTF-8 <=4MiB; rows paged in chunks of 1000, at most 10000 rows.",
         "parameters": [
           {
             "in": "header",
@@ -226,14 +226,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "./publication.schema.json"
-                  },
-                  {
-                    "$ref": "./public-benchmark.schema.json"
-                  }
-                ]
+                "$ref": "./publication.schema.json"
               }
             }
           }

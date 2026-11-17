@@ -164,6 +164,15 @@ mod tests {
     use super::super::{list, RunJournal};
     use super::*;
 
+    fn write_record(root: &Path, id: &str, created: u64) {
+        let record = fixtures::serving_record(id, created);
+        let path = super::super::path_for(root, &record, &Default::default()).unwrap().unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, super::super::encoded(&super::super::Entry::Start {
+            record, origin: Some(super::super::JournalOrigin::Native),
+        }).unwrap()).unwrap();
+    }
+
     #[test]
     fn ending_ownership_releases_locks_while_a_duplicate_handle_exists() {
         let root = fixtures::root();
@@ -243,7 +252,7 @@ mod tests {
     #[test]
     fn active_journal_is_hidden_from_other_processes_and_process_exit_releases_run_lock() {
         let root = fixtures::root();
-        let journal = RunJournal::begin(&root, fixtures::record("cross-process", 1)).unwrap();
+        let journal = RunJournal::begin(&root, fixtures::serving_record("cross-process", 1)).unwrap();
         let activity_marker = journal.activity_marker.clone();
         assert!(child(&root, "run-active").wait().unwrap().success());
         drop(journal);
@@ -265,11 +274,8 @@ mod tests {
     #[test]
     fn history_only_opens_run_locks_for_the_requested_page() {
         let root = fixtures::root();
-        let records: Vec<_> = (0..150)
-            .map(|index| fixtures::record(&format!("legacy-{index}"), index))
-            .collect();
-        for page in records.chunks(100) {
-            super::super::import(&root, page.to_vec()).unwrap();
+        for index in 0..150 {
+            write_record(&root, &format!("synthetic-{index}"), index);
         }
         assert!(!root.join("run-locks").exists());
         let page = list(&root, 50, 5).unwrap();
@@ -284,7 +290,7 @@ mod tests {
     #[test]
     fn history_preserves_and_skips_a_record_when_its_os_lock_cannot_be_opened() {
         let root = fixtures::root();
-        super::super::import(&root, vec![fixtures::record("lock-unavailable", 1)]).unwrap();
+        write_record(&root, "lock-unavailable", 1);
         fs::create_dir_all(run_lock_path(&root, "lock-unavailable")).unwrap();
         let page = list(&root, 0, 20).unwrap();
         assert_eq!(page.total, 1);

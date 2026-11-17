@@ -1,5 +1,4 @@
 import { formatRuntimeVersionLabel } from "@aiolm/benchmark-contracts";
-import type { LegacyPerformanceBenchmarkResult } from '../api/types.ts';
 
 export interface LoadingProfile {
   id: string;
@@ -45,12 +44,6 @@ export function formatRecordedRuntimeVersion(version: string | null | undefined,
   return formatRuntimeVersionLabel({ name: engine, version, build }) ?? unavailable;
 }
 
-/** Historical Python results keep their measured core/plugin identity. */
-export function formatBenchmarkRuntimeVersion(result: Pick<LegacyPerformanceBenchmarkResult, 'provider' | 'runtime_version' | 'runtime_variant' | 'runtime_plugin_version'>, build: string, unavailable: string): string {
-  if (!result.provider || result.provider === 'llama.cpp') return formatRecordedRuntimeVersion(result.runtime_version, build, unavailable);
-  return formatRuntimeVersionLabel({ name: result.provider, version: result.runtime_version,
-    variant: result.runtime_variant, plugin_version: result.runtime_plugin_version }) ?? unavailable;
-}
 
 export function extractFlagNames(help: string): string[] {
   const seen = new Set<string>();
