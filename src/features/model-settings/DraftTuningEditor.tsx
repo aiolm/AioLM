@@ -50,14 +50,15 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
   };
   useEffect(() => {
     const prev = prevCfgRef.current;
+    if (prev === cfg) return;
     prevCfgRef.current = cfg;
     const pendingKeys = patchKeysRef.current;
     patchKeysRef.current = null;
-    if (prev === cfg) return;
     const changedKeys = (Object.keys(cfg) as (keyof AppConfig)[]).filter(fieldKey => cfg[fieldKey] !== prev[fieldKey]);
-    const external = !pendingKeys || changedKeys.some(fieldKey => !pendingKeys.has(fieldKey as string));
-    if (external) clearDrafts();
-  }, [cfg]);
+    if (pendingKeys && changedKeys.every(fieldKey => pendingKeys.has(fieldKey))) return;
+    for (const name of new Set([...Object.keys(numbers), ...Object.keys(chatNumbers), ...Object.keys(customText), ...Object.keys(selectModes)])) onInvalid(name, false);
+    setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({});
+  }, [cfg, numbers, chatNumbers, customText, selectModes, onInvalid]);
   const pairValid = (current: 'batch_size' | 'ubatch_size', drafts: Partial<Record<NumericKey, string>>, cfgView: AppConfig) => {
     const field = SERVER_FIELDS.find(item => item.key === current)!;
     const candidate = (target: 'batch_size' | 'ubatch_size') => {
@@ -146,21 +147,12 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
     }
     if (changed) emitChange({ chat_options: options });
   };
-  const clearDrafts = (key?: string) => {
-    if (!key) {
-      for (const name of new Set([...Object.keys(numbers), ...Object.keys(chatNumbers), ...Object.keys(customText), ...Object.keys(selectModes)])) onInvalid(name, false);
-      setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({});
-    }
-    else {
-      onInvalid(key, false);
-      setNumbers(previous => { const next = { ...previous }; delete next[key as NumericKey]; return next; });
-      setChatNumbers(previous => { const next = { ...previous }; delete next[key]; return next; });
-      setCustomText(previous => { const next = { ...previous }; delete next[key as ServerTextKey]; return next; });
-      setSelectModes(previous => { const next = { ...previous }; delete next[key]; return next; });
-    }
-  };
   const reset = (key: string) => {
-    clearDrafts(key);
+    onInvalid(key, false);
+    setNumbers(previous => { const next = { ...previous }; delete next[key as NumericKey]; return next; });
+    setChatNumbers(previous => { const next = { ...previous }; delete next[key]; return next; });
+    setCustomText(previous => { const next = { ...previous }; delete next[key as ServerTextKey]; return next; });
+    setSelectModes(previous => { const next = { ...previous }; delete next[key]; return next; });
     const patch = resetTuningField(cfg, key, tuningResetValues(runtime.options));
     emitChange(patch);
     if (key === 'batch_size' || key === 'ubatch_size') {

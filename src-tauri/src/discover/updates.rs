@@ -263,7 +263,7 @@ fn strip_library_prefix(supplied: &Path, library: &Path) -> Option<PathBuf> {
         for component in supplied_comps {
             relative.push(component.as_os_str());
         }
-        return Some(relative);
+        Some(relative)
     }
     #[cfg(not(windows))]
     None

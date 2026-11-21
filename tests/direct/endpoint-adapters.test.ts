@@ -128,7 +128,7 @@ test("endpoint adapters contracts", async () => {
   assert.equal(anthropicParser.isFinished(), true);
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(anthropicPayload, { status: 200 })) as typeof fetch;
+  globalThis.fetch = async () => new Response(anthropicPayload, { status: 200 });
   try {
     const streamUsages: Array<unknown> = [];
     const streamed = await anthropicMessagesStream(
