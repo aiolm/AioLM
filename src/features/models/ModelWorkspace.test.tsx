@@ -73,11 +73,14 @@ describe('model management and settings', () => {
     expect(await within(second).findByText('Running')).toBeVisible();
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
   });
-  it.each(['starting', 'stopping', 'stopped'] as const)('does not mark a %s default model as loaded', async state => {
+  it.each(['starting', 'stopping', 'stopped'] as const)('distinguishes a %s default model from a running model without exposing a busy file to deletion', async state => {
     const base = createTestStore({ active_model: 'b.gguf' }); base.status = { state, model: 'a.gguf' };
     mount(base);
     await findModelButton('a.gguf');
     expect(screen.queryByText('Running')).not.toBeInTheDocument();
+    const remove = screen.getByRole('button', { name: 'Delete: a.gguf' });
+    if (state === 'stopped') expect(remove).toBeEnabled();
+    else expect(remove).toBeDisabled();
   });
   it('opens a model draft while preserving the saved model and running server', async () => {
     const base = createTestStore({ active_model: 'a.gguf' }); base.status = { state: 'running', model: 'a.gguf' };

@@ -9,7 +9,9 @@ export function useSchemaOptionPagination({ schema, filter }: Pick<RuntimeOption
 
   // Rebuilt on each render like the field list: hosts may update the same
   // schema object in place, and the category chooser must follow it.
-  const groups = [...new Set((filter ? schema.options.filter(filter) : schema.options).map(option => option.group || 'runtime'))].sort();
+  const groups = new Set((filter ? schema.options.filter(filter) : schema.options).map(option => option.group || 'runtime'));
+  // A selected group still constrains the search when another category hides it.
+  if (group) groups.add(group);
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     return schema.options.filter(option => {
@@ -24,5 +26,5 @@ export function useSchemaOptionPagination({ schema, filter }: Pick<RuntimeOption
   const changeSearch = (next: string) => { setSearch(next); setLimit(64); };
   const changeGroup = (next: string) => { setGroup(next); setLimit(64); };
   const showMore = () => setLimit(current => current + 64);
-  return { search, group, groups, limit, visible, changeSearch, changeGroup, showMore };
+  return { search, group, groups: [...groups].sort(), limit, visible, changeSearch, changeGroup, showMore };
 }

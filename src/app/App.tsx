@@ -200,8 +200,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   useEffect(() => { setDismissedRuntimeError(null); }, [store.status.error]);
   const serverState = store.status.state;
   const runtimeError = store.status.error === dismissedRuntimeError ? undefined : store.status.error;
-  const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError || overrideError;
-  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? overrideError;
+  const errorText = store.bootError || store.actionError || store.statusPollError || runtimeError || overrideError;
+  const hasError = Boolean(errorText);
   // A failed launch keeps its runtime log with the error it explains; boot and
   // status-read failures are not about the model process and carry no log.
   const failureLog = (serverState === "failed" || serverState === "crashed") && !store.bootError && !store.statusPollError && !overrideError ? store.status.log_tail : undefined;
@@ -353,7 +353,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { const requestUpdate = () => setSettingsUpdateRequest(current => current + 1); if (navigate("settings", requestUpdate)) requestUpdate(); }} />
         <TaskStrip launchesOnly />
-        <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={!!hasError}>
+        <TaskActivity hasActivity={hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={hasError}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}

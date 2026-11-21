@@ -98,6 +98,8 @@ still needs the API key.
   loaded-model list. The listener and its API key stay available.
 - Model replacement and manual unload are rejected while that model is serving
   an active response. Finish or cancel the response first.
+- The model library shows a model as running only once its server is ready.
+  Starting and stopping still prevent deletion of the model files.
 - Idle model unloading considers both internal chat and requests through the
   API. Keeping the API server on does not by itself keep a model loaded.
 - Stopping the API server closes its connections while keeping model processes

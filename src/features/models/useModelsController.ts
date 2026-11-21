@@ -193,9 +193,25 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
   const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
-  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerBusy(session.state)).map(session => modelPathIdentity(loadedModelPath(session))));
-  if (isServerBusy(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
-  const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
+  const usageByPath = new Map<string, 'running' | 'transitioning'>();
+  for (const status of [store.status, ...sessions.filter(session => session.id !== 'default')]) {
+    const path = loadedModelPath(status);
+    if (!path || !isServerBusy(status.state)) continue;
+    const key = modelPathIdentity(path);
+    if (status.state === 'running' || !usageByPath.has(key)) {
+      usageByPath.set(key, status.state === 'running' ? 'running' : 'transitioning');
+    }
+  }
+  const modelUsage = (model: api.GgufModel) => {
+    let usage = usageByPath.get(modelPathIdentity(model.path));
+    if (usage === 'running') return usage;
+    for (const path of model.shards?.files ?? []) {
+      const shard = usageByPath.get(modelPathIdentity(path));
+      if (shard === 'running') return shard;
+      usage ??= shard;
+    }
+    return usage;
+  };
 
   const selectModel = async (model: api.GgufModel) => {
     if (modelUpdates.busy || model.shards?.missing.length) return;
@@ -289,7 +305,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   };
 
   const removeModel = async (model: api.GgufModel) => {
-    if (modelUpdates.busy || serverRunning || isModelLoaded(model)) {
+    if (modelUpdates.busy || serverRunning || modelUsage(model)) {
       notify(t("ui.stopBeforeDelete"));
       return;
     }
@@ -321,5 +337,5 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       onConfirm: () => void remove(),
     });
   };
-  return { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, isModelLoaded, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings };
+  return { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings };
 }

@@ -27,7 +27,7 @@ import { useModelsController,type ModelsPanelProps } from "./useModelsController
  * parent's loaded-model controls between the page heading and the library. */
 export default function ModelsPanel(props: ModelsPanelProps) {
   const { store, onSelectModel, onDiscoverModels, compact = false, active = true, children } = props;
-  const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, isModelLoaded, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
+  const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
   return (
     <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
       <header className="app-page-header"><div><h1 className="app-page-title">{t("section.library")}</h1>{compact && <p className="app-page-description">{copy.hint}</p>}</div></header>
@@ -135,7 +135,8 @@ export default function ModelsPanel(props: ModelsPanelProps) {
         {visible.map((model) => {
           const displayName = normalizeDisplayText(model.name);
           const incomplete = !!model.shards?.missing.length;
-          const running = isModelLoaded(model);
+          const usage = modelUsage(model);
+          const running = usage === 'running';
           const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           const updateStatus = modelUpdates.statuses[model.path];
           const canUpdate = !!updateStatus?.supported && !updateStatus.error && updateStatus.update_available && !!updateStatus.latest_revision;
@@ -168,7 +169,7 @@ export default function ModelsPanel(props: ModelsPanelProps) {
                 {running && <StatusBadge label={copy.running} tone="success" />}
                 {onSelectModel && <button type="button" data-icon="settings" onClick={() => void selectModel(model)} disabled={incomplete || modelUpdates.busy} aria-label={`${modelActions(locale).settings}: ${displayName}`} className="app-button app-button--secondary app-button--sm">{modelActions(locale).settings}</button>}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={modelUpdates.busy || incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={modelUpdates.busy || incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={!modelSettings && runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!usage) void selectAndStart(model); }} disabled={modelUpdates.busy || incomplete || !!usage || store.busy || (!modelSettings && runtimeGap)} title={!modelSettings && runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
               <div className="models-model-path">
                 <code>{normalizeDisplayPath(model.path)}</code>
@@ -180,7 +181,7 @@ export default function ModelsPanel(props: ModelsPanelProps) {
                 {canUpdate && <button type="button" data-icon="refresh" onClick={() => void modelUpdates.update(model.path)} disabled={updateBlocked || modelUpdates.busy || incomplete || scanning} title={!sessionsReady ? updatesCopy.sessionsPending : updateBlocked ? updatesCopy.stopFirst : updatesCopy.incremental} aria-label={`${updatesCopy.update}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0">{updatesCopy.update}</button>}
                 {modelUpdates.updating === model.path && <span role="status" className="text-xs ui-color-muted">{updatesCopy.updating}</span>}
                   <button type="button" data-icon="copy" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
-                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={modelUpdates.busy || running || store.busy || serverRunning} title={(running || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
+                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={modelUpdates.busy || !!usage || store.busy || serverRunning} title={(usage || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
               </div>
             </div>
           );
