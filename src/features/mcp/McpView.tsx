@@ -99,12 +99,12 @@ export default function McpView({ controller }: { controller: McpController }) {
               : <ul className="mcp-tool-list">{tools.map((tool) => <li key={tool.name} className={`app-list-row mcp-tool ${selectedTool?.name === tool.name ? "is-selected" : ""}`}>
                 <div className="mcp-tool__head">
                   <div className="min-w-0"><code className="mcp-tool__name">{normalizeDisplayText(tool.name)}</code><p className="mcp-hint">{normalizeDisplayText(tool.description || t("ui.noToolDescription"))}</p></div>
-                  <button type="button" disabled={saving} onClick={() => { setSelectedTool(tool); setArgsJson("{}\n"); setApproval(null); setResult(null); }} aria-label={`${t("ui.prepareCall")}: ${normalizeDisplayText(tool.name)}`} className="app-button app-button--secondary app-button--sm">{t("ui.prepareCall")}</button>
+                  <button type="button" disabled={saving || approvalBusy} onClick={() => { setSelectedTool(tool); setArgsJson("{}\n"); setApproval(null); setResult(null); }} aria-label={`${t("ui.prepareCall")}: ${normalizeDisplayText(tool.name)}`} className="app-button app-button--secondary app-button--sm">{t("ui.prepareCall")}</button>
                 </div>
                 {selectedTool?.name === tool.name && <div className="mcp-call">
                   <label className="mcp-field">{t("ui.jsonArguments")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayText(argsJson)} onChange={(event) => setArgsJson(event.target.value)} rows={4} className="app-textarea app-mono" /></label>
                   <details className="mcp-schema"><summary>{t("ui.inputSchema")}</summary><McpToolSchema tool={tool} /></details>
-                  <div><button ref={reviewButtonRef} type="button" onClick={prepareCall} disabled={saving} className="app-button app-button--primary">{t("ui.reviewToolCall")}</button></div>
+                  <div><button ref={reviewButtonRef} type="button" onClick={prepareCall} disabled={saving || approvalBusy} className="app-button app-button--primary">{t("ui.reviewToolCall")}</button></div>
                 </div>}
               </li>)}</ul>}
           </section>}

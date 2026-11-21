@@ -607,7 +607,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: document }]);
     writeProjects([project]); setActiveProjectId(project.id);
     const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent(displayDocument);
+    expect(screen.getByLabelText("Linked documents")).toHaveTextContent(displayDocument);
     expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
@@ -622,7 +622,7 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByText("No documents yet.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add document" }));
-    await waitFor(() => expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent("picked.md"));
+    await waitFor(() => expect(screen.getByLabelText("Linked documents")).toHaveTextContent("picked.md"));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(defined(readProjects()[0])).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
   });
@@ -688,5 +688,24 @@ describe("Project configuration snapshots", () => {
     expect(screen.getByText("도구 1개 · 문서 1개")).toBeVisible();
     expect(screen.getByText("Shared setup · 버전 2")).toBeVisible();
     expect(screen.queryByText(/· r2/)).not.toBeInTheDocument();
+  });
+
+  it('keeps working server tools visible when another server fails discovery and normalizes document tooltip paths', async () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Docs', '', store.cfg!, [{ name: 'notes.md', path: '\\\\?\\C:\\synthetic\\notes.md' }], [], '', 100);
+    writeProjects([project]);
+    setActiveProjectId(project.id);
+    mockedApi.mcpListServers.mockResolvedValue([
+      { id: 'alpha', name: 'Alpha', command: 'alpha-mcp', args: [], enabled: true },
+      { id: 'beta', name: 'Beta', command: 'beta-mcp', args: [], enabled: true },
+    ]);
+    mockedApi.mcpListTools.mockImplementation(async (serverId) => {
+      if (serverId === 'alpha') throw new Error('Alpha offline');
+      return [{ name: 'search', description: 'Search docs', input_schema: { type: 'object', properties: {} } }];
+    });
+    const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(await screen.findByText(/Beta · search/)).toBeInTheDocument();
+    expect(await screen.findByText(/Alpha offline/)).toBeInTheDocument();
+    expect(container.querySelector('[title="C:\\\\synthetic\\\\notes.md"]')).toBeInTheDocument();
   });
 });

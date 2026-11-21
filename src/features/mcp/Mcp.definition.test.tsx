@@ -251,4 +251,23 @@ describe('MCP saved definition ownership', () => {
     expect(api.mcpCallTool).toHaveBeenLastCalledWith('beta', 'old_echo', {}, expect.any(String));
     expect(screen.queryByRole('button', { name: 'Approve and run once' })).not.toBeInTheDocument();
   });
+
+  it('retains another server approval when resetting to a new server draft', async () => {
+    saveMcpApprovalPolicy('session');
+    vi.mocked(api.mcpCallTool).mockResolvedValue({ text: 'Synthetic receipt' });
+    await openPanel();
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    await discover();
+    review();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and run once' }));
+    await screen.findByLabelText('Tool result');
+    fireEvent.click(screen.getByText('alpha tools').closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByText('beta tools').closest('button')!);
+    await discover();
+    review();
+    await waitFor(() => expect(api.mcpCallTool).toHaveBeenCalledTimes(2));
+    expect(api.mcpCallTool).toHaveBeenLastCalledWith('beta', 'old_echo', {}, expect.any(String));
+    expect(screen.queryByRole('button', { name: 'Approve and run once' })).not.toBeInTheDocument();
+  });
 });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import * as api from "../../shared/api/index";
+import { errorMessage } from "../../shared/api/errors";
 import { MAX_PROJECT_DOCUMENTS, MAX_PROJECT_TOOLS, type ProjectDocument } from "./projectStore";
 
 interface ProjectResourcesOptions {

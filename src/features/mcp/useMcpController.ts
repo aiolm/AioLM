@@ -25,6 +25,8 @@ export function useMcpController(): McpController {
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [approvalPolicy, setApprovalPolicy] = useState<McpApprovalPolicy>(() => loadMcpApprovalPolicy());
+  const approvalPolicyRef = useRef(approvalPolicy);
+  approvalPolicyRef.current = approvalPolicy;
   const [approvedCalls, setApprovedCalls] = useState<Set<string>>(() => new Set());
   const [tools, setTools] = useState<api.McpTool[]>([]);
   const [toolLoading, setToolLoading] = useState(false);
@@ -132,7 +134,6 @@ export function useMcpController(): McpController {
     setEnabled(true);
     draftBaseline.current = { name: "", command: "", argsText: "", enabled: true };
     setApprovalPolicy(loadMcpApprovalPolicy());
-    setApprovedCalls(new Set());
     setTools([]);
     setSelectedTool(null);
     setApproval(null);
@@ -242,6 +243,7 @@ export function useMcpController(): McpController {
     const view = removalView.current;
     try {
       const next = await api.mcpRemoveServer(server.id);
+      setApprovedCalls(current => new Set([...current].filter(key => !key.startsWith(`${server.id}:`))));
       const current = removalView.current;
       if (!current) return;
       const removedCurrentTarget = current.selectedId === server.id;
@@ -284,7 +286,7 @@ export function useMcpController(): McpController {
   };
 
   const prepareCall = () => {
-    if (!selectedTool || savingRef.current) return;
+    if (!selectedTool || savingRef.current || approvalBusyRef.current) return;
     let parsedArgs: Record<string, unknown>;
     try {
       const parsed = JSON.parse(argsJson) as unknown;
@@ -296,14 +298,14 @@ export function useMcpController(): McpController {
     }
     setError(null);
     setResult(null);
-    if (approvalPolicy === "deny") {
+    if (approvalPolicyRef.current === "deny") {
       setError(t("ui.mcpBlockedByPolicy"));
       return;
     }
     const pending = { tool: selectedTool, args: parsedArgs };
     // A "session"/"server-tool" policy only skips the prompt once this exact
     // server+tool pair has been approved by hand at least once.
-    if (selectedId && canAutoApprove(approvalPolicy, approvedCalls, approvalKey(selectedId, selectedTool.name))) {
+    if (selectedId && canAutoApprove(approvalPolicyRef.current, approvedCalls, approvalKey(selectedId, selectedTool.name))) {
       void runToolCall(pending, true);
       return;
     }
@@ -312,6 +314,11 @@ export function useMcpController(): McpController {
 
   const runToolCall = async (pending: Approval, autoApproved: boolean) => {
     if (!selectedId || approvalBusyRef.current || savingRef.current) return;
+    if (approvalPolicyRef.current === "deny") {
+      setApproval(null);
+      setError(t("ui.mcpBlockedByPolicy"));
+      return;
+    }
     const serverId = selectedId;
     const key = approvalKey(serverId, pending.tool.name);
     const generation = selectionGeneration.current;
@@ -333,12 +340,13 @@ export function useMcpController(): McpController {
       if (activeCallRef.current !== call || generation !== selectionGeneration.current) return;
       if (call.cancelRequested) { setNotice(t("ui.taskCancelled")); return; }
       setResult(response);
-      if (approvalPolicy === "session" || approvalPolicy === "server-tool") {
+      const currentPolicy = approvalPolicyRef.current;
+      if (currentPolicy === "session" || currentPolicy === "server-tool") {
         setApprovedCalls((current) => new Set(current).add(key));
       }
       if (toolError) { setError(toolError); return; }
       setNotice(autoApproved
-        ? `${t("ui.mcpAutoApproved", { policy: policyLabel(approvalPolicy) })} ${t("ui.mcpToolCompleted", { name: pending.tool.name })}`
+        ? `${t("ui.mcpAutoApproved", { policy: policyLabel(currentPolicy) })} ${t("ui.mcpToolCompleted", { name: pending.tool.name })}`
         : t("ui.mcpToolCompleted", { name: pending.tool.name }));
       setError(null);
     } catch (caught) {
@@ -359,13 +367,19 @@ export function useMcpController(): McpController {
   };
 
   const approveCall = async () => {
-    if (!approval) return;
+    if (!approval || approvalBusyRef.current) return;
+    if (approvalPolicyRef.current === "deny") {
+      setApproval(null);
+      setError(t("ui.mcpBlockedByPolicy"));
+      return;
+    }
     await runToolCall(approval, false);
   };
 
   const changeApprovalPolicy = (policy: McpApprovalPolicy) => {
     setApprovalPolicy(policy);
     saveMcpApprovalPolicy(policy);
+    if (policy === "deny") setApproval(null);
     setApprovedCalls(new Set());
     setNotice(`${t("ui.approvalPolicy")}: ${policyLabel(policy)}`);
   };

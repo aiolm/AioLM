@@ -204,4 +204,35 @@ describe('MCP manual call ownership', () => {
     expect(screen.getByRole('button', { name: 'Approve and run once' })).toBeInTheDocument();
     expect(api.mcpCallTool).toHaveBeenCalledOnce();
   });
+
+  it('clears a pending approval prompt and blocks review when policy switches to deny', async () => {
+    render(<Surface />);
+    fireEvent.click((await screen.findByText('alpha tools')).closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Discover tools' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare call: echo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review tool call' }));
+    expect(screen.getByRole('button', { name: 'Approve and run once' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Approval policy' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Deny' }));
+    expect(screen.queryByRole('button', { name: 'Approve and run once' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review tool call' }));
+    expect(screen.getByText('This MCP tool is blocked by the current approval policy.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve and run once' })).not.toBeInTheDocument();
+    expect(api.mcpCallTool).not.toHaveBeenCalled();
+  });
+
+  it('disables Prepare call and Review tool call while approvalBusy is true', async () => {
+    const call = deferred<unknown>();
+    vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />);
+    await startCall();
+    expect(screen.getByRole('button', { name: 'Prepare call: echo' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Review tool call' })).toBeDisabled();
+    await act(async () => call.resolve({ text: 'Finished receipt' }));
+    await screen.findByLabelText('Tool result');
+    expect(screen.getByRole('button', { name: 'Prepare call: echo' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Review tool call' })).toBeEnabled();
+  });
 });
