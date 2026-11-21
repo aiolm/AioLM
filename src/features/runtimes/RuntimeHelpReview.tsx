@@ -114,7 +114,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     setBusy(true); setError(''); setFound(null); setRequest(next);
     registerTask({
       id: taskId, kind: 'runtime', label: copy.helpTitle, interruptible: true,
-      cancel: () => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); return runtimeHelpCancelSelected(cfg); },
+      cancel: async () => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); await runtimeHelpCancelSelected(cfg); },
     });
     try {
       const result = await runtimeHelpDiscoverSelected(cfg, next);

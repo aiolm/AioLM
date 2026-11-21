@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render as renderView, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
+import * as sharing from '../../shared/api/benchmarkSharing';
+import * as native from '../../shared/api/transport';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { benchmarkCopy } from './benchmarkCopy';
@@ -234,15 +236,21 @@ describe('public benchmark review', () => {
 
   it('disables publishing while the description exceeds the length limit', async () => {
     const copy = benchmarkCopy('en');
+    vi.spyOn(native, 'isNativeRuntimeAvailable').mockReturnValue(true);
+    vi.spyOn(sharing, 'benchmarkSharingConfiguration').mockResolvedValue({ base_url: 'https://example.test' });
     render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
     await waitForShare();
+    const publish = screen.getByRole('button', { name: copy.publishSelected });
+    await waitFor(() => expect(publish).toBeEnabled());
     const editor = screen.getByLabelText(copy.descriptionLabel, { exact: false });
     fireEvent.change(editor, { target: { value: 'x'.repeat(4001) } });
-    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeDisabled();
+    expect(publish).toBeDisabled();
   });
 
   it('retries failed share hydration and restores details once readable', async () => {
     const copy = benchmarkCopy('en');
+    vi.spyOn(native, 'isNativeRuntimeAvailable').mockReturnValue(true);
+    vi.spyOn(sharing, 'benchmarkSharingConfiguration').mockResolvedValue({ base_url: 'https://example.test' });
     vi.mocked(getQueuedBenchmark)
       .mockRejectedValueOnce(new Error('temporary read failure'))
       .mockResolvedValueOnce(undefined);
@@ -252,6 +260,6 @@ describe('public benchmark review', () => {
     expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: copy.publishRetry }));
     await screen.findByLabelText('Shared details');
-    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: copy.publishSelected })).toBeEnabled());
   });
 });

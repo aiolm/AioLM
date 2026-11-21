@@ -336,7 +336,7 @@ impl TestApi {
             Arc::new(ErrBuf::default()),
             sessions.clone(),
         );
-        let handle = start(models, EXTERNAL_KEY.into(), 0).await.unwrap();
+        let handle = start(models, EXTERNAL_KEY, 0).await.unwrap();
         Self {
             port: handle.port,
             handle: Some(handle),
@@ -1235,7 +1235,7 @@ async fn malformed_requests_are_refused_with_a_status_before_they_reach_a_model(
 }
 
 #[tokio::test]
-async fn an_oversized_or_chunked_request_gets_an_error_instead_of_a_dropped_connection() {
+async fn oversized_or_malformed_bodies_receive_a_structured_error() {
     let api = TestApi::start().await;
     for (head, expected) in [
         (
@@ -1247,9 +1247,9 @@ async fn an_oversized_or_chunked_request_gets_an_error_instead_of_a_dropped_conn
         ),
         (
             format!(
-                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {EXTERNAL_KEY}\r\nTransfer-Encoding: chunked\r\n\r\ninvalid\r\n"
             ),
-            "411",
+            "400",
         ),
     ] {
         let mut socket = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
@@ -1643,6 +1643,7 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
     assert_eq!(events[4].1["item"]["status"], "completed");
     let completed = &events.last().unwrap().1["response"];
     assert_eq!(&completed["output"][0]["id"], item_id);
+    assert_eq!(completed["output"][0]["status"], "completed");
     assert_eq!(completed["output_text"], "Hello");
     let streamed_id = completed["id"].as_str().unwrap();
     let fourth: Value = api
@@ -1664,7 +1665,7 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
             {"role":"user","content":"two"},
             {"role":"assistant","content":"done"},
             {"role":"user","content":"three"},
-            {"role":"assistant","content":"Hello","reasoning_content":""},
+            {"role":"assistant","content":"Hello"},
             {"role":"user","content":"four"}
         ])
     );
@@ -3041,53 +3042,38 @@ async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
 #[tokio::test]
 async fn cancelled_streaming_response_never_stores_completed_after_cancel_returns() {
     let api = TestApi::start().await;
-    let upstream = Upstream::sse(&["data: {\"id\":\"chatcmpl-race\",\"object\":\"chat.completion.chunk\",\"model\":\"m.gguf\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"]).await;
+    let (upstream, finish_upstream) = gated_stream("first", "last").await;
     api.load_default(&upstream, "worker", "m.gguf");
-    let response_id = "resp_pre_cancelled_race".to_owned();
-    let (cancel_tx, mut cancel_rx) = watch::channel(false);
-    let mut guard =
-        ActiveResponseGuard::register(&api.state.active_responses, &response_id, cancel_tx.clone());
-    // Signal cancel synchronously before finalizing stream, mirroring `/cancel`.
-    let _ = cancel_tx.send(true);
-    let _ = cancel_rx.changed().await;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let req_client = Client::new();
-    let server_responses = Arc::clone(&api.state.responses);
-    let server_resp_id = response_id.clone();
-    let server_task = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let upstream_resp = req_client
-            .post(upstream.url("/v1/chat/completions"))
-            .json(&json!({"model":"m.gguf","messages":[{"role":"user","content":"hi"}],"stream":true}))
-            .send()
-            .await
-            .unwrap();
-        let body = json!({"model":"m.gguf","input":"hi","stream":true});
-        stream_responses(
-            &mut stream,
-            upstream_resp,
-            &body,
-            server_resp_id,
-            None,
-            vec![json!({"role":"user","content":"hi"})],
-            server_responses,
-            true,
-            cancel_rx,
-            &mut guard,
+    let mut response = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"hi","stream":true}),
         )
-        .await
-        .unwrap();
-    });
-
-    let mut client = Client::new()
-        .get(format!("http://{addr}/"))
         .send()
         .await
         .unwrap();
-    let body = drain(&mut client).await;
-    server_task.await.unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = String::new();
+    while !body.contains("\n\n") {
+        body.push_str(&next_chunk(&mut response).await.unwrap());
+    }
+    let created = sse_events(&body);
+    assert_eq!(created[0].0, "response.created");
+    let id = created[0].1["response"]["id"].as_str().unwrap();
+    let path = format!("/v1/responses/{id}");
+    let cancelled: Value = api
+        .post(&format!("{path}/cancel"), &json!({}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cancelled["status"], "cancelled");
+    finish_upstream.notify_one();
+    body.push_str(&drain(&mut response).await);
     let events = sse_events(&body);
     assert!(
         events.iter().any(|(kind, data)| kind == "response.incomplete"
@@ -3098,5 +3084,5 @@ async fn cancelled_streaming_response_never_stores_completed_after_cancel_return
         !events.iter().any(|(kind, _)| kind == "response.completed"),
         "cancelled response must not emit response.completed: {body}"
     );
-    assert!(api.state.responses.lock().await.get(&response_id).is_none());
+    assert_eq!(api.get(&path).send().await.unwrap().status(), 404);
 }

@@ -56,8 +56,8 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     cancelled.current = false;
     running.current = true;
     setBusy(true); setPreparing(true); onBusyChange(true); setError('');
-    registerTask({ id: owner, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => {
-      cancelled.current = true; updateTask(owner, { state: 'cancelling' }); return adapterSetupCancel(owner);
+    registerTask({ id: owner, kind: 'runtime', label: copy.title, interruptible: true, cancel: async () => {
+      cancelled.current = true; updateTask(owner, { state: 'cancelling' }); await adapterSetupCancel(owner);
     } });
     try {
       const draft = await adapterSetupPrepare(owner, recipeToken, inputs);

@@ -41,6 +41,7 @@ export async function loadSession(definition: api.SessionDefinition, { store, cf
     const loadOperation = {};
     currentLoad.current = loadOperation;
     const taskId = `session-load-${runnableDefinition.id}`;
+    let cancelRequested = false;
     setBusyId(runnableDefinition.id);
     setLoadingId(runnableDefinition.id);
     setNotice(null);
@@ -61,6 +62,7 @@ export async function loadSession(definition: api.SessionDefinition, { store, cf
       interruptible: true,
       cancel: async () => {
         if (currentLoad.current !== loadOperation) return;
+        cancelRequested = true;
         try { await api.sessionStop(runnableDefinition.id); }
         catch (error) { if (currentLoad.current === loadOperation) throw error; }
       },
@@ -74,7 +76,7 @@ export async function loadSession(definition: api.SessionDefinition, { store, cf
         if (prepared) setEditing(current => currentSelection.current === runnableDefinition.id
           && sameData({ selectedId: runnableDefinition.id, editing: current }, editSnapshot) ? structuredClone(prepared) : current);
       }
-      if (getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new IpcError('cancelled', 'Session load cancelled.');
+      if (cancelRequested || getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new IpcError('cancelled', 'Session load cancelled.');
       const loaded = await api.sessionStart(runnableDefinition.id, launchConfig, stopExisting);
       notifySessionStatusChanged();
       updateStatus(loaded.id, () => loaded);

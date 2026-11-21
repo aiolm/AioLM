@@ -309,7 +309,7 @@ pub fn inspect_catalog(
 fn catalog_path_key(raw: &str) -> String {
     #[cfg(windows)]
     {
-        let stripped = if raw.len() >= 8 && raw[..8].eq_ignore_ascii_case(r"\\?\UNC\") {
+        let stripped = if raw.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\")) {
             format!(r"\\{}", &raw[8..])
         } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
             rest.to_owned()
@@ -648,19 +648,20 @@ mod tests {
         ];
         let (scan_by_path, binding_path_set) = catalog_indexes(&scan, &binding_paths);
 
-        assert!(scan_by_path["/models/none-first.gguf"].shards.is_none());
+        let key = catalog_path_key;
+        assert!(scan_by_path[&key("/models/none-first.gguf")].shards.is_none());
         assert_eq!(
-            scan_by_path["/models/some-first.gguf"]
+            scan_by_path[&key("/models/some-first.gguf")]
                 .shards
                 .as_ref()
                 .and_then(|shards| shards.files.first())
                 .map(String::as_str),
             Some("first-some.gguf")
         );
-        assert!(binding_path_set.contains("/models/some-first.gguf"));
-        assert!(binding_path_set.contains("/models/absent.gguf"));
-        assert!(!binding_path_set.contains("/models/unbound.gguf"));
-        assert!(binding_path_set.contains("/models/./unbound.gguf"));
+        assert!(binding_path_set.contains(&key("/models/some-first.gguf")));
+        assert!(binding_path_set.contains(&key("/models/absent.gguf")));
+        assert!(!binding_path_set.contains(&key("/models/unbound.gguf")));
+        assert!(binding_path_set.contains(&key("/models/./unbound.gguf")));
 
         let mut paths = vec![
             "/models/unbound.gguf".to_owned(),
@@ -668,7 +669,7 @@ mod tests {
             "/models/none-first.gguf".to_owned(),
             "/models/./unbound.gguf".to_owned(),
         ];
-        paths.sort_by_key(|path| !binding_path_set.contains(path.as_str()));
+        paths.sort_by_key(|path| !binding_path_set.contains(&key(path)));
         assert_eq!(
             paths,
             vec![

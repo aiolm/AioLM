@@ -817,29 +817,31 @@ describe("Performance benchmark workflow", () => {
   });
 
   it('preserves a selected non-llama runtime and blocks starting while the server is stopping', async () => {
-    const open = vi.fn();
+    const open = vi.fn<ModelSettingsContext['open']>();
     vi.mocked(useModelSettings).mockReturnValue({
       open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null,
     } satisfies ModelSettingsContext);
     mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => result(request.run_id));
-    renderPanel();
+    const view = renderPanel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Configure' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
     const openReq = defined(open.mock.calls[0])[0];
-    const vllmCfg: api.AppConfig = { ...openReq.config, active_provider: 'vllm', active_runtime: 'vllm-rt' };
-    act(() => openReq.onApply?.(vllmCfg, { ...openReq.application, settings: profileSettingsSnapshot(vllmCfg) }));
-    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    const vllmCfg: api.AppConfig = { ...testConfig, ...openReq.config, active_provider: 'vllm', active_runtime: 'vllm-rt' };
+    const application = { ...defined(openReq.application), provider: 'vllm' as const, settings: profileSettingsSnapshot(vllmCfg) };
+    await act(async () => openReq.onApply?.(vllmCfg, application));
+    const run = screen.getByRole('button', { name: 'Run benchmark' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     expect(defined(mocked.runPerformanceBench.mock.calls[0])[0]).toMatchObject({
       active_provider: 'vllm',
       active_runtime: 'vllm-rt',
     });
 
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
     const stoppingStore: AppStore = { ...store, status: { ...store.status, state: 'stopping' } };
-    const view = renderPanel(stoppingStore);
-    const buttons = screen.getAllByRole('button', { name: 'Run benchmark' });
-    expect(buttons[buttons.length - 1]).toBeDisabled();
-    view.unmount();
+    view.rerender(<I18nProvider initialLocale="en"><BenchPanel store={stoppingStore} /></I18nProvider>);
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
   });
 
   it('does not revert benchmark phase to running if benchCancel fails after settling', async () => {

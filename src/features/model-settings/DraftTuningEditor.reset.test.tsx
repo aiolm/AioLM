@@ -270,6 +270,7 @@ describe('draft tuning field resets', () => {
     );
     expect(onInvalid).toHaveBeenLastCalledWith('ctx_size', false);
     expect(screen.getByRole('spinbutton', { name: /^--ctx-size\b/ })).toHaveValue(8192);
+    view.unmount();
 
     const paired = mount('tuning', { ...testConfig, batch_size: 2048, ubatch_size: 2048, runtime_defaults: [] });
     fireEvent.change(screen.getByRole('spinbutton', { name: /^--batch-size\b/ }), { target: { value: '512' } });

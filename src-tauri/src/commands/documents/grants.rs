@@ -55,7 +55,7 @@ pub(super) struct DocumentGrants {
 }
 
 impl DocumentGrants {
-    fn new(path: PathBuf) -> Self {
+    pub(super) fn new(path: PathBuf) -> Self {
         Self {
             persisted: Mutex::new(PersistedGrants {
                 path,

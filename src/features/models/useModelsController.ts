@@ -8,7 +8,7 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { useI18n } from "../../shared/i18n/i18n";
 import { memorySourceText, statusDisplayCopy } from '../../shared/i18n/statusDisplayCopy';
 import { modelPathIdentity, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
+import { isLifecycleCancellation, isServerBusy } from "../../shared/lib/serverLifecycle";
 import { formatMebibytes } from '../../shared/lib/units';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { startModelScan } from '../../shared/runtime/modelScan';

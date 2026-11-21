@@ -695,17 +695,16 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig('Docs', '', store.cfg!, [{ name: 'notes.md', path: '\\\\?\\C:\\synthetic\\notes.md' }], [], '', 100);
     writeProjects([project]);
     setActiveProjectId(project.id);
-    mockedApi.mcpListServers.mockResolvedValue([
+    mockedApi.mcpListServers.mockResolvedValueOnce([
       { id: 'alpha', name: 'Alpha', command: 'alpha-mcp', args: [], enabled: true },
       { id: 'beta', name: 'Beta', command: 'beta-mcp', args: [], enabled: true },
     ]);
-    mockedApi.mcpListTools.mockImplementation(async (serverId) => {
-      if (serverId === 'alpha') throw new Error('Alpha offline');
-      return [{ name: 'search', description: 'Search docs', input_schema: { type: 'object', properties: {} } }];
-    });
-    const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(await screen.findByText(/Beta · search/)).toBeInTheDocument();
+    mockedApi.mcpListTools
+      .mockRejectedValueOnce(new Error('Alpha offline'))
+      .mockResolvedValueOnce([{ name: 'search', description: 'Search docs', input_schema: { type: 'object', properties: {} } }]);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(await screen.findByRole('checkbox', { name: 'Beta · search' })).toBeVisible();
     expect(await screen.findByText(/Alpha offline/)).toBeInTheDocument();
-    expect(container.querySelector('[title="C:\\\\synthetic\\\\notes.md"]')).toBeInTheDocument();
+    expect(screen.getByTitle(String.raw`C:\synthetic\notes.md`)).toBeVisible();
   });
 });

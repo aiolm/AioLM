@@ -24,15 +24,21 @@ export function useProjectResources({ selectedTools, setSelectedTools, setDocume
     setMcpLoading(true);
     try {
       const servers = await api.mcpListServers();
-      const entries: { serverId: string; serverName: string; toolName: string; key: string }[] = [];
-      for (const server of servers.filter((item) => item.enabled)) {
-        const tools = await api.mcpListTools(server.id);
-        for (const tool of tools) entries.push({ serverId: server.id, serverName: server.name, toolName: tool.name, key: `${server.id}:${tool.name}` });
+      const entries: typeof mcpCatalog = [];
+      const failures: string[] = [];
+      for (const server of servers.filter(item => item.enabled)) {
+        try {
+          const tools = await api.mcpListTools(server.id);
+          for (const tool of tools) entries.push({ serverId: server.id, serverName: server.name, toolName: tool.name, key: `${server.id}:${tool.name}` });
+        } catch (caught) {
+          failures.push(`${server.name}: ${errorMessage(caught)}`);
+        }
       }
       setMcpCatalog(entries);
-      if (!silent) setError(null);
+      if (failures.length > 0) setError(failures.join('\n'));
+      else if (!silent) setError(null);
     } catch (caught) {
-      if (!silent) setError(caught instanceof Error ? caught.message : String(caught));
+      if (!silent) setError(errorMessage(caught));
     } finally {
       setMcpLoading(false);
     }

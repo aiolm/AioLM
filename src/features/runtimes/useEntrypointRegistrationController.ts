@@ -149,7 +149,7 @@ export function useEntrypointRegistrationController({ locked, onRegistered, onPu
     setBusy(true); setError(''); setSkipHelp(false);
     registerTask({
       id: taskId, kind: 'runtime', label: copy.title, interruptible: true,
-      cancel: () => { cancelled.current = true; updateTask(taskId, { state: 'cancelling' }); return entrypointHelpCancel(entry); },
+      cancel: async () => { cancelled.current = true; updateTask(taskId, { state: 'cancelling' }); await entrypointHelpCancel(entry); },
     });
     try {
       const result = await (cfg ? entrypointHelpDiscover(entry, request, cfg) : entrypointHelpDiscover(entry, request));

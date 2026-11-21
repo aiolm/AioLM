@@ -1291,32 +1291,28 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
             }
             _ = client_left(stream) => return Err(Failure::Connection),
         };
-        let cancelled = {
+        let completed = {
             let mut store = responses.lock().await;
             active_guard.disarm();
             if *cancel_rx.borrow() {
-                true
-            } else {
-                let assistant = openai_assistant_message(&value);
-                let completed = openai_to_responses(&value, &body, &response_id);
-                if store_response {
-                    let history = HistoryNode::append(parent_history, turn_messages, assistant);
-                    remember_response(&mut store, response_id, completed.clone(), history);
-                }
-                false
+                drop(store);
+                write_json_response(
+                    stream,
+                    200,
+                    response_value(&response_id, model, "", Vec::new(), empty_response_usage(), "cancelled"),
+                )
+                .await?;
+                return Ok(());
             }
+            let completed = openai_to_responses(&value, &body, &response_id);
+            if store_response {
+                let assistant = openai_assistant_message(&value);
+                let history = HistoryNode::append(parent_history, turn_messages, assistant);
+                remember_response(&mut store, response_id, completed.clone(), history);
+            }
+            completed
         };
-        if cancelled {
-            write_json_response(
-                stream,
-                200,
-                response_value(&response_id, model, "", Vec::new(), empty_response_usage(), "cancelled"),
-            )
-            .await?;
-            return Ok(());
-        }
-        let response_value = openai_to_responses(&value, &body, &response_id);
-        write_json_response(stream, 200, response_value).await?;
+        write_json_response(stream, 200, completed).await?;
     }
     Ok(())
 }
@@ -1817,32 +1813,30 @@ async fn stream_responses(
     }
     // Atomically check whether `/cancel` already claimed this ID before storing
     // or emitting `"completed"`, preventing `200 cancelled` + stored `"completed"`.
-    let completed = {
+    let (finish_events, completed) = {
         let mut store = responses.lock().await;
         active_guard.disarm();
         if *cancel_rx.borrow() {
-            None
-        } else {
-            let assistant = state.assistant_message();
-            let completed = response_value(
-                &response_id,
-                model,
-                &state.text,
-                std::mem::take(&mut state.output),
-                state.usage.take().unwrap_or_else(empty_response_usage),
-                "completed",
-            );
-            if store_response {
-                let history = HistoryNode::append(parent_history, turn_messages, assistant);
-                remember_response(&mut store, response_id, completed.clone(), history);
-            }
-            Some(completed)
+            drop(store);
+            return send_cancelled_sse(stream, &mut state, &response_id, model).await;
         }
+        let finish_events = state.finish();
+        let assistant = store_response.then(|| state.assistant_message());
+        let completed = response_value(
+            &response_id,
+            model,
+            &state.text,
+            std::mem::take(&mut state.output),
+            state.usage.take().unwrap_or_else(empty_response_usage),
+            "completed",
+        );
+        if let Some(assistant) = assistant {
+            let history = HistoryNode::append(parent_history, turn_messages, assistant);
+            remember_response(&mut store, response_id, completed.clone(), history);
+        }
+        (finish_events, completed)
     };
-    let Some(completed) = completed else {
-        return send_cancelled_sse(stream, &mut state, &response_id, model).await;
-    };
-    write_events(stream, state.finish()).await?;
+    write_events(stream, finish_events).await?;
     let event = state.event(json!({"type":"response.completed","response":completed}));
     write_events(stream, vec![event]).await?;
     stream

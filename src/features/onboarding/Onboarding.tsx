@@ -30,7 +30,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
   const [error, setError] = useState<{ kind: 'saveError' | 'folderError' | 'folderRequired'; detail?: string } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
-  const errorMessage = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const inFlight = useRef(false);
   const lastReadyStep = useRef(step);
 
@@ -54,7 +54,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
     if (!stepChanged && active && active !== owner.body && active !== owner.documentElement && active !== owner.getElementById('root')) return;
     target.focus();
   }, [step, surfaceReady]);
-  useEffect(() => { if (error) errorMessage.current?.focus(); }, [error]);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
   const chooseFolder = async () => {
     if (inFlight.current) return;
@@ -139,7 +139,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
             <div className="setup-folder-note"><strong>{copy.noModels}</strong><p>{copy.noModelsHint}</p></div>
           </div>}
         </div>
-        {error && <div ref={errorMessage} className="setup-error" tabIndex={-1}>
+        {error && <div ref={errorRef} className="setup-error" tabIndex={-1}>
           <FeedbackBanner tone="error" title={error.detail ? copy[error.kind] : undefined}>{error.detail ?? copy[error.kind]}</FeedbackBanner>
         </div>}
         <footer className="setup-footer">

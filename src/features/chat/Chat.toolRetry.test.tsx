@@ -292,46 +292,58 @@ it('shows clipboard copy failures in the visible alert banner and warns when del
     title: 'Live streaming thread',
     messages: [],
   };
-  streamMock.mockImplementationOnce(() => new Promise(() => undefined));
+  let finishStream!: (text: string) => void;
+  streamMock.mockImplementationOnce(() => new Promise(resolve => { finishStream = resolve; }));
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText: vi.fn().mockRejectedValueOnce(new Error('Clipboard unavailable')) },
   });
-  saveChatWorkspace({ activeThreadId: live.id, threads: [live, other] });
-  const store = createTestStore({ active_model: '/synthetic/chat-model' });
-  store.status = { state: 'running', model: 'synthetic-chat', url: 'http://127.0.0.1:1/v1', api_key: 'synthetic-key' };
-  render(<I18nProvider initialLocale="en"><ChatPanel store={store} /></I18nProvider>);
-  await screen.findByRole('heading', { name: 'Live streaming thread' });
+  try {
+    saveChatWorkspace({ activeThreadId: live.id, threads: [live, other] });
+    const store = createTestStore({ active_model: '/synthetic/chat-model' });
+    store.status = { state: 'running', model: 'synthetic-chat', url: 'http://127.0.0.1:1/v1', api_key: 'synthetic-key' };
+    render(<I18nProvider initialLocale="en"><ChatPanel store={store} /></I18nProvider>);
+    await screen.findByRole('heading', { name: live.title });
 
-  const composer = screen.getByRole('textbox', { name: /message/i });
-  fireEvent.change(composer, { target: { value: 'Start background response' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
+    const composer = screen.getByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Start background response' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
 
-  fireEvent.click(screen.getByRole('button', { name: 'Other conversation' }));
-  await screen.findByRole('heading', { name: 'Other conversation' });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: other.title }));
+    await screen.findByRole('heading', { name: other.title });
 
-  fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(/Clipboard unavailable/);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Clipboard unavailable/);
 
-  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
-  fireEvent.click(screen.getByRole('button', { name: `Delete conversation: ${live.title}` }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(chatText.en.stopCurrentResponseFirst);
+    const toggle = screen.getByRole('button', { name: 'Conversations' });
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: `Delete conversation: ${live.title}` }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(chatText.en.stopCurrentResponseFirst);
+  } finally {
+    if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard);
+    else Reflect.deleteProperty(navigator, 'clipboard');
+    await act(async () => { finishStream?.(''); });
+  }
 });
 
 it('ignores Escape in the thread sidebar while an open dialog is active', async () => {
-  const { thread } = await renderSaved();
-  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
-  expect(screen.getByRole('button', { name: `Delete conversation: ${thread.title}` })).toBeVisible();
+  await renderSaved();
+  const toggle = screen.getByRole('button', { name: 'Conversations' });
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
   const dialog = document.createElement('dialog');
-  dialog.setAttribute('open', '');
   document.body.appendChild(dialog);
+  dialog.showModal();
   try {
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.getByRole('button', { name: `Delete conversation: ${thread.title}` })).toBeVisible();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
   } finally {
+    dialog.close();
     dialog.remove();
   }
-  fireEvent.keyDown(document, { key: 'Escape' });
-  expect(screen.queryByRole('button', { name: `Delete conversation: ${thread.title}` })).not.toBeInTheDocument();
+  fireEvent.keyDown(toggle, { key: 'Escape' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });

@@ -111,15 +111,18 @@ describe('model metadata badges', () => {
         model="hf-owner/qwen3-mlx"
         artifact={{
           path: 'models/hf/hf-owner--qwen3-mlx/snapshots/0123456789abcdef0123456789abcdef01234567',
+          name: 'qwen3-mlx',
           format: 'mlx',
+          role: 'model',
           size_bytes: 1024,
+          file_count: 1,
           repository: 'hf-owner/qwen3-mlx',
           architectures: [],
-          tags: [],
           modalities: { text: true, image: false, audio: false, video: false },
-          shards: [],
           incomplete: false,
           missing: [],
+          ownership: 'hf-cache',
+          notes: [],
         }}
       />
     </I18nProvider>);

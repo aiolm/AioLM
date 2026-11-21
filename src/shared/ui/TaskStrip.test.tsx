@@ -278,7 +278,7 @@ describe("task cancellation ownership", () => {
       interruptible: true,
       cancel: () => Promise.reject(new Error("Cancel RPC failed")),
     });
-    const { rerender } = render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
     const strip = screen.getByTestId("task-strip");
     fireEvent.click(within(strip).getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText("Cancel RPC failed")).toBeVisible();
@@ -290,11 +290,11 @@ describe("task cancellation ownership", () => {
     fireEvent.click(within(strip).getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText("Cancel RPC failed")).toBeVisible();
     act(() => finishTask("reject-cancel", "completed"));
-    act(() => dismissTask("reject-cancel"));
-    rerender(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    fireEvent.click(within(strip).getByRole("button", { name: "Dismiss: Background job" }));
+    expect(strip).not.toBeInTheDocument();
 
-    registerTask({ id: "next-job", kind: "other", label: "Next job", phase: "running", interruptible: false });
-    rerender(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    act(() => { registerTask({ id: "next-job", kind: "other", label: "Next job", phase: "running", interruptible: false }); });
+    expect(screen.getByText("Next job")).toBeVisible();
     expect(screen.queryByText("Cancel RPC failed")).not.toBeInTheDocument();
   });
 });

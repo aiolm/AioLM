@@ -376,7 +376,11 @@ fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, AppError
     }
 }
 
-fn select_picked_document(state: &AppState, path: PathBuf) -> Result<String, AppError> {
+fn select_picked_document(
+    state: &AppState,
+    path: PathBuf,
+    grant: impl FnOnce(&Path) -> Result<(), AppError>,
+) -> Result<String, AppError> {
     let canonical = path
         .canonicalize()
         .map_err(|error| AppError::io("cannot select document", &error))?;
@@ -385,7 +389,7 @@ fn select_picked_document(state: &AppState, path: PathBuf) -> Result<String, App
             "unsupported document type; choose a text, DOCX, or PDF document",
         ));
     }
-    grants::document_grants()?.grant(&canonical)?;
+    grant(&canonical)?;
     let mut selected = state
         .selected_document
         .lock()
@@ -405,7 +409,9 @@ pub(crate) async fn pick_document(state: State<'_, AppState>) -> Result<Option<S
     .await
     .map_err(|error| format!("document picker task failed: {error}"))?;
     let chosen = path
-        .map(|chosen| select_picked_document(&state, chosen))
+        .map(|chosen| {
+            select_picked_document(&state, chosen, |path| grants::document_grants()?.grant(path))
+        })
         .transpose()?;
     persist_selected_document(chosen)
 }
@@ -1170,12 +1176,13 @@ mod tests {
             fs::write(path, b"synthetic").unwrap();
         }
         let state = AppState::default();
-        let doc_grants = root.join("doc-grants.json");
-        let _guard = grants::document_grants_override_for_tests(doc_grants);
-
-        let selected_doc = select_picked_document(&state, valid_doc.clone()).unwrap();
+        let doc_grants = grants::DocumentGrants::new(root.join("doc-grants.json"));
+        let grant = |path: &Path| doc_grants.grant(path);
+        let selected_doc = select_picked_document(&state, valid_doc, grant).unwrap();
         assert_eq!(
-            select_picked_document(&state, bad_doc).unwrap_err().kind,
+            select_picked_document(&state, bad_doc, grant)
+                .unwrap_err()
+                .kind,
             crate::error::ErrorKind::Validation
         );
         assert_eq!(

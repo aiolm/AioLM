@@ -1309,7 +1309,7 @@ fn forget_provider_runtime_clears_matching_non_llama_references_only() {
     let kept = lib.entries[1].settings.clone();
     let rev = lib.revision;
     let mut cfg = AppConfig {
-        active_provider: crate::providers::ProviderId::Vllm,
+        active_provider: "vllm".into(),
         active_runtime: "vllm-env-1".into(),
         sessions: vec![super::super::SessionDefinition {
             id: "work".into(),

@@ -355,7 +355,7 @@ describe("loaded model and saved session controls", () => {
     fireEvent.click(savedRow().getByRole('button', { name: 'Load session' }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
     fireEvent.click(within(screen.getByTestId('task-strip')).getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('failed'));
+    expect(await screen.findByText('Synthetic cancellation failure')).toBeVisible();
     await act(async () => finish());
     expect(mocked.sessionStop).toHaveBeenCalledWith('work');
     expect(mocked.sessionStart).not.toHaveBeenCalled();

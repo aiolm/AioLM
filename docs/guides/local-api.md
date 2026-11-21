@@ -66,6 +66,11 @@ Stateless Responses clients can resend returned output items in `input` before
 their `function_call_output` items. Returned reasoning summaries remain attached
 to the assistant turn instead of creating extra user messages.
 
+For a successful Responses stream, each output item is finalized before
+`response.completed`. If `POST /v1/responses/{id}/cancel` interrupts the stream,
+it ends with `response.incomplete` and a `cancelled` status; the cancelled
+response does not remain available by ID.
+
 Anthropic streams deliver parallel tool calls as consecutive content blocks
 after generation finishes, preserving each call's argument fragments. Text and
 reasoning continue streaming while the engine generates them.

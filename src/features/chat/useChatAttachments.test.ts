@@ -302,6 +302,6 @@ describe('composer attachment ownership', () => {
     await act(async () => { await result.current.addAttachment(); });
     expect(result.current.attachments).toHaveLength(2);
     expect(result.current.attachments.map(item => item.name)).toEqual(['a.png', 'b.png']);
-    expect(setError).not.toHaveBeenCalled();
+    expect(setError).toHaveBeenLastCalledWith(null);
   });
 });

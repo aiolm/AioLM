@@ -41,7 +41,7 @@ function runtimeSelection(cfg: api.AppConfig): RuntimeSelection {
   return next;
 }
 
-function benchmarkTarget(current: api.AppConfig, saved?: BenchmarkTargetSelection | null) {
+function benchmarkTarget(current: api.AppConfig, saved?: Partial<BenchmarkTargetSelection> | null) {
   const scoped = saved?.runtime ? { ...current, ...saved.runtime } : current;
   const application = saved?.application ?? appliedProfile(scoped);
   const base = application ? { ...executionConfig(scoped, application.settings), ...(saved?.runtime ?? {}), active_model: application.model } : scoped;

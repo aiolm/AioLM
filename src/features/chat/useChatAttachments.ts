@@ -30,6 +30,8 @@ type AttachmentApplication = { generation: number } & (
 interface PendingDrop { id: string; remaining: number; generation: number }
 type ImportOutcome = 'queued' | 'complete' | 'cancelled' | 'failed' | 'stale';
 
+const mediaKey = (item: ImageAttachment) => item.ref ?? item.dataUrl;
+
 export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false, locale = "en" }: UseChatAttachmentsOptions) {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
@@ -54,9 +56,14 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
 
   useEffect(() => {
     if (!application || generation.current !== application.generation) return;
-    const accepted = application.kind === 'document'
-      ? documents.some(document => document.path === application.value.path)
-      : attachments.includes(application.value);
+    let accepted: boolean;
+    if (application.kind === 'document') {
+      const path = application.value.path;
+      accepted = documents.some(document => document.path === path);
+    } else {
+      const key = mediaKey(application.value);
+      accepted = attachments.some(item => mediaKey(item) === key);
+    }
     // Project bindings may occupy a slot before the queued append commits.
     // Confirm the result after rendering without side effects inside its updater.
     setAttachmentStatus(accepted ? 'ready' : 'failed');
@@ -97,23 +104,10 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
         const attachment = await api.importMedia(path);
         if (!current()) return 'stale';
         const value = { ...attachment, name };
-        const mediaKey = value.ref ?? value.dataUrl;
-        if (attachments.some((item) => (item.ref ?? item.dataUrl) === mediaKey)) {
-          setAttachmentStatus("ready");
-          setError(null);
-          return 'complete';
-        }
-        let appended = false;
-        setAttachments((items) => {
-          if (generation.current !== ownGeneration || items.length >= 4 || items.some((item) => (item.ref ?? item.dataUrl) === mediaKey)) return items;
-          appended = true;
-          return [...items, value];
-        });
-        if (!appended) {
-          setAttachmentStatus("ready");
-          setError(null);
-          return 'complete';
-        }
+        const key = mediaKey(value);
+        setAttachments((items) => generation.current !== ownGeneration || items.length >= 4 || items.some(item => mediaKey(item) === key)
+          ? items
+          : [...items, value]);
         setApplication({ generation: ownGeneration, kind: 'media', value });
         queued = true;
       } else {
@@ -184,7 +178,7 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
   };
 
   const removeAttachment = (dataUrl: string) => {
-    setAttachments((current) => current.filter((item) => (item.ref ?? item.dataUrl) !== dataUrl));
+    setAttachments((current) => current.filter((item) => mediaKey(item) !== dataUrl));
   };
 
   const removeDocument = (path: string) => {

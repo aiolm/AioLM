@@ -11,8 +11,8 @@ const OPTIONS = [
   { value: "system", label: "System" },
 ];
 
-function renderSelect(onChange = vi.fn()) {
-  render(<CustomSelect id="theme" value="light" options={OPTIONS} onChange={onChange} ariaLabel="Theme" />);
+function renderSelect(onChange = vi.fn(), value = "light") {
+  render(<CustomSelect id="theme" value={value} options={OPTIONS} onChange={onChange} ariaLabel="Theme" />);
   const trigger = screen.getByRole("combobox", { name: "Theme" });
   if (!trigger) throw new Error("CustomSelect trigger button not found.");
   return { onChange, trigger };
@@ -685,7 +685,7 @@ describe("CustomSelect", () => {
   });
 
   it("wraps ArrowUp to the last enabled option when nothing is highlighted", () => {
-    const { trigger } = renderSelect({ value: "missing" });
+    const { trigger } = renderSelect(vi.fn(), "missing");
     fireEvent.click(trigger);
     fireEvent.keyDown(trigger, { key: "ArrowUp" });
     expect(trigger).toHaveAttribute("aria-activedescendant", expect.stringContaining("-option-2"));
@@ -693,14 +693,16 @@ describe("CustomSelect", () => {
 
   it("cycles through same-letter options on repeated single-letter typeahead", () => {
     const onChange = vi.fn();
-    render(
-      <CustomSelect
-        value="dark"
+    function ThemePicker() {
+      const [value, setValue] = useState("dark");
+      return <CustomSelect
+        value={value}
         options={[{ value: "dark", label: "Dark" }, { value: "default", label: "Default" }, { value: "light", label: "Light" }]}
-        onChange={onChange}
+        onChange={next => { setValue(next); onChange(next); }}
         ariaLabel="Theme"
-      />,
-    );
+      />;
+    }
+    render(<ThemePicker />);
     const trigger = screen.getByRole("combobox", { name: "Theme" });
     fireEvent.keyDown(trigger, { key: "d" });
     expect(onChange).toHaveBeenLastCalledWith("default");
