@@ -3,6 +3,10 @@
 //! actual spawned process argv, app-owned binding refusal and a rebuilt
 //! runtime that invalidates the reviewed help while keeping saved values.
 //! The option names are fresh; no app code knows them. No inference claims.
+
+#[path = "support/fake_runtime.rs"]
+mod fake_runtime;
+
 use aiolm_lib::{
     providers::{
         self,
@@ -658,7 +662,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     let native_dir = aiolm_lib::runtime::runtime_dir("cpu", "b1").unwrap();
     fs::create_dir_all(&native_dir).unwrap();
     let native_bin = native_dir.join(aiolm_lib::runtime::server_executable_name());
-    fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &native_bin).unwrap();
+    fake_runtime::stage(&native_bin).unwrap();
     let mut native = AppConfig {
         active_backend: "cpu".into(),
         active_build: "b1".into(),

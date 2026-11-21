@@ -9,6 +9,10 @@
 //! A default-suite synthetic interpreter case below separately exercises
 //! public portable export cancellation through real owned child processes;
 //! it executes no Python source and makes no engine-readiness claim.
+
+#[path = "support/fake_runtime.rs"]
+mod fake_runtime;
+
 use aiolm_lib::{
     providers::{
         self,
@@ -683,7 +687,7 @@ mod portable_inventory_cancel {
         } else {
             "aiolm-portable-inventory-fixture"
         });
-        fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &python).unwrap();
+        super::fake_runtime::stage(&python).unwrap();
         fs::write(
             python.with_extension("aiolm-portable-inventory-fixture"),
             format!(

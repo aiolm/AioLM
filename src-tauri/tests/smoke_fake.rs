@@ -6,6 +6,10 @@
 //! gate — it needs no environment variable and no network access, so a
 //! regression in the spawn/readiness/streaming plumbing fails CI instead of
 //! being masked by the gated tests' early-return "pass".
+
+#[path = "support/fake_runtime.rs"]
+mod fake_runtime;
+
 use std::fs;
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +21,6 @@ use aiolm_lib::{server, AppConfig, ErrBuf};
 /// real AioLM-installed runtime. Only runtimes installed in AioLM are ever
 /// used, so the fixture must not rely on the removed PATH lookup.
 fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
-    let fixture = env!("CARGO_BIN_EXE_fake-llama-server");
     let dir = tempfile_dir::TempDir::new();
     let runtime_dir = dir.path().join("runtimes").join("local_fake-cpu");
     std::fs::create_dir_all(&runtime_dir).expect("create fake managed runtime dir");
@@ -26,17 +29,7 @@ fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
     } else {
         "llama-server"
     };
-    fs::copy(fixture, runtime_dir.join(staged_name)).expect("stage fake llama-server fixture");
-    #[cfg(windows)]
-    {
-        // The fixture uses shared provider helpers, so a dynamically linked
-        // WebView loader must travel with it into the cleared runtime environment.
-        let loader = std::path::Path::new(fixture).with_file_name("WebView2Loader.dll");
-        if loader.is_file() {
-            fs::copy(loader, runtime_dir.join("WebView2Loader.dll"))
-                .expect("stage the fixture's WebView loader");
-        }
-    }
+    fake_runtime::stage(&runtime_dir.join(staged_name)).expect("stage fake llama-server fixture");
 
     // `runtimes_root()` derives from the data folder; point it at the
     // throwaway root. This test binary is single-threaded at the point this
