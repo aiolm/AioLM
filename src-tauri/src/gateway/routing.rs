@@ -337,6 +337,14 @@ impl Lease {
     pub(super) fn upstream_key(&self) -> &str {
         &self.key
     }
+
+    /// Whether the leased engine is known to accept `stream_options.include_usage`.
+    pub(super) fn stream_usage_supported(&self) -> Option<bool> {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.stream_usage_supported)
+    }
+
     pub(super) fn adapt(
         &self,
         endpoint: &str,

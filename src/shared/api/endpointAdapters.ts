@@ -448,6 +448,7 @@ export class AnthropicSseParser {
   private buffer = "";
   private result = "";
   private finished = false;
+  private inputTokens = 0;
   private readonly onDelta: (delta: AnthropicStreamDelta) => void;
 
   constructor(onDelta: (delta: AnthropicStreamDelta) => void) {
@@ -503,7 +504,8 @@ export class AnthropicSseParser {
     if (event.type === "message_start") {
       const message = event.message && typeof event.message === "object" ? event.message as Record<string, unknown> : {};
       const usage = message.usage && typeof message.usage === "object" ? message.usage as Record<string, unknown> : {};
-      this.onDelta({ usage: { input_tokens: Number(usage.input_tokens ?? 0), output_tokens: 0 } });
+      this.inputTokens = Number(usage.input_tokens ?? 0);
+      this.onDelta({ usage: { input_tokens: this.inputTokens, output_tokens: 0 } });
     } else if (event.type === "content_block_delta") {
       const delta = event.delta && typeof event.delta === "object" ? event.delta as Record<string, unknown> : {};
       if (delta.type === "text_delta" && typeof delta.text === "string") {
@@ -518,9 +520,10 @@ export class AnthropicSseParser {
     } else if (event.type === "message_delta") {
       const delta = event.delta && typeof event.delta === "object" ? event.delta as Record<string, unknown> : {};
       const usage = event.usage && typeof event.usage === "object" ? event.usage as Record<string, unknown> : undefined;
+      if (usage && usage.input_tokens !== undefined) this.inputTokens = Number(usage.input_tokens);
       this.onDelta({
         finishReason: delta.stop_reason as AnthropicMessagesResponse["stop_reason"] | undefined,
-        usage: usage ? { input_tokens: Number(usage.input_tokens ?? 0), output_tokens: Number(usage.output_tokens ?? 0) } : undefined,
+        usage: usage ? { input_tokens: this.inputTokens, output_tokens: Number(usage.output_tokens ?? 0) } : undefined,
       });
     } else if (event.type === "message_stop") {
       this.finished = true;

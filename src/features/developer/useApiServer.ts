@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { LayoutReadPhase } from "../../shared/api/transport";
 
-export type ApiServerPending = "starting" | "stopping" | "restarting" | null;
+export type ApiServerPending = "starting" | "stopping" | "restarting" | "resetting" | null;
 
 /** How often the visible API page re-reads the listener, so a failure or another control surface shows up. */
 const POLL_INTERVAL_MS = 3000;
@@ -11,7 +11,7 @@ function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-const stopped = (current: api.ApiServerStatus): api.ApiServerStatus => ({ running: false, url: null, api_key: null, port: current.port });
+const stopped = (current: api.ApiServerStatus): api.ApiServerStatus => ({ running: false, url: null, api_key: current.api_key ?? null, port: current.port });
 
 const isVisible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
 
@@ -74,18 +74,20 @@ export function useApiServer(fallbackPort: number, active = true) {
     };
   }, [active, refresh]);
 
-  const run = useCallback(async (kind: Exclude<ApiServerPending, null>, action: () => Promise<void>) => {
-    if (busy.current) return;
+  const run = useCallback(async (kind: Exclude<ApiServerPending, null>, action: () => Promise<void>): Promise<boolean> => {
+    if (busy.current) return false;
     busy.current = true;
     generation.current += 1;
     setPending(kind);
     setError(null);
     try {
       await action();
+      return true;
     } catch (cause) {
       setError(errorText(cause));
       // Whatever the failed call left behind is the truth, not our last guess.
       await api.apiServerStatus().then(setStatus, () => undefined);
+      return false;
     } finally {
       generation.current += 1;
       busy.current = false;
@@ -93,19 +95,20 @@ export function useApiServer(fallbackPort: number, active = true) {
     }
   }, []);
 
-  const start = useCallback(() => run("starting", async () => { setStatus(await api.startApiServer()); }), [run]);
+  const start = useCallback(() => run("starting", async () => { setStatus(await api.startApiServer()); }).then(() => undefined), [run]);
   const stop = useCallback(() => run("stopping", async () => {
     await api.stopApiServer();
     setStatus(stopped);
-  }), [run]);
+  }).then(() => undefined), [run]);
   const restart = useCallback(() => run("restarting", async () => {
     await api.stopApiServer();
     setStatus(stopped);
     setStatus(await api.startApiServer());
-  }), [run]);
+  }).then(() => undefined), [run]);
+  const resetKey = useCallback(() => run("resetting", async () => { setStatus(await api.resetApiKey()); }), [run]);
 
   const clearError = useCallback(() => setError(null), []);
   const getActionRevision = useCallback(() => generation.current, []);
 
-  return { status, checked, pending, error, refresh, start, stop, restart, clearError, getActionRevision };
+  return { status, checked, pending, error, refresh, start, stop, restart, resetKey, clearError, getActionRevision };
 }

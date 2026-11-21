@@ -36,7 +36,7 @@ One listener serves both protocols:
 
 | Protocol | Endpoints | Send the key as |
 | --- | --- | --- |
-| OpenAI-compatible | `GET /v1/models`, `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses` | `Authorization: Bearer <key>` |
+| OpenAI-compatible | `GET /v1/models`, `GET /v1/models/<id>`, `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/audio/transcriptions`, `/v1/audio/translations` | `Authorization: Bearer <key>` |
 | Anthropic Messages | `POST /v1/messages` | `x-api-key: <key>` with an `anthropic-version` header |
 
 ```sh
@@ -44,11 +44,11 @@ curl http://127.0.0.1:8080/v1/models \
   -H "Authorization: Bearer <LOCAL_API_KEY>"
 ```
 
-The API key remains valid while the desktop app is open, including across model
-reloads and API server stop/start. It is generated again when the app starts and
-is not saved to configuration. Copy it from the API server page; examples and
-diagnostic output do not contain the key. Private model-process credentials are
-separate.
+The API key stays the same across restarts, model reloads, and API server
+stop/start until you reset it from the API server page. It is stored separately
+from configuration in a private `api-key` file inside the AioLM data folder.
+Copy it from the API server page; examples and diagnostic output do not contain
+the key. Private model-process credentials are separate.
 
 ### Function tools
 

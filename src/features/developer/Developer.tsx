@@ -12,6 +12,7 @@ import ModelIcon from '../../shared/ui/ModelIcon';
 import StableLabel from '../../shared/ui/StableLabel';
 import StatusBadge from '../../shared/ui/StatusBadge';
 import Badge from '../../shared/ui/Badge';
+import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ApiPortControl from './ApiPortControl';
 import ApiExamples, { type ApiFormat } from './ApiExamples';
 import { apiServerCopy } from './apiServerCopy';
@@ -32,6 +33,8 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
   const [modelsFetched, setModelsFetched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [format, setFormat] = useState<ApiFormat>('openai');
   const configuredPort = store.cfg?.port ?? 8080;
   const panelActive = useContext(ActivePanelContext);
@@ -39,8 +42,8 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
   const apiRunning = apiServer.status.running;
   const apiPending = apiServer.pending;
   const baseUrl = apiRunning ? apiServer.status.url ?? '' : '';
-  const apiKey = apiRunning ? apiServer.status.api_key ?? '' : '';
-  const canQueryModels = !!baseUrl && !!apiKey;
+  const apiKey = apiServer.status.api_key ?? '';
+  const canQueryModels = apiRunning && !!baseUrl && !!apiKey;
   const displayUrl = baseUrl || `http://127.0.0.1:${configuredPort}/v1`;
   const connectionUrl = format === 'anthropic' ? displayUrl.replace(/\/v1\/?$/, '') : displayUrl;
   const modelsRequest = useRef(0);
@@ -94,6 +97,7 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
     try {
       await navigator.clipboard.writeText(text);
       window.clearTimeout(copyTimer.current);
+      setAnnouncement('');
       setCopied(id);
       copyTimer.current = window.setTimeout(() => setCopied(null), 1800);
     } catch (caught) { setError(errorMessage(caught)); }
@@ -103,8 +107,18 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
       <StableLabel value={copied === id ? t('panel.copied') : label} labels={[t('panel.copied'), label]} />
     </button>;
 
+  const handleResetApiKey = async () => {
+    setError(null);
+    if (copied === 'api-key') setCopied(null);
+    setAnnouncement('');
+    const ok = await apiServer.resetKey();
+    setResetConfirmOpen(false);
+    if (ok) setAnnouncement(copy.resetKeyDone);
+  };
+
   const pendingLabels = { starting: t('ui.apiStarting'), stopping: t('ui.apiStopping'), restarting: t('ui.apiRestarting') };
-  const apiStatusLabel = apiPending ? pendingLabels[apiPending] : apiRunning ? t('ui.apiRunning') : t('ui.apiStopped');
+  const lifecyclePending = apiPending === 'starting' || apiPending === 'stopping' || apiPending === 'restarting' ? apiPending : null;
+  const apiStatusLabel = lifecyclePending ? pendingLabels[lifecyclePending] : apiRunning ? t('ui.apiRunning') : t('ui.apiStopped');
   const modelsMessage = !apiRunning ? copy.modelsOff : loadingModels && !modelsFetched ? copy.modelsChecking
     : !modelsFetched ? copy.modelsUnavailable : models.length ? ''
       : store.status.state === 'starting' ? copy.modelsLoading : copy.modelsEmpty;
@@ -114,19 +128,19 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
       <header className="api-page-heading"><h1>{t('section.api')}</h1><p>{copy.intro}</p></header>
       <section className="api-server-control">
         <div className="developer-api-status" role="status" aria-live="polite">
-          <StatusBadge tone={apiPending ? 'warning' : apiRunning ? 'success' : 'neutral'} label={apiStatusLabel} />
+          <StatusBadge tone={lifecyclePending ? 'warning' : apiRunning ? 'success' : 'neutral'} label={apiStatusLabel} />
           <p>{apiRunning ? copy.running : copy.stopped}</p>
         </div>
         <button type="button" onClick={() => void (apiRunning ? apiServer.stop() : apiServer.start())} disabled={!apiServer.checked || apiPending !== null}
-          aria-busy={apiPending !== null} data-icon={apiRunning ? 'stop' : 'play'} className={`app-button ${apiRunning ? 'app-button--secondary' : 'app-button--primary'}`}>
-          <StableLabel value={apiPending ? apiStatusLabel : apiRunning ? t('ui.stopApi') : t('ui.startApi')} labels={[t('ui.startApi'), t('ui.stopApi'), ...Object.values(pendingLabels)]} />
+          aria-busy={lifecyclePending !== null} data-icon={apiRunning ? 'stop' : 'play'} className={`app-button ${apiRunning ? 'app-button--secondary' : 'app-button--primary'}`}>
+          <StableLabel value={lifecyclePending ? apiStatusLabel : apiRunning ? t('ui.stopApi') : t('ui.startApi')} labels={[t('ui.startApi'), t('ui.stopApi'), ...Object.values(pendingLabels)]} />
         </button>
       </section>
       <PanelFeedback>
         {apiServer.error && <FeedbackBanner tone="error" title={t('ui.apiFailedTitle')} onDismiss={apiServer.clearError}>{apiServer.error}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" title={t('error.wrong')} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
       </PanelFeedback>
-      <span className="sr-only" role="status" aria-live="polite">{copied ? t('panel.copied') : ''}</span>
+      <span className="sr-only" role="status" aria-live="polite">{copied ? t('panel.copied') : announcement}</span>
 
       <section className="api-section api-models" aria-labelledby="api-models-title">
         <div className="api-section-heading">
@@ -155,11 +169,16 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
           <p id="api-format-hint" className="api-hint">{copy.formatHint}</p>
         </div>
         <dl className="api-connection-values">
-          <div><dt>{t('ui.baseUrl')}</dt><dd><code>{connectionUrl}</code>{copyButton('base-url', connectionUrl, t('ui.copyUrl'), !baseUrl)}</dd></div>
-          <div><dt>{copy.key}</dt><dd><code aria-hidden="true">••••••••••••••••</code>{copyButton('api-key', apiKey, t('ui.copyApiKey'), !apiKey)}</dd></div>
+          <div><dt>{t('ui.baseUrl')}</dt><dd><code>{connectionUrl}</code>{copyButton('base-url', connectionUrl, t('ui.copyUrl'), !connectionUrl)}</dd></div>
+          <div><dt>{copy.key}</dt><dd><code aria-hidden="true">••••••••••••••••</code><span className="api-key-actions"><button type="button" className="app-button app-button--ghost app-button--sm" data-icon="reset" disabled={!apiServer.checked || apiPending !== null} aria-busy={apiPending === 'resetting'} onClick={() => setResetConfirmOpen(true)}>{copy.resetKey}</button>{copyButton('api-key', apiKey, t('ui.copyApiKey'), !apiKey)}</span></dd></div>
         </dl>
         <p className="api-hint api-key-hint">{copy.keyHint}</p>
       </section>
+
+      <ConfirmDialog open={resetConfirmOpen} title={copy.resetKeyTitle} description={copy.resetKeyConfirm}
+        confirmLabel={copy.resetKey} tone="danger" confirmIcon="reset" busy={apiPending === 'resetting'}
+        onCancel={() => { if (apiPending !== 'resetting') setResetConfirmOpen(false); }}
+        onConfirm={() => void handleResetApiKey()} />
 
       <details className="api-disclosure">
         <summary>{copy.settings}</summary>

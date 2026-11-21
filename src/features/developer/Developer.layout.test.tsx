@@ -10,6 +10,7 @@ vi.mock("../../shared/api/index", () => ({
   localModels: vi.fn(),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
+  resetApiKey: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
   normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
 }));

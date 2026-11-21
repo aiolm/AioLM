@@ -332,6 +332,7 @@ pub fn run() {
             commands::gateway::start_api_server,
             commands::gateway::stop_api_server,
             commands::gateway::api_server_status,
+            commands::gateway::reset_api_key,
             commands::gateway::start_anthropic_gateway,
             commands::gateway::stop_anthropic_gateway,
             commands::gateway::anthropic_gateway_status,
@@ -419,6 +420,9 @@ pub fn run() {
         if retry != rfd::MessageDialogResult::Ok {
             return;
         }
+    }
+    if let Err(error) = app.state::<AppState>().init_persistent_api_key() {
+        eprintln!("could not initialize persistent API key: {error}");
     }
     // Installers from earlier successful updates outlive the process that
     // launched them; reclaim their staging once no installer can be using it.

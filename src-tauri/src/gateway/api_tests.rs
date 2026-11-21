@@ -3037,3 +3037,66 @@ async fn native_transcribe_reports_failed_oversize_and_empty_transcripts() {
     );
     assert_eq!(api.active(), 0);
 }
+
+#[tokio::test]
+async fn cancelled_streaming_response_never_stores_completed_after_cancel_returns() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::sse(&["data: {\"id\":\"chatcmpl-race\",\"object\":\"chat.completion.chunk\",\"model\":\"m.gguf\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"]).await;
+    api.load_default(&upstream, "worker", "m.gguf");
+    let response_id = "resp_pre_cancelled_race".to_owned();
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let mut guard =
+        ActiveResponseGuard::register(&api.state.active_responses, &response_id, cancel_tx.clone());
+    // Signal cancel synchronously before finalizing stream, mirroring `/cancel`.
+    let _ = cancel_tx.send(true);
+    let _ = cancel_rx.changed().await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let req_client = Client::new();
+    let server_responses = Arc::clone(&api.state.responses);
+    let server_resp_id = response_id.clone();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let upstream_resp = req_client
+            .post(upstream.url("/v1/chat/completions"))
+            .json(&json!({"model":"m.gguf","messages":[{"role":"user","content":"hi"}],"stream":true}))
+            .send()
+            .await
+            .unwrap();
+        let body = json!({"model":"m.gguf","input":"hi","stream":true});
+        stream_responses(
+            &mut stream,
+            upstream_resp,
+            &body,
+            server_resp_id,
+            None,
+            vec![json!({"role":"user","content":"hi"})],
+            server_responses,
+            true,
+            cancel_rx,
+            &mut guard,
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut client = Client::new()
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .unwrap();
+    let body = drain(&mut client).await;
+    server_task.await.unwrap();
+    let events = sse_events(&body);
+    assert!(
+        events.iter().any(|(kind, data)| kind == "response.incomplete"
+            && data["response"]["status"] == "cancelled"),
+        "{body}"
+    );
+    assert!(
+        !events.iter().any(|(kind, _)| kind == "response.completed"),
+        "cancelled response must not emit response.completed: {body}"
+    );
+    assert!(api.state.responses.lock().await.get(&response_id).is_none());
+}

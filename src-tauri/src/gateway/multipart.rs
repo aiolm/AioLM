@@ -216,6 +216,35 @@ impl AudioForm {
         format!("multipart/form-data; boundary={}", self.boundary)
     }
 
+    /// Rotate to a fresh boundary if any field value (for example after adapter
+    /// model rewriting) contains the current boundary.
+    pub(super) fn ensure_safe_boundary(&mut self) {
+        let field_collides = |boundary: &str| {
+            !boundary.is_empty()
+                && self
+                    .fields
+                    .values()
+                    .any(|value| value_contains(value, boundary))
+        };
+        if !field_collides(&self.boundary) {
+            return;
+        }
+        loop {
+            let candidate = format!("aiolm-boundary-{}", uuid::Uuid::new_v4().simple());
+            let needle = candidate.as_bytes();
+            if !self.file.windows(needle.len()).any(|w| w == needle)
+                && !self
+                    .file_headers
+                    .windows(needle.len())
+                    .any(|w| w == needle)
+                && !field_collides(&candidate)
+            {
+                self.boundary = candidate;
+                break;
+            }
+        }
+    }
+
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         let boundary = self.boundary.as_bytes();
         let mut body = Vec::new();
@@ -267,6 +296,14 @@ impl AudioForm {
         body.extend_from_slice(boundary);
         body.extend_from_slice(b"--\r\n");
         Ok(body)
+    }
+}
+
+fn value_contains(value: &Value, boundary: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(boundary),
+        Value::Array(items) => items.iter().any(|item| value_contains(item, boundary)),
+        other => other.to_string().contains(boundary),
     }
 }
 
@@ -427,5 +464,28 @@ mod tests {
             &form("", b"")
         )
         .is_err());
+    }
+
+    #[test]
+    fn ensure_safe_boundary_rotates_when_adapted_field_collides() {
+        let raw = form(
+            "--test-boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\npublic\r\n",
+            b"audio",
+        );
+        let mut parsed =
+            AudioForm::parse("multipart/form-data; boundary=test-boundary", &raw).unwrap();
+        parsed.fields.insert(
+            "model".into(),
+            Value::String("adapted-test-boundary-model".into()),
+        );
+        parsed.ensure_safe_boundary();
+        assert_ne!(parsed.boundary, "test-boundary");
+        let reencoded = parsed.encode().unwrap();
+        let reparsed = AudioForm::parse(&parsed.content_type(), &reencoded).unwrap();
+        assert_eq!(
+            reparsed.fields["model"],
+            Value::String("adapted-test-boundary-model".into())
+        );
+        assert_eq!(reparsed.file, b"audio");
     }
 }

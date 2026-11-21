@@ -17,8 +17,8 @@ pub(crate) struct ApiServerStatus {
     pub running: bool,
     /// OpenAI-style base URL, ending in `/v1`. Present only while running.
     pub url: Option<String>,
-    /// The application-lifetime key clients must present. Present only while
-    /// running; never persisted.
+    /// Persistent local API key clients must present. Available even while
+    /// stopped so callers can copy or reset it in advance.
     pub api_key: Option<String>,
     /// The bound port while running, otherwise the port the next start uses.
     pub port: u16,
@@ -61,13 +61,13 @@ fn status_of(
             Some(handle) => ApiServerStatus {
                 running: true,
                 url: Some(api_url(handle.port)),
-                api_key: Some(state.api_key.to_string()),
+                api_key: Some(state.current_api_key().to_string()),
                 port: handle.port,
             },
             None => ApiServerStatus {
                 running: false,
                 url: None,
-                api_key: None,
+                api_key: Some(state.current_api_key().to_string()),
                 port: configured_port(),
             },
         },
@@ -151,6 +151,25 @@ pub(crate) async fn stop_api_server(state: State<'_, AppState>) -> Result<(), Ap
 #[tauri::command]
 pub(crate) fn api_server_status(state: State<'_, AppState>) -> Result<ApiServerStatus, AppError> {
     status_of(&state, configured_port)
+}
+
+async fn reset_key(
+    state: &AppState,
+    configured_port: impl FnOnce() -> u16,
+) -> Result<ApiServerStatus, AppError> {
+    let _control = state.api_control.lock().await;
+    if state.exiting.load(Ordering::Acquire) {
+        return Err(AppError::busy("application is exiting"));
+    }
+    state.reset_api_key()?;
+    status_of(state, configured_port)
+}
+
+#[tauri::command]
+pub(crate) async fn reset_api_key(
+    state: State<'_, AppState>,
+) -> Result<ApiServerStatus, AppError> {
+    reset_key(&state, configured_port).await
 }
 
 /// Legacy alias: the Anthropic endpoint of the unified listener.
@@ -247,22 +266,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stopped_api_reports_no_url_or_key_and_the_configured_port() {
+    async fn a_stopped_api_reports_no_url_with_the_persistent_key_and_configured_port() {
         let state = AppState::default();
+        let expected_key = state.current_api_key().to_string();
         let status = status_of(&state, || 8080).unwrap();
         assert_eq!(
             status,
             ApiServerStatus {
                 running: false,
                 url: None,
-                api_key: None,
+                api_key: Some(expected_key.clone()),
                 port: 8080,
             }
         );
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"running":false,"url":null,"api_key":null,"port":8080})
+            serde_json::json!({"running":false,"url":null,"api_key":expected_key,"port":8080})
         );
     }
 
@@ -276,13 +296,13 @@ mod tests {
             started.url.as_deref(),
             Some(format!("http://127.0.0.1:{}/v1", started.port).as_str())
         );
-        assert_eq!(started.api_key.as_deref(), Some(&*state.api_key));
+        assert_eq!(started.api_key.as_deref(), Some(&*state.current_api_key()));
         let again = start_api(&state, 0).await.unwrap();
         assert_eq!(again, started, "a second start must not rebind");
         assert_eq!(status_of(&state, || 0).unwrap(), started);
         let models = client()
             .get(format!("{}/models", started.url.as_ref().unwrap()))
-            .bearer_auth(&*state.api_key)
+            .bearer_auth(&*state.current_api_key())
             .send()
             .await
             .unwrap();
@@ -300,7 +320,8 @@ mod tests {
         stop_api(&state).await.unwrap();
         stop_api(&state).await.unwrap();
         let stopped = status_of(&state, || 4321).unwrap();
-        assert!(!stopped.running && stopped.url.is_none() && stopped.api_key.is_none());
+        assert!(!stopped.running && stopped.url.is_none());
+        assert_eq!(stopped.api_key.as_deref(), Some(&*state.current_api_key()));
         assert_eq!(stopped.port, 4321);
         assert!(
             tokio::net::TcpStream::connect(("127.0.0.1", started.port))
@@ -513,5 +534,79 @@ mod tests {
         let rendered = format!("{status:?}");
         assert!(!rendered.contains("sk-secret-value"));
         assert!(rendered.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn resetting_the_api_key_rotates_a_running_listener_immediately_and_persists_across_restarts(
+    ) {
+        let dir =
+            std::env::temp_dir().join(format!("aiolm-gw-reset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state1 = AppState::default();
+        let initial_key = state1.init_api_key_in(&dir).unwrap();
+        let started = start_api(&state1, 0).await.unwrap();
+        assert_eq!(started.api_key.as_deref(), Some(&*initial_key));
+        let client = client();
+        let url = format!("{}/models", started.url.as_ref().unwrap());
+        assert_eq!(models_status(&client, &started).await, 200);
+
+        let reset_status = reset_key(&state1, || started.port).await.unwrap();
+        assert!(reset_status.running);
+        assert_eq!(reset_status.port, started.port);
+        let new_key = reset_status.api_key.clone().unwrap();
+        assert_ne!(new_key, &*initial_key);
+
+        // Old key is refused immediately without restarting the listener.
+        let stale = client
+            .get(&url)
+            .bearer_auth(&*initial_key)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), 401);
+        assert_eq!(models_status(&client, &reset_status).await, 200);
+
+        stop_api(&state1).await.unwrap();
+
+        let state2 = AppState::default();
+        assert_eq!(&*state2.init_api_key_in(&dir).unwrap(), new_key);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn resetting_the_api_key_while_stopped_persists_for_the_next_start() {
+        let dir = std::env::temp_dir().join(format!(
+            "aiolm-gw-reset-stopped-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = AppState::default();
+        let initial_key = state.init_api_key_in(&dir).unwrap();
+        let reset_status = reset_key(&state, || 8080).await.unwrap();
+        assert!(!reset_status.running);
+        let rotated = reset_status.api_key.unwrap();
+        assert_ne!(rotated, &*initial_key);
+
+        let started = start_api(&state, 0).await.unwrap();
+        assert_eq!(started.api_key.as_deref(), Some(rotated.as_str()));
+        assert_eq!(models_status(&client(), &started).await, 200);
+
+        stop_api(&state).await.unwrap();
+        let state2 = AppState::default();
+        assert_eq!(&*state2.init_api_key_in(&dir).unwrap(), rotated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_reset_after_exit_began_is_refused() {
+        let state = AppState::default();
+        let before = state.current_api_key();
+        state.begin_normal_exit();
+        let error = reset_key(&state, || 0).await.unwrap_err();
+        assert_eq!(error.kind, crate::error::ErrorKind::Busy);
+        assert_eq!(error.message, "application is exiting");
+        assert_eq!(state.current_api_key(), before);
     }
 }

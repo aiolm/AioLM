@@ -8,8 +8,9 @@ type Language = 'curl' | 'python' | 'javascript';
 
 const endpoints = {
   openai: [
-    ['GET', '/v1/models'], ['POST', '/v1/chat/completions'], ['POST', '/v1/responses'],
+    ['GET', '/v1/models'], ['GET', '/v1/models/<id>'], ['POST', '/v1/chat/completions'], ['POST', '/v1/responses'],
     ['GET / DELETE', '/v1/responses/<id>'], ['POST', '/v1/completions'], ['POST', '/v1/embeddings'],
+    ['POST', '/v1/audio/transcriptions'], ['POST', '/v1/audio/translations'],
   ],
   anthropic: [['POST', '/v1/messages']],
 };

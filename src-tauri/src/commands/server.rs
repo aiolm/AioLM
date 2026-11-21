@@ -1170,7 +1170,7 @@ mod tests {
             }
             let loaded: serde_json::Value = client
                 .get(&url)
-                .bearer_auth(&*state.api_key)
+                .bearer_auth(&*state.current_api_key())
                 .send()
                 .await
                 .unwrap()
@@ -1189,7 +1189,7 @@ mod tests {
             assert!(state.gateway.lock().unwrap().as_ref().unwrap().is_running());
             let empty: serde_json::Value = client
                 .get(&url)
-                .bearer_auth(&*state.api_key)
+                .bearer_auth(&*state.current_api_key())
                 .send()
                 .await
                 .unwrap()

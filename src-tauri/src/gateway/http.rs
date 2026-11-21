@@ -115,6 +115,20 @@ impl ApiError {
     }
 }
 
+const SINGLETON_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "authorization",
+    "x-api-key",
+    "content-type",
+];
+
+enum BodyFraming {
+    Length(usize),
+    Chunked,
+}
+
 /// The parsed request line and headers of a request whose body has not been
 /// read yet. Reading the head first lets the listener authenticate a caller
 /// before it buffers anything they send.
@@ -124,7 +138,7 @@ pub(super) struct Head {
     pub path: String,
     /// Header names are lower-cased.
     pub headers: HashMap<String, String>,
-    content_length: usize,
+    framing: BodyFraming,
     /// Body bytes that arrived together with the headers.
     received: Vec<u8>,
 }
@@ -172,6 +186,42 @@ fn bad_request(message: &str) -> ApiError {
     ApiError::new(400, "invalid_request", message)
 }
 
+fn normalize_target_path(target: &str) -> Result<String, ApiError> {
+    let raw = if let Some(rest) = target
+        .as_bytes()
+        .get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"http://"))
+        .then(|| &target[7..])
+        .or_else(|| {
+            target
+                .as_bytes()
+                .get(..8)
+                .is_some_and(|head| head.eq_ignore_ascii_case(b"https://"))
+                .then(|| &target[8..])
+        }) {
+        let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
+        let after_authority = &rest[authority_end..];
+        if after_authority.starts_with('/') {
+            after_authority
+        } else {
+            "/"
+        }
+    } else {
+        target
+    };
+    let mut path = raw.split('?').next().unwrap_or_default();
+    if path.is_empty() || !path.starts_with('/') {
+        return Err(bad_request("malformed request target"));
+    }
+    if path.len() > 1 && path.ends_with('/') {
+        path = path.trim_end_matches('/');
+        if path.is_empty() {
+            path = "/";
+        }
+    }
+    Ok(path.to_string())
+}
+
 async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
     let mut bytes = Vec::with_capacity(8192);
     let mut buffer = [0_u8; 8192];
@@ -214,8 +264,8 @@ async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
     if method.is_empty() || target.is_empty() {
         return Err(bad_request("malformed request line"));
     }
-    let path = target.split('?').next().unwrap_or_default().to_string();
-    let mut headers = HashMap::new();
+    let path = normalize_target_path(target)?;
+    let mut headers: HashMap<String, String> = HashMap::new();
     for line in lines.filter(|line| !line.is_empty()) {
         let (name, value) = line
             .split_once(':')
@@ -231,41 +281,176 @@ async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
             return Err(bad_request("invalid request header name or value"));
         }
         let name = name.to_ascii_lowercase();
-        if name == "host" && headers.contains_key(&name) {
-            return Err(bad_request("multiple Host headers are not supported"));
+        let trimmed = value.trim_matches([' ', '\t']);
+        if let Some(existing) = headers.get_mut(&name) {
+            if SINGLETON_HEADERS.contains(&name.as_str()) {
+                return Err(bad_request(&format!(
+                    "duplicate {name} header is not supported"
+                )));
+            }
+            if !trimmed.is_empty() {
+                if !existing.is_empty() {
+                    existing.push_str(", ");
+                }
+                existing.push_str(trimmed);
+            }
+        } else {
+            headers.insert(name, trimmed.to_string());
         }
-        headers.insert(name, value.trim_matches([' ', '\t']).to_string());
     }
-    if headers.contains_key("transfer-encoding") {
-        return Err(ApiError::new(
-            411,
-            "length_required",
-            "chunked request bodies are not supported; send a Content-Length header",
+    if headers.contains_key("transfer-encoding") && headers.contains_key("content-length") {
+        return Err(bad_request(
+            "Transfer-Encoding and Content-Length cannot both be present",
         ));
     }
-    let content_length = match headers.get("content-length") {
-        None => 0,
-        Some(value) => value
+    let framing = if let Some(encoding) = headers.get("transfer-encoding") {
+        if !encoding.trim().eq_ignore_ascii_case("chunked") {
+            return Err(bad_request("only Transfer-Encoding: chunked is supported"));
+        }
+        BodyFraming::Chunked
+    } else if let Some(value) = headers.get("content-length") {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(bad_request("Content-Length is not a valid number"));
+        }
+        let content_length = value
             .parse::<usize>()
-            .map_err(|_| bad_request("Content-Length is not a valid number"))?,
+            .map_err(|_| bad_request("Content-Length is not a valid number"))?;
+        if content_length > MAX_BODY {
+            return Err(ApiError::new(
+                413,
+                "request_too_large",
+                format!(
+                    "request body exceeds the {} MiB limit",
+                    MAX_BODY / (1024 * 1024)
+                ),
+            ));
+        }
+        BodyFraming::Length(content_length)
+    } else {
+        BodyFraming::Length(0)
     };
-    if content_length > MAX_BODY {
-        return Err(ApiError::new(
-            413,
-            "request_too_large",
-            format!(
-                "request body exceeds the {} MiB limit",
-                MAX_BODY / (1024 * 1024)
-            ),
-        ));
-    }
     Ok(Head {
         method,
         path,
         headers,
-        content_length,
+        framing,
         received: bytes[header_end..].to_vec(),
     })
+}
+
+async fn read_more_chunk_bytes(
+    stream: &mut TcpStream,
+    buf: &mut Vec<u8>,
+    cursor: &mut usize,
+) -> Result<(), ApiError> {
+    if *cursor > 0 {
+        buf.drain(..*cursor);
+        *cursor = 0;
+    }
+    let mut chunk = [0_u8; 8192];
+    let count = stream
+        .read(&mut chunk)
+        .await
+        .map_err(|error| bad_request(&format!("request body read failed: {error}")))?;
+    if count == 0 {
+        return Err(bad_request(
+            "client closed before the chunked body was complete",
+        ));
+    }
+    buf.extend_from_slice(&chunk[..count]);
+    Ok(())
+}
+
+async fn read_chunked_body(stream: &mut TcpStream, mut buf: Vec<u8>) -> Result<Vec<u8>, ApiError> {
+    const MAX_CHUNK_LINE: usize = 4096;
+    let mut cursor = 0_usize;
+    let mut decoded = Vec::new();
+    loop {
+        let line_len = loop {
+            if let Some(pos) = buf[cursor..].windows(2).position(|window| window == b"\r\n") {
+                break pos;
+            }
+            if buf.len() - cursor > MAX_CHUNK_LINE {
+                return Err(bad_request("chunk size line is too long"));
+            }
+            read_more_chunk_bytes(stream, &mut buf, &mut cursor).await?;
+        };
+        if line_len > MAX_CHUNK_LINE {
+            return Err(bad_request("chunk size line is too long"));
+        }
+        let line = std::str::from_utf8(&buf[cursor..cursor + line_len])
+            .map_err(|_| bad_request("chunk size line is not valid UTF-8"))?;
+        let hex = line
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim_matches([' ', '\t']);
+        if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(bad_request("invalid chunk size"));
+        }
+        let chunk_size = usize::from_str_radix(hex, 16)
+            .map_err(|_| bad_request("chunk size is out of range"))?;
+        cursor += line_len + 2;
+
+        if chunk_size == 0 {
+            loop {
+                if buf.len() - cursor >= 2 && &buf[cursor..cursor + 2] == b"\r\n" {
+                    break;
+                }
+                if let Some(end) = buf[cursor..]
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                {
+                    if end + 4 > MAX_HEADER_BYTES {
+                        return Err(ApiError::new(
+                            431,
+                            "headers_too_large",
+                            "chunked trailers exceed the 64 KiB limit",
+                        ));
+                    }
+                    break;
+                }
+                if buf.len() - cursor > MAX_HEADER_BYTES {
+                    return Err(ApiError::new(
+                        431,
+                        "headers_too_large",
+                        "chunked trailers exceed the 64 KiB limit",
+                    ));
+                }
+                read_more_chunk_bytes(stream, &mut buf, &mut cursor).await?;
+            }
+            break;
+        }
+
+        if decoded
+            .len()
+            .checked_add(chunk_size)
+            .is_none_or(|total| total > MAX_BODY)
+        {
+            return Err(ApiError::new(
+                413,
+                "request_too_large",
+                format!(
+                    "request body exceeds the {} MiB limit",
+                    MAX_BODY / (1024 * 1024)
+                ),
+            ));
+        }
+
+        while buf.len() - cursor < chunk_size + 2 {
+            read_more_chunk_bytes(stream, &mut buf, &mut cursor).await?;
+        }
+        if &buf[cursor + chunk_size..cursor + chunk_size + 2] != b"\r\n" {
+            return Err(bad_request("malformed chunk terminator"));
+        }
+        decoded.extend_from_slice(&buf[cursor..cursor + chunk_size]);
+        cursor += chunk_size + 2;
+        if cursor >= 8192 || cursor == buf.len() {
+            buf.drain(..cursor);
+            cursor = 0;
+        }
+    }
+    Ok(decoded)
 }
 
 async fn read_body_inner(stream: &mut TcpStream, head: Head) -> Result<Request, ApiError> {
@@ -273,14 +458,17 @@ async fn read_body_inner(stream: &mut TcpStream, head: Head) -> Result<Request, 
         method,
         path,
         headers,
-        content_length,
-        received: mut body,
+        framing,
+        received,
     } = head;
-    if body.len() < content_length
-        && headers
-            .get("expect")
-            .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"))
-    {
+    let should_continue = headers
+        .get("expect")
+        .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"))
+        && match framing {
+            BodyFraming::Length(len) => received.len() < len,
+            BodyFraming::Chunked => received.is_empty(),
+        };
+    if should_continue {
         // curl waits for this before sending a large body; without it every
         // such request stalls for a second. It is sent only once the caller
         // is known to be allowed to send the body.
@@ -289,18 +477,25 @@ async fn read_body_inner(stream: &mut TcpStream, head: Head) -> Result<Request, 
             .await
             .map_err(|error| bad_request(&format!("request read failed: {error}")))?;
     }
-    let mut buffer = [0_u8; 8192];
-    while body.len() < content_length {
-        let count = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|error| bad_request(&format!("request body read failed: {error}")))?;
-        if count == 0 {
-            return Err(bad_request("client closed before the body was complete"));
+    let body = match framing {
+        BodyFraming::Length(content_length) => {
+            let mut body = received;
+            let mut buffer = [0_u8; 8192];
+            while body.len() < content_length {
+                let count = stream
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|error| bad_request(&format!("request body read failed: {error}")))?;
+                if count == 0 {
+                    return Err(bad_request("client closed before the body was complete"));
+                }
+                body.extend_from_slice(&buffer[..count]);
+            }
+            body.truncate(content_length);
+            body
         }
-        body.extend_from_slice(&buffer[..count]);
-    }
-    body.truncate(content_length);
+        BodyFraming::Chunked => read_chunked_body(stream, received).await?,
+    };
     Ok(Request {
         method,
         path,
@@ -507,17 +702,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chunked_and_malformed_length_requests_are_rejected_with_a_status() {
-        let error = parse(b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n")
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(error.status, 411);
-        let error = parse(b"POST /v1/messages HTTP/1.1\r\nContent-Length: nope\r\n\r\n")
-            .await
-            .err()
-            .unwrap();
-        assert_eq!(error.status, 400);
+    async fn malformed_transfer_and_length_requests_are_rejected_with_400() {
+        for raw in [
+            &b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n"[..],
+            &b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n"[..],
+            &b"POST /v1/messages HTTP/1.1\r\nContent-Length: nope\r\n\r\n"[..],
+            &b"POST /v1/messages HTTP/1.1\r\nContent-Length: +5\r\n\r\n"[..],
+        ] {
+            let error = parse(raw).await.err().unwrap();
+            assert_eq!(error.status, 400);
+        }
     }
 
     #[tokio::test]
@@ -648,6 +842,53 @@ mod tests {
         assert_eq!(
             ApiError::new(401, "invalid_api_key", "x").body(Api::OpenAi)["error"]["type"],
             "authentication_error"
+        );
+    }
+
+    #[tokio::test]
+    async fn chunked_bodies_with_extensions_and_trailers_decode_and_oversize_returns_413() {
+        let request = parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5;ext=1\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        assert_eq!(request.body, b"hello world");
+
+        let with_trailer = parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\nX-Checksum: abc\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        assert_eq!(with_trailer.body, b"hi");
+
+        let oversized_hex = format!("{:x}", MAX_BODY + 1);
+        let oversized = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n{oversized_hex}\r\n"
+        );
+        let error = parse(oversized.as_bytes()).await.err().unwrap();
+        assert_eq!((error.status, error.code), (413, "request_too_large"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_singleton_headers_are_rejected_and_targets_are_normalized() {
+        for dup in [
+            b"POST /v1/models HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n".as_slice(),
+            b"POST /v1/models HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+            b"POST /v1/models HTTP/1.1\r\nAuthorization: Bearer a\r\nAuthorization: Bearer b\r\n\r\n",
+        ] {
+            let error = parse(dup).await.err().unwrap();
+            assert_eq!(error.status, 400);
+        }
+
+        let request = parse(
+            b"POST http://127.0.0.1:8080/v1/chat/completions/?a=1 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nAccept: application/json\r\nAccept: text/event-stream\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        assert_eq!(request.path, "/v1/chat/completions");
+        assert_eq!(
+            request.headers["accept"],
+            "application/json, text/event-stream"
         );
     }
 }

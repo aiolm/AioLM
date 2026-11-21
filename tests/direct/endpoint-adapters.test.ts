@@ -12,6 +12,7 @@ import {
   consumeNativeChatStream,
   consumeAnthropicStream,
 } from "../../src/shared/api/endpointAdapters.ts";
+import { anthropicMessagesStream } from "../../src/shared/api/chat.ts";
 import { defined } from "../../src/testing/assertDefined.ts";
 
 test("endpoint adapters contracts", async () => {
@@ -103,10 +104,12 @@ test("endpoint adapters contracts", async () => {
   assert.equal(nativeParser.isFinished(), true);
 
   const anthropicEvents: string[] = [];
+  const anthropicUsages: Array<{ input_tokens: number; output_tokens: number }> = [];
   const anthropicParser = new AnthropicSseParser((delta) => {
     if (delta.thinking) anthropicEvents.push(`r:${delta.thinking}`);
     if (delta.text) anthropicEvents.push(`t:${delta.text}`);
     if (delta.finishReason) anthropicEvents.push(`f:${delta.finishReason}`);
+    if (delta.usage) anthropicUsages.push(delta.usage);
   });
   const anthropicPayload = [
     `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { usage: { input_tokens: 4 } } })}\n\n`,
@@ -117,6 +120,31 @@ test("endpoint adapters contracts", async () => {
   ].join("");
   anthropicParser.push(anthropicPayload);
   assert.deepEqual(anthropicEvents, ["r:reason", "t:done", "f:end_turn"]);
+  assert.deepEqual(anthropicUsages, [
+    { input_tokens: 4, output_tokens: 0 },
+    { input_tokens: 4, output_tokens: 2 },
+  ]);
   assert.equal(anthropicParser.value(), "done");
   assert.equal(anthropicParser.isFinished(), true);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(anthropicPayload, { status: 200 })) as typeof fetch;
+  try {
+    const streamUsages: Array<unknown> = [];
+    const streamed = await anthropicMessagesStream(
+      "http://127.0.0.1:1234/v1",
+      "k",
+      "claude-synthetic",
+      [{ role: "user", content: "hi" }],
+      sampling,
+      (delta) => { if (delta.usage) streamUsages.push(delta.usage); },
+    );
+    assert.equal(streamed, "done");
+    assert.deepEqual(streamUsages, [
+      { prompt_tokens: 4, completion_tokens: 0, total_tokens: 4 },
+      { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

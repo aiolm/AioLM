@@ -126,6 +126,7 @@ export const serverStatus = (phase: LayoutReadPhase = "initial") => invoke<Serve
 export const startApiServer = () => invoke<ApiServerStatus>("start_api_server");
 export const stopApiServer = () => invoke<void>("stop_api_server");
 export const apiServerStatus = (phase: LayoutReadPhase = "initial") => invoke<ApiServerStatus>("api_server_status", undefined, phase);
+export const resetApiKey = () => invoke<ApiServerStatus>("reset_api_key");
 export const startAnthropicGateway = () => invoke<string>("start_anthropic_gateway");
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");

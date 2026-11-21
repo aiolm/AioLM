@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
@@ -15,6 +15,7 @@ vi.mock("../../shared/api/index", () => ({
   apiServerStatus: vi.fn(),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
+  resetApiKey: vi.fn(),
   localModels: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
   normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
@@ -29,7 +30,7 @@ vi.mock("../../shared/api/index", () => ({
 
 const SECRET = "sk-test-secret-value";
 const API_URL = "http://127.0.0.1:8080/v1";
-const stoppedApi: ApiServerStatus = { running: false, url: null, api_key: null, port: 8080 };
+const stoppedApi: ApiServerStatus = { running: false, url: null, api_key: SECRET, port: 8080 };
 const runningApi: ApiServerStatus = { running: true, url: API_URL, api_key: SECRET, port: 8080 };
 // The model's own server is private: its URL and key must never leak into the API page.
 const privateModel: ServerStatus = { state: "running", url: "http://127.0.0.1:49152/v1", api_key: "private-internal-key", model: "models/loaded.gguf" };
@@ -76,6 +77,7 @@ beforeEach(() => {
   vi.mocked(api.localModels).mockResolvedValue([]);
   vi.mocked(api.startApiServer).mockResolvedValue(runningApi);
   vi.mocked(api.stopApiServer).mockResolvedValue(undefined);
+  vi.mocked(api.resetApiKey).mockResolvedValue(runningApi);
 });
 
 describe("API server lifecycle", () => {
@@ -532,10 +534,24 @@ describe("API key and connection details", () => {
     expect(container.textContent).not.toContain("private-internal-key");
   });
 
-  it("disables key and URL copying while the API is stopped", async () => {
-    render(page(storeWith()));
-    expect(await screen.findByRole("button", { name: "Copy API key" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copy URL" })).toBeDisabled();
+  it("allows copying the URL and API key while the API is stopped without querying models", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { container } = render(page(storeWith()));
+
+    const copyKey = await screen.findByRole("button", { name: "Copy API key" });
+    await waitFor(() => expect(copyKey).toBeEnabled());
+    const copyUrl = screen.getByRole("button", { name: "Copy URL" });
+    expect(copyUrl).toBeEnabled();
+
+    fireEvent.click(copyUrl);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(API_URL));
+
+    fireEvent.click(copyKey);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(SECRET));
+    expect(container.textContent).not.toContain(SECRET);
+    expect(container.innerHTML).not.toContain(SECRET);
+    expect(api.localModels).not.toHaveBeenCalled();
   });
 
   it("announces a failed key copy and still hides the key", async () => {
@@ -552,6 +568,72 @@ describe("API key and connection details", () => {
     expect(screen.getByRole("button", { name: "Copy API key" })).toBeEnabled();
   });
 
+  it("resets the API key only after confirmation and uses the new key without rendering it", async () => {
+    const ROTATED = "sk-rotated-test-secret-value";
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
+    vi.mocked(api.resetApiKey).mockResolvedValue({ ...runningApi, api_key: ROTATED });
+    const { container } = render(page(storeWith(privateModel)));
+
+    const resetTrigger = await screen.findByRole("button", { name: "Reset API key" });
+    await waitFor(() => expect(resetTrigger).toBeEnabled());
+    fireEvent.click(resetTrigger);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(api.resetApiKey).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.resetApiKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset API key" }));
+    const confirmDialog = await screen.findByRole("dialog");
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Reset API key" }));
+
+    await waitFor(() => expect(api.resetApiKey).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(api.localModels).toHaveBeenCalledWith(API_URL, ROTATED));
+    expect(document.querySelector(".sr-only[role='status']")).toHaveTextContent("API key reset");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy API key" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ROTATED));
+    expect(container.textContent).not.toContain(ROTATED);
+    expect(container.innerHTML).not.toContain(ROTATED);
+    expect(container.textContent).not.toContain(SECRET);
+    expect(container.innerHTML).not.toContain(SECRET);
+  });
+
+  it("allows resetting the API key while stopped and reports reset errors without losing status", async () => {
+    const ROTATED = "sk-stopped-rotated-secret";
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(api.apiServerStatus).mockResolvedValue(stoppedApi);
+    vi.mocked(api.resetApiKey)
+      .mockResolvedValueOnce({ ...stoppedApi, api_key: ROTATED })
+      .mockRejectedValueOnce(new Error("cannot write private api-key file"));
+    const { container } = render(page(storeWith()));
+
+    const resetTrigger = await screen.findByRole("button", { name: "Reset API key" });
+    await waitFor(() => expect(resetTrigger).toBeEnabled());
+    fireEvent.click(resetTrigger);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reset API key" }));
+    await waitFor(() => expect(api.resetApiKey).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(document.querySelector(".sr-only[role='status']")).toHaveTextContent("API key reset");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy API key" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ROTATED));
+    expect(container.textContent).not.toContain(ROTATED);
+    expect(container.innerHTML).not.toContain(ROTATED);
+    expect(api.localModels).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset API key" }));
+    const failDialog = await screen.findByRole("dialog");
+    fireEvent.click(within(failDialog).getByRole("button", { name: "Reset API key" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("cannot write private api-key file");
+  });
+
   it("lists only the endpoints the selected format serves and no LM Studio REST or HTTP model management", async () => {
     vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
     const { container } = render(page(storeWith()));
@@ -559,7 +641,17 @@ describe("API key and connection details", () => {
     openDisclosure("API reference & examples");
 
     const endpoints = () => Array.from(container.querySelectorAll(".api-endpoints tbody code"), code => code.textContent).sort();
-    expect(endpoints()).toEqual(["/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/models", "/v1/responses", "/v1/responses/<id>"]);
+    expect(endpoints()).toEqual([
+      "/v1/audio/transcriptions",
+      "/v1/audio/translations",
+      "/v1/chat/completions",
+      "/v1/completions",
+      "/v1/embeddings",
+      "/v1/models",
+      "/v1/models/<id>",
+      "/v1/responses",
+      "/v1/responses/<id>",
+    ]);
 
     chooseOption("Connection format", "Anthropic");
     expect(endpoints()).toEqual(["/v1/messages"]);

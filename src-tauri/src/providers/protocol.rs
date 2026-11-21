@@ -11,7 +11,10 @@
 //! validation with the other providers.
 use super::artifacts::Modalities;
 use super::ProviderId;
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+    Engine,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -215,7 +218,7 @@ fn forbidden_fields(provider: ProviderId) -> &'static [&'static str] {
 /// The input modality an OpenAI or engine-specific content part carries.
 pub fn part_modality(part: &Value) -> Option<&'static str> {
     match part.get("type").and_then(Value::as_str)? {
-        "text" | "input_text" => Some("text"),
+        "text" | "input_text" | "output_text" | "refusal" => Some("text"),
         "image_url" | "input_image" | "image" => Some("image"),
         "input_audio" | "audio_url" | "audio" => Some("audio"),
         "video_url" | "input_video" | "video" => Some("video"),
@@ -284,17 +287,56 @@ fn media_reference(part: &Value) -> Option<(&str, bool)> {
     }
 }
 
+fn strip_prefix_ignore_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+        .then(|| &value[prefix.len()..])
+}
+
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    strip_prefix_ignore_ascii_case(value, prefix).is_some()
+}
+
 fn decoded_len(data: &str) -> Result<usize, AdaptError> {
-    if data.len() > (crate::media::MAX_MEDIA_BYTES as usize).div_ceil(3) * 4 {
-        return Err(adapt_error(
-            "media_limit",
-            "Each media file must be at most 64 MiB.",
-        ));
-    }
-    let decoded = STANDARD
-        .decode(data)
-        .map_err(|_| adapt_error("invalid_media", "Media contains invalid base64 data."))?;
-    if decoded.is_empty() {
+    let max_encoded = (crate::media::MAX_MEDIA_BYTES as usize).div_ceil(3) * 4;
+    let cleaned: std::borrow::Cow<'_, [u8]> = if data.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        let mut stripped = Vec::with_capacity(data.len().min(max_encoded));
+        for byte in data.bytes() {
+            if !byte.is_ascii_whitespace() {
+                if stripped.len() >= max_encoded {
+                    return Err(adapt_error(
+                        "media_limit",
+                        "Each media file must be at most 64 MiB.",
+                    ));
+                }
+                stripped.push(byte);
+            }
+        }
+        std::borrow::Cow::Owned(stripped)
+    } else {
+        if data.len() > max_encoded {
+            return Err(adapt_error(
+                "media_limit",
+                "Each media file must be at most 64 MiB.",
+            ));
+        }
+        std::borrow::Cow::Borrowed(data.as_bytes())
+    };
+    let decoded = match STANDARD.decode(cleaned.as_ref()) {
+        Ok(bytes) => bytes,
+        Err(base64::DecodeError::InvalidPadding) if !cleaned.contains(&b'=') => STANDARD_NO_PAD
+            .decode(cleaned.as_ref())
+            .map_err(|_| adapt_error("invalid_media", "Media contains invalid base64 data."))?,
+        Err(_) => {
+            return Err(adapt_error(
+                "invalid_media",
+                "Media contains invalid base64 data.",
+            ))
+        }
+    };
+    if decoded.is_empty() || decoded.len() > crate::media::MAX_MEDIA_BYTES as usize {
         return Err(adapt_error(
             "media_limit",
             "Each media file must be nonempty and at most 64 MiB.",
@@ -316,17 +358,18 @@ fn media_bytes(provider: ProviderId, modality: &str, part: &Value) -> Result<u64
         ));
     };
     let reference = reference.trim();
-    if let Some(rest) = reference.strip_prefix("data:") {
+    if let Some(rest) = strip_prefix_ignore_ascii_case(reference, "data:") {
         let (header, data) = rest
             .split_once(',')
             .ok_or_else(|| adapt_error("invalid_media", "Malformed media data URI."))?;
-        if !header.ends_with(";base64") {
+        let header_lower = header.to_ascii_lowercase();
+        if !header_lower.ends_with(";base64") {
             return Err(adapt_error(
                 "invalid_media",
                 "Media data URIs must use base64 encoding.",
             ));
         }
-        if !header.starts_with(&format!("{modality}/")) {
+        if !header_lower.starts_with(&format!("{modality}/")) {
             return Err(adapt_error(
                 "invalid_media",
                 format!("A {modality} part needs a data:{modality}/... URI, not data:{header}."),
@@ -433,20 +476,24 @@ fn audio_mime_of_format(format: &str) -> Option<&'static str> {
 /// llama-server decodes `input_audio.data` as bare base64 in every build that
 /// has audio input; data URIs there are only understood by recent builds.
 fn llama_audio(reference: &str) -> Result<Value, AdaptError> {
-    match reference
-        .strip_prefix("data:")
+    match strip_prefix_ignore_ascii_case(reference, "data:")
         .and_then(|rest| rest.split_once(','))
     {
         Some((header, data)) => {
-            let mime = header.trim_end_matches(";base64");
-            let format = audio_format_of_mime(mime).ok_or_else(|| {
+            let mime = header
+                .split(';')
+                .next()
+                .unwrap_or(header)
+                .trim()
+                .to_ascii_lowercase();
+            let format = audio_format_of_mime(&mime).ok_or_else(|| {
                 adapt_error(
                     "invalid_audio",
                     format!("llama.cpp reads wav, mp3 or flac audio, not {mime}."),
                 )
             })?;
             Ok(
-                serde_json::json!({"type":"input_audio","input_audio":{"data":data,"format":format}}),
+                serde_json::json!({"type":"input_audio","input_audio":{"data":data.trim(),"format":format}}),
             )
         }
         None => Ok(serde_json::json!({"type":"input_audio","input_audio":{"data":reference}})),
@@ -481,7 +528,7 @@ fn normalize_parts(provider: ProviderId, body: &mut Value) -> Result<(), AdaptEr
                         .pointer("/input_audio/format")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
-                    let bare = !data.starts_with("data:") && !remote(&data);
+                    let bare = !starts_with_ignore_ascii_case(&data, "data:") && !remote(&data);
                     match provider {
                         // vLLM v0.31.0 `chat_utils.parse_input_audio` wraps
                         // `data` as `data:audio/{format};base64,{data}`, so a
@@ -499,7 +546,7 @@ fn normalize_parts(provider: ProviderId, body: &mut Value) -> Result<(), AdaptEr
                                 return Err(adapt_error("invalid_audio", "Specify input_audio.format (for example wav or mp3) for base64 audio."));
                             }
                         }
-                        ProviderId::Llama if data.starts_with("data:") => {
+                        ProviderId::Llama if starts_with_ignore_ascii_case(&data, "data:") => {
                             *part = llama_audio(&data)?
                         }
                         // mlx-vlm v0.7.6 treats `data` that looks like a path
@@ -545,7 +592,7 @@ fn normalize_parts(provider: ProviderId, body: &mut Value) -> Result<(), AdaptEr
                                 .or_else(|| value.get("url").and_then(Value::as_str))
                         })
                         .unwrap_or("");
-                    *part = if url.starts_with("data:video/") {
+                    *part = if starts_with_ignore_ascii_case(url, "data:video/") {
                         let data = url
                             .split_once(',')
                             .ok_or(adapt_error("invalid_video", "video data URI is malformed"))?
@@ -554,6 +601,21 @@ fn normalize_parts(provider: ProviderId, body: &mut Value) -> Result<(), AdaptEr
                     } else {
                         serde_json::json!({"type":"input_video","input_video":{"url":url}})
                     };
+                }
+                (_, "output_text") => {
+                    let text = part
+                        .get("text")
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()));
+                    *part = serde_json::json!({"type":"text","text":text});
+                }
+                (_, "refusal") => {
+                    let text = part
+                        .get("refusal")
+                        .or_else(|| part.get("text"))
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()));
+                    *part = serde_json::json!({"type":"text","text":text});
                 }
                 // llama-server reads only `text`, `image_url`, `input_audio`
                 // and video parts; the Responses spellings are renamed.
@@ -952,22 +1014,46 @@ pub fn adapt_request(
             "tools",
             "tool_choice",
             "parallel_tool_calls",
+            "function_call",
+            "functions",
             "temperature",
             "top_p",
+            "top_k",
+            "min_p",
             "max_tokens",
             "max_completion_tokens",
+            "min_tokens",
             "stop",
             "seed",
             "presence_penalty",
             "frequency_penalty",
+            "repetition_penalty",
+            "repeat_penalty",
+            "logit_bias",
             "response_format",
+            "reasoning",
             "reasoning_effort",
+            "verbosity",
+            "modalities",
+            "prediction",
+            "store",
+            "metadata",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "service_tier",
             "logprobs",
             "top_logprobs",
             "user",
             "n",
+            "best_of",
+            "echo",
+            "suffix",
             "encoding_format",
             "dimensions",
+            "include_reasoning",
+            "enable_thinking",
+            "think",
+            "chat_template_kwargs",
         ];
         if let Some(field) = object.keys().find(|field| {
             !CANONICAL.contains(&field.as_str()) && !info.request_option_keys.contains(field)
@@ -2117,5 +2203,102 @@ mod tests {
             RequestDefaultsPolicy::Apply,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn custom_adapters_accept_standard_openai_and_local_compat_fields_while_blocking_paths() {
+        let mut engine = info(
+            ProviderId::parse("custom.auto-synthetic").unwrap(),
+            Modalities::text_only(),
+        );
+        engine.tools_auto = true;
+        engine.tool_parser = true;
+        let mut body = json!({
+            "model": "public",
+            "messages": [{"role": "user", "content": "hi"}],
+            "store": true,
+            "metadata": {"session": "hermes"},
+            "prompt_cache_key": "k-1",
+            "top_k": 40,
+            "min_p": 0.05,
+            "repeat_penalty": 1.1,
+            "chat_template_kwargs": {"enable_thinking": false}
+        });
+        adapt_request(
+            &engine,
+            "chat/completions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
+        assert_eq!(body["model"], engine.upstream_model);
+        assert_eq!(body["store"], true);
+        assert_eq!(body["prompt_cache_key"], "k-1");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+
+        for forbidden in ["adapter_path", "model_path", "chat_template"] {
+            let mut blocked = json!({"messages":[]});
+            blocked[forbidden] = json!("/unowned/file");
+            assert_eq!(
+                adapt_request(
+                    &engine,
+                    "chat/completions",
+                    &mut blocked,
+                    RequestDefaultsPolicy::Apply,
+                )
+                .unwrap_err()
+                .code,
+                "unsupported_field",
+                "{forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_output_text_and_refusal_parts_and_tolerates_whitespace_unpadded_base64() {
+        let llama = info(ProviderId::Llama, all_inputs());
+        let mut body = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "hello"},
+                    {"type": "refusal", "refusal": "declined"}
+                ]
+            }, {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "DATA:IMAGE/PNG;charset=utf-8;BASE64,AA\n=="}},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
+                ]
+            }]
+        });
+        adapt_request(
+            &llama,
+            "chat/completions",
+            &mut body,
+            RequestDefaultsPolicy::Apply,
+        )
+        .unwrap();
+        assert_eq!(
+            body["messages"][0]["content"][0],
+            json!({"type": "text", "text": "hello"})
+        );
+        assert_eq!(
+            body["messages"][0]["content"][1],
+            json!({"type": "text", "text": "declined"})
+        );
+
+        let mut empty_media = chat(json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,   \n "}}));
+        assert_eq!(
+            adapt_request(
+                &llama,
+                "chat/completions",
+                &mut empty_media,
+                RequestDefaultsPolicy::Apply,
+            )
+            .unwrap_err()
+            .code,
+            "media_limit"
+        );
     }
 }

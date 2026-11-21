@@ -209,6 +209,14 @@ export async function anthropicMessagesStream(
   }
   if (!response.body) throw new Error("The Anthropic-compatible API returned an empty response stream.");
   return consumeAnthropicStream(response.body, (delta) => {
-    onDelta({ reasoning: delta.thinking, content: delta.text, usage: delta.usage });
+    onDelta({
+      reasoning: delta.thinking,
+      content: delta.text,
+      usage: delta.usage ? {
+        prompt_tokens: delta.usage.input_tokens,
+        completion_tokens: delta.usage.output_tokens,
+        total_tokens: delta.usage.input_tokens + delta.usage.output_tokens,
+      } : undefined,
+    });
   });
 }

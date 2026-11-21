@@ -15,6 +15,7 @@ vi.mock("../../shared/api/index", () => ({
   apiServerStatus: vi.fn(),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
+  resetApiKey: vi.fn(),
   localModels: vi.fn(),
   sessionSummaryList: vi.fn(async () => []),
   normalizeSessionList: vi.fn((value: unknown): unknown[] => Array.isArray(value) ? value : []),
@@ -30,7 +31,7 @@ vi.mock("../../shared/api/index", () => ({
 const SECRET = "sk-test-secret-value";
 const API_URL = "http://127.0.0.1:8080/v1";
 const API_ROOT = "http://127.0.0.1:8080";
-const stoppedApi: ApiServerStatus = { running: false, url: null, api_key: null, port: 8080 };
+const stoppedApi: ApiServerStatus = { running: false, url: null, api_key: SECRET, port: 8080 };
 const runningApi: ApiServerStatus = { running: true, url: API_URL, api_key: SECRET, port: 8080 };
 // The model's own server is private: its URL and key must never reach this page.
 const privateModel: ServerStatus = { state: "running", url: "http://127.0.0.1:49152/v1", api_key: "private-internal-key", model: "models/loaded.gguf" };
@@ -154,15 +155,29 @@ describe("connection format", () => {
     modelLifecycleCommands().forEach(command => expect(command).not.toHaveBeenCalled());
   });
 
-  it("shows the URL for the saved port while stopped, in both formats, with copying disabled", async () => {
-    render(page(storeWith(undefined, { cfg: { ...createTestStore().cfg!, port: 9191 } })));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start API" })).toBeEnabled());
+  it("allows copying the URL in both formats and the API key while stopped", async () => {
+    const store = storeWith(undefined, { cfg: { ...createTestStore().cfg!, port: 9191 } });
+    const { container } = render(page(store));
+    const copyUrl = screen.getByRole("button", { name: "Copy URL" });
+    const copyKey = screen.getByRole("button", { name: "Copy API key" });
+    await waitFor(() => expect(copyKey).toBeEnabled());
+    expect(copyUrl).toBeEnabled();
 
     expect(baseUrlText()).toHaveTextContent(/^http:\/\/127\.0\.0\.1:9191\/v1$/);
+    fireEvent.click(copyUrl);
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("http://127.0.0.1:9191/v1"));
+
     chooseOption("Connection format", "Anthropic");
     expect(baseUrlText()).toHaveTextContent(/^http:\/\/127\.0\.0\.1:9191$/);
-    expect(screen.getByRole("button", { name: "Copy URL" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Copy API key" })).toBeDisabled();
+    fireEvent.click(copyUrl);
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("http://127.0.0.1:9191"));
+
+    fireEvent.click(copyKey);
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(SECRET));
+    expect(container.innerHTML).not.toContain(SECRET);
+    expect(api.localModels).not.toHaveBeenCalled();
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
   });
 
   it("keeps the API key out of the examples and the copied example", async () => {
