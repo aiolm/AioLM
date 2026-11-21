@@ -231,4 +231,27 @@ describe('public benchmark review', () => {
     rerender(<PublicBenchmarkReview record={saved} busy copy={copy} />);
     expect(screen.getByLabelText(copy.descriptionLabel, { exact: false })).toBeDisabled();
   });
+
+  it('disables publishing while the description exceeds the length limit', async () => {
+    const copy = benchmarkCopy('en');
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    await waitForShare();
+    const editor = screen.getByLabelText(copy.descriptionLabel, { exact: false });
+    fireEvent.change(editor, { target: { value: 'x'.repeat(4001) } });
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeDisabled();
+  });
+
+  it('retries failed share hydration and restores details once readable', async () => {
+    const copy = benchmarkCopy('en');
+    vi.mocked(getQueuedBenchmark)
+      .mockRejectedValueOnce(new Error('temporary read failure'))
+      .mockResolvedValueOnce(undefined);
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    fireEvent.click(screen.getByText('Share result'));
+    await screen.findByRole('alert');
+    expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: copy.publishRetry }));
+    await screen.findByLabelText('Shared details');
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeEnabled();
+  });
 });

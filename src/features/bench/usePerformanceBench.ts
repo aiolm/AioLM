@@ -4,7 +4,7 @@ import { providerOf } from '../../shared/api/providers';
 import type { AppStore } from '../../shared/state/store';
 import { finishTask, registerTask, updateTask, useTasks } from '../../shared/state/taskRegistry';
 import { useI18n } from '../../shared/i18n/i18n';
-import { isServerRunning } from '../../shared/lib/serverLifecycle';
+import { isServerBusy } from '../../shared/lib/serverLifecycle';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory';
 import { readPerformanceHistory, summarizeServingPoints } from './performanceRecords';
@@ -17,7 +17,7 @@ import { publicModelSource } from '../../shared/contracts/benchmark/publicBenchm
 import { benchmarkCopy } from './benchmarkCopy';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { executionChanges, executionConfig } from '../../shared/config/executionSettings';
-import { materializeProfileApplication, profileTargetKey, type ProfileApplication } from '../../shared/config/settingsProfiles';
+import { materializeProfileApplication, profileTargetKey, RUNTIME_SELECTION_KEYS, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { appliedProfile, profileLibrary } from '../model-settings/profileEditor';
 import { applyProfile } from '../model-settings/profileWorkspaceState';
@@ -32,13 +32,23 @@ import { usePerformanceConditions } from './usePerformanceConditions';
 
 type Copy = ReturnType<typeof benchmarkCopy>;
 
-function benchmarkTarget(current: api.AppConfig, saved?: ProfileApplication | null) {
-  const application = saved ?? appliedProfile(current);
-  const base = application ? { ...executionConfig(current, application.settings), active_model: application.model } : current;
-  const resolved = resolveProfileForExecution(base, profileLibrary(current), application);
+type RuntimeSelection = Partial<Pick<api.AppConfig, typeof RUNTIME_SELECTION_KEYS[number]>>;
+type BenchmarkTargetSelection = { runtime?: RuntimeSelection; application: ProfileApplication };
+
+function runtimeSelection(cfg: api.AppConfig): RuntimeSelection {
+  const next: RuntimeSelection = {};
+  for (const key of RUNTIME_SELECTION_KEYS) if (cfg[key] !== undefined) (next as Record<string, unknown>)[key] = cfg[key];
+  return next;
+}
+
+function benchmarkTarget(current: api.AppConfig, saved?: BenchmarkTargetSelection | null) {
+  const scoped = saved?.runtime ? { ...current, ...saved.runtime } : current;
+  const application = saved?.application ?? appliedProfile(scoped);
+  const base = application ? { ...executionConfig(scoped, application.settings), ...(saved?.runtime ?? {}), active_model: application.model } : scoped;
+  const resolved = resolveProfileForExecution(base, profileLibrary(scoped), application);
   const config = applyProfile(base, resolved.profile);
   const next = materializeProfileApplication(config, resolved.application.system_prompt, resolved.profile);
-  config.settings_profiles = { ...resolved.library, applied: { ...resolved.library.applied, [profileTargetKey(config.active_model)]: next } };
+  config.settings_profiles = { ...resolved.library, applied: { ...resolved.library.applied, [profileTargetKey(config.active_model, 'default', providerOf(config))]: next } };
   return { config, application: next };
 }
 
@@ -60,8 +70,10 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const profileImport = useBenchmarkProfileImport(store);
   const modelCopy = modelActions(locale);
   const modelSettings = useModelSettings();
-  const [targetApplication, setTargetApplication] = useState<ProfileApplication | null>(() => store.cfg ? benchmarkTarget(store.cfg).application : null);
-  const installedRuntimes = useInstalledRuntimes(providerOf(targetApplication?.settings ?? store.cfg ?? {}) === 'llama.cpp');
+  const [targetSelection, setTargetSelection] = useState<BenchmarkTargetSelection | null>(() => store.cfg
+    ? { runtime: runtimeSelection(store.cfg), application: benchmarkTarget(store.cfg).application }
+    : null);
+  const installedRuntimes = useInstalledRuntimes(providerOf(targetSelection?.runtime ?? targetSelection?.application.settings ?? store.cfg ?? {}) === 'llama.cpp');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
   const [sessionsReady, setSessionsReady] = useState(false);
@@ -104,9 +116,9 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const tasks = useTasks();
   const busy = phase !== "idle";
   const otherBenchmark = tasks.some((task) => task.kind === "benchmark" && task.id !== TASK_ID && (task.state === "running" || task.state === "cancelling"));
-  const serverRunning = isServerRunning(store.status.state);
+  const serverRunning = isServerBusy(store.status.state);
   const defaultTarget = useMemo(() => store.cfg ? benchmarkTarget(store.cfg) : null, [store.cfg]);
-  const target = useMemo(() => store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget, [store.cfg, targetApplication, defaultTarget]);
+  const target = useMemo(() => store.cfg && targetSelection ? benchmarkTarget(store.cfg, targetSelection) : defaultTarget, [store.cfg, targetSelection, defaultTarget]);
   const targetConfig = target?.config ?? null;
   const { promptBytes, setPromptBytes, concurrencies, setConcurrencies,
     corpus, setCorpus, valid, total, admission, setAdmissionRevision, toggle } = usePerformanceConditions(targetConfig, active, busy);
@@ -145,8 +157,10 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   }, []);
 
   useEffect(() => {
-    if (!targetApplication && store.cfg) setTargetApplication(benchmarkTarget(store.cfg).application);
-  }, [store.cfg, targetApplication]);
+    if (!targetSelection && store.cfg) {
+      setTargetSelection({ runtime: runtimeSelection(store.cfg), application: benchmarkTarget(store.cfg).application });
+    }
+  }, [store.cfg, targetSelection]);
   const refreshSessions = useSessionPolling({ active: active && !!modelSettings, intervalMs: 2000,
     onData: value => { setSessions(value); setSessionsError(false); setSessionsReady(true); },
     onError: () => { setSessionsError(true); setSessionsReady(false); },
@@ -178,9 +192,12 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const editModel = (section: string) => {
     const current = store.getConfig?.() ?? store.cfg;
     if (busy || !current) return;
-    const selected = benchmarkTarget(current, targetApplication);
+    const selected = benchmarkTarget(current, targetSelection);
     modelSettings?.open({ target: { kind: 'benchmark', id: TASK_ID }, config: selected.config, application: selected.application, section,
-      onApply: (cfg, application) => { setTargetApplication(benchmarkTarget(cfg, application).application); } });
+      onApply: (cfg, application) => {
+        const runtime = runtimeSelection(cfg);
+        setTargetSelection({ runtime, application: benchmarkTarget(cfg, { runtime, application }).application });
+      } });
   };
   const stopSessions = async () => {
     if (stoppingSessions) return;
@@ -204,6 +221,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     try { await api.benchCancel(); }
     catch (caught) {
       cancelRequestedRef.current = false;
+      if (!activeRef.current) return;
       setPhase("running");
       setError(normalizeDisplayText(caught instanceof Error ? caught.message : String(caught)));
       updateTask(TASK_ID, { state: "running" });
@@ -212,7 +230,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
 
   const run = async () => {
     if (!canRun || !store.cfg || activeRef.current) return;
-    const snapshot = structuredClone(benchmarkTarget(store.getConfig?.() ?? store.cfg, targetApplication));
+    const snapshot = structuredClone(benchmarkTarget(store.getConfig?.() ?? store.cfg, targetSelection));
     const cfg = snapshot.config;
     const runId = `performance-${crypto.randomUUID()}`;
     const request: api.PerformanceBenchmarkRequest = { run_id: runId, method: { id: 'openai-chat-serving', version: 5 }, context_profile: corpus, prompt_bytes: [...promptBytes].sort((a, b) => a - b), max_output_tokens: OUTPUT_TOKENS, concurrencies: [...concurrencies].sort((a, b) => a - b), repetitions: REPETITIONS, warmup: false, request_usage: true };
@@ -353,6 +371,6 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     servingProvenance, modelSource, refreshSessions, loadHistory, editModel, stopSessions,
     cancel, run, toggle, statusLabel, progressMessage,
     copyResults, exportResults, deleteSelectedHistory,
-    importDefaultTarget: () => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); },
+    importDefaultTarget: () => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetSelection({ runtime: runtimeSelection(current), application: benchmarkTarget(current).application }); },
   };
 }

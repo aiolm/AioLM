@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { DESCRIPTION_MAX_CODEPOINTS } from '@aiolm/benchmark-contracts';
 import { toPublicBenchmark, type PublicBenchmarkSubmission } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import { parseStoredPublicationBody } from '../../shared/contracts/benchmark/publication.ts';
 import { getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
 import type { PerformanceBenchmarkRecord } from '../../shared/api/benchmarkHistory.ts';
 import type { benchmarkCopy } from './benchmarkCopy.ts';
-import { DescriptionEditor } from './DescriptionEditor.tsx';
+import { DescriptionEditor, descriptionCodePoints } from './DescriptionEditor.tsx';
 import { BenchmarkPublishPanel } from './BenchmarkPublishPanel.tsx';
 import { PublicBenchmarkSummary } from './PublicBenchmarkSummary.tsx';
 
@@ -22,6 +23,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
   const [publishing, setPublishing] = useState(false);
   const [hydration, setHydration] = useState<Hydration>('idle');
   const [hydrationError, setHydrationError] = useState<string | null>(null);
+  const [hydrationRevision, setHydrationRevision] = useState(0);
   // Submission IDs with a finished hydration; set only on completion so
   // StrictMode setup-cleanup-setup refetches instead of stalling.
   const hydratedFor = useRef<string | null>(null);
@@ -33,6 +35,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
   // The editor also freezes while publication preparation runs so async
   // binding cannot race visible edits.
   const effectiveDescription = boundDescription ?? description;
+  const descriptionInvalid = boundDescription === null && descriptionCodePoints(description) > DESCRIPTION_MAX_CODEPOINTS;
   const editorLocked = busy || publishing || hydration !== 'ready' || boundDescription !== null;
 
   useEffect(() => {
@@ -98,7 +101,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
         setHydration('failed');
       });
     return () => { active = false; };
-  }, [snapshot, submissionId, copy.hydrateError]);
+  }, [snapshot, submissionId, copy.hydrateError, hydrationRevision]);
   const actionsReady = hydration === 'ready';
   return (
     <details className="app-card app-card--flush performance-card performance-details performance-share" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -108,7 +111,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
       {open && !snapshot && !error && <p role="status">{copy.hydrateLoading}</p>}
       {open && error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
       {open && snapshot && hydration === 'pending' && <p role="status">{copy.hydrateLoading}</p>}
-      {open && snapshot && hydration === 'failed' && hydrationError && <FeedbackBanner tone="error">{hydrationError}</FeedbackBanner>}
+      {open && snapshot && hydration === 'failed' && hydrationError && <FeedbackBanner tone="error" action={{ label: copy.publishRetry, disabled: busy, onClick: () => { hydratedFor.current = null; setHydrationRevision(value => value + 1); } }}>{hydrationError}</FeedbackBanner>}
       {open && snapshot && actionsReady && <>
         <PublicBenchmarkSummary snapshot={snapshot} copy={copy} />
         <DescriptionEditor
@@ -124,6 +127,7 @@ export function PublicBenchmarkReview({ record, busy, copy, onPublished, onWorki
         <BenchmarkPublishPanel
           snapshot={snapshot}
           description={effectiveDescription}
+          descriptionInvalid={descriptionInvalid}
           sourceRunId={record.id}
           busy={busy}
           copy={copy}

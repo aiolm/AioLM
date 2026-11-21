@@ -35,8 +35,8 @@ const measurement = {
  * description come from the review card, so one submission ID always maps to
  * one exact body. Retry and restart reuse the frozen queued body.
  */
-export function BenchmarkPublishPanel({ snapshot, description, sourceRunId, busy, copy, onPublished, onBound, onWorkingChange, outbox }: {
-  snapshot: PublicBenchmarkSubmission; description: string; sourceRunId: string;
+export function BenchmarkPublishPanel({ snapshot, description, descriptionInvalid = false, sourceRunId, busy, copy, onPublished, onBound, onWorkingChange, outbox }: {
+  snapshot: PublicBenchmarkSubmission; description: string; descriptionInvalid?: boolean; sourceRunId: string;
   busy: boolean; copy: Copy; onPublished?: () => void; onBound?: (description: string) => void;
   onWorkingChange?: (working: boolean) => void;
   outbox?: PublishOutbox;
@@ -152,7 +152,7 @@ export function BenchmarkPublishPanel({ snapshot, description, sourceRunId, busy
 
   const publish = async () => {
     const controller = controllerRef.current!;
-    if (busy || runningRef.current || published || restoring || restoreFailed || !serviceReady) return;
+    if (busy || runningRef.current || published || restoring || restoreFailed || descriptionInvalid || !serviceReady) return;
     const aborter = new AbortController();
     abortRef.current = aborter;
     runningRef.current = true;
@@ -271,7 +271,7 @@ export function BenchmarkPublishPanel({ snapshot, description, sourceRunId, busy
         {serviceUrl === null && <FeedbackBanner tone="info">{copy.publishNeedsService}</FeedbackBanner>}
         {serviceHost && <p className="performance-hint">{copy.publishServiceLabel}: {serviceHost}</p>}
         <div className="performance-actions">
-          <button type="button" className="app-button app-button--primary app-button--sm" disabled={working || unavailable || restoreFailed || errorCode === 'submission_deleted'} onClick={() => void publish()}>{phase === 'working' ? (status ?? copy.publishSubmitting) : error ? copy.publishRetry : copy.publishSelected}</button>
+          <button type="button" className="app-button app-button--primary app-button--sm" disabled={working || unavailable || restoreFailed || descriptionInvalid || errorCode === 'submission_deleted'} onClick={() => void publish()}>{phase === 'working' ? (status ?? copy.publishSubmitting) : error ? copy.publishRetry : copy.publishSelected}</button>
           {phase !== 'idle' && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void cancel()}>{copy.cancelPublish}</button>}
         </div>
         {status && phase === 'working' && <p role="status">{status}</p>}

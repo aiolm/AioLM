@@ -815,4 +815,47 @@ describe("Performance benchmark workflow", () => {
     expect(defined(csv.mock.calls[0])[0].map((item) => item.result.status)).toEqual(["failed", "complete"]);
     expect(vi.spyOn(URL, 'revokeObjectURL')).not.toHaveBeenCalled();
   });
+
+  it('preserves a selected non-llama runtime and blocks starting while the server is stopping', async () => {
+    const open = vi.fn();
+    vi.mocked(useModelSettings).mockReturnValue({
+      open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null,
+    } satisfies ModelSettingsContext);
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => result(request.run_id));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Configure' }));
+    const openReq = defined(open.mock.calls[0])[0];
+    const vllmCfg: api.AppConfig = { ...openReq.config, active_provider: 'vllm', active_runtime: 'vllm-rt' };
+    act(() => openReq.onApply?.(vllmCfg, { ...openReq.application, settings: profileSettingsSnapshot(vllmCfg) }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
+    expect(defined(mocked.runPerformanceBench.mock.calls[0])[0]).toMatchObject({
+      active_provider: 'vllm',
+      active_runtime: 'vllm-rt',
+    });
+
+    const stoppingStore: AppStore = { ...store, status: { ...store.status, state: 'stopping' } };
+    const view = renderPanel(stoppingStore);
+    const buttons = screen.getAllByRole('button', { name: 'Run benchmark' });
+    expect(buttons[buttons.length - 1]).toBeDisabled();
+    view.unmount();
+  });
+
+  it('does not revert benchmark phase to running if benchCancel fails after settling', async () => {
+    let finish!: (value: api.PerformanceBenchmarkResult) => void;
+    let rejectCancel!: (reason: Error) => void;
+    mocked.runPerformanceBench.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    mocked.benchCancel.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCancel = reject; }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
+    const request = defined(mocked.runPerformanceBench.mock.calls[0])[1];
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel benchmark' }));
+    await act(async () => finish(result(request.run_id)));
+    await act(async () => rejectCancel(new Error('late cancel transport failure')));
+    expect(screen.queryByText('late cancel transport failure')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled();
+  });
 });
