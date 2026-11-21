@@ -481,6 +481,7 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
     );
     serving.abort();
     managed_options_and_probe_cache_journey(&home.path).await;
+    managed_readable_served_alias_journey(&home.path).await;
 }
 
 /// Read a legacy managed spec through settings, then exercise the real helper
@@ -821,5 +822,155 @@ async fn managed_options_and_probe_cache_journey(home: &Path) {
         accepted
     );
     assert!(providers::registry::command(&cfg, cfg.port, "").is_err());
+    cli(home, &["runtime", "remove", engine, runtime]).await;
+}
+
+/// A managed connection registered with a readable served alias exposes that
+/// model name end to end: engine argv, probe evidence, the external model list
+/// and request routing. The opaque connection id is no longer advertised.
+async fn managed_readable_served_alias_journey(home: &Path) {
+    let folder = home.join("readable alias engine");
+    fs::create_dir(&folder).unwrap();
+    let engine_program = folder.join(format!(
+        "aiolm-auto-options-fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &engine_program).unwrap();
+    #[cfg(windows)]
+    {
+        let loader = Path::new(env!("CARGO_BIN_EXE_fake-llama-server"))
+            .parent()
+            .unwrap()
+            .join("WebView2Loader.dll");
+        if loader.is_file() {
+            fs::copy(loader, folder.join("WebView2Loader.dll")).unwrap();
+        }
+    }
+    let model = folder.join("synthetic-model.gguf");
+    fs::write(&model, b"synthetic model data, not an inference claim").unwrap();
+    let engine = "custom.auto-0123456789abcded";
+    let runtime = "connection-0123456789abcded";
+    let directory = providers::registry::root().join(engine).join(runtime);
+    fs::create_dir_all(&directory).unwrap();
+    let spec_path = directory.join("connection.json");
+    let launch = json!({
+        "program": engine_program,
+        "args": ["serve","llm","--model","{model}","--port","{port}",
+            "--host","{host}","--served-model-name","{model_alias}"],
+        "env":{}, "working_directory":folder,
+    });
+    let spec = serde_json::to_vec(&json!({
+        "version":1,"engine_id":engine,"runtime_id":runtime,
+        "target":{"kind":"managed","launch":launch,"artifacts":[]},
+        "model_path":model,"upstream_model":null,
+        "served_alias":"Synthetic-model",
+    }))
+    .unwrap();
+    fs::write(&spec_path, &spec).unwrap();
+    let address = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(spec_path.to_str().unwrap().as_bytes());
+    let manifest = json!({
+        "schema_version":1,"adapter_version":1,"engine_id":engine,"runtime_id":runtime,
+        "display_name":"Synthetic readable alias","compute_ownership":"descendant",
+        "platforms":[{"os":std::env::consts::OS,"arch":std::env::consts::ARCH}],
+        "protocol":"openai-v1",
+        "probe":{"program":env!("CARGO_BIN_EXE_aiolm-cli"),
+            "args":["--internal-runtime-auto","probe",address,"{model}"],
+            "env":{},"working_directory":null},
+        "launch":{"program":env!("CARGO_BIN_EXE_aiolm-cli"),
+            "args":["--internal-runtime-auto","serve",address,"{model}","{port}"],
+            "env":{"AIO_CONNECT_KEY":"{api_key}"},"working_directory":null},
+        "options":[],"model_formats":["unknown"],
+        "models":[{"path":model,"name":"Synthetic model.gguf"}],
+        "artifacts":[spec_path,engine_program],"health_path":"/health",
+        "health_authenticated":false,
+    });
+    let manifest_path = folder.join("owned-manifest.json");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    cli(
+        home,
+        &[
+            "runtime",
+            "register-manifest",
+            manifest_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    cli(home, &["runtime", "select", engine, runtime]).await;
+    cli(
+        home,
+        &["config", "set", "active_model", model.to_str().unwrap()],
+    )
+    .await;
+    cli(home, &["runtime", "probe", engine, runtime]).await;
+    let registration: Value =
+        serde_json::from_slice(&fs::read(directory.join("registration.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        registration["probe"]["served_model"], "Synthetic-model",
+        "the connection probe must verify the readable name, not the connection id"
+    );
+    cli(home, &["server", "start"]).await;
+    let launches: Vec<Vec<String>> =
+        fs::read_to_string(folder.join("automatic-launches.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    let argv = launches.last().unwrap();
+    let index = argv
+        .iter()
+        .position(|arg| arg == "--served-model-name")
+        .unwrap();
+    assert_eq!(argv[index + 1], "Synthetic-model");
+    let cfg = config::load_result().unwrap();
+    let client = reqwest::Client::new();
+    let listed: Value = client
+        .get(format!("http://127.0.0.1:{}/v1/models", cfg.port))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["data"][0]["id"], "Synthetic-model");
+    let chat: Value = client
+        .post(format!(
+            "http://127.0.0.1:{}/v1/chat/completions",
+            cfg.port
+        ))
+        .json(&json!({
+            "model":"Synthetic-model",
+            "messages":[{"role":"user","content":"hi"}],
+            "max_tokens":8
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(chat["model"], "Synthetic-model");
+    assert_eq!(chat["choices"][0]["message"]["content"], "5");
+    let legacy = client
+        .post(format!(
+            "http://127.0.0.1:{}/v1/chat/completions",
+            cfg.port
+        ))
+        .json(&json!({
+            "model":format!("aiolm-{runtime}"),
+            "messages":[{"role":"user","content":"hi"}],
+            "max_tokens":8
+        }))
+        .send()
+        .await
+        .unwrap();
+    let legacy_status = legacy.status();
+    let legacy_body: Value = legacy.json().await.unwrap();
+    assert!(
+        !legacy_status.is_success(),
+        "the opaque connection id must no longer be an addressable model: {legacy_status} {legacy_body}"
+    );
+    cli(home, &["server", "stop"]).await;
     cli(home, &["runtime", "remove", engine, runtime]).await;
 }

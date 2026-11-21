@@ -11,12 +11,13 @@ use tokio::{
 };
 
 const HEADER_LIMIT: usize = 32 * 1024;
-const BODY_LIMIT: usize = 8 * 1024 * 1024;
+const BODY_LIMIT: usize = 32 * 1024 * 1024;
+const ERROR_BODY_LIMIT: usize = 2 * 1024 * 1024;
 const STREAM_LIMIT: usize = 64 * 1024 * 1024;
 // Match the existing gateway's serving window. Setup samples have a separate,
 // shorter deadline; ordinary chat must retain time for long generations.
 const REQUEST_BUDGET: Duration = Duration::from_secs(3600);
-const READ_BUDGET: Duration = Duration::from_secs(10);
+const READ_BUDGET: Duration = Duration::from_secs(60);
 const MAX_CONNECTIONS: usize = 16;
 
 /// Credentials are intentionally not serializable or printable.
@@ -406,14 +407,37 @@ async fn dispatch(
         ));
     }
     if !response.status().is_success() {
-        return Err(failure(
-            if response.status().is_redirection() {
-                502
-            } else {
-                response.status().as_u16()
-            },
-            "upstream server rejected the chat request",
-        ));
+        if response.status().is_redirection() {
+            return Err(failure(502, "upstream server rejected the chat request"));
+        }
+        let status = response.status().as_u16();
+        let mut bytes = Vec::new();
+        while bytes.len() < ERROR_BODY_LIMIT {
+            let next = tokio::select! {
+                chunk = response.chunk() => match chunk {
+                    Ok(chunk) => chunk,
+                    Err(_) => break,
+                },
+                closed = client_closed(socket) => return Err(closed),
+            };
+            let Some(chunk) = next else { break };
+            let remaining = ERROR_BODY_LIMIT - bytes.len();
+            bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        }
+        let text = redact_secrets(String::from_utf8_lossy(&bytes).into_owned(), state);
+        let value = match serde_json::from_str::<Value>(&text) {
+            Ok(parsed) if parsed.is_object() || parsed.is_array() => parsed,
+            _ => {
+                let trimmed = text.trim();
+                let message = if trimmed.is_empty() {
+                    "upstream server rejected the chat request".to_string()
+                } else {
+                    trimmed.chars().take(2000).collect()
+                };
+                json!({"error":{"message":message,"type":"aiolm_proxy_error"}})
+            }
+        };
+        return json_response(socket, status, &value, started, origin.as_deref()).await;
     }
     let kind = response
         .headers()
@@ -474,6 +498,18 @@ async fn dispatch(
             .map_err(|_| failure(502, "upstream returned invalid JSON"))?;
         json_response(socket, 200, &value, started, origin.as_deref()).await
     }
+}
+
+fn redact_secrets(mut text: String, state: &State) -> String {
+    if let Some(key) = &state.upstream_api_key {
+        if !key.is_empty() {
+            text = text.replace(key, "[redacted]");
+        }
+    }
+    if !state.api_key.is_empty() {
+        text = text.replace(&state.api_key, "[redacted]");
+    }
+    text
 }
 
 async fn handle(mut socket: TcpStream, state: Arc<State>) {
@@ -622,6 +658,11 @@ mod tests {
     enum Answer {
         Stream,
         Json,
+        Error {
+            status: u16,
+            content_type: String,
+            body: String,
+        },
         Redirect(String),
         StalledStream,
         FirstStreamStalls,
@@ -676,6 +717,13 @@ mod tests {
                                 Answer::Json => {
                                     let value = json!({"model":MODEL,"choices":[{"message":{"content":"5"}}],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}});
                                     let _ = json_response(&mut socket, 200, &value, &mut false, None).await;
+                                }
+                                Answer::Error { status, content_type, body } => {
+                                    let response = format!(
+                                        "HTTP/1.1 {status} Error\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                        body.len()
+                                    );
+                                    let _ = socket.write_all(response.as_bytes()).await;
                                 }
                                 Answer::Redirect(location) => {
                                     let response = format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -1120,5 +1168,37 @@ mod tests {
         assert!(response.ends_with("data: [DONE]\n\n"));
         assert_eq!(upstream.recorded.lock().await.len(), 2);
         assert!(!proxy.task.is_finished());
+    }
+
+    #[tokio::test]
+    async fn upstream_error_json_is_preserved_without_hiding_diagnosis() {
+        let upstream = upstream(Answer::Error {
+            status: 400,
+            content_type: "application/json".into(),
+            body: json!({"error":{"message":"invalid parameter foo","type":"invalid_request_error","code":"bad_param"}}).to_string(),
+        })
+        .await;
+        let proxy = proxy(&upstream, Duration::from_secs(2), None).await;
+        let response = exchange(proxy.address, &chat(MODEL, false)).await;
+        assert!(response.starts_with("HTTP/1.1 400 "), "{response}");
+        assert!(response.contains("invalid parameter foo"), "{response}");
+        assert!(response.contains("bad_param"), "{response}");
+    }
+
+    #[tokio::test]
+    async fn upstream_error_relays_redacts_app_and_upstream_credentials() {
+        let upstream_secret = "synthetic-upstream-secret";
+        let upstream = upstream(Answer::Error {
+            status: 400,
+            content_type: "text/plain".into(),
+            body: format!("rejected key {upstream_secret} and {APP_KEY}"),
+        })
+        .await;
+        let proxy = proxy(&upstream, Duration::from_secs(2), Some(upstream_secret)).await;
+        let response = exchange(proxy.address, &chat(MODEL, false)).await;
+        assert!(response.starts_with("HTTP/1.1 400 "), "{response}");
+        assert!(!response.contains(upstream_secret), "{response}");
+        assert!(!response.contains(APP_KEY), "{response}");
+        assert!(response.contains("[redacted]"), "{response}");
     }
 }

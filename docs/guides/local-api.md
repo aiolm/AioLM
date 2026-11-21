@@ -29,7 +29,9 @@ on the new port; loaded models stay available. If the API is stopped, the new
 port applies the next time it starts.
 
 The model ID is an identifier returned by `GET /v1/models`; use it in the
-request's `model` field.
+request's `model` field. For a managed automatic connection this is the model's
+library display name without the file extension, for example
+`Qwen3.8-Flash-Next-UD-Q4_K_XL`.
 
 The listener binds only to `127.0.0.1` on the configured API port (initially 8080).
 One listener serves both protocols:

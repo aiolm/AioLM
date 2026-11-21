@@ -1627,6 +1627,7 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
     }
     let embedding = p.capabilities.tasks.iter().any(|t| t == "embed");
     let upstream = p.served_model.clone();
+    let tools = p.capabilities.tools || super::runtime_auto::is_owned_manifest(&r.manifest);
     Ok(EngineInfo {
         provider: p.engine_id,
         runtime_id: p.runtime_id.clone(),
@@ -1668,8 +1669,8 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, AppError> {
                 launch_fingerprint(&r.manifest, cfg)
             )
         }),
-        tools_auto: p.capabilities.tools,
-        tool_parser: p.capabilities.tools,
+        tools_auto: tools,
+        tool_parser: tools,
     })
 }
 pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, AppError> {

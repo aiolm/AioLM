@@ -54,6 +54,11 @@ binary version. Engine names resolve on app startup without first opening engine
 management or settings. Split GGUF models have one display name without the shard
 counter; the original first-shard path is still used to open the model.
 
+A managed connection serves the model under that display name without the file
+extension, so an external client's model list shows the model name instead of an
+internal connection ID. An attached server keeps the identifier the server itself
+advertises.
+
 For an AioLM-managed connection, model settings show options from the selected
 engine command's own help. Existing connections discover this help when their
 settings are first opened. The executable and connection files must still match

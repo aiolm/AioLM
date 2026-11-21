@@ -78,6 +78,11 @@ struct ConnectionSpec {
     target: Target,
     model_path: String,
     upstream_model: Option<String>,
+    /// Readable served-model name for managed launches, derived from the
+    /// library display name at connection time. Registrations without it keep
+    /// the connection-scoped `aiolm-<runtime id>` identifier.
+    #[serde(default)]
+    served_alias: Option<String>,
 }
 
 impl ConnectionSpec {
@@ -351,6 +356,17 @@ fn read_spec(path: &Path) -> Result<ConnectionSpec, crate::error::AppError> {
         return Err(crate::error::AppError::validation(
             "invalid automatic connection",
         ));
+    }
+    if let Some(alias) = &spec.served_alias {
+        if alias.is_empty()
+            || alias.len() > 96
+            || alias.starts_with(['-', '.'])
+            || alias.chars().any(char::is_control)
+        {
+            return Err(crate::error::AppError::validation(
+                "invalid automatic connection served alias",
+            ));
+        }
     }
     Ok(spec)
 }
@@ -782,6 +798,17 @@ pub async fn connect(
     } else {
         model_id.into()
     };
+    // Managed connections serve the library display name so external clients
+    // see a readable model name instead of the opaque connection identity.
+    let served_alias = if attached {
+        None
+    } else {
+        known
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .and_then(|model| readable_served_alias(&model.name))
+    };
     let spec = ConnectionSpec {
         version: 1,
         engine_id: engine,
@@ -789,6 +816,7 @@ pub async fn connect(
         target,
         model_path: model_path.clone(),
         upstream_model: attached.then(|| model_id.into()),
+        served_alias,
     };
     let result = async {
         if attached {
@@ -973,6 +1001,24 @@ fn expand(
     }
     Ok(value.into())
 }
+/// Readable served-model identifier for a managed connection: the library
+/// display name (split GGUF shards already merged) without its file extension,
+/// sanitized like the built-in engines' served names. `None` keeps the legacy
+/// connection-scoped identifier when no usable model name remains.
+fn readable_served_alias(display_name: &str) -> Option<String> {
+    let stem = match display_name.rsplit_once('.') {
+        Some((stem, extension)) if extension.eq_ignore_ascii_case("gguf") => stem,
+        _ => display_name,
+    };
+    let alias = super::launch::served_model_name(stem);
+    // `model` is the sanitizer's degenerate fallback, not a real model name.
+    if alias == "model" {
+        None
+    } else {
+        Some(alias)
+    }
+}
+
 async fn upstream(
     spec: &ConnectionSpec,
     model: &str,
@@ -999,7 +1045,10 @@ async fn upstream(
                 .map_err(|e| crate::error::AppError::from_io(&e))?
                 .port();
             drop(socket);
-            let alias = format!("aiolm-{}", spec.runtime_id);
+            // Older registrations without a stored readable name keep the
+            // connection-scoped identifier they were verified with.
+            let legacy_alias = format!("aiolm-{}", spec.runtime_id);
+            let alias = spec.served_alias.as_deref().unwrap_or(&legacy_alias);
             let aliased = launch
                 .args
                 .iter()
@@ -1008,12 +1057,12 @@ async fn upstream(
             let mut command = crate::procutil::std_command(&launch.program);
             command
                 .args(transported_arguments(
-                    launch, transport, model, port, &alias,
+                    launch, transport, model, port, alias,
                 )?)
                 .env_clear()
                 .envs(crate::runtime::child_environment());
             for (name, value) in &launch.env {
-                command.env(name, expand(value, model, port, &alias)?);
+                command.env(name, expand(value, model, port, alias)?);
             }
             if let Some(cwd) = &launch.working_directory {
                 command.current_dir(cwd);
@@ -1042,7 +1091,7 @@ async fn upstream(
                     if info.models.len() != 1 {
                         return Err(crate::error::AppError::validation("automatic launch requires exactly one served model; its model identity is ambiguous"));
                     }
-                    let expected = if aliased { alias.as_str() } else { model };
+                    let expected = if aliased { alias } else { model };
                     if info.models[0].id != expected {
                         return Err(crate::error::AppError::validation("the model API did not confirm the selected launch identity; automatic connection remains unverified"));
                     }
@@ -1187,7 +1236,7 @@ pub async fn run_internal(args: &[String]) -> Result<(), crate::error::AppError>
                     video: false,
                 },
                 chat: true,
-                tools: false,
+                tools: true,
                 // Core API verification proves no request control.
                 stream_usage_supported: None,
             },
@@ -1510,6 +1559,58 @@ mod tests {
         assert!(encoded_spec_path(Path::new("relative/connection.json")).is_err());
     }
 
+    #[test]
+    fn managed_connections_serve_the_library_display_name() {
+        assert_eq!(
+            readable_served_alias("Qwen3.8-Flash-Next-UD-Q4_K_XL.gguf").as_deref(),
+            Some("Qwen3.8-Flash-Next-UD-Q4_K_XL")
+        );
+        assert_eq!(
+            readable_served_alias("My Model:v1.GGUF").as_deref(),
+            Some("My-Model-v1")
+        );
+        // Degenerate names keep the legacy connection-scoped identifier.
+        assert_eq!(readable_served_alias("model.gguf"), None);
+        assert_eq!(readable_served_alias(".gguf"), None);
+        assert_eq!(readable_served_alias("---"), None);
+        assert_eq!(readable_served_alias(""), None);
+    }
+
+    #[test]
+    fn legacy_connection_specs_without_a_served_alias_still_parse() {
+        let legacy = serde_json::json!({
+            "version": 1,
+            "engine_id": "custom.auto-0123456789abcdef",
+            "runtime_id": "connection-0123456789abcdef",
+            "target": {"kind": "attached", "base_url": "http://127.0.0.1:43121/v1"},
+            "model_path": "/synthetic/model-reference.json",
+            "upstream_model": "synthetic-model"
+        });
+        let spec: ConnectionSpec = serde_json::from_value(legacy).unwrap();
+        assert_eq!(spec.served_alias, None);
+    }
+
+    #[test]
+    fn invalid_served_aliases_are_rejected_when_reading_a_connection() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-auto-alias-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("connection.json");
+        let mut spec = attached_spec(&directory);
+        for invalid in ["", "-leading", ".leading", &"a".repeat(97), "bad\u{0}name"] {
+            spec.served_alias = Some(invalid.into());
+            fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
+            assert!(read_spec(&path).is_err(), "{invalid:?}");
+        }
+        spec.served_alias = Some("Qwen3.8-Flash-Next-UD-Q4_K_XL".into());
+        fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        assert_eq!(
+            read_spec(&path).unwrap().served_alias.as_deref(),
+            Some("Qwen3.8-Flash-Next-UD-Q4_K_XL")
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
     fn attached_spec(directory: &Path) -> ConnectionSpec {
         ConnectionSpec {
             version: 1,
@@ -1523,6 +1624,7 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
             upstream_model: Some("synthetic-model".into()),
+            served_alias: None,
         }
     }
 
