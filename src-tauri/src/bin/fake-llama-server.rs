@@ -135,7 +135,10 @@ fn standard_stream(
     // Standard OpenAI streamed usage is the only optional field.
     let usage_requested = fields.contains_key("stream_options");
     if usage_requested {
-        assert_eq!(request["stream_options"], serde_json::json!({"include_usage": true}));
+        assert_eq!(
+            request["stream_options"],
+            serde_json::json!({"include_usage": true})
+        );
     }
     assert_eq!(
         fields.len(),
@@ -243,10 +246,15 @@ fn handle(mut stream: TcpStream) {
         .position(|arg| arg == "--benchmark-receipt")
         .and_then(|index| arguments.get(index + 1))
         .map(std::path::PathBuf::from)
-        .or_else(|| automatic_options_fixture().then(|| {
-            std::env::current_exe().unwrap().parent().unwrap()
-                .join("automatic-http-requests.jsonl")
-        }));
+        .or_else(|| {
+            automatic_options_fixture().then(|| {
+                std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("automatic-http-requests.jsonl")
+            })
+        });
     if let Some(log_path) = receipt_path {
         let _guard = REQUEST_LOG_LOCK.lock().unwrap();
         let mut log = std::fs::OpenOptions::new()
@@ -455,15 +463,27 @@ fn handle(mut stream: TcpStream) {
                 std::sync::atomic::AtomicUsize::new(0);
             let call = CHAT_CALLS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            if benchmark_request(&request) && request.get("stream_options").is_some()
-                && (arguments.iter().any(|arg| arg == "--benchmark-reject-usage")
-                    || (call > 0 && arguments.iter().any(|arg| arg == "--benchmark-late-reject-usage"))
-                    || (request.pointer("/messages/0/content").and_then(serde_json::Value::as_str)
+            if benchmark_request(&request)
+                && request.get("stream_options").is_some()
+                && (arguments
+                    .iter()
+                    .any(|arg| arg == "--benchmark-reject-usage")
+                    || (call > 0
+                        && arguments
+                            .iter()
+                            .any(|arg| arg == "--benchmark-late-reject-usage"))
+                    || (request
+                        .pointer("/messages/0/content")
+                        .and_then(serde_json::Value::as_str)
                         .is_some_and(|text| text.starts_with('B'))
                         && arguments.iter().any(|arg| arg == "--benchmark-mixed-usage")))
             {
-                respond(&mut stream, "400 Bad Request", "application/json",
-                    r#"{"error":{"message":"optional stream_options unsupported"}}"#);
+                respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":{"message":"optional stream_options unsupported"}}"#,
+                );
                 return;
             }
             if call > 0 && arguments.iter().any(|arg| arg == "--benchmark-second-eof") {

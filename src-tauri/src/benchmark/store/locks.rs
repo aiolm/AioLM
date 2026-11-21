@@ -166,11 +166,19 @@ mod tests {
 
     fn write_record(root: &Path, id: &str, created: u64) {
         let record = fixtures::serving_record(id, created);
-        let path = super::super::path_for(root, &record, &Default::default()).unwrap().unwrap();
+        let path = super::super::path_for(root, &record, &Default::default())
+            .unwrap()
+            .unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, super::super::encoded(&super::super::Entry::Start {
-            record, origin: Some(super::super::JournalOrigin::Native),
-        }).unwrap()).unwrap();
+        fs::write(
+            path,
+            super::super::encoded(&super::super::Entry::Start {
+                record,
+                origin: Some(super::super::JournalOrigin::Native),
+            })
+            .unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -252,7 +260,8 @@ mod tests {
     #[test]
     fn active_journal_is_hidden_from_other_processes_and_process_exit_releases_run_lock() {
         let root = fixtures::root();
-        let journal = RunJournal::begin(&root, fixtures::serving_record("cross-process", 1)).unwrap();
+        let journal =
+            RunJournal::begin(&root, fixtures::serving_record("cross-process", 1)).unwrap();
         let activity_marker = journal.activity_marker.clone();
         assert!(child(&root, "run-active").wait().unwrap().success());
         drop(journal);

@@ -410,7 +410,9 @@ pub(crate) async fn pick_document(state: State<'_, AppState>) -> Result<Option<S
     .map_err(|error| format!("document picker task failed: {error}"))?;
     let chosen = path
         .map(|chosen| {
-            select_picked_document(&state, chosen, |path| grants::document_grants()?.grant(path))
+            select_picked_document(&state, chosen, |path| {
+                grants::document_grants()?.grant(path)
+            })
         })
         .transpose()?;
     persist_selected_document(chosen)

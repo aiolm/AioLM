@@ -3076,8 +3076,10 @@ async fn cancelled_streaming_response_never_stores_completed_after_cancel_return
     body.push_str(&drain(&mut response).await);
     let events = sse_events(&body);
     assert!(
-        events.iter().any(|(kind, data)| kind == "response.incomplete"
-            && data["response"]["status"] == "cancelled"),
+        events
+            .iter()
+            .any(|(kind, data)| kind == "response.incomplete"
+                && data["response"]["status"] == "cancelled"),
         "{body}"
     );
     assert!(

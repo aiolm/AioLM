@@ -126,8 +126,12 @@ impl ServingMetadata {
             ComputeOwnership::Direct | ComputeOwnership::Descendant => {
                 (ServingTopology::Owned, ServingMemoryScope::OwnedProcessTree)
             }
-            ComputeOwnership::Attached => (ServingTopology::Attached, ServingMemoryScope::Unavailable),
-            ComputeOwnership::Unknown => (ServingTopology::Unknown, ServingMemoryScope::Unavailable),
+            ComputeOwnership::Attached => {
+                (ServingTopology::Attached, ServingMemoryScope::Unavailable)
+            }
+            ComputeOwnership::Unknown => {
+                (ServingTopology::Unknown, ServingMemoryScope::Unavailable)
+            }
         };
         Self {
             runtime,
@@ -301,7 +305,8 @@ fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
 
 fn decoded_len(data: &str) -> Result<usize, AdaptError> {
     let max_encoded = (crate::media::MAX_MEDIA_BYTES as usize).div_ceil(3) * 4;
-    let cleaned: std::borrow::Cow<'_, [u8]> = if data.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    let cleaned: std::borrow::Cow<'_, [u8]> = if data.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
         let mut stripped = Vec::with_capacity(data.len().min(max_encoded));
         for byte in data.bytes() {
             if !byte.is_ascii_whitespace() {
@@ -476,9 +481,7 @@ fn audio_mime_of_format(format: &str) -> Option<&'static str> {
 /// llama-server decodes `input_audio.data` as bare base64 in every build that
 /// has audio input; data URIs there are only understood by recent builds.
 fn llama_audio(reference: &str) -> Result<Value, AdaptError> {
-    match strip_prefix_ignore_ascii_case(reference, "data:")
-        .and_then(|rest| rest.split_once(','))
-    {
+    match strip_prefix_ignore_ascii_case(reference, "data:").and_then(|rest| rest.split_once(',')) {
         Some((header, data)) => {
             let mime = header
                 .split(';')
@@ -2288,7 +2291,9 @@ mod tests {
             json!({"type": "text", "text": "declined"})
         );
 
-        let mut empty_media = chat(json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,   \n "}}));
+        let mut empty_media = chat(
+            json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,   \n "}}),
+        );
         assert_eq!(
             adapt_request(
                 &llama,

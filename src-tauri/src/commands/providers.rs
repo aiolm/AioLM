@@ -309,7 +309,10 @@ pub fn inspect_catalog(
 fn catalog_path_key(raw: &str) -> String {
     #[cfg(windows)]
     {
-        let stripped = if raw.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\")) {
+        let stripped = if raw
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\"))
+        {
             format!(r"\\{}", &raw[8..])
         } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
             rest.to_owned()
@@ -649,7 +652,9 @@ mod tests {
         let (scan_by_path, binding_path_set) = catalog_indexes(&scan, &binding_paths);
 
         let key = catalog_path_key;
-        assert!(scan_by_path[&key("/models/none-first.gguf")].shards.is_none());
+        assert!(scan_by_path[&key("/models/none-first.gguf")]
+            .shards
+            .is_none());
         assert_eq!(
             scan_by_path[&key("/models/some-first.gguf")]
                 .shards

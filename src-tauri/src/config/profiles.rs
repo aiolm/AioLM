@@ -1284,8 +1284,12 @@ pub fn forget_provider_runtime(
     }
     for definition in &mut cfg.sessions {
         if let Some(settings) = definition.execution.as_mut() {
-            if names_provider_runtime(settings, cfg.active_provider.as_str(), provider_str, runtime_id)
-            {
+            if names_provider_runtime(
+                settings,
+                cfg.active_provider.as_str(),
+                provider_str,
+                runtime_id,
+            ) {
                 clear_provider_runtime(settings);
                 changed = true;
             }
@@ -1294,8 +1298,12 @@ pub fn forget_provider_runtime(
     if let Some(library) = cfg.settings_profiles.as_mut() {
         let mut library_changed = false;
         for entry in &mut library.entries {
-            if names_provider_runtime(&entry.settings, entry.provider.as_str(), provider_str, runtime_id)
-            {
+            if names_provider_runtime(
+                &entry.settings,
+                entry.provider.as_str(),
+                provider_str,
+                runtime_id,
+            ) {
                 clear_provider_runtime(&mut entry.settings);
                 entry.revision = entry.revision.saturating_add(1);
                 library_changed = true;

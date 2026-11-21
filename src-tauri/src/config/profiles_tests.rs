@@ -1314,8 +1314,10 @@ fn forget_provider_runtime_clears_matching_non_llama_references_only() {
         sessions: vec![super::super::SessionDefinition {
             id: "work".into(),
             execution: Some(
-                serde_json::from_value(json!({"active_provider": "vllm", "active_runtime": "vllm-env-1"}))
-                    .unwrap(),
+                serde_json::from_value(
+                    json!({"active_provider": "vllm", "active_runtime": "vllm-env-1"}),
+                )
+                .unwrap(),
             ),
             ..Default::default()
         }],

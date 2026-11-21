@@ -1088,9 +1088,7 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
                     )
                     .await?;
                 } else {
-                    return Err(
-                        ApiError::new(404, "not_found", "response was not found").into(),
-                    );
+                    return Err(ApiError::new(404, "not_found", "response was not found").into());
                 }
             }
             return Ok(());
@@ -1104,9 +1102,7 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
                 if let Some(stored) = stored {
                     write_json_response(stream, 200, stored.response).await?;
                 } else {
-                    return Err(
-                        ApiError::new(404, "not_found", "response was not found").into(),
-                    );
+                    return Err(ApiError::new(404, "not_found", "response was not found").into());
                 }
             }
             "DELETE" => {
@@ -1131,10 +1127,12 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
     }
 
     if path != "/v1/responses" {
-        return Err(
-            ApiError::new(404, "not_found", "supported response route is POST /v1/responses")
-                .into(),
-        );
+        return Err(ApiError::new(
+            404,
+            "not_found",
+            "supported response route is POST /v1/responses",
+        )
+        .into());
     }
     if method != "POST" {
         return Err(ApiError::new(
@@ -1155,9 +1153,11 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
         None | Some(Value::Null) => true,
         Some(Value::Bool(enabled)) => *enabled,
         Some(_) => {
-            return Err(ApiError::new(400, "invalid_request", "`store` must be a boolean")
-                .with_param("store")
-                .into());
+            return Err(
+                ApiError::new(400, "invalid_request", "`store` must be a boolean")
+                    .with_param("store")
+                    .into(),
+            );
         }
     };
     let previous_id = match body.get("previous_response_id") {
@@ -1299,7 +1299,14 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
                 write_json_response(
                     stream,
                     200,
-                    response_value(&response_id, model, "", Vec::new(), empty_response_usage(), "cancelled"),
+                    response_value(
+                        &response_id,
+                        model,
+                        "",
+                        Vec::new(),
+                        empty_response_usage(),
+                        "cancelled",
+                    ),
                 )
                 .await?;
                 return Ok(());
@@ -1599,10 +1606,9 @@ fn responses_to_openai(request: &Value, messages: Vec<Value>) -> Result<Value, S
                     "Responses tool choice type {kind} cannot be represented by this adapter"
                 ));
             }
-            let name = choice
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Responses tool_choice function requires a string name".to_string())?;
+            let name = choice.get("name").and_then(Value::as_str).ok_or_else(|| {
+                "Responses tool_choice function requires a string name".to_string()
+            })?;
             json!({"type":"function","function":{"name":name}})
         };
         if !empty_tools_list || converted.as_str() == Some("none") {
@@ -2373,7 +2379,10 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
             body.insert(field.into(), value.clone());
         }
     }
-    if let Some(stop_sequences) = request.get("stop_sequences").filter(|value| !value.is_null()) {
+    if let Some(stop_sequences) = request
+        .get("stop_sequences")
+        .filter(|value| !value.is_null())
+    {
         let stop_sequences = stop_sequences
             .as_array()
             .ok_or_else(|| "stop_sequences must be an array".to_string())?;
@@ -2400,7 +2409,8 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                     .ok_or_else(|| "Anthropic tool requires a string name".to_string())?;
                 let mut function = Map::new();
                 function.insert("name".into(), Value::String(name.to_owned()));
-                if let Some(description) = tool.get("description").filter(|value| !value.is_null()) {
+                if let Some(description) = tool.get("description").filter(|value| !value.is_null())
+                {
                     function.insert("description".into(), description.clone());
                 }
                 let parameters = tool
@@ -2444,7 +2454,11 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                         })?;
                     json!({"type":"function","function":{"name":name}})
                 }
-                other => return Err(format!("Anthropic tool_choice type {other} is not supported")),
+                other => {
+                    return Err(format!(
+                        "Anthropic tool_choice type {other} is not supported"
+                    ))
+                }
             }
         } else {
             return Err("tool_choice must be a string or object".into());

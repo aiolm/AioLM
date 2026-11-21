@@ -1,9 +1,7 @@
 //! One validated selection shared by the desktop, CLI and API gateway.
 use super::{
     artifacts, compat, launch,
-    protocol::{
-        valid_public_label, ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata,
-    },
+    protocol::{valid_public_label, ComputeOwnership, EngineInfo, PublicEngine, ServingMetadata},
     python_env, ProviderId,
 };
 use crate::config::AppConfig;

@@ -74,10 +74,7 @@ impl Usage {
                     }
                 }
             }
-            Ok(Self::Counters {
-                prompt,
-                completion,
-            })
+            Ok(Self::Counters { prompt, completion })
         };
         parse().unwrap_or(Self::Invalid)
     }
@@ -296,9 +293,7 @@ pub(super) async fn request_outcome(
             .execute(request)
             .await
             .map_err(|error| request_error("benchmark request failed", error))?;
-        if negotiate_usage
-            && matches!(response.status().as_u16(), 400 | 422)
-        {
+        if negotiate_usage && matches!(response.status().as_u16(), 400 | 422) {
             // Do not buffer a rejection body or wait for its connection to close.
             return Ok(RequestOutcome::UsageRejected(response.status().as_u16()));
         }
@@ -431,10 +426,7 @@ mod tests {
         assert_eq!(row.output_bytes as f64 / 0.2, 60.0);
         assert_eq!(row.usage_status, "missing");
         assert_eq!(
-            (
-                row.reported_prompt_tokens,
-                row.reported_completion_tokens,
-            ),
+            (row.reported_prompt_tokens, row.reported_completion_tokens,),
             (None, None)
         );
         assert_eq!(row.finish_reason, "not_reported");
@@ -517,10 +509,7 @@ mod tests {
         assert_eq!(row.finish_reason, "length");
         assert_eq!(row.usage_status, "complete");
         assert_eq!(
-            (
-                row.reported_prompt_tokens,
-                row.reported_completion_tokens,
-            ),
+            (row.reported_prompt_tokens, row.reported_completion_tokens,),
             (Some(4), Some(1))
         );
         for (reason, expected) in [
@@ -559,10 +548,7 @@ mod tests {
             let row = measured(data.as_bytes()).unwrap();
             assert_eq!(row.usage_status, status);
             assert_eq!(
-                (
-                    row.reported_prompt_tokens,
-                    row.reported_completion_tokens,
-                ),
+                (row.reported_prompt_tokens, row.reported_completion_tokens,),
                 counters
             );
         }
@@ -577,10 +563,7 @@ mod tests {
         let row = measured(data.as_bytes()).unwrap();
         assert_eq!(row.usage_status, "complete");
         assert_eq!(
-            (
-                row.reported_prompt_tokens,
-                row.reported_completion_tokens,
-            ),
+            (row.reported_prompt_tokens, row.reported_completion_tokens,),
             (Some(7), Some(3))
         );
     }
@@ -603,10 +586,7 @@ mod tests {
             let row = with_usage(usage);
             assert_eq!(row.usage_status, "invalid");
             assert_eq!(
-                (
-                    row.reported_prompt_tokens,
-                    row.reported_completion_tokens,
-                ),
+                (row.reported_prompt_tokens, row.reported_completion_tokens,),
                 (None, None)
             );
         }
@@ -810,12 +790,20 @@ mod tests {
                 http_fixture(status, b"rejected".to_vec(), true).await;
             let result = tokio::time::timeout(
                 Duration::from_secs(1),
-                request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true),
+                request_outcome(
+                    &client,
+                    &prepared,
+                    &AtomicBool::new(false),
+                    Budget::default(),
+                    true,
+                ),
             )
             .await
             .expect("HTTP failures must not wait for the rejection body to finish");
             if matches!(status, 400 | 422) {
-                assert!(matches!(result.unwrap(), RequestOutcome::UsageRejected(code) if code == status));
+                assert!(
+                    matches!(result.unwrap(), RequestOutcome::UsageRejected(code) if code == status)
+                );
             } else {
                 let error = result.unwrap_err();
                 assert_eq!(error.kind, ErrorKind::Unavailable);
@@ -831,12 +819,20 @@ mod tests {
             http_fixture(200, b"data: [DONE]\n\n".to_vec(), true).await;
         let outcome = tokio::time::timeout(
             Duration::from_secs(1),
-            request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true),
+            request_outcome(
+                &client,
+                &prepared,
+                &AtomicBool::new(false),
+                Budget::default(),
+                true,
+            ),
         )
         .await
         .expect("DONE must not wait for EOF")
         .unwrap();
-        assert!(matches!(outcome, RequestOutcome::Complete(measurement) if measurement.output_bytes == 0 && measurement.reported_completion_tokens.is_none()));
+        assert!(
+            matches!(outcome, RequestOutcome::Complete(measurement) if measurement.output_bytes == 0 && measurement.reported_completion_tokens.is_none())
+        );
         fixture.abort();
         for body in [
             b"data: {}\n\n".to_vec(),
@@ -845,10 +841,16 @@ mod tests {
         ] {
             let (client, prepared, fixture) = http_fixture(200, body, false).await;
             assert_eq!(
-                request_outcome(&client, &prepared, &AtomicBool::new(false), Budget::default(), true)
-                    .await
-                    .unwrap_err()
-                    .kind,
+                request_outcome(
+                    &client,
+                    &prepared,
+                    &AtomicBool::new(false),
+                    Budget::default(),
+                    true
+                )
+                .await
+                .unwrap_err()
+                .kind,
                 ErrorKind::Unavailable
             );
             fixture.await.unwrap();
@@ -859,7 +861,10 @@ mod tests {
             &client,
             &prepared,
             &AtomicBool::new(false),
-            Budget { response_bytes: 8, ..Budget::default() },
+            Budget {
+                response_bytes: 8,
+                ..Budget::default()
+            },
             true,
         )
         .await
@@ -889,7 +894,13 @@ mod tests {
             fixture.abort();
             let (client, prepared, fixture) = http_fixture(200, partial, true).await;
             let cancel = AtomicBool::new(false);
-            let operation = request_outcome(&client, &prepared, &cancel, Budget::default(), negotiate_usage);
+            let operation = request_outcome(
+                &client,
+                &prepared,
+                &cancel,
+                Budget::default(),
+                negotiate_usage,
+            );
             let stop = async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 cancel.store(true, Ordering::Release);

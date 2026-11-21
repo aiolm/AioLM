@@ -218,7 +218,8 @@ fn probe_body_submission(bytes: &[u8], submission_id: &str) -> Result<(), Sharin
     let root = value
         .as_object()
         .ok_or_else(|| SharingError::binding_conflict_msg(NOT_A_REQUEST))?;
-    let bound = root.get("benchmark")
+    let bound = root
+        .get("benchmark")
         .and_then(|benchmark| benchmark.get("submission_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| SharingError::binding_conflict_msg(MISMATCH))?;

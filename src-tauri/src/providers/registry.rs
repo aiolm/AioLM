@@ -1540,7 +1540,10 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
         .collect()
 }
 pub fn catalog() -> Vec<Value> {
-    let benchmark = format!("openai-chat-serving@{}", crate::performance_bench::METHOD_VERSION);
+    let benchmark = format!(
+        "openai-chat-serving@{}",
+        crate::performance_bench::METHOD_VERSION
+    );
     let inventory = registrations();
     let mut seen = std::collections::BTreeSet::new();
     inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| {

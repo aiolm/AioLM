@@ -72,7 +72,6 @@ fn metadata(result: &PerformanceBenchResult) -> Value {
     value
 }
 
-
 fn valid_serving_row(value: &Value) -> bool {
     crate::performance_bench::PerformanceBenchRow::deserialize(value)
         .is_ok_and(|row| row.validate())
@@ -124,17 +123,22 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
     let mut input_hashes = HashSet::new();
     for value in rows {
         let hashes = value["input_sha256_by_request"]
-            .as_array().ok_or("cold prompt trial is missing request input hashes")?;
+            .as_array()
+            .ok_or("cold prompt trial is missing request input hashes")?;
         if hashes.len() != value["concurrency"].as_u64().unwrap() as usize {
             return Err("cold prompt input hashes do not match the request slots".into());
         }
         for hash in hashes {
             let hash = hash.as_str().ok_or("invalid cold prompt input hash")?;
             if hash.len() != 64
-                || !hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || !hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 || !input_hashes.insert(hash)
             {
-                return Err("cold prompt request input hashes must be valid and globally unique".into());
+                return Err(
+                    "cold prompt request input hashes must be valid and globally unique".into(),
+                );
             }
         }
     }
@@ -179,11 +183,15 @@ fn validate_serving_record(record: &Value) -> Result<(), String> {
             if row["concurrency"].as_u64() == Some(u64::from(first_concurrency))
                 && row["repetition"].as_u64() == Some(1)
             {
-                let input = workload.inputs.iter().find(|input| {
-                    row["input_bytes"].as_u64() == Some(u64::from(input.bytes))
-                }).ok_or("cold prompt trial has no input descriptor")?;
+                let input = workload
+                    .inputs
+                    .iter()
+                    .find(|input| row["input_bytes"].as_u64() == Some(u64::from(input.bytes)))
+                    .ok_or("cold prompt trial has no input descriptor")?;
                 if row["input_sha256_by_request"][0].as_str() != Some(input.sha256.as_str()) {
-                    return Err("cold prompt input descriptor does not match the first request".into());
+                    return Err(
+                        "cold prompt input descriptor does not match the first request".into(),
+                    );
                 }
             }
         }
@@ -453,15 +461,24 @@ fn supported_journal(path: &Path) -> Result<bool, AppError> {
         .read_until(b'\n', &mut line)
         .map_err(|error| AppError::from_io(&error))?;
     if !line.ends_with(b"\n") || line.len() as u64 > MAX_JOURNAL_BYTES {
-        return Err(AppError::validation("benchmark journal has no complete start event"));
+        return Err(AppError::validation(
+            "benchmark journal has no complete start event",
+        ));
     }
     let start: Value = serde_json::from_slice(&line).map_err(|error| {
-        AppError::validation(format!("benchmark journal contains a corrupt event: {error}"))
+        AppError::validation(format!(
+            "benchmark journal contains a corrupt event: {error}"
+        ))
     })?;
     if start["kind"] != "start" {
-        return Err(AppError::validation("benchmark journal has no complete start event"));
+        return Err(AppError::validation(
+            "benchmark journal has no complete start event",
+        ));
     }
-    Ok(start.pointer("/record/schemaVersion").and_then(Value::as_u64) == Some(3))
+    Ok(start
+        .pointer("/record/schemaVersion")
+        .and_then(Value::as_u64)
+        == Some(3))
 }
 
 fn require_supported_journal(path: &Path) -> Result<(), AppError> {
@@ -630,7 +647,6 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,7 +691,8 @@ mod tests {
             "max_output_tokens":128,"concurrencies":[1],"repetitions":1,
             "warmup":false,"request_usage":true,"cache_policy":"cold_prompt",
             "prompt_nonce":"0123456789abcdef0123456789abcdef"
-        })).unwrap();
+        }))
+        .unwrap();
         let model = serde_json::from_value(
             json!({"status":"unidentified","sha256":null,"size_bytes":null}),
         )
@@ -705,7 +722,6 @@ mod tests {
                 "concurrencies":[1],"repetitions":1,"warmup":false,"request_usage":true},
             "result":serving_result(id)})
     }
-
 
     #[test]
     fn metadata_updates_preserve_unknown_values_and_persisted_rows() {
@@ -777,7 +793,8 @@ mod tests {
             let path = runs.join(format!("{:016}-{}", 100 + version, record_digest(&old)));
             let mut bytes = serde_json::to_vec(&json!({
                 "kind":"start","origin":"legacy","record":old
-            })).unwrap();
+            }))
+            .unwrap();
             // The unread tail is intentionally not decodable by the new reader.
             bytes.extend_from_slice(b"\nold unsupported event\n{\"torn\":");
             fs::write(&path, &bytes).unwrap();
@@ -796,8 +813,10 @@ mod tests {
         assert!(last.warnings.is_empty());
         for (path, bytes) in unsupported {
             assert_eq!(fs::read(&path).unwrap(), bytes);
-            assert_eq!(replay_run(&path).err().unwrap(),
-                AppError::validation("unsupported benchmark record"));
+            assert_eq!(
+                replay_run(&path).err().unwrap(),
+                AppError::validation("unsupported benchmark record")
+            );
             assert_eq!(fs::read(&path).unwrap(), bytes);
         }
         fs::remove_dir_all(root).unwrap();
@@ -828,8 +847,13 @@ mod tests {
         let path = files(&root).unwrap().remove(0);
         drop(journal);
         let mut file = OpenOptions::new().append(true).open(path).unwrap();
-        file.write_all(&encoded(&Entry::Trial { row: json!(serving_row()) }).unwrap())
-            .unwrap();
+        file.write_all(
+            &encoded(&Entry::Trial {
+                row: json!(serving_row()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
         file.write_all(b"{\"kind\":\"finish\",\"result\":").unwrap();
         file.sync_all().unwrap();
         drop(file);
@@ -891,18 +915,26 @@ mod tests {
         journal.checkpoint(&result).unwrap();
         let prepared = replay(&journal.path).unwrap();
         assert_eq!(prepared["request"]["request_usage"], true);
-        assert_eq!(prepared["result"]["provenance"]["workload"]["request_usage"], false);
+        assert_eq!(
+            prepared["result"]["provenance"]["workload"]["request_usage"],
+            false
+        );
         assert_eq!(prepared["result"]["rows"], json!([]));
         assert_eq!(
             prepared["result"]["provenance"]["execution"]["settings"],
-            json!(super::super::provenance::common_request_settings(128, false))
+            json!(super::super::provenance::common_request_settings(
+                128, false
+            ))
         );
 
         result.rows.push(row);
         journal.checkpoint(&result).unwrap();
         let measured = replay(&journal.path).unwrap();
         assert_eq!(measured["request"]["request_usage"], true);
-        assert_eq!(measured["result"]["provenance"]["workload"]["request_usage"], false);
+        assert_eq!(
+            measured["result"]["provenance"]["workload"]["request_usage"],
+            false
+        );
         assert_eq!(measured["result"]["rows"].as_array().unwrap().len(), 1);
         result.status = "complete";
         result.message = None;
@@ -1059,7 +1091,9 @@ mod serving_validation_tests {
             (1, 2, vec!["b".repeat(64)]),
             (2, 1, vec!["c".repeat(64), "d".repeat(64)]),
             (2, 2, vec!["e".repeat(64), "f".repeat(64)]),
-        ].into_iter().map(|(concurrency, repetition, hashes)| {
+        ]
+        .into_iter()
+        .map(|(concurrency, repetition, hashes)| {
             let mut row = template.clone();
             row["id"] = json!(format!("c{concurrency}-r{repetition}"));
             row["concurrency"] = json!(concurrency);
@@ -1067,7 +1101,8 @@ mod serving_validation_tests {
             row["finish_reasons"] = json!(vec!["stop"; concurrency]);
             row["input_sha256_by_request"] = json!(hashes);
             row
-        }).collect::<Vec<_>>());
+        })
+        .collect::<Vec<_>>());
         record["result"]["status"] = json!("complete");
         record["result"]["message"] = Value::Null;
         record
@@ -1079,15 +1114,17 @@ mod serving_validation_tests {
         let mut cold = cold;
         cold["request"]["request_usage"] = json!(false);
         cold["result"]["provenance"]["workload"]["request_usage"] = json!(false);
-        cold["result"]["provenance"]["execution"]["settings"] =
-            json!(super::super::provenance::common_request_settings(128, false));
+        cold["result"]["provenance"]["execution"]["settings"] = json!(
+            super::super::provenance::common_request_settings(128, false)
+        );
         let root = tests::root();
         for cap in [1, 128] {
             let mut boundary = cold.clone();
             boundary["request"]["max_output_tokens"] = json!(cap);
             boundary["result"]["provenance"]["workload"]["max_output_tokens"] = json!(cap);
-            boundary["result"]["provenance"]["execution"]["settings"] =
-                json!(super::super::provenance::common_request_settings(cap, false));
+            boundary["result"]["provenance"]["execution"]["settings"] = json!(
+                super::super::provenance::common_request_settings(cap, false)
+            );
             for row in boundary["result"]["rows"].as_array_mut().unwrap() {
                 row["max_output_tokens"] = json!(cap);
             }
@@ -1098,26 +1135,53 @@ mod serving_validation_tests {
         validate_record(&downgraded).unwrap();
         for (pointer, value) in [
             ("/result/provenance/workload/prompt_nonce", Value::Null),
-            ("/result/provenance/workload/prompt_nonce", json!("a".repeat(31))),
-            ("/result/provenance/workload/prompt_nonce", json!("A".repeat(32))),
+            (
+                "/result/provenance/workload/prompt_nonce",
+                json!("a".repeat(31)),
+            ),
+            (
+                "/result/provenance/workload/prompt_nonce",
+                json!("A".repeat(32)),
+            ),
             ("/result/provenance/workload/corpus_version", json!(1)),
-            ("/result/provenance/workload/cache_policy", json!("as_configured")),
+            (
+                "/result/provenance/workload/cache_policy",
+                json!("as_configured"),
+            ),
             ("/result/provenance/workload/warmup", json!(true)),
             ("/result/provenance/workload/request_usage", json!(true)),
-            ("/result/provenance/workload/inputs/0/sha256", json!("0".repeat(64))),
+            (
+                "/result/provenance/workload/inputs/0/sha256",
+                json!("0".repeat(64)),
+            ),
             ("/result/rows/0/input_sha256_by_request", Value::Null),
             ("/result/rows/0/input_sha256_by_request", json!([])),
-            ("/result/rows/0/input_sha256_by_request", json!(["A".repeat(64)])),
-            ("/result/rows/2/input_sha256_by_request", json!(["c".repeat(64)])),
-            ("/result/rows/2/input_sha256_by_request", json!(["c".repeat(64), "c".repeat(64)])),
-            ("/result/rows/2/input_sha256_by_request", json!(["a".repeat(64), "d".repeat(64)])),
+            (
+                "/result/rows/0/input_sha256_by_request",
+                json!(["A".repeat(64)]),
+            ),
+            (
+                "/result/rows/2/input_sha256_by_request",
+                json!(["c".repeat(64)]),
+            ),
+            (
+                "/result/rows/2/input_sha256_by_request",
+                json!(["c".repeat(64), "c".repeat(64)]),
+            ),
+            (
+                "/result/rows/2/input_sha256_by_request",
+                json!(["a".repeat(64), "d".repeat(64)]),
+            ),
         ] {
             let mut invalid = cold.clone();
             *invalid.pointer_mut(pointer).unwrap() = value;
             assert!(validate_record(&invalid).is_err(), "{pointer}");
         }
         let mut missing = cold.clone();
-        missing["result"]["rows"][0].as_object_mut().unwrap().remove("input_sha256_by_request");
+        missing["result"]["rows"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("input_sha256_by_request");
         assert!(validate_record(&missing).is_err());
         for topology in ["owned", "attached", "unknown"] {
             let mut supported = cold.clone();
@@ -1129,7 +1193,8 @@ mod serving_validation_tests {
         initial["result"]["status"] = json!("failed");
         let journal = RunJournal::begin(&root, initial).unwrap();
         let mut result = tests::serving_result("cold-prompt-round-trip");
-        result.provenance = Some(serde_json::from_value(cold["result"]["provenance"].clone()).unwrap());
+        result.provenance =
+            Some(serde_json::from_value(cold["result"]["provenance"].clone()).unwrap());
         result.rows = serde_json::from_value(cold["result"]["rows"].clone()).unwrap();
         result.status = "complete";
         result.message = None;
@@ -1142,5 +1207,4 @@ mod serving_validation_tests {
         assert_eq!(page.records, vec![expected]);
         fs::remove_dir_all(root).unwrap();
     }
-
 }

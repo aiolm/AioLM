@@ -233,10 +233,7 @@ impl AudioForm {
             let candidate = format!("aiolm-boundary-{}", uuid::Uuid::new_v4().simple());
             let needle = candidate.as_bytes();
             if !self.file.windows(needle.len()).any(|w| w == needle)
-                && !self
-                    .file_headers
-                    .windows(needle.len())
-                    .any(|w| w == needle)
+                && !self.file_headers.windows(needle.len()).any(|w| w == needle)
                 && !field_collides(&candidate)
             {
                 self.boundary = candidate;

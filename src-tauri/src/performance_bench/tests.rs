@@ -18,7 +18,10 @@ fn desktop_request() -> PerformanceBenchRequest {
 fn request() -> PerformanceBenchRequest {
     PerformanceBenchRequest {
         run_id: "serving-journal".into(),
-        method: ServingMethod { id: "openai-chat-serving".into(), version: 5 },
+        method: ServingMethod {
+            id: "openai-chat-serving".into(),
+            version: 5,
+        },
         context_profile: "novel_ko".into(),
         prompt_bytes: vec![256],
         max_output_tokens: 128,
@@ -113,8 +116,13 @@ fn cold_prompt_inputs_are_exact_unique_slot_prompts_with_first_point_descriptors
     let (workload, bases) = prepare_inputs(&request);
     let nonce = workload.prompt_nonce.clone().unwrap();
     assert_eq!(nonce.len(), 32);
-    assert!(nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
-    assert_eq!((workload.corpus_version, workload.cache_policy.as_str()), (2, "cold_prompt"));
+    assert!(nonce
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    assert_eq!(
+        (workload.corpus_version, workload.cache_policy.as_str()),
+        (2, "cold_prompt")
+    );
     let mut seen = std::collections::HashSet::new();
     for (input, base) in workload.inputs.iter().zip(&bases) {
         for concurrency in [2, 4] {
@@ -123,7 +131,8 @@ fn cold_prompt_inputs_are_exact_unique_slot_prompts_with_first_point_descriptors
                     let point = (input.bytes, concurrency, repetition);
                     let text = corpus::cold_text(base, &nonce, point, slot as usize);
                     assert_eq!(text.len(), input.bytes as usize);
-                    let identity = format!("{nonce}:{}:{concurrency}:{repetition}:{slot}", input.bytes);
+                    let identity =
+                        format!("{nonce}:{}:{concurrency}:{repetition}:{slot}", input.bytes);
                     let prefix = format!(
                         "{}{:x}\n",
                         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -141,7 +150,11 @@ fn cold_prompt_inputs_are_exact_unique_slot_prompts_with_first_point_descriptors
         }
     }
     let (again, _) = prepare_inputs(&request);
-    assert_ne!(again.prompt_nonce.unwrap(), nonce, "each run gets a fresh nonce");
+    assert_ne!(
+        again.prompt_nonce.unwrap(),
+        nonce,
+        "each run gets a fresh nonce"
+    );
 }
 
 #[test]
@@ -167,7 +180,10 @@ fn serving_accepts_only_the_current_method_and_caps_between_one_and_128_tokens()
     let mut unsupported = request();
     unsupported.method.version = 4;
     assert!(validate_request(&mut unsupported).is_err());
-    let mut warmup = PerformanceBenchRequest { warmup: true, ..request() };
+    let mut warmup = PerformanceBenchRequest {
+        warmup: true,
+        ..request()
+    };
     assert!(validate_request(&mut warmup).is_err());
     validate_desktop_request(&mut PerformanceBenchRequest {
         request_usage: true,
@@ -444,19 +460,23 @@ fn buffered_workload(
 ) -> BufferedWorkload {
     let provenance = result.provenance.as_ref().unwrap();
     let nonce = provenance.workload.prompt_nonce.as_ref().unwrap();
-    let base = corpus::text(&request.context_profile, point.0 as usize - corpus::COLD_PREFIX_BYTES);
+    let base = corpus::text(
+        &request.context_profile,
+        point.0 as usize - corpus::COLD_PREFIX_BYTES,
+    );
     let mut hashes = Vec::with_capacity(point.1 as usize);
-    let slots = (0..point.1).map(|slot| {
-        let text = corpus::cold_text(&base, nonce, point, slot as usize);
-        hashes.push(format!("{:x}", Sha256::digest(text.as_bytes())));
-        let mut slot = buffered.try_clone().unwrap();
-        let mut body: Value = serde_json::from_slice(
-            slot.body().unwrap().as_bytes().unwrap(),
-        ).unwrap();
-        body["messages"][0]["content"] = json!(text);
-        *slot.body_mut() = Some(serde_json::to_vec(&body).unwrap().into());
-        slot
-    }).collect();
+    let slots = (0..point.1)
+        .map(|slot| {
+            let text = corpus::cold_text(&base, nonce, point, slot as usize);
+            hashes.push(format!("{:x}", Sha256::digest(text.as_bytes())));
+            let mut slot = buffered.try_clone().unwrap();
+            let mut body: Value =
+                serde_json::from_slice(slot.body().unwrap().as_bytes().unwrap()).unwrap();
+            body["messages"][0]["content"] = json!(text);
+            *slot.body_mut() = Some(serde_json::to_vec(&body).unwrap().into());
+            slot
+        })
+        .collect();
     BufferedWorkload {
         request: request.clone(),
         slots,
@@ -468,21 +488,55 @@ fn buffered_workload(
 #[tokio::test]
 async fn first_actual_batch_negotiates_usage_without_discarding_accepted_measurements() {
     for (reports, status, completion) in [
-        (vec![json!({"completion_tokens":2}), json!({"completion_tokens":3})], "partial", Some(5)),
+        (
+            vec![
+                json!({"completion_tokens":2}),
+                json!({"completion_tokens":3}),
+            ],
+            "partial",
+            Some(5),
+        ),
         (vec![Value::Null, Value::Null], "missing", None),
-        (vec![json!({"completion_tokens":-1}), Value::Null], "invalid", None),
+        (
+            vec![json!({"completion_tokens":-1}), Value::Null],
+            "invalid",
+            None,
+        ),
     ] {
-        let request = PerformanceBenchRequest { request_usage: true, repetitions: 1, ..request() };
+        let request = PerformanceBenchRequest {
+            request_usage: true,
+            repetitions: 1,
+            ..request()
+        };
         let (directory, mut result, journal, checkpoint, events, progress) = journaled(&request);
         let (client, buffered, owner) = fixture_for(
-            reports.into_iter().map(|usage| Reply::done(usage, Some("stop"))).collect(),
+            reports
+                .into_iter()
+                .map(|usage| Reply::done(usage, Some("stop")))
+                .collect(),
             &request,
-        ).await;
+        )
+        .await;
         let mut workload = buffered_workload(&request, &buffered, &result, (256, 2, 1));
-        trial(&mut workload, &client, (256, 2, 1), 0, None,
-            ServingMemoryScope::Unavailable, &AtomicBool::new(false), &mut result,
-            Some(&checkpoint), &progress).await.unwrap();
-        assert_eq!(owner.receipts.lock().unwrap().len(), 2, "no preflight inference with warmup off");
+        trial(
+            &mut workload,
+            &client,
+            (256, 2, 1),
+            0,
+            None,
+            ServingMemoryScope::Unavailable,
+            &AtomicBool::new(false),
+            &mut result,
+            Some(&checkpoint),
+            &progress,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            owner.receipts.lock().unwrap().len(),
+            2,
+            "no preflight inference with warmup off"
+        );
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].output_bytes, 24);
         assert_eq!(result.rows[0].usage_status, status);
@@ -496,51 +550,100 @@ async fn first_actual_batch_negotiates_usage_without_discarding_accepted_measure
         drop(journal);
         let page = crate::benchmark::store::list(&directory.0, 0, 10).unwrap();
         assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-        assert_eq!(page.records[0]["result"]["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            page.records[0]["result"]["rows"].as_array().unwrap().len(),
+            1
+        );
     }
 }
 
 #[tokio::test]
 async fn entirely_rejected_first_batch_checkpoints_usage_off_before_resend() {
     for status in [400, 422] {
-        let request = PerformanceBenchRequest { request_usage: true, repetitions: 1, ..request() };
+        let request = PerformanceBenchRequest {
+            request_usage: true,
+            repetitions: 1,
+            ..request()
+        };
         let (directory, mut result, journal, saved, events, progress) = journaled(&request);
-        let (client, buffered, owner) = fixture_for(vec![
-            Reply::rejected(status), Reply::rejected(status),
-            Reply::done(Value::Null, Some("stop")), Reply::done(Value::Null, Some("stop")),
-        ], &request).await;
+        let (client, buffered, owner) = fixture_for(
+            vec![
+                Reply::rejected(status),
+                Reply::rejected(status),
+                Reply::done(Value::Null, Some("stop")),
+                Reply::done(Value::Null, Some("stop")),
+            ],
+            &request,
+        )
+        .await;
         let receipts = owner.receipts.clone();
         let downgraded_at = Arc::new(Mutex::new(None));
         let observed_downgrade = downgraded_at.clone();
         let checkpoint: Checkpoint = Arc::new(move |result| {
             if result.rows.is_empty() {
-                assert_eq!(receipts.lock().unwrap().len(), 2, "checkpoint precedes resend");
+                assert_eq!(
+                    receipts.lock().unwrap().len(),
+                    2,
+                    "checkpoint precedes resend"
+                );
                 let provenance = result.provenance.as_ref().unwrap();
                 assert!(!provenance.workload.request_usage);
-                assert!(provenance.execution.settings.iter().all(|setting| setting.name != "stream_options.include_usage"));
+                assert!(provenance
+                    .execution
+                    .settings
+                    .iter()
+                    .all(|setting| setting.name != "stream_options.include_usage"));
                 *observed_downgrade.lock().unwrap() = Some(Instant::now());
             }
             saved(result)
         });
         let mut workload = buffered_workload(&request, &buffered, &result, (256, 2, 1));
-        trial(&mut workload, &client, (256, 2, 1), 0, None,
-            ServingMemoryScope::Unavailable, &AtomicBool::new(false), &mut result,
-            Some(&checkpoint), &progress).await.unwrap();
+        trial(
+            &mut workload,
+            &client,
+            (256, 2, 1),
+            0,
+            None,
+            ServingMemoryScope::Unavailable,
+            &AtomicBool::new(false),
+            &mut result,
+            Some(&checkpoint),
+            &progress,
+        )
+        .await
+        .unwrap();
         let receipts = owner.receipts.lock().unwrap();
         assert_eq!(receipts.len(), 4);
-        assert!(receipts[..2].iter().all(|receipt| receipt["body"]["stream_options"]["include_usage"] == true));
-        assert!(receipts[2..].iter().all(|receipt| receipt["body"].get("stream_options").is_none()));
-        let mut first: Vec<_> = receipts[..2].iter().map(|receipt|
-            receipt["body"]["messages"][0]["content"].as_str().unwrap()).collect();
-        let mut retried: Vec<_> = receipts[2..].iter().map(|receipt|
-            receipt["body"]["messages"][0]["content"].as_str().unwrap()).collect();
+        assert!(receipts[..2]
+            .iter()
+            .all(|receipt| receipt["body"]["stream_options"]["include_usage"] == true));
+        assert!(receipts[2..]
+            .iter()
+            .all(|receipt| receipt["body"].get("stream_options").is_none()));
+        let mut first: Vec<_> = receipts[..2]
+            .iter()
+            .map(|receipt| receipt["body"]["messages"][0]["content"].as_str().unwrap())
+            .collect();
+        let mut retried: Vec<_> = receipts[2..]
+            .iter()
+            .map(|receipt| receipt["body"]["messages"][0]["content"].as_str().unwrap())
+            .collect();
         first.sort_unstable();
         retried.sort_unstable();
         assert_eq!(first, retried, "negotiation resends the same slot prompts");
         assert_ne!(first[0], first[1]);
         assert!(first.iter().all(|text| text.len() == 256));
-        let since_downgrade = downgraded_at.lock().unwrap().unwrap().elapsed().as_secs_f64() * 1000.0;
-        assert!(result.rows[0].e2e_ms <= since_downgrade, "rejected latency is not measured");
+        let since_downgrade = downgraded_at
+            .lock()
+            .unwrap()
+            .unwrap()
+            .elapsed()
+            .as_secs_f64()
+            * 1000.0;
+        assert!(
+            result.rows[0].e2e_ms <= since_downgrade,
+            "rejected latency is not measured"
+        );
         assert_eq!(result.rows[0].usage_status, "missing");
         assert_eq!(events.lock().unwrap().len(), 1);
         result.status = "complete";
@@ -550,18 +653,27 @@ async fn entirely_rejected_first_batch_checkpoints_usage_off_before_resend() {
         let page = crate::benchmark::store::list(&directory.0, 0, 10).unwrap();
         assert!(page.warnings.is_empty(), "{:?}", page.warnings);
         assert_eq!(page.records[0]["request"]["request_usage"], true);
-        assert_eq!(page.records[0]["result"]["provenance"]["workload"]["request_usage"], false);
+        assert_eq!(
+            page.records[0]["result"]["provenance"]["workload"]["request_usage"],
+            false
+        );
     }
 }
 
 #[tokio::test]
 async fn mixed_first_batch_and_later_usage_rejections_never_replay_or_record_failed_rows() {
     for accepted_first in [false, true] {
-        let request = PerformanceBenchRequest { request_usage: true, ..request() };
+        let request = PerformanceBenchRequest {
+            request_usage: true,
+            ..request()
+        };
         let (directory, mut result, journal, checkpoint, events, progress) = journaled(&request);
         let mut replies = Vec::new();
         if accepted_first {
-            replies.extend([Reply::done(Value::Null, Some("stop")), Reply::done(Value::Null, Some("stop"))]);
+            replies.extend([
+                Reply::done(Value::Null, Some("stop")),
+                Reply::done(Value::Null, Some("stop")),
+            ]);
         }
         if accepted_first {
             replies.extend([Reply::rejected(400), Reply::rejected(422)]);
@@ -571,21 +683,46 @@ async fn mixed_first_batch_and_later_usage_rejections_never_replay_or_record_fai
         let (client, buffered, owner) = fixture_for(replies, &request).await;
         let mut workload = buffered_workload(&request, &buffered, &result, (256, 2, 1));
         if accepted_first {
-            trial(&mut workload, &client, (256, 2, 1), 0, None,
-                ServingMemoryScope::Unavailable, &AtomicBool::new(false), &mut result,
-                Some(&checkpoint), &progress).await.unwrap();
+            trial(
+                &mut workload,
+                &client,
+                (256, 2, 1),
+                0,
+                None,
+                ServingMemoryScope::Unavailable,
+                &AtomicBool::new(false),
+                &mut result,
+                Some(&checkpoint),
+                &progress,
+            )
+            .await
+            .unwrap();
         }
         let next = buffered_workload(&request, &buffered, &result, (256, 2, 2));
         workload.slots = next.slots;
         workload.input_hashes = next.input_hashes;
-        let error = trial(&mut workload, &client, (256, 2, 2), 0, None,
-            ServingMemoryScope::Unavailable, &AtomicBool::new(false), &mut result,
-            Some(&checkpoint), &progress).await.unwrap_err();
+        let error = trial(
+            &mut workload,
+            &client,
+            (256, 2, 2),
+            0,
+            None,
+            ServingMemoryScope::Unavailable,
+            &AtomicBool::new(false),
+            &mut result,
+            Some(&checkpoint),
+            &progress,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.kind, crate::error::ErrorKind::Unavailable);
         assert_eq!(result.rows.len(), usize::from(accepted_first));
         assert_eq!(events.lock().unwrap().len(), usize::from(accepted_first));
         assert!(result.provenance.as_ref().unwrap().workload.request_usage);
-        assert_eq!(owner.receipts.lock().unwrap().len(), if accepted_first { 4 } else { 2 });
+        assert_eq!(
+            owner.receipts.lock().unwrap().len(),
+            if accepted_first { 4 } else { 2 }
+        );
         result.status = if accepted_first { "partial" } else { "failed" };
         result.message = Some(error.message);
         journal.finish(&result).unwrap();
@@ -593,7 +730,10 @@ async fn mixed_first_batch_and_later_usage_rejections_never_replay_or_record_fai
         drop(journal);
         let page = crate::benchmark::store::list(&directory.0, 0, 10).unwrap();
         assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-        assert_eq!(page.records[0]["result"]["rows"].as_array().unwrap().len(), usize::from(accepted_first));
+        assert_eq!(
+            page.records[0]["result"]["rows"].as_array().unwrap().len(),
+            usize::from(accepted_first)
+        );
     }
 }
 
@@ -623,10 +763,7 @@ async fn serving_trials_checkpoint_but_eof_errors_and_cancel_discard_whole_batch
     let row = &result.rows[0];
     assert_eq!(row.output_bytes, 256);
     assert_eq!(row.reported_completion_tokens, Some(256));
-    assert_eq!(
-        row.usage_status, "partial",
-        "prompt usage may stay unknown"
-    );
+    assert_eq!(row.usage_status, "partial", "prompt usage may stay unknown");
     assert_eq!(row.finish_reasons, ["length", "length"]);
     assert!(row.validate());
     assert!(row.e2e_ms >= 40.0, "batch E2E includes the last DONE");
@@ -640,9 +777,9 @@ async fn serving_trials_checkpoint_but_eof_errors_and_cancel_discard_whole_batch
         assert_eq!(body["model"], "selected-model");
         let text = body["messages"][0]["content"].as_str().unwrap();
         assert_eq!(text.len(), 256);
-        assert!(row.input_sha256_by_request.contains(
-            &format!("{:x}", Sha256::digest(text.as_bytes()))
-        ));
+        assert!(row
+            .input_sha256_by_request
+            .contains(&format!("{:x}", Sha256::digest(text.as_bytes()))));
         for forbidden in ["top_k", "ignore_eos", "min_tokens", "stream_options"] {
             assert!(body.get(forbidden).is_none(), "{forbidden}");
         }
@@ -834,32 +971,53 @@ async fn optional_usage_aggregates_only_known_safe_counters_without_losing_outpu
     let safe = json!({"prompt_tokens":10,"completion_tokens":2,"total_tokens":12});
     let max = json!({"prompt_tokens":9_007_199_254_740_991u64,"completion_tokens":0});
     for (reports, status, prompt, completion) in [
-        (vec![safe.clone(), safe.clone()], "complete", Some(20), Some(4)),
+        (
+            vec![safe.clone(), safe.clone()],
+            "complete",
+            Some(20),
+            Some(4),
+        ),
         (vec![safe.clone(), Value::Null], "partial", None, None),
         (
             vec![
                 json!({"prompt_tokens":10,"completion_tokens":1}),
                 json!({"prompt_tokens":10,"completion_tokens":1}),
             ],
-            "complete", Some(20), Some(2),
+            "complete",
+            Some(20),
+            Some(2),
         ),
         (
             vec![
                 json!({"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":-1}}),
                 safe.clone(),
             ],
-            "complete", Some(20), Some(4),
+            "complete",
+            Some(20),
+            Some(4),
         ),
-        (vec![safe.clone(), json!({"prompt_tokens":-1})], "invalid", None, None),
+        (
+            vec![safe.clone(), json!({"prompt_tokens":-1})],
+            "invalid",
+            None,
+            None,
+        ),
         (vec![max.clone(), max], "invalid", None, None),
         (vec![Value::Null, Value::Null], "missing", None, None),
         (
-            vec![json!({"completion_tokens":1}), json!({"completion_tokens":3})],
-            "partial", None, Some(4),
+            vec![
+                json!({"completion_tokens":1}),
+                json!({"completion_tokens":3}),
+            ],
+            "partial",
+            None,
+            Some(4),
         ),
     ] {
-        let replies = reports.into_iter()
-            .map(|usage| Reply::done(usage, Some("stop"))).collect();
+        let replies = reports
+            .into_iter()
+            .map(|usage| Reply::done(usage, Some("stop")))
+            .collect();
         let (client, buffered, _owner) = fixture(replies).await;
         let request = request();
         let (_directory, mut result, _journal, checkpoint, _events, progress) = journaled(&request);
@@ -874,10 +1032,15 @@ async fn optional_usage_aggregates_only_known_safe_counters_without_losing_outpu
             &mut result,
             Some(&checkpoint),
             &progress,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         let row = &result.rows[0];
         assert_eq!(row.usage_status, status);
-        assert_eq!((row.reported_prompt_tokens, row.reported_completion_tokens), (prompt, completion));
+        assert_eq!(
+            (row.reported_prompt_tokens, row.reported_completion_tokens),
+            (prompt, completion)
+        );
         assert_eq!(row.output_bytes, 24);
         if status == "invalid" {
             assert_eq!(row.prefill_tokens_per_second, None);
@@ -896,10 +1059,18 @@ async fn serving_requests_omit_saved_defaults_and_negotiate_usage_declarations()
         engine.tasks = vec!["generate".into()];
         engine.chat_supported = Some(true);
         engine.stream_usage_supported = usage;
-        engine.request_fields.insert("temperature".into(), json!(0.9));
-        engine.request_fields.insert("ignore_eos".into(), json!(true));
-        engine.request_fields.insert("min_tokens".into(), json!(128));
-        engine.request_fields.insert("stream_options".into(), json!({"include_usage":true}));
+        engine
+            .request_fields
+            .insert("temperature".into(), json!(0.9));
+        engine
+            .request_fields
+            .insert("ignore_eos".into(), json!(true));
+        engine
+            .request_fields
+            .insert("min_tokens".into(), json!(128));
+        engine
+            .request_fields
+            .insert("stream_options".into(), json!({"include_usage":true}));
         engine.request_lora = Some("selected-lora".into());
         let body = point_body(&engine, "synthetic input".into(), &request()).unwrap();
         assert_eq!(
@@ -913,13 +1084,18 @@ async fn serving_requests_omit_saved_defaults_and_negotiate_usage_declarations()
         assert_eq!(admission.status, "supported", "{usage:?}");
         assert_eq!(admission.reason, "ready");
         assert!(admission.detail.is_none());
-        let requested = PerformanceBenchRequest { request_usage: true, ..request() };
+        let requested = PerformanceBenchRequest {
+            request_usage: true,
+            ..request()
+        };
         let effective = effective_request(&engine, &requested);
         assert_eq!(effective.request_usage, usage != Some(false));
         let body = point_body(&engine, "synthetic input".into(), &effective).unwrap();
         assert_eq!(
             body.get("stream_options"),
-            (usage != Some(false)).then(|| json!({"include_usage": true})).as_ref()
+            (usage != Some(false))
+                .then(|| json!({"include_usage": true}))
+                .as_ref()
         );
     }
 }

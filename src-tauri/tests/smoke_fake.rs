@@ -830,12 +830,19 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         .any(|args| args == ["--api-key-file", "[redacted]"]));
     let frozen = serde_json::to_value(&complete).unwrap();
     assert_eq!(frozen["provenance"]["method"]["version"], 5);
-    assert_eq!(frozen["provenance"]["workload"]["cache_policy"], "cold_prompt");
+    assert_eq!(
+        frozen["provenance"]["workload"]["cache_policy"],
+        "cold_prompt"
+    );
     assert_eq!(frozen["provenance"]["workload"]["corpus_version"], 2);
     assert_eq!(frozen["provenance"]["workload"]["warmup"], false);
-    let nonce = frozen["provenance"]["workload"]["prompt_nonce"].as_str().unwrap();
+    let nonce = frozen["provenance"]["workload"]["prompt_nonce"]
+        .as_str()
+        .unwrap();
     assert_eq!(nonce.len(), 32);
-    assert!(nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    assert!(nonce
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
     assert_eq!(frozen["provenance"]["workload"]["request_usage"], false);
     let settings = frozen
         .pointer("/provenance/execution/settings")
@@ -888,12 +895,24 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         .iter()
         .filter(|call| call["path"] == "/v1/chat/completions")
         .collect();
-    assert_eq!(chats.len(), 6, "only the measured batches generate benchmark prompts");
-    assert!(calls.iter().any(|call| call["path"] == "/completion"),
-        "ordinary generation readiness remains enabled");
-    let pids: std::collections::BTreeSet<_> = chats.iter()
-        .map(|call| call["pid"].as_u64().unwrap()).collect();
-    assert_eq!(pids.len(), 1, "one model launch serves every measured point");
+    assert_eq!(
+        chats.len(),
+        6,
+        "only the measured batches generate benchmark prompts"
+    );
+    assert!(
+        calls.iter().any(|call| call["path"] == "/completion"),
+        "ordinary generation readiness remains enabled"
+    );
+    let pids: std::collections::BTreeSet<_> = chats
+        .iter()
+        .map(|call| call["pid"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        pids.len(),
+        1,
+        "one model launch serves every measured point"
+    );
     let port = chats[0]["port"].as_u64().unwrap() as u16;
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
     use sha2::{Digest, Sha256};
@@ -909,8 +928,12 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         assert!([256, 4096].contains(&text.len()));
         assert!(matches!(text.as_bytes()[0], b'A' | b'B'));
         assert_eq!(text.as_bytes()[65], b'\n');
-        assert!(transmitted.insert(format!("{:x}", Sha256::digest(text.as_bytes())), text).is_none(),
-            "every point and slot sends a distinct prompt");
+        assert!(
+            transmitted
+                .insert(format!("{:x}", Sha256::digest(text.as_bytes())), text)
+                .is_none(),
+            "every point and slot sends a distinct prompt"
+        );
     }
     assert_eq!(transmitted.len(), 6);
     for row in frozen["rows"].as_array().unwrap() {
@@ -922,8 +945,12 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
             assert_eq!(text.as_bytes()[0], b'A' + slot as u8);
         }
         if row["concurrency"] == 1 && row["repetition"] == 1 {
-            let descriptor = frozen["provenance"]["workload"]["inputs"].as_array().unwrap().iter()
-                .find(|input| input["bytes"] == row["input_bytes"]).unwrap();
+            let descriptor = frozen["provenance"]["workload"]["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|input| input["bytes"] == row["input_bytes"])
+                .unwrap();
             assert_eq!(descriptor["sha256"], hashes[0]);
         }
     }
@@ -1079,20 +1106,40 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     .await;
     assert_eq!(reported.status, "complete", "{:?}", reported.message);
     let usage_calls: Vec<serde_json::Value> = fs::read_to_string(&usage_receipt)
-        .unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-    let usage_chats: Vec<_> = usage_calls.iter()
-        .filter(|call| call["path"] == "/v1/chat/completions").collect();
-    assert_eq!(usage_chats.len(), 1, "warmup off performs exactly the measured inference");
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let usage_chats: Vec<_> = usage_calls
+        .iter()
+        .filter(|call| call["path"] == "/v1/chat/completions")
+        .collect();
+    assert_eq!(
+        usage_chats.len(),
+        1,
+        "warmup off performs exactly the measured inference"
+    );
     assert_eq!(usage_chats[0]["body"]["max_tokens"], 128);
-    assert_eq!(usage_chats[0]["body"]["messages"][0]["content"].as_str().unwrap()
-        .as_bytes()[65], b'\n');
+    assert_eq!(
+        usage_chats[0]["body"]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .as_bytes()[65],
+        b'\n'
+    );
     let row = &reported.rows[0];
     assert_eq!(row.reported_prompt_tokens, Some(3));
     assert_eq!(row.reported_completion_tokens, Some(2));
     assert_eq!(row.usage_status, "complete");
-    assert!(row.prefill_tokens_per_second.is_some_and(|rate| rate.is_finite() && rate > 0.0));
-    assert!(row.decode_tokens_per_second.is_some_and(|rate| rate.is_finite() && rate > 0.0));
-    assert!(row.tpot_ms.is_some_and(|duration| duration.is_finite() && duration > 0.0));
+    assert!(row
+        .prefill_tokens_per_second
+        .is_some_and(|rate| rate.is_finite() && rate > 0.0));
+    assert!(row
+        .decode_tokens_per_second
+        .is_some_and(|rate| rate.is_finite() && rate > 0.0));
+    assert!(row
+        .tpot_ms
+        .is_some_and(|duration| duration.is_finite() && duration > 0.0));
     // The owned server tree is sampled on every supported desktop platform.
     assert!(row.peak_memory_bytes.is_some_and(|bytes| bytes > 0));
     let frozen = serde_json::to_value(&reported).unwrap();
@@ -1101,7 +1148,9 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
         .as_array()
         .unwrap()
         .iter()
-        .any(|setting| setting["name"] == "stream_options.include_usage" && setting["value"] == true));
+        .any(
+            |setting| setting["name"] == "stream_options.include_usage" && setting["value"] == true
+        ));
     // A first measured batch may wholly reject optional usage. The retry
     // keeps exactly those prompts and all later points keep usage disabled.
     let negotiation_request = bench::PerformanceBenchRequest {
@@ -1112,31 +1161,68 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     };
     let negotiation_receipt = root.join("negotiated-serving-requests.jsonl");
     let negotiation_cfg = AppConfig {
-        server_args: vec!["--benchmark-reject-usage".into(), "--benchmark-receipt".into(),
-            negotiation_receipt.to_string_lossy().into_owned()],
+        server_args: vec![
+            "--benchmark-reject-usage".into(),
+            "--benchmark-receipt".into(),
+            negotiation_receipt.to_string_lossy().into_owned(),
+        ],
         ..cfg.clone()
     };
-    let runtime = bench::RuntimeInfo::prepare(&negotiation_cfg, &negotiation_request).await.unwrap();
-    let negotiated = bench::run(negotiation_cfg, negotiation_request.clone(), Default::default(),
-        Arc::new(AtomicBool::new(false)), process.clone(), Arc::new(|_| {}), runtime).await;
+    let runtime = bench::RuntimeInfo::prepare(&negotiation_cfg, &negotiation_request)
+        .await
+        .unwrap();
+    let negotiated = bench::run(
+        negotiation_cfg,
+        negotiation_request.clone(),
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
     assert_eq!(negotiated.status, "complete", "{:?}", negotiated.message);
     assert_eq!(negotiated.rows.len(), 2);
-    let wire: Vec<serde_json::Value> = fs::read_to_string(&negotiation_receipt).unwrap()
-        .lines().map(|line| serde_json::from_str(line).unwrap())
-        .filter(|call: &serde_json::Value| call["path"] == "/v1/chat/completions").collect();
+    let wire: Vec<serde_json::Value> = fs::read_to_string(&negotiation_receipt)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|call: &serde_json::Value| call["path"] == "/v1/chat/completions")
+        .collect();
     assert_eq!(wire.len(), 6);
-    assert!(wire[..2].iter().all(|call| call["body"]["stream_options"]["include_usage"] == true));
-    assert!(wire[2..].iter().all(|call| call["body"].get("stream_options").is_none()));
-    let prompts = |calls: &[serde_json::Value]| calls.iter()
-        .map(|call| call["body"]["messages"][0]["content"].as_str().unwrap().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(prompts(&wire[..2]), prompts(&wire[2..4]),
-        "an entirely rejected optional-field batch retries the same point inputs");
+    assert!(wire[..2]
+        .iter()
+        .all(|call| call["body"]["stream_options"]["include_usage"] == true));
+    assert!(wire[2..]
+        .iter()
+        .all(|call| call["body"].get("stream_options").is_none()));
+    let prompts = |calls: &[serde_json::Value]| {
+        calls
+            .iter()
+            .map(|call| {
+                call["body"]["messages"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        prompts(&wire[..2]),
+        prompts(&wire[2..4]),
+        "an entirely rejected optional-field batch retries the same point inputs"
+    );
     assert!(prompts(&wire[..2]).is_disjoint(&prompts(&wire[4..])));
     let negotiated_json = serde_json::to_value(&negotiated).unwrap();
-    assert_eq!(negotiated_json["provenance"]["workload"]["request_usage"], false);
-    assert!(negotiated_json["provenance"]["execution"]["settings"].as_array().unwrap()
-        .iter().all(|setting| setting["name"] != "stream_options.include_usage"));
+    assert_eq!(
+        negotiated_json["provenance"]["workload"]["request_usage"],
+        false
+    );
+    assert!(negotiated_json["provenance"]["execution"]["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|setting| setting["name"] != "stream_options.include_usage"));
     assert!(process.lock().unwrap().is_none());
 
     // Mixed acceptance must not duplicate already accepted inference; a
@@ -1147,21 +1233,42 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     ] {
         let receipt = root.join(format!("{flag}.jsonl"));
         let server = AppConfig {
-            server_args: vec![flag.into(), "--benchmark-receipt".into(),
-                receipt.to_string_lossy().into_owned()],
+            server_args: vec![
+                flag.into(),
+                "--benchmark-receipt".into(),
+                receipt.to_string_lossy().into_owned(),
+            ],
             ..cfg.clone()
         };
         let measured = bench::PerformanceBenchRequest {
-            concurrencies, ..negotiation_request.clone()
+            concurrencies,
+            ..negotiation_request.clone()
         };
-        let runtime = bench::RuntimeInfo::prepare(&server, &measured).await.unwrap();
-        let result = bench::run(server, measured, Default::default(),
-            Arc::new(AtomicBool::new(false)), process.clone(), Arc::new(|_| {}), runtime).await;
-        assert_eq!(result.status, expected_status, "{flag}: {:?}", result.message);
+        let runtime = bench::RuntimeInfo::prepare(&server, &measured)
+            .await
+            .unwrap();
+        let result = bench::run(
+            server,
+            measured,
+            Default::default(),
+            Arc::new(AtomicBool::new(false)),
+            process.clone(),
+            Arc::new(|_| {}),
+            runtime,
+        )
+        .await;
+        assert_eq!(
+            result.status, expected_status,
+            "{flag}: {:?}",
+            result.message
+        );
         assert_eq!(result.rows.len(), expected_rows);
-        let calls = fs::read_to_string(receipt).unwrap().lines()
+        let calls = fs::read_to_string(receipt)
+            .unwrap()
+            .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .filter(|call| call["path"] == "/v1/chat/completions").count();
+            .filter(|call| call["path"] == "/v1/chat/completions")
+            .count();
         assert_eq!(calls, expected_calls, "no retry after accepted inference");
         assert!(process.lock().unwrap().is_none());
     }
@@ -1170,16 +1277,31 @@ async fn assert_common_serving_benchmarks(root: &std::path::Path) {
     // same input grid and run label.
     let repeat_receipt = root.join("repeat-serving-requests.jsonl");
     let repeated_cfg = AppConfig {
-        server_args: vec!["--benchmark-receipt".into(),
-            repeat_receipt.to_string_lossy().into_owned()],
+        server_args: vec![
+            "--benchmark-receipt".into(),
+            repeat_receipt.to_string_lossy().into_owned(),
+        ],
         ..cfg.clone()
     };
-    let runtime = bench::RuntimeInfo::prepare(&repeated_cfg, &request).await.unwrap();
-    let repeated = bench::run(repeated_cfg, request.clone(), Default::default(),
-        Arc::new(AtomicBool::new(false)), process.clone(), Arc::new(|_| {}), runtime).await;
+    let runtime = bench::RuntimeInfo::prepare(&repeated_cfg, &request)
+        .await
+        .unwrap();
+    let repeated = bench::run(
+        repeated_cfg,
+        request.clone(),
+        Default::default(),
+        Arc::new(AtomicBool::new(false)),
+        process.clone(),
+        Arc::new(|_| {}),
+        runtime,
+    )
+    .await;
     assert_eq!(repeated.status, "complete", "{:?}", repeated.message);
     let repeated_json = serde_json::to_value(&repeated).unwrap();
-    assert_ne!(repeated_json["provenance"]["workload"]["prompt_nonce"].as_str(), Some(nonce));
+    assert_ne!(
+        repeated_json["provenance"]["workload"]["prompt_nonce"].as_str(),
+        Some(nonce)
+    );
     for row in repeated_json["rows"].as_array().unwrap() {
         for hash in row["input_sha256_by_request"].as_array().unwrap() {
             assert!(!transmitted.contains_key(hash.as_str().unwrap()));

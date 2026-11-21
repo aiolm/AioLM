@@ -138,7 +138,9 @@ fn write_private_api_key(path: &Path, key: &str) -> Result<(), AppError> {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options.open(&temp).map_err(|error| AppError::from_io(&error))?;
+        let mut file = options
+            .open(&temp)
+            .map_err(|error| AppError::from_io(&error))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

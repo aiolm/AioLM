@@ -179,7 +179,11 @@ mod windows {
     fn open_process(pid: u32) -> Option<OwnedHandle> {
         // SAFETY: Read-only access, a scalar PID, and no inherited handle.
         let handle = unsafe {
-            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, 0, pid)
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
         };
         if handle.is_null() {
             None
@@ -192,7 +196,10 @@ mod windows {
     impl ProcessMemoryReader {
         pub(super) fn open(pid: u32, tree: Option<crate::procutil::ProcessHandle>) -> Option<Self> {
             let handle = open_process(pid)?;
-            if tree.as_ref().is_some_and(|tree| !tree.contains_handle(&handle)) {
+            if tree
+                .as_ref()
+                .is_some_and(|tree| !tree.contains_handle(&handle))
+            {
                 return None;
             }
             Some(Self(handle, tree))
@@ -217,7 +224,8 @@ mod windows {
                 }
                 if let Some(bytes) = working_set(handle.as_raw_handle()) {
                     total = Some(total.unwrap_or(0_u64).checked_add(bytes)?);
-                } else if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
+                } else if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_OBJECT_0
+                {
                     // A live but unreadable member is not a measured zero.
                     return None;
                 }
@@ -423,14 +431,22 @@ mod tests {
     fn unrelated_process_is_not_measured_as_an_owned_job_member() {
         let unrelated = std::process::id();
         let empty_job = crate::procutil::ProcessHandle::empty_for_test();
-        assert!(super::windows::ProcessMemoryReader::open(unrelated, Some(empty_job.clone())).is_none());
-        assert_eq!(PeakMemorySampler::start(unrelated, Some(empty_job)).finish(), None);
+        assert!(
+            super::windows::ProcessMemoryReader::open(unrelated, Some(empty_job.clone())).is_none()
+        );
+        assert_eq!(
+            PeakMemorySampler::start(unrelated, Some(empty_job)).finish(),
+            None
+        );
     }
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     #[test]
     fn unsupported_platform_has_no_memory_measurement() {
-        assert_eq!(PeakMemorySampler::start(std::process::id(), None).finish(), None);
+        assert_eq!(
+            PeakMemorySampler::start(std::process::id(), None).finish(),
+            None
+        );
     }
 
     #[test]
@@ -520,7 +536,10 @@ mod tests {
         while std::time::Instant::now() < deadline {
             root_only = PeakMemorySampler::start(owned.id(), None).finish();
             with_tree = PeakMemorySampler::start(owned.id(), Some(tree.clone())).finish();
-            if with_tree.zip(root_only).is_some_and(|(tree, root)| tree >= root + (200 << 20)) {
+            if with_tree
+                .zip(root_only)
+                .is_some_and(|(tree, root)| tree >= root + (200 << 20))
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
@@ -530,10 +549,18 @@ mod tests {
         let exited = tree.wait_exited(std::time::Duration::from_secs(5));
         let members = members.unwrap();
         assert!(exited, "all owned test workers must exit before assertions");
-        assert!(members.contains(&descendant), "the descendant joined the owned job");
-        assert!(members.len() >= 4, "the job snapshot includes every worker, not only two slots");
         assert!(
-            with_tree.zip(root_only).is_some_and(|(tree, root)| tree >= root + (200 << 20)),
+            members.contains(&descendant),
+            "the descendant joined the owned job"
+        );
+        assert!(
+            members.len() >= 4,
+            "the job snapshot includes every worker, not only two slots"
+        );
+        assert!(
+            with_tree
+                .zip(root_only)
+                .is_some_and(|(tree, root)| tree >= root + (200 << 20)),
             "tree {with_tree:?} must include the descendant beyond root {root_only:?}"
         );
     }

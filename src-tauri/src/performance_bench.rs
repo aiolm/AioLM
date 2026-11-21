@@ -108,8 +108,13 @@ impl PerformanceBenchRow {
             && self.decode_tokens_per_second.is_none_or(positive)
             && self.tpot_ms.is_none_or(positive)
             && (self.first_output_ms.is_some()
-                || [self.prefill_tokens_per_second, self.decode_tokens_per_second, self.tpot_ms]
-                    .iter().all(Option::is_none))
+                || [
+                    self.prefill_tokens_per_second,
+                    self.decode_tokens_per_second,
+                    self.tpot_ms,
+                ]
+                .iter()
+                .all(Option::is_none))
             && (self.reported_prompt_tokens.is_some() || self.prefill_tokens_per_second.is_none())
             && (self.reported_completion_tokens.is_some()
                 || (self.decode_tokens_per_second.is_none() && self.tpot_ms.is_none()))
@@ -118,11 +123,17 @@ impl PerformanceBenchRow {
             && counter(self.reported_prompt_tokens)
             && counter(self.reported_completion_tokens)
             && self.input_sha256_by_request.len() == self.concurrency as usize
-            && self.input_sha256_by_request.iter().enumerate().all(|(index, hash)| {
-                hash.len() == 64
-                    && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                    && !self.input_sha256_by_request[..index].contains(hash)
-            })
+            && self
+                .input_sha256_by_request
+                .iter()
+                .enumerate()
+                .all(|(index, hash)| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        && !self.input_sha256_by_request[..index].contains(hash)
+                })
             && match self.usage_status.as_str() {
                 "complete" => known.iter().all(Option::is_some),
                 "partial" => known.iter().any(Option::is_none),
@@ -131,8 +142,15 @@ impl PerformanceBenchRow {
             }
             && self.finish_reasons.len() == self.concurrency as usize
             && self.finish_reasons.iter().all(|v| {
-                ["stop", "length", "content_filter", "tool_calls", "other", "not_reported"]
-                    .contains(&v.as_str())
+                [
+                    "stop",
+                    "length",
+                    "content_filter",
+                    "tool_calls",
+                    "other",
+                    "not_reported",
+                ]
+                .contains(&v.as_str())
             })
             && counter(self.peak_memory_bytes)
             && self.timing_source == "client"
@@ -168,8 +186,7 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     if request.run_id.is_empty() || request.run_id.len() > 128 {
         return Err("benchmark run_id must contain 1 to 128 bytes".into());
     }
-    if request.method.id != "openai-chat-serving" || request.method.version != METHOD_VERSION
-    {
+    if request.method.id != "openai-chat-serving" || request.method.version != METHOD_VERSION {
         return Err("unsupported benchmark method".into());
     }
     if ![
@@ -283,10 +300,12 @@ pub async fn admission(
 
 /// Standard OpenAI streamed usage is requested unless the runtime explicitly
 /// declares that it rejects `stream_options`; unknown support is attempted.
-fn effective_request(engine: &EngineInfo, request: &PerformanceBenchRequest) -> PerformanceBenchRequest {
+fn effective_request(
+    engine: &EngineInfo,
+    request: &PerformanceBenchRequest,
+) -> PerformanceBenchRequest {
     let mut effective = request.clone();
-    effective.request_usage =
-        request.request_usage && engine.stream_usage_supported != Some(false);
+    effective.request_usage = request.request_usage && engine.stream_usage_supported != Some(false);
     effective
 }
 
@@ -450,24 +469,30 @@ fn aggregate(
         let mut tpot_total = Some(0.0);
         for measurement in measurements {
             let first = measurement.first_output_ms;
-            let prefill = measurement.reported_prompt_tokens
+            let prefill = measurement
+                .reported_prompt_tokens
                 .filter(|tokens| *tokens > 0)
                 .zip(first.filter(|ms| *ms > 0.0))
                 .map(|(tokens, ms)| 1000.0 * tokens as f64 / ms);
-            let tpot = measurement.reported_completion_tokens
+            let tpot = measurement
+                .reported_completion_tokens
                 .filter(|tokens| *tokens >= 2)
                 .zip(first)
                 .filter(|(_, ms)| measurement.e2e_ms > *ms)
                 .map(|(tokens, ms)| (measurement.e2e_ms - ms) / (tokens - 1) as f64)
                 .filter(|value| value.is_finite() && *value > 0.0);
             prefill_total = prefill_total.zip(prefill).map(|(sum, value)| sum + value);
-            decode_total = decode_total.zip(tpot).map(|(sum, value)| sum + 1000.0 / value);
+            decode_total = decode_total
+                .zip(tpot)
+                .map(|(sum, value)| sum + 1000.0 / value);
             tpot_total = tpot_total.zip(tpot).map(|(sum, value)| sum + value);
         }
-        let mean = |total: Option<f64>| total
-            .filter(|_| !measurements.is_empty())
-            .map(|sum| sum / measurements.len() as f64)
-            .filter(|value| value.is_finite());
+        let mean = |total: Option<f64>| {
+            total
+                .filter(|_| !measurements.is_empty())
+                .map(|sum| sum / measurements.len() as f64)
+                .filter(|value| value.is_finite())
+        };
         (mean(prefill_total), mean(decode_total), mean(tpot_total))
     };
     let finished = measurements
@@ -532,7 +557,9 @@ async fn batch(
     }
     while let Some((slot, result)) = pending.next().await {
         match result? {
-            protocol::RequestOutcome::Complete(measurement) => measurements[slot] = Some(measurement),
+            protocol::RequestOutcome::Complete(measurement) => {
+                measurements[slot] = Some(measurement)
+            }
             protocol::RequestOutcome::UsageRejected(status) => rejection = Some(status),
         }
     }
@@ -549,7 +576,10 @@ async fn batch(
     }
     Ok(BatchOutcome::Complete(
         started,
-        measurements.into_iter().map(|m| m.expect("all launch slots completed")).collect(),
+        measurements
+            .into_iter()
+            .map(|m| m.expect("all launch slots completed"))
+            .collect(),
     ))
 }
 
@@ -596,7 +626,14 @@ fn point_body(
     .map_err(|error| error.message)?;
     // The adapter must preserve the standard request without injecting defaults.
     let allowed: &[&str] = if request.request_usage {
-        &["model", "messages", "temperature", "max_tokens", "stream", "stream_options"]
+        &[
+            "model",
+            "messages",
+            "temperature",
+            "max_tokens",
+            "stream",
+            "stream_options",
+        ]
     } else {
         &["model", "messages", "temperature", "max_tokens", "stream"]
     };
@@ -679,7 +716,12 @@ impl RuntimeInfo {
 
 pub(crate) fn prepare_inputs(request: &PerformanceBenchRequest) -> (ServingWorkload, Vec<String>) {
     let prompt_nonce = uuid::Uuid::new_v4().simple().to_string();
-    let first_concurrency = request.concurrencies.iter().copied().min().expect("validated grid");
+    let first_concurrency = request
+        .concurrencies
+        .iter()
+        .copied()
+        .min()
+        .expect("validated grid");
     // Freeze one shared suffix per size, not a complete grid of per-slot payloads.
     let input_texts: Vec<_> = request
         .prompt_bytes
@@ -689,12 +731,21 @@ pub(crate) fn prepare_inputs(request: &PerformanceBenchRequest) -> (ServingWorkl
             corpus::text(&request.context_profile, suffix_bytes)
         })
         .collect();
-    let inputs = request.prompt_bytes.iter().copied().zip(&input_texts)
+    let inputs = request
+        .prompt_bytes
+        .iter()
+        .copied()
+        .zip(&input_texts)
         .map(|(bytes, text)| {
             let mut hash = Sha256::new();
-            hash.update(corpus::cold_prefix(&prompt_nonce, (bytes, first_concurrency, 1), 0).as_bytes());
+            hash.update(
+                corpus::cold_prefix(&prompt_nonce, (bytes, first_concurrency, 1), 0).as_bytes(),
+            );
             hash.update(text.as_bytes());
-            ServingInput { bytes, sha256: format!("{:x}", hash.finalize()) }
+            ServingInput {
+                bytes,
+                sha256: format!("{:x}", hash.finalize()),
+            }
         })
         .collect();
     (
@@ -749,8 +800,14 @@ impl BufferedWorkload {
                 ServingMemoryScope::OwnedRootProcess => Some(PeakMemorySampler::start(pid, None)),
                 _ => None,
             };
-            let measured = batch(client, &self.slots, cancel,
-                protocol::Budget::default(), self.usage_undecided).await;
+            let measured = batch(
+                client,
+                &self.slots,
+                cancel,
+                protocol::Budget::default(),
+                self.usage_undecided,
+            )
+            .await;
             let peak = sampler.and_then(PeakMemorySampler::finish);
             match measured? {
                 BatchOutcome::Complete(started, measurements) => {
@@ -763,22 +820,31 @@ impl BufferedWorkload {
                     let provenance = result.provenance.as_mut().expect("frozen provenance");
                     provenance.workload.request_usage = false;
                     provenance.execution.settings.retain(|setting| {
-                        !(setting.target == "request" && setting.name == "stream_options.include_usage")
+                        !(setting.target == "request"
+                            && setting.name == "stream_options.include_usage")
                     });
                     // Persist the actual request policy before any resend.
-                    if let Some(checkpoint) = checkpoint { checkpoint(result)?; }
+                    if let Some(checkpoint) = checkpoint {
+                        checkpoint(result)?;
+                    }
                     emit(progress, &self.request, "loading", result.rows.len(), None, Some(format!(
                         "The runtime rejected stream_options.include_usage (HTTP {status}); token usage is not requested for this run."
                     )));
                     for buffered in &mut self.slots {
-                        let bytes = buffered.body().and_then(reqwest::Body::as_bytes)
+                        let bytes = buffered
+                            .body()
+                            .and_then(reqwest::Body::as_bytes)
                             .ok_or("benchmark request body is not buffered")?;
-                        let mut body: serde_json::Value = serde_json::from_slice(bytes)
-                            .map_err(|error| error.to_string())?;
-                        body.as_object_mut().ok_or("benchmark request body is not an object")?
+                        let mut body: serde_json::Value =
+                            serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+                        body.as_object_mut()
+                            .ok_or("benchmark request body is not an object")?
                             .remove("stream_options");
-                        *buffered.body_mut() = Some(serde_json::to_vec(&body)
-                            .map_err(|error| error.to_string())?.into());
+                        *buffered.body_mut() = Some(
+                            serde_json::to_vec(&body)
+                                .map_err(|error| error.to_string())?
+                                .into(),
+                        );
                     }
                 }
             }
@@ -801,16 +867,31 @@ async fn trial(
 ) -> Result<(), AppError> {
     let (input_bytes, concurrency, repetition) = point;
     if workload.slots.len() != concurrency as usize
-        || workload.input_hashes.as_ref().is_none_or(|hashes| hashes.len() != concurrency as usize)
+        || workload
+            .input_hashes
+            .as_ref()
+            .is_none_or(|hashes| hashes.len() != concurrency as usize)
     {
-        return Err(AppError::validation("buffered slot inputs do not match the measured point"));
+        return Err(AppError::validation(
+            "buffered slot inputs do not match the measured point",
+        ));
     }
     let request = &workload.request;
     let target = request.max_output_tokens;
     let phase = if concurrency == 1 { "single" } else { "batch" };
     emit(progress,request,phase,result.rows.len(),None,Some(format!("{input_bytes} UTF-8 bytes / {target} output tokens, {concurrency} request(s), repetition {repetition}")));
-    let measured = workload.measure(client, pid, tree,
-        memory_scope, cancel, result, checkpoint, progress).await;
+    let measured = workload
+        .measure(
+            client,
+            pid,
+            tree,
+            memory_scope,
+            cancel,
+            result,
+            checkpoint,
+            progress,
+        )
+        .await;
     let failure = |e: AppError| {
         AppError::new(
             e.kind,

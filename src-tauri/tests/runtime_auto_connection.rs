@@ -168,7 +168,10 @@ async fn respond(
         (200, "application/json", "{\"status\":\"ok\"}".into())
     } else if path == "/v1/chat/completions" {
         let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        assert_ne!(value.pointer("/messages/0/content").and_then(Value::as_str), Some("Reply with OK."));
+        assert_ne!(
+            value.pointer("/messages/0/content").and_then(Value::as_str),
+            Some("Reply with OK.")
+        );
         let measured = value
             .pointer("/messages/0/content")
             .and_then(Value::as_str)
@@ -180,7 +183,10 @@ async fn respond(
             assert_eq!(value["stream_options"], json!({"include_usage":true}));
             if measured {
                 assert_eq!(value["max_tokens"], 128);
-                assert_eq!(value["messages"][0]["content"].as_str().unwrap().len(), 1024);
+                assert_eq!(
+                    value["messages"][0]["content"].as_str().unwrap().len(),
+                    1024
+                );
             }
             let body = "{\"error\":\"optional stream_options unsupported\"}";
             let response = format!("HTTP/1.1 400 Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
@@ -419,8 +425,11 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
         .await;
         assert_eq!(result.status, "complete", "{:?}", result.message);
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(benchmark_calls.load(Ordering::Acquire), 4,
-            "one rejected first measured request, then three accepted requests; no workload warmup");
+        assert_eq!(
+            benchmark_calls.load(Ordering::Acquire),
+            4,
+            "one rejected first measured request, then three accepted requests; no workload warmup"
+        );
         for row in &result.rows {
             assert_eq!(row.output_bytes, 12 * u64::from(row.concurrency));
             assert!(row.e2e_ms > 0.0);
@@ -431,25 +440,44 @@ async fn automatic_cli_connection_verifies_and_registers_an_independent_service_
             assert!(row.decode_tokens_per_second.is_none());
             assert!(row.tpot_ms.is_none());
             assert_eq!(row.input_sha256_by_request.len(), row.concurrency as usize);
-            assert!(row.peak_memory_bytes.is_none(), "an attached proxy is not owned compute");
+            assert!(
+                row.peak_memory_bytes.is_none(),
+                "an attached proxy is not owned compute"
+            );
             assert_eq!(row.finish_reasons, vec!["stop"; row.concurrency as usize]);
         }
         let recorded = serde_json::to_value(&result).unwrap();
         assert_eq!(recorded["provenance"]["method"]["version"], 5);
-        assert_eq!(recorded["provenance"]["workload"]["cache_policy"], "cold_prompt");
+        assert_eq!(
+            recorded["provenance"]["workload"]["cache_policy"],
+            "cold_prompt"
+        );
         // The entirely rejected first measured batch freezes usage off.
-        assert_eq!(recorded["provenance"]["execution"]["memory_scope"], "unavailable");
+        assert_eq!(
+            recorded["provenance"]["execution"]["memory_scope"],
+            "unavailable"
+        );
         assert_eq!(recorded["provenance"]["workload"]["request_usage"], false);
         assert!(recorded["provenance"]["execution"]["settings"]
             .as_array()
             .unwrap()
             .iter()
             .all(|setting| setting["name"] != "stream_options.include_usage"));
-        let hashes: Vec<_> = recorded["rows"].as_array().unwrap().iter()
-            .flat_map(|row| row["input_sha256_by_request"].as_array().unwrap()).collect();
+        let hashes: Vec<_> = recorded["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row["input_sha256_by_request"].as_array().unwrap())
+            .collect();
         assert_eq!(hashes.len(), 3);
-        assert_eq!(hashes.iter().map(|hash| hash.as_str().unwrap())
-            .collect::<std::collections::BTreeSet<_>>().len(), 3);
+        assert_eq!(
+            hashes
+                .iter()
+                .map(|hash| hash.as_str().unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            3
+        );
         assert!(process.lock().unwrap().is_none());
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
         assert!(client
@@ -772,7 +800,11 @@ async fn managed_options_and_probe_cache_journey(home: &Path) {
                 .lines()
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-        assert_eq!(bodies.len(), 3, "no generating benchmark warmup or usage probe");
+        assert_eq!(
+            bodies.len(),
+            3,
+            "no generating benchmark warmup or usage probe"
+        );
         for body in bodies {
             assert_eq!(body.as_object().unwrap().len(), 5);
             assert_eq!(body["model"], "aiolm-connection-0123456789abcdee");
@@ -781,18 +813,38 @@ async fn managed_options_and_probe_cache_journey(home: &Path) {
             assert_eq!(body["stream"], true);
             assert_eq!(body["messages"][0]["content"].as_str().unwrap().len(), 1024);
         }
-        assert_eq!(launches().len(), launch_count + 1, "one engine load for all points");
-        let http: Vec<Value> = fs::read_to_string(&http_log).unwrap().lines()
-            .skip(http_before).map(|line| serde_json::from_str(line).unwrap()).collect();
-        assert_eq!(http.iter().map(|call| call["pid"].as_u64().unwrap())
-            .collect::<std::collections::BTreeSet<_>>().len(), 1,
-            "every point is served by the same normally launched engine");
-        let texts: Vec<_> = http.iter()
+        assert_eq!(
+            launches().len(),
+            launch_count + 1,
+            "one engine load for all points"
+        );
+        let http: Vec<Value> = fs::read_to_string(&http_log)
+            .unwrap()
+            .lines()
+            .skip(http_before)
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            http.iter()
+                .map(|call| call["pid"].as_u64().unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            1,
+            "every point is served by the same normally launched engine"
+        );
+        let texts: Vec<_> = http
+            .iter()
             .filter(|call| call["body"]["max_tokens"] == 128)
             .map(|call| call["body"]["messages"][0]["content"].as_str().unwrap())
             .collect();
         assert_eq!(texts.len(), 3);
-        assert_eq!(texts.iter().collect::<std::collections::BTreeSet<_>>().len(), 3);
+        assert_eq!(
+            texts
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            3
+        );
         assert!(process.lock().unwrap().is_none());
         let launched = launches();
         let argv = launched.last().unwrap();
@@ -904,19 +956,17 @@ async fn managed_readable_served_alias_journey(home: &Path) {
     .await;
     cli(home, &["runtime", "probe", engine, runtime]).await;
     let registration: Value =
-        serde_json::from_slice(&fs::read(directory.join("registration.json")).unwrap())
-            .unwrap();
+        serde_json::from_slice(&fs::read(directory.join("registration.json")).unwrap()).unwrap();
     assert_eq!(
         registration["probe"]["served_model"], "Synthetic-model",
         "the connection probe must verify the readable name, not the connection id"
     );
     cli(home, &["server", "start"]).await;
-    let launches: Vec<Vec<String>> =
-        fs::read_to_string(folder.join("automatic-launches.jsonl"))
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+    let launches: Vec<Vec<String>> = fs::read_to_string(folder.join("automatic-launches.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
     let argv = launches.last().unwrap();
     let index = argv
         .iter()
@@ -935,10 +985,7 @@ async fn managed_readable_served_alias_journey(home: &Path) {
         .unwrap();
     assert_eq!(listed["data"][0]["id"], "Synthetic-model");
     let chat: Value = client
-        .post(format!(
-            "http://127.0.0.1:{}/v1/chat/completions",
-            cfg.port
-        ))
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", cfg.port))
         .json(&json!({
             "model":"Synthetic-model",
             "messages":[{"role":"user","content":"hi"}],
@@ -953,10 +1000,7 @@ async fn managed_readable_served_alias_journey(home: &Path) {
     assert_eq!(chat["model"], "Synthetic-model");
     assert_eq!(chat["choices"][0]["message"]["content"], "5");
     let legacy = client
-        .post(format!(
-            "http://127.0.0.1:{}/v1/chat/completions",
-            cfg.port
-        ))
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", cfg.port))
         .json(&json!({
             "model":format!("aiolm-{runtime}"),
             "messages":[{"role":"user","content":"hi"}],

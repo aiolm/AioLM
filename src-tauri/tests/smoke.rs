@@ -119,7 +119,10 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
     assert_eq!(completed.input_bytes, 1024);
     assert_eq!(completed.timing_source, "client");
     assert_eq!(completed.max_output_tokens, 128);
-    assert_eq!(completed.input_sha256_by_request.len(), completed.concurrency as usize);
+    assert_eq!(
+        completed.input_sha256_by_request.len(),
+        completed.concurrency as usize
+    );
     assert_eq!(
         serde_json::to_value(&result).unwrap()["provenance"]["method"]["version"],
         5

@@ -53,7 +53,6 @@ pub(crate) struct Method {
     pub version: u32,
 }
 
-
 /// New runs freeze the common HTTP workload independently of engine tokenizers.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -393,7 +392,9 @@ impl ServingWorkload {
             || self.warmup
             || !self.prompt_nonce.as_deref().is_some_and(|nonce| {
                 nonce.len() == 32
-                    && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    && nonce
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             })
             || self.inputs.is_empty()
             || self.inputs.len() > 64
@@ -543,10 +544,7 @@ impl ServingBenchmarkProvenance {
             .cloned()
             .collect();
         if requests
-            != common_request_settings(
-                self.workload.max_output_tokens,
-                self.workload.request_usage,
-            )
+            != common_request_settings(self.workload.max_output_tokens, self.workload.request_usage)
         {
             return Err("serving settings do not describe the common request".into());
         }
@@ -584,7 +582,8 @@ mod tests {
     fn model() -> ModelIdentity {
         serde_json::from_value(json!({
             "status":"unidentified","sha256":null,"size_bytes":null
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     fn serving_fixture(request_usage: bool) -> ServingBenchmarkProvenance {
@@ -594,9 +593,15 @@ mod tests {
             "max_output_tokens":128,"concurrencies":[1],"repetitions":1,
             "warmup":false,"request_usage":request_usage,"cache_policy":"cold_prompt",
             "prompt_nonce":"0123456789abcdef0123456789abcdef"
-        })).unwrap();
+        }))
+        .unwrap();
         capture_serving(
-            &AppConfig::default(), &profile(), model(), workload, None, "Recorded model".into()
+            &AppConfig::default(),
+            &profile(),
+            model(),
+            workload,
+            None,
+            "Recorded model".into(),
         )
     }
 
@@ -750,10 +755,19 @@ mod tests {
         for request_usage in [false, true] {
             let provenance = serving_fixture(request_usage);
             provenance.validate("novel_en").unwrap();
-            let names: Vec<_> = provenance.execution.settings.iter()
-                .map(|setting| setting.name.as_str()).collect();
+            let names: Vec<_> = provenance
+                .execution
+                .settings
+                .iter()
+                .map(|setting| setting.name.as_str())
+                .collect();
             let expected = if request_usage {
-                vec!["max_tokens", "stream", "stream_options.include_usage", "temperature"]
+                vec![
+                    "max_tokens",
+                    "stream",
+                    "stream_options.include_usage",
+                    "temperature",
+                ]
             } else {
                 vec!["max_tokens", "stream", "temperature"]
             };
@@ -795,7 +809,11 @@ mod tests {
             provenance.execution.settings = common_request_settings(cap, false);
             provenance.validate("novel_en").unwrap();
         }
-        for topology in [ServingTopology::Owned, ServingTopology::Attached, ServingTopology::Unknown] {
+        for topology in [
+            ServingTopology::Owned,
+            ServingTopology::Attached,
+            ServingTopology::Unknown,
+        ] {
             provenance.execution.topology = topology;
             provenance.execution.memory_scope = ServingMemoryScope::Unavailable;
             provenance.validate("novel_en").unwrap();
@@ -815,8 +833,13 @@ mod tests {
         ] {
             let mut invalid = serde_json::to_value(&provenance).unwrap();
             *invalid.pointer_mut(pointer).unwrap() = value;
-            assert!(serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
-                .unwrap().validate("novel_en").is_err(), "{pointer}");
+            assert!(
+                serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
+                    .unwrap()
+                    .validate("novel_en")
+                    .is_err(),
+                "{pointer}"
+            );
         }
         assert!(provenance.validate("code_python").is_err());
     }
@@ -847,7 +870,11 @@ mod tests {
             "format":"GGUF","source":"gguf","base_models":[],
             "artifact":"quantized/model.gguf"
         });
-        assert!(serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
-            .unwrap().validate("novel_en").is_err());
+        assert!(
+            serde_json::from_value::<ServingBenchmarkProvenance>(invalid)
+                .unwrap()
+                .validate("novel_en")
+                .is_err()
+        );
     }
 }

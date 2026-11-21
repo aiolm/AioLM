@@ -166,9 +166,7 @@ async fn reset_key(
 }
 
 #[tauri::command]
-pub(crate) async fn reset_api_key(
-    state: State<'_, AppState>,
-) -> Result<ApiServerStatus, AppError> {
+pub(crate) async fn reset_api_key(state: State<'_, AppState>) -> Result<ApiServerStatus, AppError> {
     reset_key(&state, configured_port).await
 }
 
@@ -539,8 +537,7 @@ mod tests {
     #[tokio::test]
     async fn resetting_the_api_key_rotates_a_running_listener_immediately_and_persists_across_restarts(
     ) {
-        let dir =
-            std::env::temp_dir().join(format!("aiolm-gw-reset-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("aiolm-gw-reset-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let state1 = AppState::default();
@@ -576,10 +573,8 @@ mod tests {
 
     #[tokio::test]
     async fn resetting_the_api_key_while_stopped_persists_for_the_next_start() {
-        let dir = std::env::temp_dir().join(format!(
-            "aiolm-gw-reset-stopped-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aiolm-gw-reset-stopped-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let state = AppState::default();

@@ -337,15 +337,20 @@ mod tests {
             let id = format!("unsupported-delete-{version}");
             let mut record = fixtures::serving_record(&id, version);
             record["schemaVersion"] = json!(version);
-            let path = root.join("runs").join(format!("{version:016}-{}.jsonl", digest(&id)));
+            let path = root
+                .join("runs")
+                .join(format!("{version:016}-{}.jsonl", digest(&id)));
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let mut bytes = serde_json::to_vec(&json!({
                 "kind":"start","origin":"legacy","record":record
-            })).unwrap();
+            }))
+            .unwrap();
             bytes.extend_from_slice(b"\nunsupported tail\n");
             fs::write(&path, &bytes).unwrap();
-            assert_eq!(delete(&root, &id).unwrap_err(),
-                AppError::validation("unsupported benchmark record"));
+            assert_eq!(
+                delete(&root, &id).unwrap_err(),
+                AppError::validation("unsupported benchmark record")
+            );
             assert!(!has_tombstone(&root, &id).unwrap());
             assert_eq!(fs::read(&path).unwrap(), bytes);
         }

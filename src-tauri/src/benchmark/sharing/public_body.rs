@@ -176,7 +176,9 @@ fn public_value(value: &Value, shape: &Value, schema: &Value) -> bool {
                 return false;
             };
             fields.iter().all(|(key, value)| {
-                properties.get(key).is_some_and(|shape| public_value(value, shape, schema))
+                properties
+                    .get(key)
+                    .is_some_and(|shape| public_value(value, shape, schema))
             })
         }
         Value::Array(values) => {
@@ -300,7 +302,10 @@ mod tests {
             json!({"environment": {"cpu": {"serial": "synthetic"}}}),
             json!({"execution": {"effective_args": ["--threads", "8"]}}),
         ] {
-            assert!(validate(&json!({"benchmark": private, "description_md": ""})).is_err(), "{private}");
+            assert!(
+                validate(&json!({"benchmark": private, "description_md": ""})).is_err(),
+                "{private}"
+            );
         }
         assert!(validate(&json!({"benchmark": {}, "local_fingerprint": "synthetic"})).is_err());
     }
@@ -330,7 +335,12 @@ mod tests {
         validate(&reviewed).unwrap();
         assert_eq!(reviewed, body);
         assert_eq!(serde_json::to_vec(&reviewed).unwrap(), encoded);
-        for nonce in ["a".repeat(31), "a".repeat(33), "A".repeat(32), "g".repeat(32)] {
+        for nonce in [
+            "a".repeat(31),
+            "a".repeat(33),
+            "A".repeat(32),
+            "g".repeat(32),
+        ] {
             let mut invalid = body.clone();
             invalid["benchmark"]["workload"]["prompt_nonce"] = json!(nonce);
             assert!(validate(&invalid).is_err());
@@ -359,7 +369,10 @@ mod tests {
             json!({"model": {"metadata": {"artifact": "/synthetic/model.gguf"}}}),
             json!({"model": {"source": {"repository": "C:\\synthetic"}}}),
         ] {
-            assert!(validate(&json!({"benchmark": private, "description_md": ""})).is_err(), "{private}");
+            assert!(
+                validate(&json!({"benchmark": private, "description_md": ""})).is_err(),
+                "{private}"
+            );
         }
     }
 }

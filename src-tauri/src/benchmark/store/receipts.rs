@@ -757,10 +757,7 @@ mod tests {
             .unwrap(),
         );
         fs::write(&existing, bytes).unwrap();
-        for (index, id) in ["interrupted", "failed", "existing"]
-            .iter()
-            .enumerate()
-        {
+        for (index, id) in ["interrupted", "failed", "existing"].iter().enumerate() {
             acknowledge_at(&root, id, receipt(index + 500), 10 + index as u64).unwrap();
         }
         let mut journal_paths = Vec::new();
@@ -942,16 +939,21 @@ mod tests {
         let id = "unsupported-receipt";
         let mut record = fixtures::serving_record(id, 1);
         record["schemaVersion"] = json!(2);
-        let path = root.join("runs").join(format!("{:016}-{}", 1, record_digest(&record)));
+        let path = root
+            .join("runs")
+            .join(format!("{:016}-{}", 1, record_digest(&record)));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let bytes = serde_json::to_vec(&json!({
             "kind":"start","origin":"legacy","record":record
-        })).unwrap();
+        }))
+        .unwrap();
         let mut bytes = bytes;
         bytes.extend_from_slice(b"\nunsupported tail\n");
         fs::write(&path, &bytes).unwrap();
-        assert_eq!(acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
-            AppError::validation("unsupported benchmark record"));
+        assert_eq!(
+            acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
+            AppError::validation("unsupported benchmark record")
+        );
         assert!(!receipt_path(&root, id).exists());
         assert!(!candidate_path(&root, id).exists());
         assert_eq!(fs::read(&path).unwrap(), bytes);
@@ -964,8 +966,10 @@ mod tests {
         };
         let receipt_bytes = serde_json::to_vec(&accepted).unwrap();
         crate::config::atomic_write(&receipt_path(&root, id), &receipt_bytes).unwrap();
-        assert_eq!(acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
-            AppError::validation("unsupported benchmark record"));
+        assert_eq!(
+            acknowledge_at(&root, id, receipt(1), 10).err().unwrap(),
+            AppError::validation("unsupported benchmark record")
+        );
         assert_eq!(fs::read(receipt_path(&root, id)).unwrap(), receipt_bytes);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
@@ -983,7 +987,10 @@ mod tests {
         let accepted = read_accepted(&receipt_path(&root, id)).unwrap().unwrap();
         assert!(accepted.candidate.is_none());
         assert!(!candidate_path(&root, id).exists());
-        assert_eq!(prune_cache(&root, 0, |path| fs::remove_file(path)).pruned, 0);
+        assert_eq!(
+            prune_cache(&root, 0, |path| fs::remove_file(path)).pruned,
+            0
+        );
         assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
     }

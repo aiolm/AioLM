@@ -367,7 +367,10 @@ async fn read_chunked_body(stream: &mut TcpStream, mut buf: Vec<u8>) -> Result<V
     let mut decoded = Vec::new();
     loop {
         let line_len = loop {
-            if let Some(pos) = buf[cursor..].windows(2).position(|window| window == b"\r\n") {
+            if let Some(pos) = buf[cursor..]
+                .windows(2)
+                .position(|window| window == b"\r\n")
+            {
                 break pos;
             }
             if buf.len() - cursor > MAX_CHUNK_LINE {
