@@ -19,8 +19,9 @@ function finiteInteger(value: unknown, fallback: number, min: number, max: numbe
 
 function normalizeTypedTuning(config: AppConfig): Pick<AppConfig, "batch_size" | "ubatch_size" | "keep" | "cache_type_k" | "cache_type_v"> {
   const batch_size = finiteInteger(config.batch_size, DEFAULT_BATCH_SIZE, 1, 131072);
-  const ubatch_size = finiteInteger(config.ubatch_size, DEFAULT_UBATCH_SIZE, 1, batch_size);
-  const keep = finiteInteger(config.keep, 0, 0, 131072);
+  const inheritBatch = config.runtime_defaults?.includes("batch_size") || config.runtime_defaults?.includes("ubatch_size");
+  const ubatch_size = finiteInteger(config.ubatch_size, DEFAULT_UBATCH_SIZE, 1, inheritBatch ? 131072 : batch_size);
+  const keep = finiteInteger(config.keep, 0, -1, 131072);
   const cache_type_k = typeof config.cache_type_k === "string" && CACHE_TYPES.has(config.cache_type_k) ? config.cache_type_k : DEFAULT_CACHE_TYPE;
   const cache_type_v = typeof config.cache_type_v === "string" && CACHE_TYPES.has(config.cache_type_v) ? config.cache_type_v : DEFAULT_CACHE_TYPE;
   return { batch_size, ubatch_size, keep, cache_type_k, cache_type_v };
@@ -47,8 +48,12 @@ export function normalizeConfigPatch(patch: ConfigPatch<AppConfig>): ConfigPatch
   if (typeof next.mmproj === "string") next.mmproj = normalizeStoredPath(next.mmproj);
   if (next.lora_adapters) next.lora_adapters = next.lora_adapters.map((adapter) => ({ ...adapter, path: normalizeStoredPath(adapter.path) }));
   if ("batch_size" in next) next.batch_size = finiteInteger(next.batch_size, DEFAULT_BATCH_SIZE, 1, 131072);
-  if ("ubatch_size" in next) next.ubatch_size = finiteInteger(next.ubatch_size, DEFAULT_UBATCH_SIZE, 1, next.batch_size ?? 131072);
-  if ("keep" in next) next.keep = finiteInteger(next.keep, 0, 0, 131072);
+  if ("ubatch_size" in next) {
+    const inheritBatch = next.runtime_defaults?.includes("batch_size") || next.runtime_defaults?.includes("ubatch_size");
+    const maxBatch = inheritBatch || next.batch_size === undefined ? 131072 : next.batch_size;
+    next.ubatch_size = finiteInteger(next.ubatch_size, DEFAULT_UBATCH_SIZE, 1, maxBatch);
+  }
+  if ("keep" in next) next.keep = finiteInteger(next.keep, 0, -1, 131072);
   if (typeof next.cache_type_k === "string" && !CACHE_TYPES.has(next.cache_type_k)) next.cache_type_k = DEFAULT_CACHE_TYPE;
   if (typeof next.cache_type_v === "string" && !CACHE_TYPES.has(next.cache_type_v)) next.cache_type_v = DEFAULT_CACHE_TYPE;
   return next;

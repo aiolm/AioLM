@@ -7,9 +7,11 @@ import { mergeProviderRequestSettings } from '../../shared/config/providerReques
 import { ensureProfileLibrary,profileSettingsSnapshot,profileTargetKey,settingsEqual,type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { useI18n } from '../../shared/i18n/i18n';
+import { errorMessage } from '../../shared/api/errors';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
-import { sessionConfig } from '../../shared/runtime/sessionUtils';
+import { notifySessionStatusChanged, sessionConfig } from '../../shared/runtime/sessionUtils';
+import { sessionHasActivity } from '../../shared/state/sessionActivity';
 import type { AppStore } from '../../shared/state/store';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { modelSettingsContext as Context,MANAGE_MODEL_RUNTIMES,type ModelSettingsRequest } from './modelSettingsContext';
@@ -50,6 +52,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const [error, setError] = useState('');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const lastSessionsKey = useRef<string | null>(null);
+  const stoppingTargetRef = useRef<string | null>(null);
   const applySessionData = useCallback((next: api.SessionStatus[]) => {
     const key = sessionRefreshKey(next);
     if (key === lastSessionsKey.current) return;
@@ -181,7 +184,18 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   // Stopping this target, whether it is still loading or already serving. The
   // dialog offers it in place of a launch while the model is up, so there is
   // somewhere to stop from without closing the settings first.
-  const stopTarget = () => { void (id === 'default' ? latest.current.stop() : api.sessionStop(id)).catch(cause => setError(String(cause))); };
+  const stopTarget = () => {
+    if (stoppingTargetRef.current !== null) return;
+    if (sessionHasActivity(id)) {
+      setError(copy.activity);
+      return;
+    }
+    stoppingTargetRef.current = id;
+    void (id === 'default' ? latest.current.stop() : api.sessionStop(id))
+      .then(() => { notifySessionStatusChanged(); })
+      .catch(cause => setError(errorMessage(cause)))
+      .finally(() => { stoppingTargetRef.current = null; });
+  };
   const contextValue = useMemo(() => ({ open, suspended, resume, getRequestConfig, getRequestProfile }),
     [open, suspended, resume, getRequestConfig, getRequestProfile]);
   return <Context.Provider value={contextValue}>
@@ -199,7 +213,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       preflightState={preflightState ?? undefined}
-      onCancelStart={launching?.editorKey === editor.key ? () => { void launching.cancel().catch((cause: unknown) => setError(String(cause))); } : undefined} onStop={stopTarget}
+      onCancelStart={launching?.editorKey === editor.key ? () => { void launching.cancel().catch((cause: unknown) => setError(errorMessage(cause))); } : undefined} onStop={stopTarget}
       onManageRuntimes={() => {
         if (lock.current) return;
         const event = new Event(MANAGE_MODEL_RUNTIMES, { cancelable: true });

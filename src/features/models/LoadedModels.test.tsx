@@ -5,6 +5,7 @@ import * as api from "../../shared/api/index";
 import { IpcError } from "../../shared/api/ipcError";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
+import { defaultPreferences, savePreferences } from "../../shared/config/preferences";
 import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
@@ -497,6 +498,7 @@ describe("loaded model and saved session controls", () => {
   it("unloads a stopped session before removing its definition", async () => {
     const store = renderPanel(); await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove saved session?" })).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(store.cfg!.sessions).toEqual([]));
     expect(store.cfg!.settings_profiles).toBeUndefined();
     expect(mocked.sessionUnload).toHaveBeenCalledWith("work");
@@ -522,6 +524,7 @@ describe("loaded model and saved session controls", () => {
     const store = renderPanel({ ...configured, settings_profiles: library });
     await selectWork();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Remove saved session?' })).getByRole('button', { name: 'Remove' }));
 
     await waitFor(() => expect(store.cfg!.sessions).toEqual([other]));
     expect(store.cfg!.settings_profiles).toEqual(expected);
@@ -541,6 +544,7 @@ describe("loaded model and saved session controls", () => {
     }));
     await selectWork();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Remove saved session?' })).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
 
     const later: api.SessionDefinition = { ...definition, id: 'later', name: 'Later session',
@@ -573,6 +577,7 @@ describe("loaded model and saved session controls", () => {
     else vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error('Synthetic removal failure'));
     await selectWork();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Remove saved session?' })).getByRole('button', { name: 'Remove' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic removal failure');
     expect(store.cfg!.sessions).toEqual([definition]);
     expect(store.cfg!.settings_profiles).toEqual(library);
@@ -593,6 +598,7 @@ describe("loaded model and saved session controls", () => {
     }
     await selectWork();
     fireEvent.click(savedRow().getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Remove saved session?' })).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(pending === 'unload' ? mocked.sessionUnload : store.updateConfig).toHaveBeenCalledOnce());
     fireEvent.click(savedRow('Other session').getByRole('button', { name: /Other session/ }));
     expect(screen.getByLabelText('Session name')).toHaveValue('Other session');
@@ -615,6 +621,7 @@ describe("loaded model and saved session controls", () => {
     mocked.sessionUnload.mockRejectedValueOnce(new Error("Unload failed"));
     const store = renderPanel(); await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove saved session?" })).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Unload failed");
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -729,5 +736,23 @@ describe("loaded model and saved session controls", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("모델을 로드하기 전에 진행 중인 응답을 중지하세요.");
     expect(mocked.sessionStart).not.toHaveBeenCalled();
     setSessionActivity("default", false);
+  });
+
+  it("cancelling Remove confirmation keeps the saved session and skips confirmation when destructive prompts are off", async () => {
+    const store = renderPanel();
+    await selectWork();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove saved session?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(mocked.sessionUnload).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.cfg!.sessions).toEqual([definition]);
+
+    const prefs = defaultPreferences();
+    prefs.advanced.confirmDestructiveActions = false;
+    savePreferences(prefs);
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.queryByRole("dialog", { name: "Remove saved session?" })).not.toBeInTheDocument();
+    await waitFor(() => expect(store.cfg!.sessions).toEqual([]));
   });
 });

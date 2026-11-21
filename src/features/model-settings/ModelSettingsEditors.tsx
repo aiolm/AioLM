@@ -44,6 +44,6 @@ export default function ModelSettingsEditors({ controller }: { controller: Model
                 provider validation active and retain field drafts across tabs. */}
             {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions benchmark={benchmark} collapseTools hideDefaultsReset key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
             {!llama && !external && <div hidden={section === 'model'}><ProviderOptions benchmark={benchmark} key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
-            {llama && section === 'advanced' && <ProviderOptions benchmark={benchmark} editor="custom" key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
+            {llama && <div hidden={section !== 'advanced'}><ProviderOptions benchmark={benchmark} editor="custom" key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
   </>;
 }

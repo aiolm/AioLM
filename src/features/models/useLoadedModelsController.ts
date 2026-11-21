@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import * as api from "../../shared/api/index";
 import { IpcError } from "../../shared/api/ipcError";
 import { settingsForSession } from "../../shared/config/executionSettings";
+import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { profileTargetKey } from "../../shared/config/settingsProfiles";
 import { useI18n } from "../../shared/i18n/i18n";
 import { modelDisplayName } from "../../shared/lib/displayPaths";
@@ -89,6 +90,7 @@ export function useLoadedModelsController({ store, poll, refresh }: LoadedModels
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<api.SessionDefinition | null>(null);
   const currentEdit = useRef({ selectedId, editing });
   currentEdit.current = { selectedId, editing };
   const currentSelection = useRef(selectedId);
@@ -351,6 +353,15 @@ export function useLoadedModelsController({ store, poll, refresh }: LoadedModels
       ? { active_provider: status.engine.provider, active_runtime: status.engine.runtime_id } : {}) };
     return { status, state, rowDefinition, model, runtimeConfig };
   };
+  const requestRemove = (definition: api.SessionDefinition) => {
+    if (definition.id === DEFAULT_SESSION_ID) return;
+    if (sessionHasActivity(definition.id)) {
+      setFailure(t("ui.sessionActiveResponseRemove"));
+      return;
+    }
+    if (shouldConfirmDestructive()) setPendingDelete(definition);
+    else void remove(definition);
+  };
   const controlsDisabled = busyId !== null || savingId !== null || store.busy;
-  return { allDefinitions, t, locale, copy, cfg, definitions, selectedId, setSelectedId, detailsOpen, setDetailsOpen, editing, setEditing, stopExisting, setStopExistingDraft, busyId, loadingId, notice, failure, setFailure, pendingNavigation, setPendingNavigation, definitionsById, performSelection, selectDefinition, saveDefinition, addDefinition, requestNewDefinition, load, stop, cancelLoad, remove, updateEditing, currentDefinition, closeDetails, openSettings, rowFor, controlsDisabled, modelSettings };
+  return { allDefinitions, t, locale, copy, cfg, definitions, selectedId, setSelectedId, detailsOpen, setDetailsOpen, editing, setEditing, stopExisting, setStopExistingDraft, busyId, loadingId, notice, failure, setFailure, pendingNavigation, setPendingNavigation, pendingDelete, setPendingDelete, definitionsById, performSelection, selectDefinition, saveDefinition, addDefinition, requestNewDefinition, load, stop, cancelLoad, remove, requestRemove, updateEditing, currentDefinition, closeDetails, openSettings, rowFor, controlsDisabled, modelSettings };
 }

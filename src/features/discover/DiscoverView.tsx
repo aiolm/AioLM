@@ -116,8 +116,8 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
                 <div className="mt-1 text-xs tabular-nums ui-color-muted">{t("ui.bytesOfTotal", { received: formatBytes(entry.received), total: formatBytes(entry.total) })}{percent !== undefined ? ` · ${percent}%` : ''}</div>
               </div>
               <div className="flex max-w-full flex-wrap items-center gap-2">
-                <button type="button" className="app-button app-button--primary app-button--sm" disabled={store.busy} aria-label={`${t("ui.pendingResume")}: ${label}`} onClick={() => void resumePending(entry)}>{t("ui.pendingResume")}</button>
-                <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.pendingDiscard")}: ${label}`} onClick={() => requestDiscard(entry)}>{t("ui.pendingDiscard")}</button>
+                <button type="button" className="app-button app-button--primary app-button--sm" disabled={store.busy || discardBusy} aria-label={`${t("ui.pendingResume")}: ${label}`} onClick={() => void resumePending(entry)}>{t("ui.pendingResume")}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={discardBusy} aria-label={`${t("ui.pendingDiscard")}: ${label}`} onClick={() => requestDiscard(entry)}>{t("ui.pendingDiscard")}</button>
               </div>
             </div>;
           })}

@@ -193,8 +193,8 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
   const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
-  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => modelPathIdentity(loadedModelPath(session))));
-  if (isServerRunning(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
+  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerBusy(session.state)).map(session => modelPathIdentity(loadedModelPath(session))));
+  if (isServerBusy(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
   const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
 
   const selectModel = async (model: api.GgufModel) => {
@@ -204,7 +204,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       await store.updateConfig({ active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
     } catch (error) {
-      notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(`${t("panel.copyFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -218,7 +218,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       await store.updateConfig({ mmproj: model.path });
       // 프로젝터 선택도 선택 상태 변경이므로 성공 알림을 표시하지 않는다.
     } catch (error) {
-      notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(`${t("panel.copyFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -284,7 +284,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       await navigator.clipboard.writeText(normalizeDisplayPath(path));
       notify(t("ui.modelPathCopied"));
     } catch (error) {
-      notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(`${t("panel.copyFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 

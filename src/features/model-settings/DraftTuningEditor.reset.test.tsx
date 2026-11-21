@@ -250,4 +250,57 @@ describe('draft tuning field resets', () => {
     expect(screen.queryByRole('textbox', { name: inputName })).not.toBeInTheDocument();
     expect(config().runtime_defaults).toContain(_key);
   });
+
+  it('clears stale invalid drafts on external config replacement and revalidates paired batch sizes on reset', () => {
+    const onInvalid = vi.fn();
+    const onChange = vi.fn();
+    const initial = { ...testConfig, batch_size: 2048, ubatch_size: 512, ctx_size: 4096, runtime_defaults: [] };
+    const view = render(
+      <I18nProvider initialLocale="en">
+        <DraftTuningEditor cfg={initial} section="tuning" disabled={false} runtime={runtime} onChange={onChange} onInvalid={onInvalid} />
+      </I18nProvider>,
+    );
+    fireEvent.change(screen.getByRole('spinbutton', { name: /^--ctx-size\b/ }), { target: { value: '256' } });
+    expect(onInvalid).toHaveBeenLastCalledWith('ctx_size', true);
+
+    view.rerender(
+      <I18nProvider initialLocale="en">
+        <DraftTuningEditor cfg={{ ...initial, ctx_size: 8192 }} section="tuning" disabled={false} runtime={runtime} onChange={onChange} onInvalid={onInvalid} />
+      </I18nProvider>,
+    );
+    expect(onInvalid).toHaveBeenLastCalledWith('ctx_size', false);
+    expect(screen.getByRole('spinbutton', { name: /^--ctx-size\b/ })).toHaveValue(8192);
+
+    const paired = mount('tuning', { ...testConfig, batch_size: 2048, ubatch_size: 2048, runtime_defaults: [] });
+    fireEvent.change(screen.getByRole('spinbutton', { name: /^--batch-size\b/ }), { target: { value: '512' } });
+    expect(paired.onInvalid).toHaveBeenLastCalledWith('batch_size', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Micro batch size to default' }));
+    expect(paired.onInvalid).toHaveBeenCalledWith('batch_size', false);
+  });
+
+  it('defers custom Mirostat commits until typed and links invalid input to an alert error message', () => {
+    const onInvalid = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <I18nProvider initialLocale="en">
+        <DraftTuningEditor
+          cfg={{ ...testConfig, runtime_defaults: [], chat_options: { mirostat: 1 } }}
+          section="sampling"
+          disabled={false}
+          runtime={runtime}
+          onChange={onChange}
+          onInvalid={onInvalid}
+        />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByText('More llama.cpp sampling controls'));
+    fireEvent.click(screen.getByRole('combobox', { name: /^--mirostat\b/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'Custom numeric value' }));
+    expect(onChange).not.toHaveBeenCalled();
+    const custom = screen.getByRole('textbox', { name: 'Custom value for Mirostat mode' });
+    fireEvent.change(custom, { target: { value: 'not-a-number' } });
+    expect(custom).toHaveAttribute('aria-invalid', 'true');
+    const error = screen.getByRole('alert');
+    expect(custom.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
+  });
 });

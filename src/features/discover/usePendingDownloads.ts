@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import * as api from '../../shared/api/index';
 import { isIpcErrorKind } from '../../shared/api/ipcError';
 import type { AppStore } from '../../shared/state/store';
@@ -22,6 +22,7 @@ export function usePendingDownloads({ active, downloadBusy: transferring, latest
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState<api.PendingDownload | null>(null);
   const [discardBusy, setDiscardBusy] = useState(false);
+  const discardBusyRef = useRef(false);
   const downloadBusy = transferring || resumingId !== null;
   const refreshPending = useCallback(async () => {
     try { setPending(await api.hfPendingDownloads()); } catch { /* Browser preview and read failures leave the list empty. */ }
@@ -58,6 +59,8 @@ export function usePendingDownloads({ active, downloadBusy: transferring, latest
   };
 
   const discardPending = async (entry: api.PendingDownload) => {
+    if (discardBusyRef.current) return;
+    discardBusyRef.current = true;
     setDiscardBusy(true);
     try {
       await api.hfDiscardDownload(entry.id);
@@ -65,6 +68,7 @@ export function usePendingDownloads({ active, downloadBusy: transferring, latest
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      discardBusyRef.current = false;
       setDiscardBusy(false); setDiscarding(null);
     }
   };

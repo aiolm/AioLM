@@ -52,7 +52,7 @@ function statusCopy(state: api.SessionStatus["state"], t: ReturnType<typeof useI
  */
 export default function LoadedModels(props: LoadedModelsProps) {
   const { store } = props;
-  const { allDefinitions, t, locale, copy, cfg, definitions, selectedId, setSelectedId, detailsOpen, setDetailsOpen, editing, setEditing, stopExisting, setStopExistingDraft, busyId, loadingId, notice, failure, setFailure, pendingNavigation, setPendingNavigation, definitionsById, performSelection, selectDefinition, saveDefinition, addDefinition, requestNewDefinition, load, stop, cancelLoad, remove, updateEditing, closeDetails, openSettings, rowFor, controlsDisabled, modelSettings } = useLoadedModelsController(props);
+  const { allDefinitions, t, locale, copy, cfg, definitions, selectedId, setSelectedId, detailsOpen, setDetailsOpen, editing, setEditing, stopExisting, setStopExistingDraft, busyId, loadingId, notice, failure, setFailure, pendingNavigation, setPendingNavigation, pendingDelete, setPendingDelete, definitionsById, performSelection, selectDefinition, saveDefinition, addDefinition, requestNewDefinition, load, stop, cancelLoad, remove, requestRemove, updateEditing, closeDetails, openSettings, rowFor, controlsDisabled, modelSettings } = useLoadedModelsController(props);
   const settingsButton = (definition: api.SessionDefinition) =>
     // Opening settings only reads; the apply itself is what has to wait for a
     // transition, and it says so, so a loading or stopping model stays inspectable.
@@ -120,7 +120,7 @@ export default function LoadedModels(props: LoadedModelsProps) {
                       <div className="flex flex-wrap items-center gap-2">
                         <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>
                         {state === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
-                        <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>
+                        <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => requestRemove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>
                       </div>
                     </div>}
                   </article>
@@ -152,6 +152,19 @@ export default function LoadedModels(props: LoadedModelsProps) {
           setDetailsOpen(false);
         }
       }} onCancel={() => setPendingNavigation(null)} />
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={copy.removeTitle}
+        description={copy.removeBody.replace('{name}', normalizeDisplayText(pendingDelete?.name ?? ''))}
+        confirmLabel={t("ui.sessionDelete")}
+        tone="danger"
+        onConfirm={() => {
+          const target = pendingDelete;
+          setPendingDelete(null);
+          if (target) void remove(target);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </section>
   );
 }

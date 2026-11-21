@@ -4,7 +4,7 @@ import { trackInitialRead } from "../ui/initialLayout.ts";
 import { toIpcError } from "./ipcError.ts";
 
 const layoutReads = new Set([
-  "get_config", "server_status", "session_list", "list_models", "device_profile",
+  "get_config", "server_status", "session_list", "list_models", "list_model_artifacts", "device_profile",
   "rt_list", "rt_latest", "rt_probe", "mcp_list_servers", "mcp_list_tools",
   "api_server_status", "anthropic_gateway_status", "hf_search_models", "hf_model_files", "read_document_binding",
 ]);

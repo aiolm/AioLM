@@ -47,8 +47,10 @@ export function previewExecution(cfg: AppConfig, path: string): Partial<AppConfi
 }
 
 export function forgetExecution(path: string) {
-  const value = read();
-  delete value.models[identity(path)];
-  for (const key of Object.keys(value.models)) if (key === profileTargetKey(path) || key.endsWith(`:${profileTargetKey(path)}`)) delete value.models[key];
-  window.localStorage.setItem(MODEL_EXECUTION_KEY, JSON.stringify(value));
+  try {
+    const value = read();
+    delete value.models[identity(path)];
+    for (const key of Object.keys(value.models)) if (key === profileTargetKey(path) || key.endsWith(`:${profileTargetKey(path)}`)) delete value.models[key];
+    window.localStorage.setItem(MODEL_EXECUTION_KEY, JSON.stringify(value));
+  } catch { /* Best-effort cache cleanup must not block model deletion when storage is corrupted or full. */ }
 }

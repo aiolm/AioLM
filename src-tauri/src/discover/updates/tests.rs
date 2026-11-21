@@ -1724,3 +1724,18 @@ async fn gguf_companions_already_updated_by_another_model_are_adopted_without_tr
     assert!(repeat.changed.is_empty());
     assert!(repeat.removed.is_empty());
 }
+
+#[test]
+fn load_installed_accepts_non_verbatim_paths_inside_canonical_library() {
+    let blobs = snapshot_blobs();
+    let fixture = Fixture::snapshot(&blobs);
+    let model_str = fixture.model.to_string_lossy().into_owned();
+    let non_verbatim = model_str.strip_prefix(r"\\?\").unwrap_or(&model_str);
+    let loaded = load_installed(
+        non_verbatim,
+        fixture.library.to_str().unwrap(),
+        Some(&fixture.receipts),
+    )
+    .expect("non-verbatim model path inside canonical library must load");
+    assert_eq!(loaded.repository, REPOSITORY);
+}

@@ -160,6 +160,7 @@ export function useModelSettingsDialogController({ open, initialConfig, targetLa
     if ((['active_runtime', 'active_backend', 'active_build'] as const).some(key => key in patch && patch[key] !== latest.current[key])) {
       setFlow({ step: 'runtime', runtime: null, profile: null });
     }
+    if (('active_model' in patch) && patch.active_model !== undefined) setPathDraft(normalizeDisplayPath(patch.active_model));
     setSettings(previous => {
       const current = executionConfig(currentConfig.current, previous);
       return executionSettings({ ...current, ...withManualOverrides(current, patch) });

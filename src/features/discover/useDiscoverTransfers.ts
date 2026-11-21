@@ -272,7 +272,7 @@ export function useDiscoverTransfers({ store, latestStore, catalog, includeCompa
       if (ownsTransferTask(cancelDownload)) {
         finishTransferTask(cancelDownload, cancelled ? 'cancelled' : 'failed', message);
         if (canUpdateTransferPanel(origin)) setInstalledRevision(revision => revision + 1);
-        if (!cancelled && ownsCurrentDownload(origin)) setError(message);
+        if (!cancelled && canUpdateTransferPanel(origin)) setError(message);
       }
     } finally {
       if (canUpdateTransferPanel(origin)) setDownloading(null);

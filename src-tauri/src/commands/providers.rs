@@ -306,18 +306,41 @@ pub fn inspect_catalog(
     inspect_catalog_view(root, cancel, selection, true)
 }
 
-fn catalog_indexes<'scan, 'bindings>(
+fn catalog_path_key(raw: &str) -> String {
+    #[cfg(windows)]
+    {
+        let stripped = if raw.len() >= 8 && raw[..8].eq_ignore_ascii_case(r"\\?\UNC\") {
+            format!(r"\\{}", &raw[8..])
+        } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+            rest.to_owned()
+        } else {
+            raw.to_owned()
+        };
+        stripped.replace('/', "\\").to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        raw.to_owned()
+    }
+}
+
+fn catalog_indexes<'scan>(
     scan: &'scan crate::models::ModelScan,
-    binding_paths: &'bindings [String],
+    binding_paths: &[String],
 ) -> (
-    HashMap<&'scan str, &'scan crate::models::GgufModel>,
-    HashSet<&'bindings str>,
+    HashMap<String, &'scan crate::models::GgufModel>,
+    HashSet<String>,
 ) {
     let mut scan_by_path = HashMap::with_capacity(scan.models.len());
     for model in &scan.models {
-        scan_by_path.entry(model.path.as_str()).or_insert(model);
+        scan_by_path
+            .entry(catalog_path_key(&model.path))
+            .or_insert(model);
     }
-    let binding_path_set = binding_paths.iter().map(String::as_str).collect();
+    let binding_path_set = binding_paths
+        .iter()
+        .map(|path| catalog_path_key(path))
+        .collect();
     (scan_by_path, binding_path_set)
 }
 
@@ -408,15 +431,15 @@ fn inspect_catalog_view(
     }
     let mut seen = artifacts
         .iter()
-        .map(|artifact| artifact.path.clone())
+        .map(|artifact| catalog_path_key(&artifact.path))
         .collect::<HashSet<_>>();
     artifacts.extend(
         selected_bindings
             .unwrap_or_else(providers::registry::registered_models)
             .into_iter()
-            .filter(|artifact| seen.insert(artifact.path.clone())),
+            .filter(|artifact| seen.insert(catalog_path_key(&artifact.path))),
     );
-    artifacts.sort_by_key(|artifact| !binding_path_set.contains(artifact.path.as_str()));
+    artifacts.sort_by_key(|artifact| !binding_path_set.contains(&catalog_path_key(&artifact.path)));
     // Discovery does not need each runtime's binary-integrity/availability
     // check, especially not once per model. Launch/probe still enforce it.
     let mut ids = ProviderId::ALL.to_vec();
@@ -444,7 +467,7 @@ fn inspect_catalog_view(
                 })
                 .collect();
             let shards = scan_by_path
-                .get(artifact.path.as_str())
+                .get(&catalog_path_key(&artifact.path))
                 .and_then(|model| model.shards.clone());
             CatalogModel {
                 artifact,

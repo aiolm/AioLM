@@ -53,7 +53,7 @@ export function useModelDownloadTask(): void {
       // cannot leave a stale row behind or open a second one.
       const current = getTaskSnapshot().find((task) => task.id === MODEL_DOWNLOAD_TASK_ID);
       if (current) {
-        updateTask(MODEL_DOWNLOAD_TASK_ID, { ...patch, state: current.state === 'cancelling' ? 'cancelling' : 'running' });
+        updateTask(MODEL_DOWNLOAD_TASK_ID, { ...patch, detail: undefined, state: current.state === 'cancelling' ? 'cancelling' : 'running' });
       } else {
         registerTask({
           id: MODEL_DOWNLOAD_TASK_ID,

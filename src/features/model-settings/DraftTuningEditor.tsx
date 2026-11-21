@@ -1,4 +1,4 @@
-import { useId, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { TuningIdScope } from '../tuning/TuningIdScope';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -40,6 +40,42 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
   const [chatNumbers, setChatNumbers] = useState<Record<string, string>>({});
   const [selectModes, setSelectModes] = useState<Record<string, 'select' | 'custom'>>({});
   const [customText, setCustomText] = useState<Partial<Record<ServerTextKey, boolean>>>({});
+  const prevCfgRef = useRef<AppConfig>(cfg);
+  const patchKeysRef = useRef<Set<string> | null>(null);
+  const emitChange: DraftPatch = (patch) => {
+    patchKeysRef.current ??= new Set();
+    for (const fieldKey of Object.keys(patch)) patchKeysRef.current.add(fieldKey);
+    patchKeysRef.current.add('runtime_defaults');
+    onChange(patch);
+  };
+  useEffect(() => {
+    const prev = prevCfgRef.current;
+    prevCfgRef.current = cfg;
+    const pendingKeys = patchKeysRef.current;
+    patchKeysRef.current = null;
+    if (prev === cfg) return;
+    const changedKeys = (Object.keys(cfg) as (keyof AppConfig)[]).filter(fieldKey => cfg[fieldKey] !== prev[fieldKey]);
+    const external = !pendingKeys || changedKeys.some(fieldKey => !pendingKeys.has(fieldKey as string));
+    if (external) clearDrafts();
+  }, [cfg]);
+  const pairValid = (current: 'batch_size' | 'ubatch_size', drafts: Partial<Record<NumericKey, string>>, cfgView: AppConfig) => {
+    const field = SERVER_FIELDS.find(item => item.key === current)!;
+    const candidate = (target: 'batch_size' | 'ubatch_size') => {
+      if (drafts[target] === undefined) return cfgView[target];
+      const item = SERVER_FIELDS.find(entry => entry.key === target)!;
+      const parsed = parseNumericInput(drafts[target], item.step);
+      return parsed !== null && parsed >= item.min && parsed <= item.max ? parsed : null;
+    };
+    const value = candidate(current);
+    const batch = candidate('batch_size') ?? cfgView.batch_size;
+    const min = current === 'batch_size'
+      ? (cfgView.runtime_defaults?.includes('ubatch_size') && drafts.ubatch_size === undefined ? 1 : Math.max(1, candidate('ubatch_size') ?? cfgView.ubatch_size))
+      : field.min;
+    const max = current === 'ubatch_size' ? Math.min(field.max, batch) : field.max;
+    const valid = value !== null && value >= min && value <= max;
+    onInvalid(current, !valid);
+    return valid ? value : null;
+  };
   const pairCandidate = (key: 'batch_size' | 'ubatch_size', drafts: Partial<Record<NumericKey, string>>) => {
     if (drafts[key] === undefined) return display[key];
     const field = SERVER_FIELDS.find(item => item.key === key)!;
@@ -70,28 +106,22 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
     const nextNumbers = { ...numbers, [key]: raw };
     setNumbers(nextNumbers);
     if (key === 'batch_size' || key === 'ubatch_size') {
-      const batch = pairCandidate('batch_size', nextNumbers) ?? display.batch_size;
       const patch: Partial<AppConfig> = {};
       const updatePair = (current: 'batch_size' | 'ubatch_size') => {
         if (nextNumbers[current] === undefined) return;
-        const field = SERVER_FIELDS.find(item => item.key === current)!;
-        const value = pairCandidate(current, nextNumbers);
-        const min = current === 'batch_size' ? pairMinimum(nextNumbers) : field.min;
-        const max = current === 'ubatch_size' ? Math.min(field.max, batch) : field.max;
-        const valid = value !== null && value >= min && value <= max;
-        onInvalid(current, !valid);
-        if (valid) patch[current] = value;
+        const value = pairValid(current, nextNumbers, display);
+        if (value !== null) patch[current] = value;
       };
       updatePair(key === 'batch_size' ? 'ubatch_size' : 'batch_size');
       updatePair(key);
-      if (Object.keys(patch).length) onChange(patch);
+      if (Object.keys(patch).length) emitChange(patch);
       return;
     }
     const field = [...SERVER_FIELDS, ...MTP_FIELDS, ...SAMPLING_FIELDS, ...REASONING_FIELDS].find(item => item.key === key)!;
     const value = parseNumericInput(raw, field.step);
     const valid = value !== null && ((field.allowZero && value === 0) || value >= field.min) && value <= ceilingOf(field) && !field.excludedValues?.includes(value);
     onInvalid(key, !valid);
-    if (valid) onChange({ [key]: value });
+    if (valid) emitChange({ [key]: value });
   };
   const chatNumeric = (key: string, raw: string) => {
     const field = ADVANCED_SAMPLING_FIELDS.find(item => item.key === key)!;
@@ -104,15 +134,17 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
     const next = typeof update === 'function' ? update(chatNumbers) : update;
     setChatNumbers(next);
     let options = { ...cfg.chat_options };
+    let changed = false;
     for (const [key, raw] of Object.entries(next)) {
       if (raw === chatNumbers[key]) continue;
       const value = chatNumeric(key, raw);
       if (value !== undefined) {
         options = removeChatOverride(options, key);
         options[key] = value;
+        changed = true;
       }
     }
-    onChange({ chat_options: options });
+    if (changed) emitChange({ chat_options: options });
   };
   const clearDrafts = (key?: string) => {
     if (!key) {
@@ -129,10 +161,22 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
   };
   const reset = (key: string) => {
     clearDrafts(key);
-    onChange(resetTuningField(cfg, key, tuningResetValues(runtime.options)));
+    const patch = resetTuningField(cfg, key, tuningResetValues(runtime.options));
+    emitChange(patch);
+    if (key === 'batch_size' || key === 'ubatch_size') {
+      const other = key === 'batch_size' ? 'ubatch_size' : 'batch_size';
+      const nextDrafts = { ...numbers };
+      delete nextDrafts[key];
+      const nextDisplay = tuningDisplayConfig({ ...cfg, ...patch }, runtime.options);
+      if (nextDrafts[other] !== undefined || !nextDisplay.runtime_defaults?.includes(other)) {
+        pairValid(other, nextDrafts, nextDisplay);
+      } else {
+        onInvalid(other, false);
+      }
+    }
   };
   const textValue = (key: ServerTextKey) => String(display[key] ?? '');
-  const text = (key: ServerTextKey, value: string) => onChange({ [key]: value });
+  const text = (key: ServerTextKey, value: string) => emitChange({ [key]: value });
   const commitText = (key: ServerTextKey, value: string) => { if (value !== textValue(key)) text(key, value); };
   const optionsFor = (key: 'spec_type' | 'spec_draft_ngl'): readonly string[] => key === 'spec_type' ? SPEC_TYPE_OPTIONS : SPEC_DRAFT_NGL_OPTIONS;
   const numericProps = { numericDrafts: numbers, onNumericChange: numeric, onNumericCommit: (field: { key: NumericKey }, value: string) => numeric(field.key, value) };
@@ -147,16 +191,16 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
   return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
     {section === 'sampling' ? <TuningSamplingSection t={t} cfg={display} disabled={disabled || benchmark} {...numericProps}
       chatOptionDrafts={chatNumbers} setChatOptionDrafts={setChatDrafts} chatOptionSelectModes={selectModes} setChatOptionSelectModes={setSelectModes}
-      onChatOptionCommit={(field, value) => { const parsed = chatNumeric(field.key, value); if (parsed !== undefined) onChange({ chat_options: { ...removeChatOverride(cfg.chat_options, field.key), [field.key]: parsed } }); }}
+      onChatOptionCommit={(field, value) => { const parsed = chatNumeric(field.key, value); if (parsed !== undefined) emitChange({ chat_options: { ...removeChatOverride(cfg.chat_options, field.key), [field.key]: parsed } }); }}
       samplerChain={Array.isArray(display.chat_options.samplers) ? display.chat_options.samplers.filter((value): value is string => typeof value === 'string') : []}
-      onSamplerChainChange={samplers => onChange({ chat_options: { ...cfg.chat_options, samplers } })} draftMode />
+      onSamplerChainChange={samplers => emitChange({ chat_options: { ...cfg.chat_options, samplers } })} draftMode />
       : section === 'reasoning' ? <TuningReasoningSection t={t} cfg={display} disabled={disabled} {...numericProps}
-        requestReadOnly={benchmark} updateServerText={text} updateReasoningEffort={reasoning_effort => onChange({ reasoning_effort })}
+        requestReadOnly={benchmark} updateServerText={text} updateReasoningEffort={reasoning_effort => emitChange({ reasoning_effort })}
         reasoningBudgetMessageValue={textValue('reasoning_budget_message')} onReasoningBudgetMessageChange={value => text('reasoning_budget_message', value)}
         onReasoningBudgetMessageCommit={value => commitText('reasoning_budget_message', value)} />
         : <TuningServerSection t={t} cfg={display} disabled={disabled} {...numericProps} fields={section === 'adapters' ? [] : fields}
           showFlashAttention={section !== 'adapters'} showCacheTypes={section !== 'adapters'} showProjector={false} showSpeculative={section === 'adapters'} showDraftBindings={false}
-          updateFlash={flash_attn => onChange({ flash_attn })} serverTextValue={textValue} onServerTextChange={text} commitServerText={commitText} projectorEditable
+          updateFlash={flash_attn => emitChange({ flash_attn })} serverTextValue={textValue} onServerTextChange={text} commitServerText={commitText} projectorEditable
           serverSelectValue={key => customText[key] || !optionsFor(key).includes(textValue(key)) ? 'custom' : textValue(key)}
           selectServerText={(key, value) => { setCustomText(previous => ({ ...previous, [key]: value === 'custom' })); if (value !== 'custom') text(key, value); }} />}
   </TuningDefaultsContext.Provider></TuningOptionsContext.Provider></TuningIdScope.Provider>;

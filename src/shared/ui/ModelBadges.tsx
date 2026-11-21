@@ -158,7 +158,7 @@ export default function ModelBadges({ model, metadata, artifact, localPath, tags
   }
   const people = modelPublishers(details, repository ?? artifact?.repository);
   if (!badges.length && !localPath && !people.length) return null;
-  const summary = <><ModelPublisher metadata={details} repository={repository} compact />
+  const summary = <><ModelPublisher metadata={details} repository={repository ?? artifact?.repository} compact />
     <CompactModelBadges badges={summaryModelBadges(badges, people)} total={badges.length + Math.max(0, people.length - 1)} /></>;
   if (mode === 'compact') return <span ref={visible.ref} className="model-information model-information--compact">{summary}</span>;
   return <div ref={node => { visible.ref.current = node; }} className="model-information model-information--detail">{summary}

@@ -103,4 +103,26 @@ describe('model metadata badges', () => {
     expect(screen.getByText('+2 more')).toBeVisible();
     expect(container.querySelector('.model-information')!.querySelector('button, summary, a')).toBeNull();
   });
+
+  it('renders the publisher badge for non-GGUF artifacts using artifact.repository', () => {
+    render(<I18nProvider initialLocale="en">
+      <ModelBadges
+        mode="compact"
+        model="hf-owner/qwen3-mlx"
+        artifact={{
+          path: 'models/hf/hf-owner--qwen3-mlx/snapshots/0123456789abcdef0123456789abcdef01234567',
+          format: 'mlx',
+          size_bytes: 1024,
+          repository: 'hf-owner/qwen3-mlx',
+          architectures: [],
+          tags: [],
+          modalities: { text: true, image: false, audio: false, video: false },
+          shards: [],
+          incomplete: false,
+          missing: [],
+        }}
+      />
+    </I18nProvider>);
+    expect(screen.getByText('hf-owner')).toBeVisible();
+  });
 });

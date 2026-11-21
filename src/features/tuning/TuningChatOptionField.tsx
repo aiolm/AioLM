@@ -1,5 +1,8 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { AppConfig } from "../../shared/api/types";
+import { parseNumericInput } from "../../shared/config/tuningValidation";
+import { executionText } from "../../shared/i18n/executionI18n";
+import { useI18n } from "../../shared/i18n/i18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { chatOptionValue, tuningFieldDescription, tuningFieldLabel, type ChatOptionField } from "./tuningFields";
@@ -24,6 +27,7 @@ export default function TuningChatOptionField({
   cfg, field, t, disabled, chatOptionDrafts, setChatOptionDrafts,
   chatOptionSelectModes, setChatOptionSelectModes, onCommit,
 }: Props) {
+  const { locale } = useI18n();
   const id = useTuningId();
   const current = chatOptionValue(cfg, field);
   const draft = chatOptionDrafts[field.key] ?? String(current);
@@ -33,6 +37,12 @@ export default function TuningChatOptionField({
   const selectValue = field.options
     ? (chatOptionSelectModes[field.key] === "custom" || !field.options.some((option) => String(option.value) === draft) ? "custom" : draft)
     : null;
+  const parsedCustom = selectValue === "custom" ? parseNumericInput(draft, field.step) : null;
+  const customInvalid = selectValue === "custom" && (
+    parsedCustom === null ||
+    (field.minExclusive ? parsedCustom <= field.min : parsedCustom < field.min) ||
+    parsedCustom > field.max
+  );
   return (
     <TuningDefaultField fieldKey={field.key} label={label} request>{(resetAction) => <div className="flex min-w-0 flex-col gap-1.5">
       {field.options && <div className="flex flex-wrap items-center justify-between gap-2">
@@ -57,7 +67,6 @@ export default function TuningChatOptionField({
             onChange={(value) => {
               if (value === "custom") {
                 setChatOptionSelectModes((modes) => ({ ...modes, [field.key]: "custom" }));
-                setChatOptionDrafts((drafts) => ({ ...drafts, [field.key]: draft }));
               } else {
                 setChatOptionSelectModes((modes) => {
                   const next = { ...modes };
@@ -75,7 +84,8 @@ export default function TuningChatOptionField({
             {selectValue === "custom" && (
               <input
                 aria-label={t("ui.customValueFor", { label })}
-                aria-describedby={`${inputId}-hint`}
+                aria-invalid={customInvalid || undefined}
+                aria-describedby={[`${inputId}-hint`, customInvalid ? `${inputId}-error` : undefined].filter(Boolean).join(" ") || undefined}
                 type="text"
                 inputMode="numeric"
                 value={draft}
@@ -90,6 +100,7 @@ export default function TuningChatOptionField({
               />
             )}
           </div>
+          {customInvalid && <span id={`${inputId}-error`} className="text-error" role="alert">{executionText[locale].invalidNumber}</span>}
         </>
       ) : (
         <TuningSliderField

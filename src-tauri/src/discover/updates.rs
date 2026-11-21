@@ -210,6 +210,65 @@ fn validate_files(files: &[TrackedFile]) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn normalize_windows_prefix_str(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let stripped = if raw.len() >= 8 && raw[..8].eq_ignore_ascii_case(r"\\?\UNC\") {
+        format!(r"\\{}", &raw[8..])
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        raw.into_owned()
+    };
+    stripped.replace('/', "\\")
+}
+
+/// Strip `library` from `supplied` without resolving symlinks/reparse points so
+/// `safe_destination` still inspects every intermediate component safely.
+fn strip_library_prefix(supplied: &Path, library: &Path) -> Option<PathBuf> {
+    if let Ok(relative) = supplied.strip_prefix(library) {
+        return Some(relative.to_path_buf());
+    }
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        let norm_supplied = normalize_windows_prefix_str(supplied);
+        let norm_library = normalize_windows_prefix_str(library);
+        let mut supplied_comps = Path::new(&norm_supplied).components();
+        for lib_comp in Path::new(&norm_library).components() {
+            let sup_comp = supplied_comps.next()?;
+            match (sup_comp, lib_comp) {
+                (Component::Prefix(a), Component::Prefix(b)) => {
+                    if !a
+                        .as_os_str()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+                    {
+                        return None;
+                    }
+                }
+                (Component::RootDir, Component::RootDir) => {}
+                (Component::Normal(a), Component::Normal(b)) => {
+                    if !a
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&b.to_string_lossy())
+                    {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        let mut relative = PathBuf::new();
+        for component in supplied_comps {
+            relative.push(component.as_os_str());
+        }
+        return Some(relative);
+    }
+    #[cfg(not(windows))]
+    None
+}
+
 fn load_installed(
     path: &str,
     models_dir: &str,
@@ -224,7 +283,7 @@ fn load_installed(
             "model update requires an absolute local path",
         ));
     }
-    let relative = supplied.strip_prefix(&library).map_err(|_| {
+    let relative = strip_library_prefix(supplied, &library).ok_or_else(|| {
         AppError::validation("only models inside the selected library can be updated")
     })?;
     let relative = relative
