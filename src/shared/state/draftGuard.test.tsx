@@ -55,4 +55,22 @@ describe('unsaved execution settings', () => {
     fireEvent.click(screen.getByText('Switch model')); fireEvent.click(within(screen.getByRole('dialog')).getByText('Cancel'));
     expect(run).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled(); expect(discard).not.toHaveBeenCalled();
   });
+
+  it('ignores rapid double-clicks while finishing and strips Error: prefix on failure', async () => {
+    let releaseSave!: (ok: boolean) => void;
+    const save = vi.fn(() => new Promise<boolean>(resolve => { releaseSave = resolve; }));
+    const discard = vi.fn();
+    const run = vi.fn(async () => { throw new Error('disk write blocked'); });
+    render(<I18nProvider initialLocale="en"><DraftGuardProvider><Draft save={save} discard={discard} /><Action run={run} /></DraftGuardProvider></I18nProvider>);
+    fireEvent.click(screen.getByText('Switch model'));
+    const saveBtn = within(screen.getByRole('dialog')).getByText('Save & continue');
+    fireEvent.click(saveBtn);
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Discard & continue'));
+    expect(save).toHaveBeenCalledOnce();
+    expect(discard).not.toHaveBeenCalled();
+    releaseSave(true);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('disk write blocked');
+    expect(run).toHaveBeenCalledOnce();
+  });
 });

@@ -268,4 +268,33 @@ describe("task cancellation ownership", () => {
     fireEvent.click(within(strip).getByRole("button", { name: "Review saved model settings" }));
     expect(recover).toHaveBeenCalledOnce();
   });
+
+  it("keeps the task running and allows dismissing cancel errors cleanly", async () => {
+    registerTask({
+      id: "reject-cancel",
+      kind: "other",
+      label: "Background job",
+      phase: "running",
+      interruptible: true,
+      cancel: () => Promise.reject(new Error("Cancel RPC failed")),
+    });
+    const { rerender } = render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    const strip = screen.getByTestId("task-strip");
+    fireEvent.click(within(strip).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Cancel RPC failed")).toBeVisible();
+    expect(getTaskSnapshot()[0]?.state).toBe("running");
+
+    fireEvent.click(within(strip).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("Cancel RPC failed")).not.toBeInTheDocument();
+
+    fireEvent.click(within(strip).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Cancel RPC failed")).toBeVisible();
+    act(() => finishTask("reject-cancel", "completed"));
+    act(() => dismissTask("reject-cancel"));
+    rerender(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+
+    registerTask({ id: "next-job", kind: "other", label: "Next job", phase: "running", interruptible: false });
+    rerender(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    expect(screen.queryByText("Cancel RPC failed")).not.toBeInTheDocument();
+  });
 });

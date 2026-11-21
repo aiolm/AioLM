@@ -181,12 +181,12 @@ export function useCustomSelectController<T extends string | number>({
     clearTimeout(buffer.timer ?? undefined);
     buffer.query = `${buffer.query}${char.toLowerCase()}`;
     buffer.timer = setTimeout(() => { buffer.query = ""; }, 700);
-    const matches = (opt: CustomSelectOption<T>) => opt.label.toLocaleLowerCase().startsWith(buffer.query);
-    const searchFrom = open ? highlightedIndex + 1 : selectedIndex + 1;
-    let match = findEnabledOption(searchFrom, 1, matches);
-    // A repeated single letter (e.g. "d", "d") should still find something even if
-    // it only matches the option already active, so retry from the start once.
-    if (match === -1 && buffer.query.length > 1) match = findEnabledOption(0, 1, matches);
+    const sameLetter = buffer.query.length > 1 && [...buffer.query].every(ch => ch === buffer.query[0]);
+    const needle = sameLetter ? buffer.query[0]! : buffer.query;
+    const matches = (opt: CustomSelectOption<T>) => opt.label.toLocaleLowerCase().startsWith(needle);
+    const current = open ? highlightedIndex : selectedIndex;
+    const searchFrom = sameLetter || buffer.query.length === 1 ? current + 1 : Math.max(0, current);
+    const match = findEnabledOption(searchFrom, 1, matches);
     const option = visibleOptions[match];
     if (!option) return;
     if (open) setHighlightedIndex(match);
@@ -219,7 +219,7 @@ export function useCustomSelectController<T extends string | number>({
       if (next !== -1) setHighlightedIndex(next);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      const prev = findEnabledOption(highlightedIndex - 1, -1, () => true);
+      const prev = findEnabledOption(highlightedIndex < 0 ? visibleOptions.length - 1 : highlightedIndex - 1, -1, () => true);
       if (prev !== -1) setHighlightedIndex(prev);
     } else if (!editable && e.key === "Home") {
       e.preventDefault();

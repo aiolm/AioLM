@@ -10,8 +10,10 @@ import TitleBar from "./TitleBar";
 // Bootstrap cannot load the normal catalogs or preferences before migration.
 const copy = {
   en: {
-    failed: "Your data could not be migrated",
-    preserved: "Your original data is preserved. Resolve the problem and retry.",
+    migrationFailed: "Your data could not be migrated",
+    migrationPreserved: "Your original data is preserved. Resolve the problem and retry.",
+    startupFailed: "AioLM could not start",
+    startupPreserved: "Resolve the problem and retry.",
     retry: "Retry",
   },
 };
@@ -20,15 +22,17 @@ export default function Bootstrap() {
   // No language has been loaded or selected before migration finishes.
   const text = copy.en;
   const [content, setContent] = useState<ReactNode>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ phase: "migration" | "startup"; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    let phase: "migration" | "startup" = "migration";
     const start = async () => {
       let paths: MigratedPath[] = [];
       if (isNativeRuntimeAvailable()) paths = await migrationPaths();
       await migrateBrowserStorage(paths);
+      phase = "startup";
 
       const [{ default: App }, { default: ErrorBoundary }, { I18nProvider, loadLocale }, { loadPreferences }, { applyTheme }] = await Promise.all([
         import("./App"),
@@ -36,7 +40,7 @@ export default function Bootstrap() {
         import("../shared/i18n/i18n"),
         import("../shared/config/preferences"),
         import("../shared/config/theme"),
-        document.fonts.load('14px "Pretendard Variable"'),
+        document.fonts.load('14px "Pretendard Variable"').catch(() => undefined),
       ]);
       const preferences = loadPreferences();
       await loadLocale(preferences.locale);
@@ -57,20 +61,20 @@ export default function Bootstrap() {
       }
     };
     void start().catch(cause => {
-      if (!cancelled) setError(errorMessage(cause));
+      if (!cancelled) setError({ phase, message: errorMessage(cause) });
     });
     return () => { cancelled = true; };
   }, [attempt]);
 
-  const failure = (
+  const failure = error && (
     <div className="app-runtime-empty">
       <div className="app-empty-state">
         <div className="app-eyebrow">AioLM · All-In-One LM</div>
-        <h1>{text.failed}</h1>
-        <p role="alert">{normalizeDisplayText(error)}</p>
-        <p>{text.preserved}</p>
+        <h1>{error.phase === "migration" ? text.migrationFailed : text.startupFailed}</h1>
+        <p role="alert">{normalizeDisplayText(error.message)}</p>
+        <p>{error.phase === "migration" ? text.migrationPreserved : text.startupPreserved}</p>
         <div className="app-empty-actions">
-          <button className="app-button app-button--primary" onClick={() => { setError(""); setAttempt(current => current + 1); }}>
+          <button className="app-button app-button--primary" onClick={() => { setError(null); setAttempt(current => current + 1); }}>
             {text.retry}
           </button>
         </div>

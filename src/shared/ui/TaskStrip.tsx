@@ -1,8 +1,9 @@
 import { normalizeDisplayText } from "../lib/displayPaths";
 import StableLabel from "./StableLabel";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { errorMessage } from "../api/errors";
 import { useI18n } from "../i18n/i18n";
-import { dismissTask, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
+import { dismissTask, getTaskSnapshot, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
 import { useLocalTaskCancellationIds } from "./TaskCancellation";
 import { formatBytes, formatDuration, formatSpeedBps } from "../lib/units";
 import { estimateRemainingSeconds } from "../lib/transfer";
@@ -39,6 +40,9 @@ export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boo
   const tasks = useTasks().filter(task => (task.kind === "model-launch") === launchesOnly);
   const localTaskIds = useLocalTaskCancellationIds();
   const [cancelError, setCancelError] = useState<string | null>(null);
+  useEffect(() => {
+    if (tasks.length === 0) setCancelError(null);
+  }, [tasks.length]);
   if (tasks.length === 0) return null;
   const active = tasks.filter((task) => task.state === "running" || task.state === "cancelling");
   const ordered = [...active, ...tasks.filter((task) => !active.includes(task))];
@@ -50,8 +54,10 @@ export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boo
     try {
       await task.cancel();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      updateTask(task.id, { state: "failed", detail: message });
+      const message = errorMessage(error);
+      if (getTaskSnapshot().find((item) => item.id === task.id)?.state === "cancelling") {
+        updateTask(task.id, { state: "running" });
+      }
       setCancelError(message);
     }
   };
@@ -94,7 +100,7 @@ export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boo
           );
         })}
       </div>
-      {cancelError && <FeedbackBanner tone="error">{cancelError}</FeedbackBanner>}
+      {cancelError && <FeedbackBanner tone="error" onDismiss={() => setCancelError(null)}>{cancelError}</FeedbackBanner>}
     </aside>
   );
 }

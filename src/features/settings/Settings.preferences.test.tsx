@@ -56,6 +56,7 @@ describe("typography preferences", () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
     resetCategory('all');
     expect(reset).toHaveBeenCalledOnce(); expect(update).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('Saved');
   });
   it("patches the app and code fonts and previews them immediately", () => {
     const update = mount({ ...defaultPreferences(), appearance: { ...defaultPreferences().appearance, fontFamily: "serif", codeFontFamily: "system" } });

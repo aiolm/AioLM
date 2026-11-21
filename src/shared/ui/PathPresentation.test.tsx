@@ -24,4 +24,34 @@ describe('shared path presentation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(action).toHaveBeenCalledWith(raw);
   });
+
+  it('keeps hovered tooltip open on click and stops Escape from closing a host dialog', () => {
+    const onCancel = vi.fn();
+    document.documentElement.style.setProperty('--app-window-chrome-height', '32px');
+    try {
+      render(
+        <I18nProvider initialLocale="en">
+          <ConfirmDialog
+            open
+            title="Host dialog"
+            description={<Tooltip label="Option help" content="Detailed help text" />}
+            onConfirm={vi.fn()}
+            onCancel={onCancel}
+          />
+        </I18nProvider>,
+      );
+      const trigger = screen.getByRole('button', { name: 'Option help' });
+      const wrapper = trigger.closest('[data-tooltip]')!;
+      fireEvent.mouseEnter(wrapper);
+      expect(screen.getByRole('tooltip')).toHaveClass('is-open');
+      fireEvent.click(trigger);
+      expect(screen.getByRole('tooltip')).toHaveClass('is-open');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(screen.queryByRole('tooltip', { hidden: false })).not.toHaveClass('is-open');
+    } finally {
+      document.documentElement.style.removeProperty('--app-window-chrome-height');
+    }
+  });
 });

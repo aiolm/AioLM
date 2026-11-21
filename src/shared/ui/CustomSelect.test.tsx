@@ -684,6 +684,30 @@ describe("CustomSelect", () => {
     expect(onChange).toHaveBeenCalledWith("dark");
   });
 
+  it("wraps ArrowUp to the last enabled option when nothing is highlighted", () => {
+    const { trigger } = renderSelect({ value: "missing" });
+    fireEvent.click(trigger);
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    expect(trigger).toHaveAttribute("aria-activedescendant", expect.stringContaining("-option-2"));
+  });
+
+  it("cycles through same-letter options on repeated single-letter typeahead", () => {
+    const onChange = vi.fn();
+    render(
+      <CustomSelect
+        value="dark"
+        options={[{ value: "dark", label: "Dark" }, { value: "default", label: "Default" }, { value: "light", label: "Light" }]}
+        onChange={onChange}
+        ariaLabel="Theme"
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Theme" });
+    fireEvent.keyDown(trigger, { key: "d" });
+    expect(onChange).toHaveBeenLastCalledWith("default");
+    fireEvent.keyDown(trigger, { key: "d" });
+    expect(onChange).toHaveBeenLastCalledWith("dark");
+  });
+
   it("has no axe-core accessibility violations, closed or open", async () => {
     const { trigger } = renderSelect();
     const closedResults = await axe.run(trigger.closest("div") ?? trigger);

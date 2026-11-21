@@ -132,4 +132,26 @@ describe("application update surfaces", () => {
     expect(screen.getByRole("button", { name: "업데이트 확인" })).toBeDisabled();
     expect(check).not.toHaveBeenCalled();
   });
+
+  it("ignores hidden confirmation/error text during Settings search and keeps Open release page enabled while downloading", async () => {
+    const { updater, install } = fixture(release);
+    const openRelease = vi.fn().mockRejectedValueOnce(new Error("browser launch failed")).mockResolvedValueOnce(undefined);
+    const { rerender } = render(<I18nProvider initialLocale="en"><AppUpdateSettings query="chat" updater={updater} openRelease={openRelease} /></I18nProvider>);
+    expect(screen.queryByText("Application updates")).not.toBeInTheDocument();
+
+    install.mockImplementationOnce(() => new Promise(() => undefined));
+    rerender(<I18nProvider initialLocale="en"><AppUpdateSettings query="" updater={updater} openRelease={openRelease} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Download and install" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Download and install" }));
+    await waitFor(() => expect(install).toHaveBeenCalledOnce());
+
+    const releaseBtn = screen.getByRole("button", { name: "Open release page" });
+    expect(releaseBtn).toBeEnabled();
+    fireEvent.click(releaseBtn);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("browser launch failed");
+    fireEvent.click(releaseBtn);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
 });

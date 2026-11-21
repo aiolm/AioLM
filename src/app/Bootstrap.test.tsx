@@ -141,4 +141,16 @@ describe("Bootstrap migration boundary", () => {
     expect(screen.getByTestId("title-bar")).toBeInTheDocument();
     expect(titleBarMounted).toHaveBeenCalledTimes(1);
   });
+
+  it("boots with fallback fonts when document.fonts.load rejects and labels post-migration errors accurately", async () => {
+    loadFont.mockRejectedValueOnce(new Error("Font asset missing"));
+    await renderBootstrap();
+    expect(await screen.findByRole("main")).toHaveTextContent("Application ready");
+
+    vi.resetModules();
+    loadPreferences.mockImplementationOnce(() => { throw new Error("Corrupt preferences cache"); });
+    await renderBootstrap();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Corrupt preferences cache");
+    expect(screen.getByRole("heading", { name: "AioLM could not start" })).toBeInTheDocument();
+  });
 });

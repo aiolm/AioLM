@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { pickModelsDir } from '../../shared/api';
+import { errorMessage } from '../../shared/api/errors';
 import type { AppPreferences } from '../../shared/config/preferences';
 import { applyTheme, subscribeToSystemTheme, type ThemeMode } from '../../shared/config/theme';
 import { localeOptions, useI18n, type Locale } from '../../shared/i18n/i18n';
@@ -64,7 +65,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
       const selected = await pickModelsDir();
       if (selected) setFolder(selected);
     } catch (cause) {
-      setError({ kind: 'folderError', detail: normalizeDisplayText(String(cause)) });
+      setError({ kind: 'folderError', detail: normalizeDisplayText(errorMessage(cause)) });
     } finally {
       inFlight.current = false;
       setChoosing(false);
@@ -83,7 +84,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
     try {
       await onComplete({ locale, theme, modelsDir: folder.trim() });
     } catch (cause) {
-      setError({ kind: 'saveError', detail: normalizeDisplayText(String(cause)) });
+      setError({ kind: 'saveError', detail: normalizeDisplayText(errorMessage(cause)) });
     } finally {
       inFlight.current = false;
       setSaving(false);

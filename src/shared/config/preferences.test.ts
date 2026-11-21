@@ -23,6 +23,12 @@ describe("preferences persistence", () => {
     expect(storedLocale()).toBe('en');
   });
 
+  it('prefers saved aiolm-preferences locale over stale legacy aiolm-locale', () => {
+    localStorage.setItem('aiolm-locale', 'ja');
+    savePreferences({ ...defaultPreferences(), locale: 'ko' });
+    expect(storedLocale()).toBe('ko');
+  });
+
   it('reports unavailable storage when completing initial setup', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
     expect(() => savePreferences(defaultPreferences(), { required: true })).toThrow('storage unavailable');

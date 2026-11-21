@@ -26,7 +26,11 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
   const resolvedLabel = label ?? t("common.help");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLSpanElement>(null);
-  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const open = (hovered && !dismissed) || focused || pinned;
   const [position, setPosition] = useState<CSSProperties>({ left: 16, top: 16 });
 
   const updatePosition = useCallback(() => {
@@ -35,27 +39,37 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(260, window.innerWidth - 32);
     const measuredHeight = popoverRef.current?.getBoundingClientRect().height ?? 80;
+    const chromeInset = typeof window !== "undefined"
+      ? (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-window-chrome-height")) || 0)
+      : 0;
+    const minTop = 16 + chromeInset;
     const left = Math.max(16, Math.min(rect.left, window.innerWidth - width - 16));
     const below = rect.bottom + 7;
     const top = below + measuredHeight <= window.innerHeight - 16
-      ? below
-      : Math.max(16, rect.top - measuredHeight - 7);
+      ? Math.max(minTop, below)
+      : Math.max(minTop, rect.top - measuredHeight - 7);
     setPosition({ left, top, width });
   }, []);
 
   useEffect(() => {
     if (!open) return;
-    const dismiss = () => setOpen(false);
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
+    const dismiss = () => { setPinned(false); setFocused(false); setDismissed(true); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        dismiss();
+      }
+    };
     window.addEventListener("aiolm:navigate", dismiss);
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
     updatePosition();
     const frame = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, { capture: true, passive: true });
     return () => {
       window.removeEventListener("aiolm:navigate", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
@@ -71,7 +85,12 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
   ) : null;
 
   return (
-    <span className="app-tooltip" data-tooltip onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <span
+      className="app-tooltip"
+      data-tooltip
+      onMouseEnter={() => { setHovered(true); setDismissed(false); }}
+      onMouseLeave={() => { setHovered(false); setDismissed(false); }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -79,10 +98,22 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
         aria-label={normalizeDisplayText(resolvedLabel)}
         aria-describedby={tooltipId}
         aria-expanded={open}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
-        onClick={() => setOpen((value) => !value)}
-        onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); } }}
+        onFocus={() => { setFocused(true); setDismissed(false); }}
+        onBlur={() => { setFocused(false); setPinned(false); }}
+        onClick={() => {
+          if (pinned) { setPinned(false); setDismissed(true); }
+          else if (open) { setPinned(true); }
+          else { setPinned(true); setDismissed(false); }
+        }}
+        onKeyDown={event => {
+          if (event.key === "Escape" && open) {
+            event.preventDefault();
+            event.stopPropagation();
+            setPinned(false);
+            setFocused(false);
+            setDismissed(true);
+          }
+        }}
       >
         <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="9" />

@@ -44,9 +44,12 @@ export function useCustomSelectPosition({
 
     const rect = trigger.getBoundingClientRect();
     const edge = MENU_EDGE;
+    const chromeInset = typeof window !== "undefined"
+      ? (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-window-chrome-height")) || 0)
+      : 0;
     const gap = 4;
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - edge - gap);
-    const spaceAbove = Math.max(0, rect.top - edge - gap);
+    const spaceAbove = Math.max(0, rect.top - (edge + chromeInset) - gap);
     const opensAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
     const availableSpace = opensAbove ? spaceAbove : spaceBelow;
     const maxHeight = Math.max(64, Math.min(240, availableSpace || 64));

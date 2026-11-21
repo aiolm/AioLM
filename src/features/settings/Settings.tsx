@@ -236,8 +236,10 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     showSaved("saved");
   };
   const restorePreferences = () => {
-    if (resetScope === 'all') reset();
-    else {
+    if (resetScope === 'all') {
+      reset();
+      showSaved("saved");
+    } else {
       const defaults = defaultPreferences();
       patch(resetScope === 'appearance' ? { appearance: defaults.appearance, theme: defaults.theme } : { [resetScope]: defaults[resetScope] });
     }
@@ -251,8 +253,10 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = "aiolm-settings.json";
+    document.body.append(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   };
   const importFile = async (file: File | undefined) => {
     if (!file) return;
@@ -261,6 +265,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
       update(next);
       setLocale(next.locale);
       setIoError(null);
+      showSaved("saved");
     } catch (error) {
       setIoError(error instanceof Error ? error.message : String(error));
     }
@@ -330,7 +335,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div className="settings-control-stack">
-              <Switch id="settings-close-to-tray" {...settingAria("settings-close-to-tray")} checked={store.cfg.close_to_tray !== false} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
+              <Switch id="settings-close-to-tray" {...settingAria("settings-close-to-tray")} checked={store.cfg.close_to_tray !== false} disabled={traySaving} onChange={(value) => { void saveCloseToTray(value); }} />
               {trayError && <FeedbackBanner tone="error">{normalizeDisplayText(trayError)}</FeedbackBanner>}
             </div>
           </Row>}

@@ -85,4 +85,21 @@ describe("desktop settings", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent(String.raw`\\?\UNC`);
     expect(update).not.toHaveBeenCalled();
   });
+
+  it("keeps Close to system tray enabled while store.busy is true and shows Saved on valid settings import", async () => {
+    const store = createTestStore();
+    store.busy = true;
+    const update = vi.fn();
+    const { container } = render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={update} reset={vi.fn()} store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Server" }));
+    expect(screen.getByRole("switch", { name: "Close to system tray" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
+    const payload = JSON.stringify({ schemaVersion: 1, preferences: defaultPreferences() });
+    const file = new File([payload], "settings.json", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => payload });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(screen.getByRole("status")).toHaveTextContent("Saved");
+  });
 });

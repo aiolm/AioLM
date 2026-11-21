@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { version } from "../../../package.json";
+import { errorMessage } from "../../shared/api/errors";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { formatBytes } from "../../shared/lib/units";
@@ -38,16 +39,16 @@ export default function AppUpdateSettings({ query = "", updater = appUpdater, op
     : info?.available ? copy.available
     : info ? info.latest_version ? copy.upToDate : copy.noRelease
     : copy.idle;
-  if (query && !Object.values(copy).join(" ").toLocaleLowerCase().includes(query)) return null;
+  if (query && ![copy.title, copy.description, copy.check, copy.install, copy.releasePage, copy.current, copy.latest, info?.notes ?? ""].join(" ").toLocaleLowerCase().includes(query)) return null;
 
   return <div className="settings-row app-update" id="settings-app-update" data-setting="" role="group" aria-labelledby="settings-app-update-title">
     <div className="settings-copy"><h3 id="settings-app-update-title">{copy.title}</h3><p>{copy.description}</p></div>
     <div className="settings-control settings-actions">
       <button id="settings-check-update" type="button" className="app-button app-button--secondary" disabled={!native || busy} data-icon="refresh" onClick={() => void updater.check()}>{state.phase === "checking" ? copy.checking : copy.check}</button>
       {info?.available && <button type="button" className="app-button app-button--primary" data-icon="download" disabled={!native || busy || !info.can_install} onClick={() => setConfirm(true)}>{copy.install}</button>}
-      {info?.available && <button type="button" className="app-button app-button--secondary" data-icon="open" disabled={!native || busy} onClick={() => {
+      {info?.available && <button type="button" className="app-button app-button--secondary" data-icon="open" disabled={!native} onClick={() => {
         setReleaseError(null);
-        void openRelease().catch((error: unknown) => setReleaseError(error instanceof Error ? error.message : String(error)));
+        void openRelease().catch((error: unknown) => setReleaseError(errorMessage(error)));
       }}>{copy.releasePage}</button>}
     </div>
     <div className="app-update-content">

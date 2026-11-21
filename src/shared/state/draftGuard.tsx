@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { useI18n } from '../i18n/i18n';
+import { errorMessage } from '../api/errors';
 import { executionText } from '../i18n/executionI18n';
 import { normalizeDisplayText } from '../lib/displayPaths';
 
@@ -29,6 +30,7 @@ export function DraftGuardProvider({ children }: { children: ReactNode }) {
   const copy = executionText[locale];
   const editors = useRef(new Set<() => EditorDraft>());
   const locked = useRef(false);
+  const finishingRef = useRef(false);
   const [pending, setPending] = useState<{ action: () => Promise<void>; resolve: (value: boolean) => void; reject: (error: unknown) => void } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -44,7 +46,8 @@ export function DraftGuardProvider({ children }: { children: ReactNode }) {
     },
   }));
   const finish = async (save: boolean) => {
-    if (!pending || busy) return;
+    if (!pending || finishingRef.current) return;
+    finishingRef.current = true;
     setBusy(true); setError('');
     try {
       for (const get of [...editors.current].sort((a, b) => (a().priority ?? 0) - (b().priority ?? 0))) {
@@ -55,8 +58,8 @@ export function DraftGuardProvider({ children }: { children: ReactNode }) {
       }
       await pending.action();
       pending.resolve(true); setPending(null); locked.current = false;
-    } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
+    } catch (cause) { setError(errorMessage(cause)); }
+    finally { finishingRef.current = false; setBusy(false); }
   };
   return <DraftContext.Provider value={guard}>
     {children}
