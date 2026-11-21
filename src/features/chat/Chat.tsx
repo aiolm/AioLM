@@ -49,7 +49,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     },
     scroll: { scrollRef, onDraftRendered, onScrollAtBottomChange },
     retry: { retryTools, restoreRetryTools },
-    visiblePhase, visibleError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
+    visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
     chatUnavailable, canSend, disabled, loadingModel, closeThreadPanel, copyMessage, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
   } = useChatPanelController({ store, preferences, onOpenModels, active });
@@ -64,6 +64,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
       <div className="chat-layout">
         <ChatThreadSidebar
           open={threadPanelOpen}
+          active={active}
           onClose={closeThreadPanel}
           activeThreadId={workspace.activeThreadId}
           threadCount={workspace.threads.length}
@@ -170,6 +171,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
 
           <PanelFeedback>
             {saveFailed && <FeedbackBanner tone="error" action={{ label: chatPersistenceCopy[locale].retry, onClick: retrySave }}>{chatPersistenceCopy[locale].failed}</FeedbackBanner>}
+            {uiError && <FeedbackBanner tone="error" onDismiss={() => setUiError(null)}>{uiError}</FeedbackBanner>}
             {mcpError && <FeedbackBanner tone="error">{mcpError}</FeedbackBanner>}
             {viewingLiveThread && projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
             {viewingLiveThread && projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}

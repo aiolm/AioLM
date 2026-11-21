@@ -283,4 +283,25 @@ describe('composer attachment ownership', () => {
     await act(async () => { read.reject(new IpcError('internal', 'File unavailable')); await adding; });
     expect(setError).not.toHaveBeenCalled();
   });
+
+  it('deduplicates media attachments with identical ref or fallback dataUrl', async () => {
+    vi.mocked(api.pickAttachment)
+      .mockResolvedValueOnce('/synthetic/a.png')
+      .mockResolvedValueOnce('/synthetic/a-copy.png')
+      .mockResolvedValueOnce('/synthetic/b.png')
+      .mockResolvedValueOnce('/synthetic/b-copy.png');
+    vi.mocked(api.importMedia)
+      .mockResolvedValueOnce({ name: 'a.png', ref: 'shared-ref', dataUrl: 'data:image/png;base64,AAA1', kind: 'image' })
+      .mockResolvedValueOnce({ name: 'a-copy.png', ref: 'shared-ref', dataUrl: 'data:image/png;base64,AAA2', kind: 'image' })
+      .mockResolvedValueOnce({ name: 'b.png', ref: undefined, dataUrl: 'data:image/png;base64,BBB', kind: 'image' })
+      .mockResolvedValueOnce({ name: 'b-copy.png', ref: undefined, dataUrl: 'data:image/png;base64,BBB', kind: 'image' });
+    const { result, setError } = setup();
+    await act(async () => { await result.current.addAttachment(); });
+    await act(async () => { await result.current.addAttachment(); });
+    await act(async () => { await result.current.addAttachment(); });
+    await act(async () => { await result.current.addAttachment(); });
+    expect(result.current.attachments).toHaveLength(2);
+    expect(result.current.attachments.map(item => item.name)).toEqual(['a.png', 'b.png']);
+    expect(setError).not.toHaveBeenCalled();
+  });
 });

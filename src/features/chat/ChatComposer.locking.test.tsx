@@ -96,6 +96,18 @@ describe('composer turn locks', () => {
     expect(screen.getByRole('button', { name: 'send' })).toBeEnabled();
   });
 
+  it('disables pending media and document removal buttons while preparing or awaiting approval', () => {
+    const options = props();
+    options.attachments = [{ name: 'photo.png', dataUrl: 'data:image/png;base64,AA==' }];
+    options.documents = [{ name: 'notes.md', path: 'notes.md', text: 'Notes' }];
+    const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="preparing" /></I18nProvider>);
+    expect(screen.getByRole('button', { name: 'removeAttachment: photo.png' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'removeAttachment: notes.md' })).toBeDisabled();
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="idle" /></I18nProvider>);
+    expect(screen.getByRole('button', { name: 'removeAttachment: photo.png' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'removeAttachment: notes.md' })).toBeEnabled();
+  });
+
   it('keeps input editable but prevents sending while an attachment is still reading', () => {
     const options = props();
     render(<I18nProvider initialLocale="en"><ChatComposer {...options} attachmentStatus="reading" /></I18nProvider>);

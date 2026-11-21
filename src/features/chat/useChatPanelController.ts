@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { errorMessage } from '../../shared/api/errors';
 import type { AppStore } from '../../shared/state/store';
 import type { AppPreferences } from '../../shared/config/preferences';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -41,6 +42,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const [phase, setPhase] = useState<ChatPhase>('idle');
   const [input, setInput] = useState('');
   const [composerRevision, setComposerRevision] = useState(0);
+  const [uiError, setUiError] = useState<string | null>(null);
   const [copiedMessage, showCopied] = useFlashMessage(1800);
   const copied = copiedMessage === null ? null : Number(copiedMessage);
   const session = useChatSession({ store, active, modelSettings, t, locale });
@@ -50,6 +52,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   } = session;
   const composerDropRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  const viewingLiveThreadRef = useRef(true);
 
   const attachmentState = useChatAttachments({ visionReady, modalities, locale,
     audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: session.videoFrames && visionReady,
@@ -61,11 +64,14 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
 
   const requireIdle = () => {
     if (phase === 'idle' && !pendingToolCall) return true;
-    setError(ct('stopCurrentResponseFirst'));
+    const message = ct('stopCurrentResponseFirst');
+    if (viewingLiveThreadRef.current) setError(message);
+    else setUiError(message);
     return false;
   };
 
   const resetComposer = () => {
+    setUiError(null);
     setInput('');
     clearComposerAttachments();
     skills.clearSelectedSkills();
@@ -78,6 +84,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages,
     viewingLiveThread, clearingWorkspace, setThreadPanelOpen, updateActiveThread,
   } = threads;
+  viewingLiveThreadRef.current = viewingLiveThread;
   const turn = useChatSend({
     store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
     embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
@@ -132,13 +139,14 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
         await navigator.clipboard.writeText(text);
         showCopied(String(index));
       } catch (caught) {
-        setError(`${t('chat.requestFailed')}: ${caught instanceof Error ? caught.message : String(caught)}`);
+        setUiError(`${t('chat.requestFailed')}: ${errorMessage(caught)}`);
       }
     })();
-  }, [t, setError, showCopied]);
+  }, [t, showCopied]);
 
   const sendMessage = () => {
     if (!canSend) return;
+    setUiError(null);
     // Resolve the full automatic title with the user's action, before retrieval
     // or generation can finish and resize the conversation heading later.
     if (activeThread?.title === 'New conversation' && input.trim()) {
@@ -173,7 +181,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   return {
     t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef,
     session, sessionLoad, attachmentState, mcp, skills, threads, turn, project, scroll, retry,
-    visiblePhase, visibleError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
+    visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
     chatUnavailable, canSend, disabled, loadingModel, closeThreadPanel, copyMessage, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
   };

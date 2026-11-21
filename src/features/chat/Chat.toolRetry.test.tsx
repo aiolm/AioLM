@@ -280,3 +280,58 @@ it("keeps a restored tool selection when the conversation's project defaults sel
   expect(defined(streamMock.mock.calls[0])[4].tools).toEqual([definition]);
   expect(screen.getByRole('checkbox', { name: 'Synthetic tools · slow_lookup' })).toBeChecked();
 });
+
+it('shows clipboard copy failures in the visible alert banner and warns when deleting a busy background thread', async () => {
+  const other: ChatThread = {
+    ...createChatThread(2, 'other-thread'),
+    title: 'Other conversation',
+    messages: [{ role: 'user', content: 'Question' }, { role: 'assistant', content: 'Copyable reply' }],
+  };
+  const live: ChatThread = {
+    ...createChatThread(1, 'live-thread'),
+    title: 'Live streaming thread',
+    messages: [],
+  };
+  streamMock.mockImplementationOnce(() => new Promise(() => undefined));
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: vi.fn().mockRejectedValueOnce(new Error('Clipboard unavailable')) },
+  });
+  saveChatWorkspace({ activeThreadId: live.id, threads: [live, other] });
+  const store = createTestStore({ active_model: '/synthetic/chat-model' });
+  store.status = { state: 'running', model: 'synthetic-chat', url: 'http://127.0.0.1:1/v1', api_key: 'synthetic-key' };
+  render(<I18nProvider initialLocale="en"><ChatPanel store={store} /></I18nProvider>);
+  await screen.findByRole('heading', { name: 'Live streaming thread' });
+
+  const composer = screen.getByRole('textbox', { name: /message/i });
+  fireEvent.change(composer, { target: { value: 'Start background response' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Other conversation' }));
+  await screen.findByRole('heading', { name: 'Other conversation' });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/Clipboard unavailable/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+  fireEvent.click(screen.getByRole('button', { name: `Delete conversation: ${live.title}` }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(chatText.en.stopCurrentResponseFirst);
+});
+
+it('ignores Escape in the thread sidebar while an open dialog is active', async () => {
+  const { thread } = await renderSaved();
+  fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+  expect(screen.getByRole('button', { name: `Delete conversation: ${thread.title}` })).toBeVisible();
+  const dialog = document.createElement('dialog');
+  dialog.setAttribute('open', '');
+  document.body.appendChild(dialog);
+  try {
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: `Delete conversation: ${thread.title}` })).toBeVisible();
+  } finally {
+    dialog.remove();
+  }
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.queryByRole('button', { name: `Delete conversation: ${thread.title}` })).not.toBeInTheDocument();
+});

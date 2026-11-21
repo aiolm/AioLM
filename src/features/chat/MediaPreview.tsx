@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { errorMessage } from '../../shared/api/errors';
 import { resolveMedia } from '../../shared/api/commands';
 import type { ProviderId } from '../../shared/api/providers';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
@@ -9,22 +10,30 @@ import { mediaPreparationCopy } from './mediaPreparationCopy';
 export default function MediaPreview({ attachment, small = false, provider = 'vllm', locale = 'en' }: { attachment: ImageAttachment; small?: boolean; provider?: ProviderId; locale?: Locale }) {
   const copy = mediaPreparationCopy[locale];
   const [url, setUrl] = useState(attachment.dataUrl); const [error, setError] = useState('');
+  const mounted = useRef(true);
   const kind = attachment.kind ?? 'image';
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   useEffect(() => {
     let active = true;
     if (!attachment.ref || attachment.dataUrl || kind !== 'image') return;
-    void resolveMedia(attachment.ref, provider).then(part => { if (active && part.type === 'image_url') setUrl(part.image_url.url); }).catch(cause => { if (active) setError(String(cause)); });
+    void resolveMedia(attachment.ref, provider).then(part => { if (active && part.type === 'image_url') setUrl(part.image_url.url); }).catch(cause => { if (active) setError(errorMessage(cause)); });
     return () => { active = false; };
   }, [attachment.ref, attachment.dataUrl, kind, provider]);
   const read = async () => {
     if (!attachment.ref) return;
+    setError('');
     try {
       // Preview needs a data URL even when MLX inference receives an owned
       // local video path. This resolves media only; it starts no engine.
       const part = await resolveMedia(attachment.ref, 'vllm');
+      if (!mounted.current) return;
+      if (part.type === 'image_url') setUrl(part.image_url.url);
       if (part.type === 'video_url') setUrl(part.video_url.url);
       if (part.type === 'input_audio') setUrl(part.input_audio.data.startsWith('data:') ? part.input_audio.data : `data:${attachment.mime ?? 'audio/wav'};base64,${part.input_audio.data}`);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { if (mounted.current) setError(errorMessage(cause)); }
   };
   const preparation = attachment.preparation;
   const pendingLabel = `${kind} · ${normalizeDisplayText(attachment.name)}`;

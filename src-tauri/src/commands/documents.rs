@@ -62,22 +62,35 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn select_picked_image(state: &AppState, path: PathBuf) -> Result<String, AppError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| AppError::io("cannot select image", &error))?;
+    if image_mime_type(&canonical).is_none() {
+        return Err(AppError::validation(
+            "unsupported image type; choose PNG, JPEG, or WebP",
+        ));
+    }
+    let mut selected = state
+        .selected_image
+        .lock()
+        .map_err(|_| AppError::internal("image selection state was poisoned"))?;
+    *selected = Some(canonical.clone());
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
-pub(crate) fn pick_image(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
-    Ok((|| {
-        if let Ok(mut selected) = state.selected_image.lock() {
-            *selected = None;
-        }
-        let path = rfd::FileDialog::new()
+pub(crate) async fn pick_image(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
             .set_title("Choose an image for vision chat")
             .add_filter("Images", IMAGE_EXTENSIONS)
-            .pick_file()?;
-        let canonical = path.canonicalize().ok()?;
-        image_mime_type(&canonical)?;
-        let mut selected = state.selected_image.lock().ok()?;
-        *selected = Some(canonical.clone());
-        Some(canonical.to_string_lossy().into_owned())
-    })())
+            .pick_file()
+    })
+    .await
+    .map_err(|error| format!("image picker task failed: {error}"))?;
+    path.map(|chosen| select_picked_image(&state, chosen))
+        .transpose()
 }
 
 fn document_extension(path: &Path) -> bool {
@@ -363,25 +376,38 @@ fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, AppError
     }
 }
 
+fn select_picked_document(state: &AppState, path: PathBuf) -> Result<String, AppError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| AppError::io("cannot select document", &error))?;
+    if !document_extension(&canonical) {
+        return Err(AppError::validation(
+            "unsupported document type; choose a text, DOCX, or PDF document",
+        ));
+    }
+    grants::document_grants()?.grant(&canonical)?;
+    let mut selected = state
+        .selected_document
+        .lock()
+        .map_err(|_| AppError::internal("document selection state was poisoned"))?;
+    *selected = Some(canonical.clone());
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
-pub(crate) fn pick_document(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
-    Ok((|| {
-        if let Ok(mut selected) = state.selected_document.lock() {
-            *selected = None;
-        }
-        let path = rfd::FileDialog::new()
+pub(crate) async fn pick_document(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
             .set_title("Choose a document for offline chat")
             .add_filter("Documents", DOCUMENT_EXTENSIONS)
-            .pick_file()?;
-        let canonical = path.canonicalize().ok()?;
-        if !document_extension(&canonical) {
-            return None;
-        }
-        grants::document_grants().ok()?.grant(&canonical).ok()?;
-        let mut selected = state.selected_document.lock().ok()?;
-        *selected = Some(canonical.clone());
-        Some(canonical.to_string_lossy().into_owned())
-    })())
+            .pick_file()
+    })
+    .await
+    .map_err(|error| format!("document picker task failed: {error}"))?;
+    let chosen = path
+        .map(|chosen| select_picked_document(&state, chosen))
+        .transpose()?;
+    persist_selected_document(chosen)
 }
 
 fn ensure_selected_document_path(
@@ -1129,5 +1155,55 @@ mod tests {
         let error = super::extract_docx_text(&bytes).expect_err("oversized XML must be rejected");
         assert!(error.message.contains("8 MiB"));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn select_picked_files_reject_unsupported_types_without_clearing_prior_selection() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-pick-preserve-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let valid_doc = root.join("notes.md");
+        let bad_doc = root.join("binary.exe");
+        let valid_img = root.join("photo.png");
+        let bad_img = root.join("clip.txt");
+        for path in [&valid_doc, &bad_doc, &valid_img, &bad_img] {
+            fs::write(path, b"synthetic").unwrap();
+        }
+        let state = AppState::default();
+        let doc_grants = root.join("doc-grants.json");
+        let _guard = grants::document_grants_override_for_tests(doc_grants);
+
+        let selected_doc = select_picked_document(&state, valid_doc.clone()).unwrap();
+        assert_eq!(
+            select_picked_document(&state, bad_doc).unwrap_err().kind,
+            crate::error::ErrorKind::Validation
+        );
+        assert_eq!(
+            state
+                .selected_document
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .as_deref(),
+            Some(selected_doc.as_str())
+        );
+
+        let selected_img = select_picked_image(&state, valid_img.clone()).unwrap();
+        assert_eq!(
+            select_picked_image(&state, bad_img).unwrap_err().kind,
+            crate::error::ErrorKind::Validation
+        );
+        assert_eq!(
+            state
+                .selected_image
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .as_deref(),
+            Some(selected_img.as_str())
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -44,6 +44,7 @@ vi.mock("../../shared/api/index", () => { const readImageData = vi.fn<typeof api
   apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
+  resetApiKey: vi.fn(),
 }); });
 
 const mocked = api as unknown as { [K in keyof typeof api]: Mock };

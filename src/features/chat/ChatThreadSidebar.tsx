@@ -5,6 +5,7 @@ import { chatTitlePreview, displayChatTitle } from './chatThreadTitle';
 
 interface ChatThreadSidebarProps {
   open: boolean;
+  active?: boolean;
   onClose?: () => void;
   activeThreadId: string;
   threadCount: number;
@@ -18,26 +19,28 @@ interface ChatThreadSidebarProps {
 }
 
 export default function ChatThreadSidebar({
-  open, onClose, activeThreadId, threadCount, threadQuery, setThreadQuery, visibleThreads,
+  open, active = true, onClose, activeThreadId, threadCount, threadQuery, setThreadQuery, visibleThreads,
   onSelect, onDelete, onNewThread, ct,
 }: ChatThreadSidebarProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !active) return;
     if (document.getElementById("chat-thread-toggle-button")?.getClientRects().length) {
       searchInputRef.current?.focus();
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose?.();
-        document.getElementById("chat-thread-toggle-button")?.focus();
-      }
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector("dialog[open]")) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("details[open], [role='listbox']")) return;
+      event.stopPropagation();
+      onClose?.();
+      document.getElementById("chat-thread-toggle-button")?.focus();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  }, [open, active, onClose]);
 
   return (
     <aside

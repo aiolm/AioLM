@@ -33,7 +33,19 @@ describe('chat path presentation', () => {
     expect(approved).toHaveBeenCalledWith({ path: raw });
     expect(screen.getByRole('img')).toHaveAttribute('alt', display);
     const removeButtons = screen.getAllByRole('button', { name: `removeAttachment: ${display}` });
-    fireEvent.click(defined(removeButtons[1]));
+    expect(removeButtons[0]).toBeDisabled();
+    expect(removeButtons[1]).toBeDisabled();
+
+    render(<I18nProvider initialLocale="en"><ChatComposer
+      contextWarning={null} contextSources={[]} mcpCatalog={[]} selectedMcpTools={[]} toggleMcpTool={vi.fn()} loadingMcpTools={false}
+      refreshMcpTools={vi.fn()} mcpDefinitions={[]} pendingToolCall={null} toolCallInProgress={false}
+      onApproveTool={vi.fn()} onRejectTool={vi.fn()} attachments={[]} onRemoveAttachment={vi.fn()} attachmentStatus="ready"
+      documents={[{ name: raw, path: raw, text: 'Notes' }]} onRemoveDocument={removeDocument}
+      input="" setInput={vi.fn()} onKeyDown={vi.fn()} disabled={false} phase="idle"
+      {...attachmentActions} onStop={vi.fn()} aborting={false} onSend={vi.fn()} canSend={false}
+      msgsLength={0} responseState="none" ct={key => key}
+    /></I18nProvider>);
+    fireEvent.click(screen.getAllByRole('button', { name: `removeAttachment: ${display}` }).at(-1)!);
     expect(removeDocument).toHaveBeenCalledWith(raw);
   });
 

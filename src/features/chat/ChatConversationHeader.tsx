@@ -155,7 +155,7 @@ export default function ChatConversationHeader({
               value={isGeneratedChatTitle(activeThread?.title) ? '' : activeThread?.title ?? ''}
               placeholder={ct('newConversation')}
               onChange={(event) => onUpdateThread({ title: event.target.value })}
-              disabled={phase !== "idle"}
+              disabled={phase !== "idle" || targetBusy}
               className="app-input mt-1.5"
             />
           </div>
@@ -165,7 +165,7 @@ export default function ChatConversationHeader({
               id="chat-system-prompt"
               value={activeThread?.systemPrompt ?? ""}
               onChange={(event) => onUpdateThread({ systemPrompt: event.target.value })}
-              disabled={phase !== "idle"}
+              disabled={phase !== "idle" || targetBusy}
               rows={4}
               className="app-textarea mt-1.5"
               placeholder={ct("systemPromptPlaceholder")}

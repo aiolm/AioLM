@@ -25,4 +25,15 @@ describe('owned media preview independently of inference encoding', () => {
     await waitFor(() => expect(container.querySelector('audio')?.getAttribute('src')).toBe('data:audio/wav;base64,AA=='));
     expect(screen.getByText('전사문 · whisper · speech-session')).toBeInTheDocument();
   });
+
+  it('recovers an image preview on retry and clears prior errors', async () => {
+    vi.mocked(resolveMedia)
+      .mockRejectedValueOnce(new Error('temporary read failure'))
+      .mockResolvedValueOnce({ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } });
+    render(<MediaPreview locale="en" attachment={{ name: 'photo.png', kind: 'image', ref: `${'c'.repeat(64)}.png`, dataUrl: '' }} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('temporary read failure');
+    fireEvent.click(screen.getByRole('button', { name: /photo\.png/ }));
+    expect(await screen.findByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,AA==');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

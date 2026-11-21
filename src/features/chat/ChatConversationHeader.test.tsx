@@ -150,3 +150,27 @@ it('lets the select consume Escape before closing settings and returning focus t
   expect(details).not.toHaveAttribute('open');
   expect(summary).toHaveFocus();
 });
+
+it('disables title and system prompt fields while targetBusy is true', () => {
+  render(
+    <ChatConversationHeader
+      threadPanelOpen={false}
+      setThreadPanelOpen={vi.fn()}
+      activeThread={createChatThread(1, 'synthetic-thread', 'Synthetic conversation')}
+      activeProjectName={null}
+      phase="idle"
+      targetBusy
+      onUpdateThread={vi.fn()}
+      sessionLabel="Model session"
+      sessionOptions={[{ id: 'default', label: 'Default session' }]}
+      selectedSessionId="default"
+      model=""
+      onSelectSession={vi.fn()}
+      ct={key => chatText.en[key]}
+    />,
+  );
+  fireEvent.click(screen.getByLabelText('Conversation settings', { selector: 'summary' }));
+  expect(screen.getByLabelText('Title')).toBeDisabled();
+  expect(screen.getByLabelText('System prompt')).toBeDisabled();
+  expect(screen.getByRole('combobox', { name: 'Model session' })).toBeDisabled();
+});

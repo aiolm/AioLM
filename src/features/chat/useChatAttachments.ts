@@ -97,7 +97,23 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
         const attachment = await api.importMedia(path);
         if (!current()) return 'stale';
         const value = { ...attachment, name };
-        setAttachments((items) => generation.current !== ownGeneration || items.length >= 4 ? items : [...items, value]);
+        const mediaKey = value.ref ?? value.dataUrl;
+        if (attachments.some((item) => (item.ref ?? item.dataUrl) === mediaKey)) {
+          setAttachmentStatus("ready");
+          setError(null);
+          return 'complete';
+        }
+        let appended = false;
+        setAttachments((items) => {
+          if (generation.current !== ownGeneration || items.length >= 4 || items.some((item) => (item.ref ?? item.dataUrl) === mediaKey)) return items;
+          appended = true;
+          return [...items, value];
+        });
+        if (!appended) {
+          setAttachmentStatus("ready");
+          setError(null);
+          return 'complete';
+        }
         setApplication({ generation: ownGeneration, kind: 'media', value });
         queued = true;
       } else {
