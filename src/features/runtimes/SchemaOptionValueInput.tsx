@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { inNumericRange, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
@@ -77,11 +77,14 @@ export function ValueInput({ inputId, option, value, label, disabled, emptyMeans
   const [invalid, setInvalid] = useState(false);
   const [jsonNumberError, setJsonNumberError] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  useEffect(() => { setDraft(text); setInvalid(false); setJsonNumberError(false); }, [text]);
+  const onInvalidRef = useRef(onInvalid);
+  onInvalidRef.current = onInvalid;
+  useEffect(() => () => onInvalidRef.current(false), []);
+  useEffect(() => { setDraft(text); setInvalid(false); setJsonNumberError(false); onInvalidRef.current(false); }, [text]);
   const kind = kindOf(option);
   const sensitive = supported(option.sensitive) === true;
   const choices = supported(option.choices) ?? [];
-  const markInvalid = (next: boolean, jsonNumber = false) => { setInvalid(next); setJsonNumberError(jsonNumber); onInvalid(next); };
+  const markInvalid = (next: boolean, jsonNumber = false) => { setInvalid(next); setJsonNumberError(jsonNumber); onInvalidRef.current(next); };
   const describedByIds = [describedBy, validationDescription, invalid ? errorId : undefined].filter(Boolean).join(' ') || undefined;
   const ariaInvalid = invalid || !!validationDescription || undefined;
   if (choices.length > 0) {

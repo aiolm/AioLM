@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { errorMessage } from '../../shared/api/errors';
 import { runtimeHelpResolve } from '../../shared/api/runtimeHelp';
 import { maskPreview } from './optionPresentation';
 import type { RuntimeOptionSchemaFormProps } from './RuntimeOptionSchemaForm';
@@ -18,7 +19,7 @@ export function useOptionArgvPreview({ schema, scope, values, compact = false }:
         .then(result => { if (active) { setIssues([]); setPreview(result.argv); } })
         .catch(cause => {
           if (!active) return;
-          if (Array.isArray(cause)) { setIssues(cause as Array<{ key: string; message: string }>); setPreview([]); } else setError(String(cause));
+          if (Array.isArray(cause)) { setIssues(cause as Array<{ key: string; message: string }>); setPreview([]); } else setError(errorMessage(cause));
         });
     }, 150);
     return () => { active = false; clearTimeout(timer); };

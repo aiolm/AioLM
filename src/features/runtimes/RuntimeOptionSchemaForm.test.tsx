@@ -392,6 +392,39 @@ describe('JSON option numeric limits', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(onInvalid).toHaveBeenLastCalledWith('schema:payload', false);
   });
+
+  it('clears schema invalidity when removing an invalid occurrence, resetting to default, or updating from props', () => {
+    const num = textOption('num', { kind: known('integer'), repeatable: known(true) });
+    const onInvalid = vi.fn();
+    let latest: Record<string, unknown> = { num: [1] };
+    function Harness({ external }: { external?: Record<string, unknown> }) {
+      const [values, setValues] = useState<Record<string, unknown>>(external ?? latest);
+      return <>
+        <button type="button" onClick={() => setValues({ num: [9] })}>External sync</button>
+        <RuntimeOptionSchemaForm schema={schema([num])} values={values} scope={[]}
+          onChange={next => { latest = next; setValues(next); }} onInvalid={onInvalid} />
+      </>;
+    }
+    const view = render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
+    const input = screen.getByLabelText('--num Occurrence 1 Value 1');
+    fireEvent.change(input, { target: { value: 'not-an-int' } });
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove occurrence' }));
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add occurrence' }));
+    fireEvent.change(screen.getByLabelText('--num Occurrence 1 Value 1'), { target: { value: 'bad' } });
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', true);
+    fireEvent.click(screen.getByRole('button', { name: 'External sync' }));
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', false);
+
+    fireEvent.change(screen.getByLabelText('--num Occurrence 1 Value 1'), { target: { value: 'bad' } });
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Use runtime default' }));
+    expect(onInvalid).toHaveBeenLastCalledWith('schema:num', false);
+    view.unmount();
+  });
 });
 
 describe('editing keeps every saved occurrence, alias and explicit value', () => {

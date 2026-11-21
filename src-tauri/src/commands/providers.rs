@@ -118,17 +118,38 @@ pub(crate) async fn provider_remove(
     runtime_id: String,
 ) -> Result<(), AppError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    let _operation = super::runtimes::runtime_change_gate(&state).await;
-    if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err(AppError::busy(
-            "stop model sessions before removing runtimes",
-        ));
+    {
+        let _operation = super::runtimes::runtime_change_gate(&state).await;
+        if super::runtimes::runtime_resources_in_use(&state)? {
+            return Err(AppError::busy(
+                "stop model sessions before removing runtimes",
+            ));
+        }
     }
     let selected = provider(&provider_id)?;
-    if selected.is_custom() {
-        return providers::registry::remove(selected, &runtime_id);
-    }
-    providers::python_env::remove(selected, &runtime_id)
+    let removed_id = runtime_id.clone();
+    tokio::task::spawn_blocking(move || {
+        if selected.is_custom() {
+            providers::registry::remove(selected, &runtime_id)
+        } else {
+            providers::python_env::remove(selected, &runtime_id)
+        }
+    })
+    .await
+    .map_err(|error| format!("runtime removal task failed: {error}"))??;
+    // Clear dangling active_runtime / session / profile references only after
+    // removal succeeds on disk so failed removals preserve existing config.
+    let _config_write = state.config_write.lock().await;
+    tokio::task::spawn_blocking(move || {
+        let mut cfg = config::load_result()?;
+        if config::profiles::forget_provider_runtime(&mut cfg, selected, &removed_id) {
+            config::save(&cfg)?;
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|error| format!("runtime profile cleanup task failed: {error}"))??;
+    Ok(())
 }
 
 /// Export one probed Python runtime as a portable bundle.

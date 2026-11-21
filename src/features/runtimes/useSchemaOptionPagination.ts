@@ -9,7 +9,7 @@ export function useSchemaOptionPagination({ schema, filter }: Pick<RuntimeOption
 
   // Rebuilt on each render like the field list: hosts may update the same
   // schema object in place, and the category chooser must follow it.
-  const groups = [...new Set(schema.options.map(option => option.group || 'runtime'))].sort();
+  const groups = [...new Set((filter ? schema.options.filter(filter) : schema.options).map(option => option.group || 'runtime'))].sort();
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     return schema.options.filter(option => {

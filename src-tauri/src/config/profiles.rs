@@ -1250,6 +1250,76 @@ pub fn forget_runtime(cfg: &mut AppConfig, backend: &str, build: &str) -> bool {
     changed
 }
 
+fn names_provider_runtime(
+    settings: &Map<String, Value>,
+    fallback_provider: &str,
+    provider_id: &str,
+    runtime_id: &str,
+) -> bool {
+    let named_provider = settings
+        .get("active_provider")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_provider);
+    named_provider == provider_id
+        && settings.get("active_runtime").and_then(Value::as_str) == Some(runtime_id)
+}
+
+fn clear_provider_runtime(settings: &mut Map<String, Value>) {
+    settings.insert("active_runtime".into(), Value::String(String::new()));
+}
+
+/// Clear references to a removed non-llama runtime across global config,
+/// named sessions, and saved settings profiles.
+pub fn forget_provider_runtime(
+    cfg: &mut AppConfig,
+    provider: crate::providers::ProviderId,
+    runtime_id: &str,
+) -> bool {
+    let provider_str = provider.as_str();
+    let mut changed = false;
+    if crate::providers::provider_of(cfg) == provider && cfg.active_runtime == runtime_id {
+        cfg.active_runtime.clear();
+        changed = true;
+    }
+    for definition in &mut cfg.sessions {
+        if let Some(settings) = definition.execution.as_mut() {
+            if names_provider_runtime(settings, cfg.active_provider.as_str(), provider_str, runtime_id)
+            {
+                clear_provider_runtime(settings);
+                changed = true;
+            }
+        }
+    }
+    if let Some(library) = cfg.settings_profiles.as_mut() {
+        let mut library_changed = false;
+        for entry in &mut library.entries {
+            if names_provider_runtime(&entry.settings, entry.provider.as_str(), provider_str, runtime_id)
+            {
+                clear_provider_runtime(&mut entry.settings);
+                entry.revision = entry.revision.saturating_add(1);
+                library_changed = true;
+            }
+        }
+        for application in library.applied.values_mut() {
+            let fallback = if application.provider.is_empty() {
+                crate::providers::ProviderId::Llama.as_str()
+            } else {
+                application.provider.as_str()
+            };
+            if names_provider_runtime(&application.settings, fallback, provider_str, runtime_id) {
+                clear_provider_runtime(&mut application.settings);
+                library_changed = true;
+            }
+        }
+        if library_changed {
+            library.revision = library.revision.saturating_add(1);
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 #[path = "profiles_tests.rs"]
 mod tests;

@@ -23,7 +23,7 @@ import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 const TASK_ID = 'provider-environment-operation';
 
-export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange }: { active: boolean; provider?: api.ProviderId; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void }) {
+export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange, onRemoved }: { active: boolean; provider?: api.ProviderId; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void; onRemoved?: () => Promise<void> | void }) {
   const { locale, t } = useI18n(); const copy = providerCopy[locale];
   const translate = useRef(t);
   translate.current = t;
@@ -108,7 +108,10 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       setResult(`${t('ui.importProviderRuntimeBundle')} · ${providerDisplayName(imported.provider)} · ${imported.id}`);
     }, { cancellable: true, inventory: true });
   const removeRuntime = (runtime: api.RuntimeInstance) => run(`${providerDisplayName(runtime.provider)} · ${copy.remove}`, async () => {
-    try { await api.providerRemove(runtime.provider, runtime.id); }
+    try {
+      await api.providerRemove(runtime.provider, runtime.id);
+      await onRemoved?.();
+    }
     finally { setPendingRemoval(null); }
   }, { inventory: true });
   const requestRemoval = (runtime: api.RuntimeInstance) => {

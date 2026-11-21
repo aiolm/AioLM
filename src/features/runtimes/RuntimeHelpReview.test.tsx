@@ -257,3 +257,13 @@ it('keeps a later manual directory edit when an earlier folder picker resolves',
   await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/new manual directory' }));
 });
+
+it('keeps a failed task record when unmounting or switching runtimes after settling', async () => {
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new IpcError('internal', 'help binary exited with status 2'));
+  const rendered = render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('alert');
+  rendered.rerender(view({ ...cfg, active_runtime: 'build-2' }));
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: 'help binary exited with status 2' })]);
+});

@@ -211,7 +211,12 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   };
 
   const performUninstall = async (backend: string, build: string) => {
-    if (uninstallBusy) return;
+    if (uninstallBusy || runtimeBusy) return;
+    if (serverRunning) {
+      setPendingUninstall(null);
+      flashT(t("ui.stopBeforeRemoveRuntime"));
+      return;
+    }
     setFailure(null);
     setUninstallBusy(true);
     try {

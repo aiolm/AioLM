@@ -23,6 +23,7 @@ import RuntimeArgumentList from './RuntimeArgumentList';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
+import { errorMessage } from '../../shared/api/errors';
 import { isIpcErrorKind } from '../../shared/api/ipcError';
 import { sensitiveStaticIndices } from './sensitiveEntryTokens';
 
@@ -73,14 +74,16 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       setWorkingDirectory(next.request.working_directory ?? next.accepted?.working_directory ?? '');
       setTextChoice({ ...(next.request.encoding ? { encoding: next.request.encoding } : {}),
         ...(next.request.locale ? { locale: next.request.locale } : {}) });
-    }).catch(cause => { if (active) setError(String(cause)); })
+    }).catch(cause => { if (active) setError(errorMessage(cause)); })
       .finally(() => { if (active) setTargetLoading(false); });
     return () => {
       active = false;
       generation.current += 1;
-      if (pending.current) void runtimeHelpCancelSelected(pending.current).catch(() => undefined);
+      if (pending.current) {
+        void runtimeHelpCancelSelected(pending.current).catch(() => undefined);
+        finishTask(taskId, 'cancelled');
+      }
       pending.current = null;
-      finishTask(taskId, 'cancelled');
     };
     // The target depends only on the selected runtime identity.
   }, [cfg.active_provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, targetAttempt, taskId]);
@@ -109,7 +112,10 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     pending.current = cfg;
     const current = () => ownGeneration === generation.current;
     setBusy(true); setError(''); setFound(null); setRequest(next);
-    registerTask({ id: taskId, kind: 'runtime', label: copy.helpTitle, interruptible: true, cancel: () => { cancelRequested.current = true; void runtimeHelpCancelSelected(cfg); } });
+    registerTask({
+      id: taskId, kind: 'runtime', label: copy.helpTitle, interruptible: true,
+      cancel: () => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); return runtimeHelpCancelSelected(cfg); },
+    });
     try {
       const result = await runtimeHelpDiscoverSelected(cfg, next);
       if (!current()) return;
@@ -117,7 +123,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       finishTask(taskId, cancelRequested.current ? 'cancelled' : 'completed');
     } catch (cause) {
       if (!current()) return;
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       // Captured stderr may itself mention cancellation; only the owned user
       // request or the native cancellation result makes this task cancelled.
       const cancelled = cancelRequested.current || isIpcErrorKind(cause, 'cancelled');
@@ -140,7 +146,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       onAccepted();
       if (compact) recheckButton.current?.focus();
     } catch (cause) {
-      if (ownGeneration === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (ownGeneration === generation.current) setError(errorMessage(cause));
     } finally {
       if (ownGeneration === generation.current) setAccepting(false);
     }
@@ -187,7 +193,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
               if (generation.current !== ownGeneration) return;
               if (!path) return;
               setWorkingDirectory(path); setFound(null); setRequest(null); setError('');
-            }).catch(cause => { if (generation.current === ownGeneration) setError(String(cause)); });
+            }).catch(cause => { if (generation.current === ownGeneration) setError(errorMessage(cause)); });
           }}>{copy.chooseDirectory}</button>
       </div>
       <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
@@ -212,7 +218,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
           aria-describedby={compact && notice ? `${id}-notice` : undefined}
           onClick={() => void discover()}>{actionLabel ?? copy.discover}</button>
         {busy && (
-          <LocalTaskCancelButton taskId={taskId} onClick={() => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); void runtimeHelpCancelSelected(cfg).catch(cause => setError(String(cause))); }}>
+          <LocalTaskCancelButton taskId={taskId} onClick={() => { cancelRequested.current = true; updateTask(taskId, { state: 'cancelling' }); void runtimeHelpCancelSelected(cfg).catch(cause => setError(errorMessage(cause))); }}>
             {copy.cancel}
           </LocalTaskCancelButton>
         )}

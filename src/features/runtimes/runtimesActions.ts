@@ -227,15 +227,21 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
   // the row it was set on, whatever the picker says by the time we finish.
   const { backend, source, preview } = state.pending;
   if (!canBuildPrBackend(backend)) {
+    state.setPrPreview(null);
     deps.setFailure(translate(deps.locale, "ui.prBackendBlocked", { backend }));
     return;
   }
   if (deps.serverRunning) {
+    state.setPrPreview(null);
     deps.flashT(translate(deps.locale, "ui.stopBeforeRuntime"));
     return;
   }
   const owner = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), true);
-  if (!owner) { deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress")); return; }
+  if (!owner) {
+    state.setPrPreview(null);
+    deps.flashT(translate(deps.locale, "ui.runtimeOperationInProgress"));
+    return;
+  }
   state.setPrPreview(null);
   deps.setFailure(null);
   state.setPrBusy(true);

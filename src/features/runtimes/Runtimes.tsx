@@ -247,7 +247,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
             ? <FeedbackBanner tone="warning">{copy.missing}</FeedbackBanner>
             : <>
           <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
-          {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} />}
+          {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} onRemoved={() => { void store.loadConfig(); }} />}
           {llama && <>
           <PanelFeedback>
             {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
@@ -318,6 +318,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
         description={rt.prPreview ? <PullRequestProvenance t={t} locale={locale} preview={rt.prPreview.preview} backend={rt.prPreview.backend} /> : ""}
         confirmLabel={t("ui.prConfirmAction")}
         tone="primary"
+        confirmDisabled={rt.serverRunning || rt.runtimeBusy}
         busy={rt.prBusy}
         onConfirm={() => void rt.installPullRequest()}
         onCancel={() => { if (!rt.prBusy) rt.setPrPreview(null); }}
@@ -330,6 +331,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
               references={runtimeReferences(store.cfg, rt.pendingUninstall.backend, rt.pendingUninstall.build)} />
           : ""}
         confirmLabel={t("ui.removeRuntime")}
+        confirmDisabled={rt.serverRunning || rt.runtimeBusy}
         busy={rt.uninstallBusy}
         onConfirm={() => void rt.confirmUninstall()}
         onCancel={() => { if (!rt.uninstallBusy) rt.setPendingUninstall(null); }}

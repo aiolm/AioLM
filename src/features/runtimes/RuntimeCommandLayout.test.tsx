@@ -21,3 +21,20 @@ it('maps a repeated word as an option value and only the chosen token as a subco
   fireEvent.click(screen.getByRole('option', { name: 'Subcommand' }));
   expect(JSON.parse(screen.getByRole('status').textContent!)).toEqual({ version: 1, options: [{ index: 0, values: 1 }], subcommands: [2] });
 });
+
+it('prunes conflicting subcommands/options covered by an expanded option value count', () => {
+  function App() {
+    const [layout, setLayout] = useState<CommandLayout>();
+    return <><RuntimeCommandLayout prefix={['--opt', '--other', 'serve']} value={layout} disabled={false} onChange={setLayout} /><output>{JSON.stringify(layout)}</output></>;
+  }
+  render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+  fireEvent.click(screen.getByLabelText('Declare fixed options and subcommands'));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Role 2' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Fixed option' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Role 3' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Subcommand' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Role 1' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Fixed option' }));
+  fireEvent.change(screen.getByLabelText('Following value count 1'), { target: { value: '2' } });
+  expect(JSON.parse(screen.getByRole('status').textContent!)).toEqual({ version: 1, options: [{ index: 0, values: 2 }], subcommands: [] });
+});

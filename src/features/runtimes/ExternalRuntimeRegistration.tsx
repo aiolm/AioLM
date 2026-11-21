@@ -1,6 +1,7 @@
 import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import * as api from '../../shared/api';
+import { errorMessage } from '../../shared/api/errors';
 import { useI18n } from '../../shared/i18n/i18n';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
@@ -17,12 +18,28 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const operation = useRef<{ cancelled: boolean } | null>(null);
+  const mounted = useRef(true);
+  const pickerGeneration = useRef(0);
   const taskId = 'runtime-adapter-registration';
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      pickerGeneration.current += 1;
+      if (operation.current) {
+        operation.current.cancelled = true;
+        operation.current = null;
+        void api.rtCancel().catch(() => undefined);
+        finishTask(taskId, 'cancelled');
+        onBusyChange(false);
+      }
+    };
+  }, [onBusyChange]);
   const cancel = async (owner = operation.current) => {
     if (!owner || operation.current !== owner || owner.cancelled) return;
     owner.cancelled = true; updateTask(taskId, { state: 'cancelling' });
     try { await api.rtCancel(); }
-    catch (cause) { if (operation.current === owner) { owner.cancelled = false; setError(String(cause)); updateTask(taskId, { state: 'running' }); } }
+    catch (cause) { if (mounted.current && operation.current === owner) { owner.cancelled = false; setError(errorMessage(cause)); updateTask(taskId, { state: 'running' }); } }
   };
   const register = async () => {
     if (locked || operation.current || !path.trim()) return;
@@ -31,18 +48,23 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => cancel(owner) });
     try {
       const registered = await api.runtimeAdapterRegister(path.trim());
+      if (!mounted.current || operation.current !== owner) return;
       notifyRuntimeInventoryChanged();
       onRegistered(registered.engine_id, registered);
       setResult(`${registered.display_name} · ${registered.runtime_id}`);
       finishTask(taskId, 'completed');
       try { await api.providerCatalog(true); }
-      catch (cause) { setError(`${copy.refreshError} ${String(cause)}`); }
+      catch (cause) { if (mounted.current) setError(`${copy.refreshError} ${errorMessage(cause)}`); }
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      if (!mounted.current || operation.current !== owner) return;
+      const message = errorMessage(cause);
       const cancelled = isIpcErrorKind(cause, 'cancelled');
       if (!cancelled) setError(message);
       finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
-    } finally { operation.current = null; setBusy(false); onBusyChange(false); }
+    } finally {
+      if (operation.current === owner) operation.current = null;
+      if (mounted.current) { setBusy(false); onBusyChange(false); }
+    }
   };
   const id = useId();
   return <section className="app-card runtime-manifest" aria-labelledby={`${id}-title`}>
@@ -51,9 +73,15 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
     <div className="entrypoint-field">
       <label htmlFor={`${id}-path`}>{copy.path}</label>
       <span className="entrypoint-path">
-        <input id={`${id}-path`} className="app-input" value={path} onChange={event => setPath(event.target.value)} disabled={busy || locked}
+        <input id={`${id}-path`} className="app-input" value={path} onChange={event => { pickerGeneration.current += 1; setPath(event.target.value); }} disabled={busy || locked}
           autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
-        <button type="button" className="app-button app-button--secondary" disabled={busy || locked} onClick={() => void api.pickRuntimeAdapter().then(value => { if (value) setPath(value); }).catch(cause => setError(String(cause)))}>{copy.file}</button>
+        <button type="button" className="app-button app-button--secondary" disabled={busy || locked} onClick={() => {
+          const generation = ++pickerGeneration.current;
+          void api.pickRuntimeAdapter().then(value => {
+            if (!mounted.current || busy || locked || pickerGeneration.current !== generation || !value) return;
+            setPath(value);
+          }).catch(cause => { if (mounted.current && pickerGeneration.current === generation) setError(errorMessage(cause)); });
+        }}>{copy.file}</button>
       </span>
     </div>
     <div className="app-page-actions">

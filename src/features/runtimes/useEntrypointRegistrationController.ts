@@ -21,6 +21,7 @@ import { finishTask, registerTask, updateTask } from '../../shared/state/taskReg
 import { helpSummary } from './helpSummary';
 import type { HelpTextChoice } from './HelpTextSettings';
 import type { BindingState, EntrypointRegistrationController, EntrypointRegistrationProps, EntrypointRegistrationStep } from './entrypointRegistrationTypes';
+import { errorMessage } from '../../shared/api/errors';
 import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 const noBinding: BindingState = { mode: 'none', flag: '', equals: false };
@@ -106,14 +107,32 @@ export function useEntrypointRegistrationController({ locked, onRegistered, onPu
       return { ok: false };
     }
   }, [metadataText]);
+  const activePrefix = protocol === 'bridge' ? bridgePrefix : prefix;
+  const normalizedLayout = useMemo(() => {
+    if (!commandLayout) return undefined;
+    const validOptions = commandLayout.options
+      .filter(option => option.index >= 0 && option.index < activePrefix.length)
+      .sort((a, b) => a.index - b.index);
+    const keptOptions: typeof validOptions = [];
+    for (const option of validOptions) {
+      if (!keptOptions.some(prev => prev.index < option.index && option.index <= prev.index + prev.values)) {
+        keptOptions.push(option);
+      }
+    }
+    const subcommands = commandLayout.subcommands
+      .filter(index => index >= 0 && index < activePrefix.length
+        && !keptOptions.some(option => option.index === index || (option.index < index && index <= option.index + option.values)))
+      .sort((a, b) => a - b);
+    return { ...commandLayout, subcommands, options: keptOptions };
+  }, [commandLayout, activePrefix.length]);
   const entry: EntrypointHelp = useMemo(() => ({
     engine_id: engine.trim(), runtime_id: runtime.trim(), program: program.trim(), prefix,
     working_directory: workingDir.trim() || null, artifacts,
     environment: Object.fromEntries(env.filter(([name]) => name.trim())),
     protocol: protocol === 'bridge' ? { kind: 'bridge', program: bridgeProgram.trim(), prefix: bridgePrefix, engine_argv_env: bridgeArgvEnv.trim() } : { kind: 'openai_http' },
     ...(metadata.value ? { option_metadata: metadata.value } : {}),
-    ...(commandLayout ? { command_layout: commandLayout } : {}),
-  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv, metadata, commandLayout]);
+    ...(normalizedLayout ? { command_layout: normalizedLayout } : {}),
+  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv, metadata, normalizedLayout]);
   const entryKey = JSON.stringify(entry);
   const current = found && found.entry === entryKey ? found : null;
   const schema = current?.result[1].schema;
@@ -126,9 +145,12 @@ export function useEntrypointRegistrationController({ locked, onRegistered, onPu
     if (busy || locked || pendingRegistration.current) return;
     const ownGeneration = ++generation.current;
     cancelled.current = false; pendingHelp.current = entry;
-    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: commandLayout?.subcommands.map(index => (protocol === 'bridge' ? bridgePrefix : prefix)[index] ?? '') ?? [], ...textChoice };
+    const request: HelpRequest = { program: null, args: [...activePrefix, ...helpArgs], scope: normalizedLayout?.subcommands.map(index => activePrefix[index] ?? '') ?? [], ...textChoice };
     setBusy(true); setError(''); setSkipHelp(false);
-    registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => { cancelled.current = true; void entrypointHelpCancel(entry); } });
+    registerTask({
+      id: taskId, kind: 'runtime', label: copy.title, interruptible: true,
+      cancel: () => { cancelled.current = true; updateTask(taskId, { state: 'cancelling' }); return entrypointHelpCancel(entry); },
+    });
     try {
       const result = await (cfg ? entrypointHelpDiscover(entry, request, cfg) : entrypointHelpDiscover(entry, request));
       if (generation.current !== ownGeneration) return;
@@ -272,7 +294,7 @@ export function useEntrypointRegistrationController({ locked, onRegistered, onPu
   const cancelHelp = () => {
     cancelled.current = true;
     updateTask(taskId, { state: 'cancelling' });
-    void entrypointHelpCancel(entry).catch(cause => setError(String(cause)));
+    void entrypointHelpCancel(entry).catch(cause => setError(errorMessage(cause)));
   };
   const previous = () => { if (!pendingRegistration.current) setStep((step - 1) as EntrypointRegistrationStep); };
   const next = () => { if (!pendingRegistration.current) setStep((step + 1) as EntrypointRegistrationStep); };

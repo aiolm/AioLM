@@ -219,7 +219,7 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
           onClick={() => store([...rows, emptyRow()])}>{copy.addOccurrence}</button>
       )}
       {!readOnly && rows.length > 0 && (
-        <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>
+        <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => { invalidCells.current.clear(); onInvalid?.(`schema:${option.key}`, false); onStore(undefined); }}>{copy.useDefault}</button>
       )}
       {aliasSelect}
       {help}

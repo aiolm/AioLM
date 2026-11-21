@@ -1280,3 +1280,70 @@ fn deleting_a_profile_atomically_updates_active_and_session_values_from_the_fall
     std::fs::remove_file(path).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
+
+#[test]
+fn forget_provider_runtime_clears_matching_non_llama_references_only() {
+    let mut lib = library();
+    lib.entries[0].provider = "vllm".into();
+    lib.entries[0].settings.extend(Map::from_iter([
+        ("active_provider".into(), json!("vllm")),
+        ("active_runtime".into(), json!("vllm-env-1")),
+    ]));
+    lib.entries[1].provider = "vllm".into();
+    lib.entries[1].settings.extend(Map::from_iter([
+        ("active_provider".into(), json!("vllm")),
+        ("active_runtime".into(), json!("vllm-env-2")),
+    ]));
+    lib.applied
+        .get_mut("model:models/sample.gguf")
+        .unwrap()
+        .provider = "vllm".into();
+    lib.applied
+        .get_mut("model:models/sample.gguf")
+        .unwrap()
+        .settings
+        .extend(Map::from_iter([
+            ("active_provider".into(), json!("vllm")),
+            ("active_runtime".into(), json!("vllm-env-1")),
+        ]));
+    let kept = lib.entries[1].settings.clone();
+    let rev = lib.revision;
+    let mut cfg = AppConfig {
+        active_provider: crate::providers::ProviderId::Vllm,
+        active_runtime: "vllm-env-1".into(),
+        sessions: vec![super::super::SessionDefinition {
+            id: "work".into(),
+            execution: Some(
+                serde_json::from_value(json!({"active_provider": "vllm", "active_runtime": "vllm-env-1"}))
+                    .unwrap(),
+            ),
+            ..Default::default()
+        }],
+        settings_profiles: Some(lib),
+        ..AppConfig::default()
+    };
+
+    assert!(forget_provider_runtime(
+        &mut cfg,
+        crate::providers::ProviderId::Vllm,
+        "vllm-env-1"
+    ));
+    assert_eq!(cfg.active_runtime, "");
+    assert_eq!(
+        cfg.sessions[0].execution.as_ref().unwrap()["active_runtime"],
+        json!("")
+    );
+    let lib = cfg.settings_profiles.as_ref().unwrap();
+    assert_eq!(lib.entries[0].settings["active_runtime"], json!(""));
+    assert_eq!(
+        lib.applied["model:models/sample.gguf"].settings["active_runtime"],
+        json!("")
+    );
+    assert_eq!(lib.entries[1].settings, kept);
+    assert!(lib.revision > rev);
+    assert!(!forget_provider_runtime(
+        &mut cfg,
+        crate::providers::ProviderId::Vllm,
+        "vllm-env-1"
+    ));
+}

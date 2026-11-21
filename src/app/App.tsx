@@ -9,6 +9,7 @@ import "../styles/app.css";
 
 
 import * as api from "../shared/api/index";
+import { errorMessage } from "../shared/api/errors";
 import { modelStatusKey, verificationOverrideKey } from "../shared/lib/serverLifecycle";
 import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
@@ -193,24 +194,31 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // and that message was the only place it existed: without somewhere to accept
   // it, being told "or start it anyway with key ..." led nowhere.
   const [overrideAccepted, setOverrideAccepted] = useState(false);
+  const [overrideBusy, setOverrideBusy] = useState(false);
+  const [overrideError, setOverrideError] = useState("");
   const [dismissedRuntimeError, setDismissedRuntimeError] = useState<string | null>(null);
   useEffect(() => { setDismissedRuntimeError(null); }, [store.status.error]);
   const serverState = store.status.state;
   const runtimeError = store.status.error === dismissedRuntimeError ? undefined : store.status.error;
-  const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError;
-  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? "";
+  const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError || overrideError;
+  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? overrideError;
   // A failed launch keeps its runtime log with the error it explains; boot and
   // status-read failures are not about the model process and carry no log.
-  const failureLog = (serverState === "failed" || serverState === "crashed") && !store.bootError && !store.statusPollError ? store.status.log_tail : undefined;
+  const failureLog = (serverState === "failed" || serverState === "crashed") && !store.bootError && !store.statusPollError && !overrideError ? store.status.log_tail : undefined;
   const dismissErrors = () => {
     setDismissedRuntimeError(store.status.error ?? null);
+    setOverrideError("");
     store.clearErrors();
   };
   const overrideKey = verificationOverrideKey(errorText);
   const acceptOverride = () => {
-    void api.allowVerificationOverride(overrideKey!)
+    if (!overrideKey || overrideBusy) return;
+    setOverrideBusy(true);
+    setOverrideError("");
+    void api.allowVerificationOverride(overrideKey)
       .then(() => { setOverrideAccepted(true); dismissErrors(); })
-      .catch(() => undefined);
+      .catch(cause => { setOverrideError(errorMessage(cause)); })
+      .finally(() => { setOverrideBusy(false); });
   };
 
   useEffect(() => {
@@ -349,7 +357,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
-            action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : undefined}><RuntimeFailureDetails error={errorText} log={failureLog} /></FeedbackBanner>}
+            action={overrideKey ? { label: t("ui.verificationOverride"), disabled: overrideBusy, onClick: acceptOverride } : undefined}><RuntimeFailureDetails error={errorText} log={failureLog} /></FeedbackBanner>}
           {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
         </PanelFeedback>
         <TaskStrip />

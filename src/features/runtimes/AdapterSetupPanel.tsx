@@ -6,6 +6,7 @@ import { adapterSetupCopy } from '../../shared/i18n/adapterSetupCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
+import { errorMessage } from '../../shared/api/errors';
 import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 /** Recipe fields and commands are data. All engines return the same draft
@@ -44,7 +45,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
       setRecipeToken(imported.token);
       setInputs(Object.fromEntries(imported.recipe.fields.map(field => [field.key, field.default ?? ''])));
     } catch (cause) {
-      if (generation.current === own) setError(String(cause));
+      if (generation.current === own) setError(errorMessage(cause));
     } finally {
       if (generation.current === own) { setBusy(false); onBusyChange(false); }
     }
@@ -56,7 +57,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
     running.current = true;
     setBusy(true); setPreparing(true); onBusyChange(true); setError('');
     registerTask({ id: owner, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => {
-      cancelled.current = true; void adapterSetupCancel(owner);
+      cancelled.current = true; updateTask(owner, { state: 'cancelling' }); return adapterSetupCancel(owner);
     } });
     try {
       const draft = await adapterSetupPrepare(owner, recipeToken, inputs);
@@ -66,9 +67,10 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
       if (!cancelled.current) onPrepared(draft);
     } catch (cause) {
       if (generation.current !== own) return;
+      const message = errorMessage(cause);
       const wasCancelled = cancelled.current || isIpcErrorKind(cause, 'cancelled');
-      if (!wasCancelled) setError(String(cause));
-      finishTask(owner, wasCancelled ? 'cancelled' : 'failed', String(cause));
+      if (!wasCancelled) setError(message);
+      finishTask(owner, wasCancelled ? 'cancelled' : 'failed', message);
     } finally {
       if (generation.current === own) { running.current = false; setBusy(false); setPreparing(false); onBusyChange(false); }
     }
@@ -80,7 +82,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
       const path = await pickRuntimePath(field.kind as 'file' | 'folder');
       if (generation.current === own && path) setInputs(current => ({ ...current, [field.key]: path }));
     } catch (cause) {
-      if (generation.current === own) setError(String(cause));
+      if (generation.current === own) setError(errorMessage(cause));
     } finally {
       if (generation.current === own) { setBusy(false); onBusyChange(false); }
     }
@@ -114,7 +116,7 @@ export default function AdapterSetupPanel({ disabled, onBusyChange, onPrepared }
         <button type="submit" className="app-button app-button--primary" disabled={locked}>{copy.prepare}</button>
         {preparing && <LocalTaskCancelButton taskId={owner} onClick={() => {
           cancelled.current = true; updateTask(owner, { state: 'cancelling' });
-          void adapterSetupCancel(owner).catch(cause => setError(String(cause)));
+          void adapterSetupCancel(owner).catch(cause => setError(errorMessage(cause)));
         }}>{copy.cancel}</LocalTaskCancelButton>}
       </div>
     </form>}

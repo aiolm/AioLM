@@ -41,12 +41,12 @@ export function RuntimeOptionSchemaFormView({ controller }: { controller: Contro
               autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => changeSearch(event.target.value)} />
           </label>
           <label>{copy.group}
-            <CustomSelect ariaLabel={copy.group} value={group} disabled={disabled}
+            <CustomSelect ariaLabel={copy.group} value={group}
               options={[{ value: '', label: copy.allGroups }, ...groups.map(name => ({ value: name, label: name }))]} onChange={changeGroup} />
           </label>
         </fieldset>
   );
-  const more = !showAll && visible.length > limit && <button type="button" className="app-button app-button--secondary" disabled={disabled}
+  const more = !showAll && visible.length > limit && <button type="button" className="app-button app-button--secondary"
     onClick={showMore}>{copy.more} ({visible.length - limit})</button>;
   const fieldGrid = fields.length > 0 && <div className="schema-option-grid">{fields}</div>;
   if (compact) return <div className="model-settings-fields schema-option-form">{navigation}{fieldGrid}{more}{showNoMatch && visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
