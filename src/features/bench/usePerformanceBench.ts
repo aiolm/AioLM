@@ -33,7 +33,7 @@ import { usePerformanceConditions } from './usePerformanceConditions';
 type Copy = ReturnType<typeof benchmarkCopy>;
 
 type RuntimeSelection = Partial<Pick<api.AppConfig, typeof RUNTIME_SELECTION_KEYS[number]>>;
-type BenchmarkTargetSelection = { runtime?: RuntimeSelection; application: ProfileApplication };
+type BenchmarkTargetSelection = { runtime?: RuntimeSelection; application?: ProfileApplication };
 
 function runtimeSelection(cfg: api.AppConfig): RuntimeSelection {
   const next: RuntimeSelection = {};
@@ -73,7 +73,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
   const [targetSelection, setTargetSelection] = useState<BenchmarkTargetSelection | null>(() => store.cfg
     ? { runtime: runtimeSelection(store.cfg), application: benchmarkTarget(store.cfg).application }
     : null);
-  const installedRuntimes = useInstalledRuntimes(providerOf(targetSelection?.runtime ?? targetSelection?.application.settings ?? store.cfg ?? {}) === 'llama.cpp');
+  const installedRuntimes = useInstalledRuntimes(providerOf(targetSelection?.runtime ?? targetSelection?.application?.settings ?? store.cfg ?? {}) === 'llama.cpp');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
   const [sessionsReady, setSessionsReady] = useState(false);

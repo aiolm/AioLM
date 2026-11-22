@@ -220,7 +220,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       await store.updateConfig({ active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
     } catch (error) {
-      notify(`${t("panel.copyFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -234,7 +234,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       await store.updateConfig({ mmproj: model.path });
       // 프로젝터 선택도 선택 상태 변경이므로 성공 알림을 표시하지 않는다.
     } catch (error) {
-      notify(`${t("panel.copyFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 

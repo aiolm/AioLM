@@ -42,6 +42,11 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
   const [customText, setCustomText] = useState<Partial<Record<ServerTextKey, boolean>>>({});
   const prevCfgRef = useRef<AppConfig>(cfg);
   const patchKeysRef = useRef<Set<string> | null>(null);
+  const clearDraftsRef = useRef<() => void>(() => undefined);
+  clearDraftsRef.current = () => {
+    for (const name of new Set([...Object.keys(numbers), ...Object.keys(chatNumbers), ...Object.keys(customText), ...Object.keys(selectModes)])) onInvalid(name, false);
+    setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({});
+  };
   const emitChange: DraftPatch = (patch) => {
     patchKeysRef.current ??= new Set();
     for (const fieldKey of Object.keys(patch)) patchKeysRef.current.add(fieldKey);
@@ -56,9 +61,8 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark = 
     patchKeysRef.current = null;
     const changedKeys = (Object.keys(cfg) as (keyof AppConfig)[]).filter(fieldKey => cfg[fieldKey] !== prev[fieldKey]);
     if (pendingKeys && changedKeys.every(fieldKey => pendingKeys.has(fieldKey))) return;
-    for (const name of new Set([...Object.keys(numbers), ...Object.keys(chatNumbers), ...Object.keys(customText), ...Object.keys(selectModes)])) onInvalid(name, false);
-    setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({});
-  }, [cfg, numbers, chatNumbers, customText, selectModes, onInvalid]);
+    clearDraftsRef.current();
+  }, [cfg]);
   const pairValid = (current: 'batch_size' | 'ubatch_size', drafts: Partial<Record<NumericKey, string>>, cfgView: AppConfig) => {
     const field = SERVER_FIELDS.find(item => item.key === current)!;
     const candidate = (target: 'batch_size' | 'ubatch_size') => {

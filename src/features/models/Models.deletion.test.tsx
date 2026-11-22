@@ -447,4 +447,38 @@ describe('model deletion request ownership', () => {
       expect(f.removed).toEqual(new Set([alpha]));
     });
   });
+
+  it('completes model deletion when clearing cached execution state fails and marks transitioning sessions busy', async () => {
+    const setItemDescriptor: TypedPropertyDescriptor<Storage["setItem"]> | undefined = Object.getOwnPropertyDescriptor(Storage.prototype, 'setItem');
+    const originalSetItem = setItemDescriptor?.value;
+    if (!originalSetItem) throw new Error('The native storage implementation is unavailable');
+    const storageSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'aiolm-model-execution') throw new DOMException('Synthetic quota full', 'QuotaExceededError');
+      originalSetItem.call(this, key, value);
+    });
+    vi.mocked(api.sessionList).mockResolvedValue([
+      { id: 'worker', name: 'Worker', state: 'stopping', model: beta, active_requests: 0, idle_seconds: 0, execution: {} },
+    ]);
+    try {
+      await withPendingDeletionFixture(async f => {
+        const betaDelete = await screen.findByRole('button', { name: 'Delete: beta.gguf' });
+        await waitFor(() => expect(betaDelete).toBeDisabled());
+        expect(betaDelete).toHaveAttribute('title', 'Unload the model before deleting a model.');
+
+        await confirmPendingDeletion(alpha);
+        const select = screen.getByRole('button', { name: 'Configure & run: beta.gguf' });
+        fireEvent.click(select);
+        await waitFor(() => expect(f.writes).toHaveLength(1));
+
+        const request = defined(f.requests[0]);
+        await act(async () => { request.entry.resolve(); await request.guarded.promise; });
+        await act(async () => { request.completion.resolve('success'); await request.native; });
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete: alpha.gguf' })).not.toBeInTheDocument());
+        expect(f.removed.has(alpha)).toBe(true);
+        expect(screen.queryByText(/Synthetic quota full|QuotaExceededError/i)).not.toBeInTheDocument();
+      });
+    } finally {
+      storageSpy.mockRestore();
+    }
+  });
 });

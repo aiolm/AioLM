@@ -21,7 +21,7 @@ vi.mock("../../shared/api/index", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../shared/api/index")>(),
   onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(), hfInstalledFiles: vi.fn(),
   hfDownloadSnapshot: vi.fn(), hfInstalledSnapshots: vi.fn(), hfCancelDownload: vi.fn(async () => undefined),
-  hfPendingDownloads: vi.fn(async () => []),
+  hfPendingDownloads: vi.fn(async () => []), hfDiscardDownload: vi.fn(async () => undefined),
 }));
 
 /** A repository tree with GGUF files and no root safetensors weights. */
@@ -611,5 +611,44 @@ describe('Discover across every repository format', () => {
     expect(screen.queryByRole('button', { name: 'Download complete model folder' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Download: model.Q4_K_M.gguf' })).not.toBeInTheDocument();
     expect(api.hfInstalledSnapshots).not.toHaveBeenCalled();
+  });
+
+  it('disables Resume and Discard while a pending download discard is in flight and surfaces snapshot errors', async () => {
+    let finishDiscard!: () => void;
+    vi.mocked(api.hfPendingDownloads).mockResolvedValueOnce([{
+      id: 'pending-1',
+      repo_id: 'owner/model',
+      file_path: 'model.gguf',
+      revision: null,
+      snapshot: false,
+      models_dir: 'models',
+      include_companions: false,
+      label: 'model.gguf',
+      total: 1000,
+      received: 250,
+      updated_at: 1,
+      files: [{ path: 'model.gguf', size: 1000 }],
+    }]);
+    vi.mocked(api.hfDiscardDownload).mockImplementationOnce(() => new Promise<void>(resolve => { finishDiscard = resolve; }));
+    vi.mocked(api.hfDownloadSnapshot).mockRejectedValueOnce(new Error('Snapshot transfer failed'));
+    vi.mocked(api.hfModelFiles).mockResolvedValueOnce(mixed);
+
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+    const discard = await screen.findByRole('button', { name: 'Discard: model.gguf' });
+    const resume = screen.getByRole('button', { name: 'Resume: model.gguf' });
+    fireEvent.click(discard);
+    const dialog = await screen.findByRole('dialog', { name: 'Discard this paused download?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(api.hfDiscardDownload).toHaveBeenCalledWith('pending-1'));
+    expect(discard).toBeDisabled();
+    expect(resume).toBeDisabled();
+    fireEvent.click(discard);
+    expect(api.hfDiscardDownload).toHaveBeenCalledOnce();
+    await act(async () => finishDiscard());
+
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    await clickDownload('Download complete model folder');
+    expect(await screen.findByText('Snapshot transfer failed')).toBeVisible();
   });
 });

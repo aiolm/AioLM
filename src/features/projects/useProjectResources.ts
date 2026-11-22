@@ -24,19 +24,21 @@ export function useProjectResources({ selectedTools, setSelectedTools, setDocume
     setMcpLoading(true);
     try {
       const servers = await api.mcpListServers();
+      const enabledServers = servers.filter(item => item.enabled);
+      const settled = await Promise.allSettled(enabledServers.map(server => api.mcpListTools(server.id)));
       const entries: typeof mcpCatalog = [];
       const failures: string[] = [];
-      for (const server of servers.filter(item => item.enabled)) {
-        try {
-          const tools = await api.mcpListTools(server.id);
-          for (const tool of tools) entries.push({ serverId: server.id, serverName: server.name, toolName: tool.name, key: `${server.id}:${tool.name}` });
-        } catch (caught) {
-          failures.push(`${server.name}: ${errorMessage(caught)}`);
+      for (const [index, result] of settled.entries()) {
+        const server = enabledServers[index];
+        if (!server) continue;
+        if (result.status === 'fulfilled') {
+          for (const tool of result.value) entries.push({ serverId: server.id, serverName: server.name, toolName: tool.name, key: `${server.id}:${tool.name}` });
+        } else {
+          failures.push(`${server.name}: ${errorMessage(result.reason)}`);
         }
       }
       setMcpCatalog(entries);
-      if (failures.length > 0) setError(failures.join('\n'));
-      else if (!silent) setError(null);
+      if (!silent) setError(failures.length > 0 ? failures.join(' · ') : null);
     } catch (caught) {
       if (!silent) setError(errorMessage(caught));
     } finally {
@@ -68,7 +70,7 @@ export function useProjectResources({ selectedTools, setSelectedTools, setDocume
       });
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(errorMessage(caught));
     }
   };
 

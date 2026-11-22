@@ -7,7 +7,7 @@ import type { AppConfig, SessionDefinition, SessionStatus } from '../../shared/a
 import type { preflightLaunch } from '../../shared/api';
 import type { AppStore } from '../../shared/state/store';
 import { executionConfig, executionSettings, settingsForSession } from '../../shared/config/executionSettings';
-import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
+import { sessionConfig, notifySessionStatusChanged, SESSION_STATUS_CHANGED_EVENT } from '../../shared/runtime/sessionUtils';
 import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
 import { ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
@@ -1514,5 +1514,40 @@ describe('post-save profile removal snapshots', () => {
     expect(store.cfg!.settings_profiles!.revision).toBe(before.cfg!.settings_profiles!.revision + 1);
     expect(context.getRequestProfile('default', store.cfg!)?.id).toBe('profile-new');
     expect(store.start).not.toHaveBeenCalled(); expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
+  });
+
+  it('guards onStop on active response, deduplicates concurrent stops, emits status refresh, and formats errorMessage', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const events: Event[] = [];
+    const listener = (event: Event) => events.push(event);
+    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, listener);
+    try {
+      setSessionActivity('work', true);
+      const sessionDialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+      act(() => sessionDialog.onStop!());
+      expect(mocks.sessionStop).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toHaveTextContent('Stop the current response before changing its model.');
+
+      setSessionActivity('work', false);
+      let finishStop!: () => void;
+      mocks.sessionStop.mockImplementationOnce(() => new Promise<void>(resolve => { finishStop = resolve; }));
+      act(() => {
+        sessionDialog.onStop!();
+        sessionDialog.onStop!();
+      });
+      expect(mocks.sessionStop).toHaveBeenCalledTimes(1);
+      await act(async () => finishStop());
+      expect(events).toHaveLength(1);
+
+      cleanup();
+      vi.mocked(store.stop).mockRejectedValueOnce(new Error('Synthetic stop failure'));
+      const defaultDialog = await open(store, { target: { kind: 'default' } });
+      await act(async () => { defaultDialog.onStop!(); });
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Synthetic stop failure');
+      expect(alert).not.toHaveTextContent('Error: Synthetic stop failure');
+    } finally {
+      window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, listener);
+    }
   });
 });

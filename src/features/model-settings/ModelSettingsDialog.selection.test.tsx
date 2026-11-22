@@ -534,4 +534,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onApply).not.toHaveBeenCalled();
     expect(onProfileCommit).not.toHaveBeenCalled();
   });
+
+  it('keeps the Model path input synced when change updates active_model', () => {
+    mount({ initialSection: 'advanced' });
+    fireEvent.change(screen.getByLabelText('Apply a llama-server command'), {
+      target: { value: '-m "\\\\?\\C:\\models\\pasted.gguf"' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply pasted settings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Model' }));
+    expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('C:\\models\\pasted.gguf');
+  });
 });
