@@ -4,12 +4,12 @@
 .api-server-content { width: 100%; min-width: 0; padding-bottom: 32px; }
 .api-page-heading h1 { margin: 0; }
 .api-page-heading p { max-width: 72ch; margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.55; }
-.api-server-control { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; margin: 0 0 8px; padding: 10px 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
+.api-server-control { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; margin: 0 0 8px; padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); }
 .api-server-control > button { flex-shrink: 0; }
 .api-server-control .developer-api-status { display: grid; justify-items: start; gap: 4px; min-width: 0; }
 .api-server-control .developer-api-status p { margin: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 
-.api-section { min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--ui-border); }
+.api-section { min-width: 0; padding: 24px 0; border-bottom: 1px solid var(--ui-border); }
 .api-connection { container: api-connection / inline-size; }
 .api-section h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.4; }
 .api-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
@@ -17,12 +17,12 @@
 .api-hint { max-inline-size: 80ch; margin: 4px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; overflow-wrap: break-word; }
 
 .api-model-list { max-height: clamp(12rem, 40dvh, 40rem); overflow: auto; margin: 12px 0 0; padding: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); list-style: none; }
-.api-model-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 6px 10px; }
+.api-model-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 12px; }
 .api-model-list li + li { border-top: 1px solid var(--ui-border); }
 .api-model-list code { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
 .api-model-list button { flex-shrink: 0; }
 
-.api-format-field { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: center; gap: 4px 16px; margin: 10px 0; color: var(--ui-ink); font-size: var(--ui-text-support); }
+.api-format-field { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: center; gap: 4px 16px; margin: 12px 0; color: var(--ui-ink); font-size: var(--ui-text-support); }
 .api-format-field .app-custom-select-container { width: 100%; max-width: 224px; }
 .api-format-field p { grid-column: 2; margin: 0; }
 /* Label, value and copy share the list's columns, so every copy button lines up
@@ -31,7 +31,7 @@
    tracks carry no padding offset. Without subgrid each row keeps the same
    three columns on its own. */
 .api-connection-values { display: grid; grid-template-columns: 128px minmax(0, 1fr) max-content; column-gap: 16px; margin: 0; border-block: 1px solid var(--ui-border); }
-.api-connection-values > div { display: grid; grid-column: 1 / -1; grid-template-columns: 128px minmax(0, 1fr) max-content; grid-template-columns: subgrid; align-items: center; gap: 4px 16px; min-height: 40px; padding-block: 6px; }
+.api-connection-values > div { display: grid; grid-column: 1 / -1; grid-template-columns: 128px minmax(0, 1fr) max-content; grid-template-columns: subgrid; align-items: center; gap: 4px 16px; min-height: 52px; padding-block: 8px; }
 .api-connection-values > div + div { border-top: 1px solid var(--ui-border); }
 .api-connection-values dt { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .api-connection-values dd { display: grid; grid-column: 2 / -1; grid-template-columns: minmax(0, 1fr) max-content; grid-template-columns: subgrid; align-items: center; gap: 12px 16px; min-width: 0; margin: 0; }
@@ -41,11 +41,11 @@
 .api-key-hint { margin-top: 8px; }
 
 .api-disclosure { min-width: 0; border-bottom: 1px solid var(--ui-border); }
-.api-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-inline: -8px; padding: 10px 8px; border-radius: var(--ui-radius-control); color: var(--ui-ink); font-size: var(--ui-text); font-weight: 550; cursor: pointer; }
+.api-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-inline: -8px; padding: 16px 8px; border-radius: var(--ui-radius-control); color: var(--ui-ink); font-size: var(--ui-text); font-weight: 550; cursor: pointer; }
 .api-disclosure > summary:hover { background: var(--ui-nav-hover); }
 .api-disclosure > summary::after { flex: none; float: none; margin: 0; }
 .api-disclosure > summary::marker { color: var(--ui-muted); }
-.api-disclosure-content { padding: 0 0 14px; }
+.api-disclosure-content { padding: 0 0 24px; }
 .api-disclosure-content > .api-port-form { max-width: 544px; }
 .api-port-pending { margin-top: 8px; }
 .api-example-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: var(--ui-text-support); }
@@ -71,13 +71,11 @@
 
 /* Keep model inventory beside connection values only when both panes fit;
    disclosures and feedback retain the full workspace width. */
-@container workspace (min-width: 720px) {
-  .api-server-content { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); column-gap: 20px; align-items: start; }
+@container workspace (min-width: 1100px) {
+  .api-server-content { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); column-gap: 24px; align-items: stretch; }
   .api-server-content > * { grid-column: 1 / -1; min-width: 0; }
-  .api-server-content > .api-models { grid-column: 1; border-bottom: 0; }
-  .api-server-content > .api-connection { grid-column: 2; border-bottom: 0; }
-  .api-server-content > .api-connection + .api-disclosure,
-  .api-server-content > .api-disclosure:first-of-type { border-top: 1px solid var(--ui-border); }
+  .api-server-content > .api-models { grid-column: 1; }
+  .api-server-content > .api-connection { grid-column: 2; }
 }
 
 @container workspace (max-width: 599px) {

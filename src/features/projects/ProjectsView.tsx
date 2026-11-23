@@ -93,15 +93,15 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
           </div>
         </aside>
         <section className="projects-editor" aria-labelledby="project-editor-title">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 id="project-editor-title" className="app-section-title">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h2>
             {isActiveSelection && <div className="flex flex-wrap items-center gap-2"><Badge tone="success">{t("ui.active")}</Badge><button type="button" onClick={deactivate} className="app-button app-button--ghost app-button--sm">{t("ui.deactivate")}</button></div>}
           </div>
-          <div className="mt-2 grid gap-3 app-form-grid">
+          <div className="mt-3 grid gap-3 app-form-grid">
             <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
-          <h3 className="app-section-title mt-3.5">{t("ui.projectProfileLabel")}</h3>
+          <h3 className="app-section-title mt-6">{t("ui.projectProfileLabel")}</h3>
           <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="projects-profile-summary">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium ui-color-ink">
@@ -110,7 +110,7 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
               </span>
               <button type="button" data-icon="edit" onClick={openProjectEditor} disabled={!canOpenProjectEditor} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>
-            <dl className="mt-2 space-y-1 text-xs">
+            <dl className="mt-3 space-y-1.5 text-xs">
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{<ModelName model={displayConfig?.active_model} empty={t("load.noModel")} />}<ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink"><RuntimeSelectionLabel config={displayConfig} separator=" · " /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="min-w-0 app-text-wrap ui-color-ink">{providerOf(displayConfig ?? {}) !== 'llama.cpp'
@@ -118,10 +118,10 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
                   ? displayConfig.provider_options.vllm.max_model_len.toLocaleString() : providerCopy[locale].inherit
                 : displayConfig?.runtime_defaults?.includes("ctx_size") ? <DefaultValue info={settingDefaultInfo("ctx_size", SERVER_OPTIONS, false, locale, { selected: true })} /> : displayConfig?.ctx_size.toLocaleString()}</dd></div>
             </dl>
-            <p className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-relaxed ui-color-ink">{displayedPrompt || t("ui.projectPromptEmpty")}</p>
+            <p className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-relaxed ui-color-ink">{displayedPrompt || t("ui.projectPromptEmpty")}</p>
             <p className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>
           </section>
-          <section className="mt-3.5 border-t pt-3 ui-border-color-border" aria-labelledby="project-workspace-title">
+          <section className="mt-6 border-t pt-4 ui-border-color-border" aria-labelledby="project-workspace-title">
             <h3 id="project-workspace-title" className="app-section-title">{t("panel.chatWorkspace")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectChatLimitsHint")}</p>
             <div className="mt-3 grid gap-4 app-form-grid">
@@ -130,7 +130,7 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
                   <span id="project-mcp-heading">{t("ui.fieldToolIds")}</span>
                   <span className="ui-color-faint">{toolCount}</span>
                 </div>
-                <p className="mt-0.5 text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
+                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button type="button" data-icon="refresh" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm"><StableLabel value={mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")} labels={[t("ui.projectMcpLoading"), t("ui.projectRefreshTools")]} /></button>
                 </div>
@@ -149,7 +149,7 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
                   <span id="project-documents-heading">{t("ui.fieldDocuments")}</span>
                   <span className="ui-color-faint">{docCount}/{MAX_PROJECT_DOCUMENTS}</span>
                 </div>
-                <p className="mt-0.5 text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
+                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
                 <div className="mt-2">
                   <button type="button" data-icon="add" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
                 </div>
@@ -160,7 +160,7 @@ export default function ProjectsView({ controller }: { controller: ProjectsContr
               </div>
             </div>
           </section>
-          <section className="mt-3.5 border-t pt-3 ui-border-color-border" aria-labelledby="project-save-title">
+          <section className="mt-6 border-t pt-4 ui-border-color-border" aria-labelledby="project-save-title">
             <h3 id="project-save-title" className="app-section-title">{t("panel.save")} / {t("panel.apply")}</h3>
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
           <div className="projects-editor-actions mt-3">

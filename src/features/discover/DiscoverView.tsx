@@ -81,9 +81,9 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
           <h1 className="app-page-title">{providerCopy[locale].discoverTitle}</h1>
           <p className="app-page-description" >{providerCopy[locale].discoverDescription}</p>
         </div>
-        <div className="app-card app-card--tight flex items-center gap-2 text-start text-xs ui-color-faint">
-          <span className="shrink-0">{t("panel.destination")}:</span>
-          <span className="max-w-[20rem] truncate text-xs font-medium ui-color-ink" title={store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}>{store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}</span>
+        <div className="app-card app-card--tight text-right text-xs ui-color-faint">
+          <div className="text-xs">{t("panel.destination")}</div>
+          <div className="mt-0.5 max-w-[18rem] app-text-wrap text-xs ui-color-ink" title={store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}>{store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}</div>
         </div>
       </header>
 
@@ -115,7 +115,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
       </form>
 
       <details
-        className="discover-token-disclosure app-card app-card--tight mb-2"
+        className="discover-token-disclosure app-card app-card--tight mb-3"
         open={hfTokenOpen}
         onToggle={(event) => setHfTokenOpen(event.currentTarget.open)}
       >
@@ -218,7 +218,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
           {searching && results.length === 0 && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.searching")}</div>}
           {searching && results.length > 0 && <span className="sr-only" role="status">{t("extra.searching")}</span>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed ui-color-faint" >{listed ? t("ui.discoverNoResults") : t("ui.searchHint")}</div>}
-          {results.length > 0 && <div role="list" className="space-y-1 p-1.5">
+          {results.length > 0 && <div role="list" className="space-y-1.5 p-2">
             {results.map((model) => (
               <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={`app-list-row block w-full${selected?.id === model.id ? " is-selected" : ""}`}>
                 <div className="flex min-w-0 items-center gap-2"><ModelIcon model={model.id} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges mode="compact" model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
@@ -311,7 +311,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
             )}
             {!loadingFiles && filteredSafetensorsGroups.length > 0 && <>
               <p className="px-3 py-2 text-xs ui-color-muted">{providerCopy[locale].safetensorsBundle}</p>
-              <div role="list" className="space-y-1 p-1.5">
+              <div role="list" className="space-y-1.5 p-2">
                 {filteredSafetensorsGroups.map(group => {
                   const path = group.file.path;
                   const matchingSnapshots = repoSnapshots.filter(artifact => selectedBundleContains(artifact, path));
@@ -348,7 +348,7 @@ export default function DiscoverView({ controller }: { controller: ReturnType<ty
                 })}
               </div>
             </>}
-            {!loadingFiles && filteredGgufGroups.length > 0 && <div role="list" className={`space-y-1 p-1.5${filteredSafetensorsGroups.length > 0 ? " border-t ui-border-color-border" : ""}`}>
+            {!loadingFiles && filteredGgufGroups.length > 0 && <div role="list" className={`space-y-1.5 p-2${filteredSafetensorsGroups.length > 0 ? " border-t ui-border-color-border" : ""}`}>
               {filteredGgufGroups.map((group) => {
                 const { file } = group;
                 const activeDownload = downloading === file.path && transferOrigin.current?.repo === selected.id;

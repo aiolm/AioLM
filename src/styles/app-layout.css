@@ -21,7 +21,7 @@
 .models-runtime-details > summary::after { float: none; margin: 0; }
 .models-runtime-details-content { margin-top: 8px; max-height: 160px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); }
 .models-header-actions { min-height: var(--ui-control); }
-.models-model-row { display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name size" "path path" "actions files"; min-height: 44px; }
+.models-model-row { display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name size" "path path" "actions files"; min-height: 56px; }
 .models-folder-actions { display: flex; flex-wrap: wrap; }
 .models-folder-actions > label { flex: 0 0 auto; }
 .models-folder-actions > input { flex: 1 1 16rem; width: auto; }

@@ -168,7 +168,7 @@ export default function ChatConversationHeader({
               value={activeThread?.systemPrompt ?? ""}
               onChange={(event) => onUpdateThread({ systemPrompt: event.target.value })}
               disabled={threadLocked}
-              rows={2}
+              rows={4}
               className="app-textarea mt-1.5"
               placeholder={ct("systemPromptPlaceholder")}
             />

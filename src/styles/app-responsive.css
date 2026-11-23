@@ -1,5 +1,5 @@
 @media (min-width: 960px) and (max-width: 1079px) {
- .app-shell:not(.app-shell--rail) { --aiolm-sidebar-width: 192px; }
+ .app-shell:not(.app-shell--rail) { --aiolm-sidebar-width: 200px; }
 }
 @media (max-width: 1199px) {
  .aiolm-runtime-context { flex-basis: clamp(260px, 38vw, 440px); max-width: 440px; }
@@ -34,13 +34,13 @@
 }
 /* Break at the width of the page, after sidebar, padding and scrollbar space. */
 @container workspace (min-width: 680px) {
- .app-master-detail { grid-template-columns: clamp(14.5rem, 21cqi, 19rem) minmax(0,1fr); }
- .discover-columns { grid-template-columns: clamp(16rem, 32cqi, 26rem) minmax(0,1fr); }
+ .app-master-detail { grid-template-columns: clamp(15rem, 22cqi, 20rem) minmax(0,1fr); }
+ .discover-columns { grid-template-columns: clamp(18rem, 34cqi, 28rem) minmax(0,1fr); }
  .chat-thread-backdrop { display: none; }
- .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: clamp(196px, 19cqi, 236px); padding-block: 10px; padding-inline: 0 14px; border: 0; border-inline-end: 1px solid var(--ui-border); border-radius: 0; background: transparent; box-shadow: none; }
- .projects-workspace { grid-template-columns: clamp(14.5rem, 22cqi, 19.5rem) minmax(0, 1fr); align-items: stretch; column-gap: 0; flex: 1 0 auto; }
- .projects-list { position: sticky; top: 0; align-self: start; max-height: max(200px, calc(100dvh - 240px)); border-block-end: 0; border-inline-end: 0; padding-bottom: 0; padding-inline-end: 16px; }
- .projects-editor { min-height: 100%; border-inline-start: 1px solid var(--ui-border); padding-inline-start: 16px; }
+ .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: clamp(220px, 21cqi, 260px); padding-block: 16px; padding-inline: 0 16px; border: 0; border-inline-end: 1px solid var(--ui-border); border-radius: 0; background: transparent; box-shadow: none; }
+ .projects-workspace { grid-template-columns: clamp(15rem, 24cqi, 21rem) minmax(0, 1fr); align-items: stretch; column-gap: 0; flex: 1 0 auto; }
+ .projects-list { position: sticky; top: 0; align-self: start; max-height: max(200px, calc(100dvh - 240px)); border-block-end: 0; border-inline-end: 0; padding-bottom: 0; padding-inline-end: 24px; }
+ .projects-editor { min-height: 100%; border-inline-start: 1px solid var(--ui-border); padding-inline-start: 24px; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
  .models-model-row { grid-template-columns: minmax(0,1fr) 5.5rem minmax(18rem, max-content); grid-template-areas: "name size actions" "path path files"; }
  .models-model-actions { max-width: 360px; justify-content: flex-end; }

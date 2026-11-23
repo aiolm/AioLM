@@ -5,14 +5,14 @@
 @keyframes app-feedback-appear { from { opacity: 0; } to { opacity: 1; } }
 .app-page-scroll { padding: var(--ui-canvas-padding); }
 /* The body title names the work under the toolbar's location label. */
-.app-page-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--ui-border); }
+.app-page-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; margin-bottom: 20px; }
 .app-page-header > div:first-child { flex: 1 1 20rem; min-width: 0; }
-.app-page-title, .api-page-heading h1, .settings-header h1 { color: var(--ui-ink); font-size: var(--ui-text-title); font-weight: 650; line-height: 1.25; letter-spacing: -.01em; }
+.app-page-title, .api-page-heading h1, .settings-header h1 { color: var(--ui-ink); font-size: var(--ui-text-title); font-weight: 650; line-height: 1.3; letter-spacing: -.01em; }
 /* One line is enough to orient; the page body carries the detail. */
-.app-page-description { max-width: 78ch; margin-top: 2px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; overflow: clip; }
+.app-page-description { max-width: 72ch; margin-top: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .app-page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.app-section-title { color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.35; }
-.app-section-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.4; margin-top: 2px; }
+.app-section-title { color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.4; }
+.app-section-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; margin-top: 4px; }
 .app-eyebrow { font-size: var(--ui-text-support); font-weight: 600; color: var(--ui-muted); }
 .app-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .app-runtime-empty { display: grid; place-items: center; min-width: 0; height: 100%; overflow: auto; }

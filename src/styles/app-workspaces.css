@@ -1,5 +1,5 @@
 /* Shared list/detail pages and the parameter editor. */
-.discover-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.discover-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; min-width: 0; margin-bottom: 12px; }
 .discover-toolbar-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; font-size: var(--ui-text-support); }
 .discover-toolbar-field > .app-custom-select-container { min-width: min(100%, 10.5rem); }
 .discover-toolbar-search { flex: 1 1 192px; }
@@ -17,17 +17,17 @@
 /* Engines: inventory, add journey and engine detail are single columns. The
    detail reads engine context, a compact device strip, backend or environment
    rows, then quiet advanced tools. */
-.runtimes-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.runtimes-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .runtime-profiles-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 
 /* Inventory: the three-step guide exists only while nothing is installed;
    otherwise Add sits beside the search as the one primary action. */
-.adapter-add { display: grid; gap: 8px; padding: 14px 16px; }
+.adapter-add { display: grid; gap: 12px; padding: 20px 24px; }
 .adapter-add .app-section-hint { margin: 0; }
 .adapter-journey { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
 .adapter-journey > li { display: inline-flex; align-items: center; gap: 8px; color: var(--ui-ink); font-size: var(--ui-text); line-height: var(--ui-text-leading); }
 .adapter-journey__index { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ui-accent-soft); color: var(--ui-accent); font-size: var(--ui-text-support); font-weight: 600; font-variant-numeric: tabular-nums; }
-.adapter-inventory { display: grid; gap: 8px; min-width: 0; }
+.adapter-inventory { display: grid; gap: 12px; min-width: 0; }
 .adapter-inventory__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .adapter-inventory__header .adapter-count { margin: 0; }
 .adapter-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
@@ -37,7 +37,7 @@
 .adapter-list__empty, .adapter-ready-note { margin: 0; }
 /* Cached inventory rows are focused when their hidden list is shown again.
    WKWebView render-skipping can drop their text and pointer target mid-click. */
-.adapter-row { padding: 6px 0; border-bottom: 1px solid var(--ui-border); }
+.adapter-row { padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
 .adapter-row__head { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 6px 16px; }
 .adapter-row__open { display: grid; gap: 2px; min-width: 0; min-height: var(--ui-control); padding: 6px 8px; border: 0; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-ink); font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
 .adapter-row__open strong { font-weight: 600; }
@@ -57,7 +57,7 @@
 .adapter-next { flex-wrap: wrap; margin-block-start: 8px; }
 
 /* Compact device strip: label/value pairs flow on one line and wrap. */
-.runtime-device-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface-muted); }
+.runtime-device-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; padding: 10px 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface-muted); }
 .runtime-device-summary__title { flex: none; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 600; line-height: var(--ui-text-leading); }
 .runtime-device-properties { display: flex; flex: 1 1 20rem; flex-wrap: wrap; gap: 4px 24px; min-width: 0; margin: 0; }
 .runtime-device-properties > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; }
@@ -71,15 +71,15 @@
 .runtime-show-all { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: var(--ui-control); }
 .runtime-show-all > label { font-size: var(--ui-text); cursor: pointer; }
 .runtime-hidden-count { flex-basis: 100%; color: var(--ui-muted); font-size: var(--ui-text-support); }
-.runtime-list { display: flex; flex-direction: column; gap: 14px; }
+.runtime-list { display: flex; flex-direction: column; gap: 20px; }
 .runtime-section__heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-bottom: 8px; border-bottom: 1px solid var(--ui-border); }
 .runtime-section__title { color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
 .runtime-section__empty { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .runtime-refresh svg { flex-shrink: 0; }
 .runtime-groups { min-width: 0; }
-.runtime-group { min-width: 0; padding: 8px 0; }
+.runtime-group { min-width: 0; padding: 14px 0; }
 .runtime-group + .runtime-group { border-top: 1px solid var(--ui-border); }
-.runtime-group__header { display: grid; grid-template-columns: minmax(0,1fr); gap: 6px 20px; align-items: center; }
+.runtime-group__header { display: grid; grid-template-columns: minmax(0,1fr); gap: 8px 20px; align-items: center; }
 .runtime-group__identity { min-width: 0; }
 .runtime-group__title { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; }
 .runtime-group__name { color: var(--ui-ink); font-size: var(--ui-text); font-weight: 600; line-height: 1.4; }
@@ -118,9 +118,9 @@
    under a hairline, with hairline subsections and no nested cards. */
 .runtime-advanced { border-top: 1px solid var(--ui-border); }
 .runtimes-wizard > .runtime-advanced:last-child { border-bottom: 1px solid var(--ui-border); }
-.runtime-advanced > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 6px 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; cursor: pointer; }
+.runtime-advanced > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 10px 0; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; cursor: pointer; }
 .runtime-advanced > summary::after { float: none; margin: 0; }
-.runtime-advanced__body { padding-bottom: 8px; }
+.runtime-advanced__body { padding-bottom: 12px; }
 .runtime-advanced__body > section.app-card { margin: 0; padding: 16px 0; border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; background: transparent; }
 .runtime-advanced__body > section.app-card:first-child { border-top: 0; padding-top: 4px; }
 .runtime-tool { display: grid; gap: 12px; min-width: 0; }
@@ -137,9 +137,9 @@
 .runtime-tool .runtime-progress-slot:empty { display: none; }
 
 /* Python / external environments of a non-llama engine. */
-.provider-env { display: grid; gap: 12px; min-width: 0; }
+.provider-env { display: grid; gap: 16px; min-width: 0; }
 .provider-env__field { display: grid; gap: 6px; max-width: 40rem; min-width: 0; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
-.provider-env__provider { display: grid; gap: 8px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--ui-border); }
+.provider-env__provider { display: grid; gap: 12px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--ui-border); }
 .provider-env__provider-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
 .provider-env__identity { display: grid; flex: 1 1 18rem; gap: 2px; min-width: 0; }
 .provider-env__identity .app-section-hint { margin: 0; }
@@ -263,27 +263,27 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .option-default-source { display: inline; margin-inline-start: 8px; font-size: var(--ui-text-support); }
 .option-default-value > code { color: var(--ui-ink); font-family: inherit; font-variant-numeric: tabular-nums; }
 .tuning-section { min-width: 0; container: fields / inline-size; }
-.tuning-section + .tuning-section { margin-top: 12px; }
+.tuning-section + .tuning-section { margin-top: 24px; }
 .tuning-section .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
 .tuning-sampling-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
 .chat-page { display: flex; flex-direction: column; position: relative; min-height: 0; padding-block: 0; overflow: hidden; }
 .chat-layout { display: flex; position: relative; min-height: 0; flex: 1; gap: 16px; }
 .chat-thread-backdrop { position: absolute; inset: 0; z-index: 34; background: var(--ui-overlay); }
-.chat-conversation { display: flex; position: relative; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding-block: 10px 12px; container: conversation / inline-size; }
+.chat-conversation { display: flex; position: relative; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding-block: 16px 24px; container: conversation / inline-size; }
 .chat-log-container { position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-height: 100px; min-width: 0; }
-.chat-message-log { min-height: 0; flex: 1 1 0; overflow: auto; padding-block: 8px; }
+.chat-message-log { min-height: 0; flex: 1 1 0; overflow: auto; padding-block: 12px; }
 .chat-scroll-bottom { position: absolute; inset-inline-start: 50%; transform: translateX(-50%); bottom: 12px; z-index: 15; border-radius: var(--ui-radius-pill); box-shadow: var(--ui-elev-menu); }
-.chat-message-content, .chat-composer, .chat-conversation-heading, .chat-session-status, .chat-owner-banner { width: 100%; max-width: 68rem; margin-inline: auto; }
-.chat-session-status { padding-bottom: 6px; }
-.chat-owner-banner { margin-bottom: 8px; }
+.chat-message-content, .chat-composer, .chat-conversation-heading, .chat-session-status, .chat-owner-banner { width: 100%; max-width: 90rem; margin-inline: auto; }
+.chat-session-status { padding-bottom: 8px; }
+.chat-owner-banner { margin-bottom: 12px; }
 .chat-empty-conversation { margin-block: clamp(12px, 5dvh, 48px); }
 .chat-message-content { padding-inline: 4px; }
-.chat-message-content > * + * { margin-top: 10px; }
+.chat-message-content > * + * { margin-top: 12px; }
 /* Completed history stays searchable and focusable without laying out every row. */
 .chat-message-completed { content-visibility: auto; contain-intrinsic-size: auto none auto 12rem; }
-.chat-message { position: relative; min-width: 0; font-size: 14px; line-height: var(--chat-prose-leading, 1.6); color: var(--ui-ink); }
-.chat-message-user { max-width: 78%; padding: 8px 12px; border: 1px solid var(--ui-border-accent); border-radius: var(--ui-radius-panel); background: var(--ui-accent-soft); }
-.chat-message-assistant { width: 100%; padding-block: 6px; }
+.chat-message { position: relative; min-width: 0; font-size: 15px; line-height: var(--chat-prose-leading, 1.7); color: var(--ui-ink); }
+.chat-message-user { max-width: 75%; padding: 12px 16px; border: 1px solid var(--ui-border-accent); border-radius: var(--ui-radius-panel); background: var(--ui-accent-soft); }
+.chat-message-assistant { width: 100%; padding-block: 12px; }
 .chat-message-compact { padding-block: 8px; }
 /* A short window keeps the failure and its details above the composer
    instead of spending the log's height on margins. */
@@ -292,10 +292,10 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 /* Failed launch diagnostics belong beside the retained or empty conversation. */
 .chat-failure-details { margin-top: 12px; text-align: start; color: var(--ui-ink); }
 .chat-composer { flex: 0 0 auto; min-width: 0; }
-.chat-composer-actions { position: relative; display: flex; min-width: 0; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--ui-border); }
+.chat-composer-actions { position: relative; display: flex; min-width: 0; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-border); }
 .chat-composer-actions.is-drag-over { border-color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 8%, transparent); }
 .chat-drop-overlay { position: absolute; inset: 4px; z-index: 18; pointer-events: none; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--ui-accent); border-radius: var(--ui-radius-panel); background: color-mix(in srgb, var(--ui-panel) 88%, transparent); color: var(--ui-accent); font-size: var(--ui-text); font-weight: 600; }
-.chat-composer-actions textarea { min-height: 44px; max-height: 140px; padding-block: 7px; font-size: 14px; resize: none; overflow-y: auto; }
+.chat-composer-actions textarea { min-height: 72px; max-height: 160px; font-size: 15px; resize: none; overflow-y: auto; }
 .chat-composer-toolbar { position: relative; display: grid; min-width: 0; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 8px; }
 .chat-composer-tools { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
 .chat-composer-toolbar > button { grid-column: 2; grid-row: 1; }
@@ -311,7 +311,7 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-mcp-tool-desc { padding-inline-start: 20px; line-height: 1.4; }
 /* A single control row shares its reading edge with the message canvas.
    Answering-model context belongs below the title, not below one control. */
-.chat-conversation-heading { display: grid; grid-template-columns: minmax(0,1fr) minmax(180px,260px); align-items: center; gap: 12px; flex: 0 0 auto; margin-block: 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--ui-border); }
+.chat-conversation-heading { display: grid; grid-template-columns: minmax(0,1fr) minmax(180px,280px); align-items: start; gap: 16px; flex: 0 0 auto; margin-block: 0 12px; }
 .chat-heading-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .chat-thread-toggle { flex-shrink: 0; }
 .chat-heading-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -319,9 +319,9 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-settings-summary { width: var(--ui-control); min-width: var(--ui-control); min-height: var(--ui-control); padding: 0; }
 .chat-settings-summary::after { display: none; }
 .chat-settings-popover { position: absolute; top: calc(100% + 8px); inset-inline-end: 0; z-index: 30; width: min(384px, 100cqi); max-height: min(70dvh,560px,var(--chat-settings-available-height,70dvh)); overflow-y: auto; border-radius: var(--ui-radius-menu); }
-.chat-settings-popover > * + * { margin-top: 10px; }
-.chat-conversation-fields, .chat-conversation-options { padding-top: 10px; border-top: 1px solid var(--ui-border); }
-.chat-conversation-fields > * + *, .chat-conversation-options > * + * { margin-top: 8px; }
+.chat-settings-popover > * + * { margin-top: 12px; }
+.chat-conversation-fields, .chat-conversation-options { padding-top: 12px; border-top: 1px solid var(--ui-border); }
+.chat-conversation-fields > * + *, .chat-conversation-options > * + * { margin-top: 12px; }
 .chat-media-controls { min-width: 0; }
 .chat-media-controls > legend { font-size: var(--ui-text-group); font-weight: 600; }
 .chat-media-target { display: grid; gap: 4px; margin-block: 12px; }
@@ -330,14 +330,14 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-thread-sidebar.is-open { display: flex; }
 .chat-thread-heading { font-size: var(--ui-text-group); font-weight: 600; }
 .chat-conversation-title, .chat-session-target { min-width: 0; }
-.chat-conversation-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; flex: 1 1 auto; }
-.chat-page-title { min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--ui-text-section); line-height: 1.35; }
+.chat-conversation-title { flex: 1 1 auto; }
+.chat-page-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--ui-text-title); line-height: var(--ui-control); }
 .chat-project-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-muted); font-size: var(--ui-text-support); }
 .chat-session-target { flex: 1 1 0; }
 .chat-session-picker { display: block; width: 100%; min-width: 0; max-width: 100%; }
 .chat-session-trigger { min-width: 0; max-width: 100%; }
 .chat-session-trigger .app-custom-select-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.chat-answer-context { display: flex; flex-wrap: wrap; min-width: 0; gap: 2px 10px; margin-top: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
+.chat-answer-context { display: flex; flex-wrap: wrap; min-width: 0; gap: 2px 10px; margin-top: 2px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 .chat-answer-context > span { min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .chat-answer-model { display: inline-flex; align-items: center; gap: 6px; }
 .chat-answer-model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -383,12 +383,12 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-thread-list::-webkit-scrollbar-thumb { background: var(--ui-border-strong); border-radius: 4px; }
 
 .projects-page { display: flex; flex-direction: column; min-height: 100%; }
-.projects-workspace { width: 100%; gap: 16px; }
+.projects-workspace { width: 100%; gap: 24px; }
 .projects-list { display: flex; min-width: 0; max-height: clamp(10rem, 35dvh, 24rem); flex-direction: column; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
 .projects-list-items { min-height: 0; flex: 1; overflow-y: auto; }
 .projects-editor { min-width: 0; }
-.projects-profile-summary { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface); }
-.projects-selection-list { max-height: clamp(9rem, 24dvh, 18rem); min-height: 0; flex: 1; overflow-y: auto; padding-block: 6px; border-block: 1px solid var(--ui-border); }
+.projects-profile-summary { margin-top: 12px; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface); }
+.projects-selection-list { max-height: clamp(12rem, 30dvh, 24rem); min-height: 0; flex: 1; overflow-y: auto; padding-block: 8px; border-block: 1px solid var(--ui-border); }
 .projects-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .projects-editor-actions > .app-button--danger { margin-inline-start: auto; }
 
