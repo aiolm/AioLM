@@ -75,7 +75,7 @@ export default memo(function AdapterCatalogList({
   onOpen: (id: ProviderId) => void;
   action?: ReactNode;
 }) {
-  const { locale } = useI18n();
+  const { t, locale } = useI18n();
   const copy = adapterCatalogCopy[locale];
   const headingId = useId();
   const [search, setSearch] = useState('');
@@ -124,7 +124,14 @@ export default memo(function AdapterCatalogList({
           <AdapterRow key={item.id} item={item} runtimes={owned} disabled={disabled} copy={copy} onOpen={onOpen} />
         ))}
       </ul>
-      {!loading && rows.length === 0 && catalog.length > 0 && <p className="app-section-hint adapter-list__empty">{copy.empty}</p>}
+      {!loading && rows.length === 0 && catalog.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="app-section-hint adapter-list__empty">{copy.empty}</p>
+          {search.trim() && (
+            <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => setSearch('')}>{t('ui.modelsClearFilters')}</button>
+          )}
+        </div>
+      )}
       <p className="app-section-hint adapter-ready-note">{copy.readyNote}</p>
     </section>
   );

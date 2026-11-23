@@ -26,4 +26,13 @@ describe("runtime version labels", () => {
     expect(screen.getByRole("button", { name: "Install b10638: CUDA (NVIDIA)" })).toBeInTheDocument();
   });
 
+  it("keeps the initial latest probe neutral without an error class before lookup settles", () => {
+    const row = initialRows().find((item) => item.backend === "cuda")!;
+    const { container } = render(<RuntimeBackendRow t={t} locale="en" row={row} device={null} serverRunning={false} runtimeBusy={false} prBusy={false} bundleBusy={false}
+      cancelBusy={false} onCancelInstall={vi.fn()} onInstall={vi.fn()} onUninstall={vi.fn()} />);
+    const latestNode = container.querySelector(".runtime-group__latest");
+    expect(latestNode).not.toBeNull();
+    expect(latestNode?.className).not.toContain("is-error");
+  });
+
 });

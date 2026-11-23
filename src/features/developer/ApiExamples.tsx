@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
+import StableLabel from '../../shared/ui/StableLabel';
 import { apiServerCopy } from './apiServerCopy';
 
 export type ApiFormat = 'openai' | 'anthropic';
@@ -47,7 +48,7 @@ export default function ApiExamples({ baseUrl, format, onCopy, copied }: {
         <label htmlFor="api-example-language">{copy.language}</label>
         <CustomSelect<Language> id="api-example-language" value={language} onChange={setLanguage}
           options={[{ value: 'curl', label: 'cURL' }, { value: 'python', label: 'Python' }, { value: 'javascript', label: 'JavaScript' }]} />
-        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="copy" onClick={() => onCopy(snippet)}>{copied ? t('panel.copied') : copy.copyExample}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="copy" onClick={() => onCopy(snippet)}><StableLabel value={copied ? t('panel.copied') : copy.copyExample} labels={[t('panel.copied'), copy.copyExample]} /></button>
       </div>
       <p className="api-hint">{copy.exampleHint}</p>
       <pre role="region" tabIndex={0} aria-label={copy.examples} className="api-code"><code>{snippet}</code></pre>

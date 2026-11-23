@@ -146,6 +146,7 @@ function NotificationSettings({ preferences, patch }: { preferences: AppPreferen
     setFeedback(sent ? { tone: "success", message: copy.testSent } : { tone: "warning", message: copy.testNotAllowed });
   }, copy.testFailed);
   const statusLabel = permission === null ? copy.statusChecking : { granted: copy.statusGranted, denied: copy.statusDenied, default: copy.statusDefault, unavailable: copy.statusUnavailable }[permission];
+  const statusLabels = [copy.statusChecking, copy.statusGranted, copy.statusDenied, copy.statusDefault, copy.statusUnavailable];
   const help = permission === "denied" ? copy.deniedHelp : permission === "unavailable" ? copy.unavailableHelp : null;
   // Desktop alerts on Windows need the app identity an installation registers.
   const windowsHelp = permission !== null && permission !== "unavailable" && /Windows/i.test(navigator.userAgent) ? copy.windowsHelp : null;
@@ -160,7 +161,7 @@ function NotificationSettings({ preferences, patch }: { preferences: AppPreferen
         {windowsHelp && <p>{windowsHelp}</p>}
       </div>
       <div className="settings-control settings-notification-actions" role="group" aria-labelledby="settings-notification-permission-label">
-        <StatusBadge role="status" label={statusLabel} tone={permission ? permissionTone[permission] : "neutral"} />
+        <StatusBadge role="status" label={statusLabel} labels={statusLabels} tone={permission ? permissionTone[permission] : "neutral"} />
         {permission === "default" && <button type="button" className="app-button app-button--primary" disabled={busy} onClick={() => { void request(); }}>{copy.allow}</button>}
         {permission === "denied" && <button type="button" className="app-button app-button--secondary" disabled={busy} onClick={() => { void recheck(); }}>{copy.checkAgain}</button>}
         <button type="button" className="app-button app-button--secondary" disabled={busy || permission !== "granted"} onClick={() => { void sendTest(); }}>{copy.sendTest}</button>
@@ -272,13 +273,13 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   };
 
   return <div className="app-page-scroll settings-page">
-    <div className="settings-header"><div><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined}>{saveState === "saved" ? <StatusBadge label={t("common.saved")} tone="success" /> : "—"}</span></div>
+    <div className="settings-header"><div><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined} aria-hidden={saveState === "saved" ? undefined : true}><StatusBadge label={t("common.saved")} tone="success" /></span></div>
     <div className="settings-layout">
       <input type="search" className="app-input settings-search" aria-label={search.label} placeholder={search.label} value={query} onChange={event => setQuery(event.target.value)} />
       <TabNav
         items={sections}
         active={section}
-        onSelect={setSection}
+        onSelect={(next) => { setSection(next); if (query) setQuery(""); }}
         label={t("settings.title")}
         orientation="horizontal"
         tabId={(id) => `settings-tab-${id}`}
@@ -344,7 +345,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
         {(normalizedQuery || section === "advanced") && <Group id="advanced" title={t("settings.advanced")}>
           <Row id="settings-confirm-destructive" label={t("settings.confirmDestructive")} description={t("settings.confirmDestructiveDesc")}>{bool("settings-confirm-destructive", preferences.advanced.confirmDestructiveActions, (value) => patch({ advanced: { ...preferences.advanced, confirmDestructiveActions: value } }))}</Row>
           <ActionRow id="settings-backup" label={t("settings.backupTitle")} description={t("settings.backupDescription")}>
-            <button type="button" className="app-button app-button--secondary" data-icon="upload" onClick={downloadExport}>{t("settings.export")}</button>
+            <button type="button" className="app-button app-button--secondary" data-icon="download" onClick={downloadExport}>{t("settings.export")}</button>
             <label data-icon="upload" className="app-button app-button--secondary settings-file-button">{t("settings.import")}
               <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
             </label>

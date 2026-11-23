@@ -450,7 +450,9 @@ describe("Performance benchmark workflow", () => {
     const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, config) => config, getRequestProfile: () => null };
     vi.mocked(useModelSettings).mockReturnValue(settings);
     renderPanel({ ...store, cfg: { ...cfg, active_backend: "", active_build: "" } });
-    expect(await screen.findByRole("button", { name: "Run benchmark" })).toBeDisabled();
+    const runButton = await screen.findByRole("button", { name: "Run benchmark" });
+    expect(runButton).toBeDisabled();
+    expect(runButton).toHaveAttribute("title", "No runtime is selected.");
     expect(screen.queryByText("No runtime is selected.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Model settings" }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ section: "model" }));
@@ -859,5 +861,13 @@ describe("Performance benchmark workflow", () => {
     await act(async () => rejectCancel(new Error('late cancel transport failure')));
     expect(screen.queryByText('late cancel transport failure')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled();
+  });
+
+  it('shows pending benchmark admission inline in .performance-run-status without injecting a banner', async () => {
+    mocked.performanceBenchAdmission.mockImplementation(() => new Promise(() => {}));
+    const { container } = renderPanel();
+    await waitFor(() => expect(container.querySelector('.performance-run-status')).toHaveTextContent('Checking benchmark support for this target…'));
+    expect(container.querySelector('.performance-notice, .performance-workspace .app-feedback')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeDisabled();
   });
 });

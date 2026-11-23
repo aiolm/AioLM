@@ -10,6 +10,7 @@ import {
 import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
+import StableLabel from '../../shared/ui/StableLabel.tsx';
 import { benchmarkManagementError, benchmarkRecoveryError } from './benchmarkSharingActionError';
 
 type Copy = ReturnType<typeof import('./benchmarkCopy.ts').benchmarkCopy>;
@@ -104,9 +105,6 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
     if (revision === lastRevision.current) return;
     lastRevision.current = revision;
     generation.current += 1;
-    setItems([]);
-    setCursor(null);
-    setStarted(false);
     setError(false);
     void loadPage();
   }, [revision, loadPage]);
@@ -121,9 +119,6 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       if (!result) return;
       setNotice(copy.recoveryImported);
       generation.current += 1;
-      setItems([]);
-      setCursor(null);
-      setStarted(false);
       await loadPage();
     } catch (error) {
       setActionError(benchmarkRecoveryError(error, copy, 'import'));
@@ -183,7 +178,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
                 {itemLabel(copy.ownedItemTitle, entry.created_at_ms)} · {displayHost(entry.destination)}
               </span>
               <span className="performance-owned-actions">
-                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="open" onClick={() => void manage(entry.submission_id)}>{opening === entry.submission_id ? copy.managementOpening : copy.openManagement}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="open" onClick={() => void manage(entry.submission_id)}><StableLabel value={opening === entry.submission_id ? copy.managementOpening : copy.openManagement} labels={[copy.managementOpening, copy.openManagement]} /></button>
                 <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="download" onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
                 <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="copy" onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
               </span>

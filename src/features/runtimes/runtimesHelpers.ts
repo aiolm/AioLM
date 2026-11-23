@@ -52,6 +52,7 @@ export interface BackendRow {
   note: UiTextKey;
   latest: api.LatestInfo | null;
   latestErr: string | null;
+  latestLoaded?: boolean;
   installed: api.InstalledRuntime[];
   busy: boolean;
   progress: api.DownloadProgress | null;
@@ -63,6 +64,7 @@ export const initialRows = (): BackendRow[] => BACKENDS.map((backend) => ({
   note: backend.note,
   latest: null,
   latestErr: null,
+  latestLoaded: false,
   installed: [],
   busy: false,
   progress: null,

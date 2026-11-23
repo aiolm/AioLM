@@ -46,7 +46,7 @@ export default function ApiPortControl({ savedPort, running, runningPort, disabl
       </div>
       <p id="developer-api-port-hint" className="mt-2 text-xs ui-color-faint">{t("ui.apiPortHint")}</p>
       <div id="developer-api-port-feedback" className="text-xs ui-color-muted">
-        {draft !== null && !valid && <p role="alert" className="mt-1">{t("ui.apiPortInvalid")}</p>}
+        {draft !== null && !valid && <p role="alert" className="mt-1 ui-color-danger">{t("ui.apiPortInvalid")}</p>}
         {stale && <FeedbackBanner tone="warning" className="api-port-pending" action={{ label: t("ui.restartApi"), disabled, onClick: onRestart }}>{t("ui.apiPortPending", { port: savedPort, current: runningPort })}</FeedbackBanner>}
       </div>
     </form>

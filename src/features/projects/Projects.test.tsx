@@ -711,4 +711,21 @@ describe("Project configuration snapshots", () => {
     expect(screen.getByRole('checkbox', { name: 'Beta · search' })).toBeVisible();
     expect(screen.getByTitle(String.raw`C:\synthetic\notes.md`)).toBeVisible();
   });
+
+  it('keeps .projects-workspace full-height without items-start and marks list row Active badges non-shrinking', () => {
+    const store = createTestStore();
+    const first = projectFromConfig('First project', 'Prompt A', store.cfg!);
+    const second = projectFromConfig('Second-project-with-very-long-unbroken-identifier-name', 'Prompt B', store.cfg!);
+    writeProjects([first, second]);
+    setActiveProjectId(second.id);
+    const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    const workspace = container.querySelector('.projects-workspace');
+    expect(workspace).not.toBeNull();
+    expect(workspace!.className).toContain('flex-1');
+    expect(workspace!.className).not.toContain('items-start');
+    const listRowBadge = container.querySelector('.projects-list-items .app-badge');
+    expect(listRowBadge).not.toBeNull();
+    expect(listRowBadge!.className).toContain('shrink-0');
+    expect(listRowBadge).toHaveTextContent(/active/i);
+  });
 });

@@ -68,13 +68,15 @@ export function EntrypointEntryStep({ controller }: StepProps) {
         )}
       </fieldset>
       <RuntimeCommandLayout prefix={protocol === 'bridge' ? bridgePrefix : prefix} value={commandLayout} disabled={disabled} onChange={setCommandLayout} />
-      <label htmlFor={`${id}-metadata`}>{copy.optionMetadata}</label>
-      <textarea id={`${id}-metadata`} name="option-metadata" className="app-textarea" value={metadataText} disabled={disabled}
-        autoCorrect="off" autoCapitalize="off" spellCheck={false}
-        aria-describedby={`${id}-metadata-hint${metadata.ok ? '' : ` ${id}-metadata-error`}`} aria-invalid={!metadata.ok || undefined}
-        onChange={event => setMetadataText(event.target.value)} />
-      <p id={`${id}-metadata-hint`} className="app-section-hint">{copy.optionMetadataHint}</p>
-      {!metadata.ok && <span id={`${id}-metadata-error`} role="alert">{copy.optionMetadataInvalid}</span>}
+      <div className="entrypoint-field">
+        <label htmlFor={`${id}-metadata`}>{copy.optionMetadata}</label>
+        <textarea id={`${id}-metadata`} name="option-metadata" className="app-textarea" value={metadataText} disabled={disabled}
+          autoCorrect="off" autoCapitalize="off" spellCheck={false}
+          aria-describedby={`${id}-metadata-hint${metadata.ok ? '' : ` ${id}-metadata-error`}`} aria-invalid={!metadata.ok || undefined}
+          onChange={event => setMetadataText(event.target.value)} />
+        <p id={`${id}-metadata-hint`} className="app-section-hint">{copy.optionMetadataHint}</p>
+        {!metadata.ok && <span id={`${id}-metadata-error`} className="text-error" role="alert">{copy.optionMetadataInvalid}</span>}
+      </div>
     </div>
   );
 }
@@ -149,7 +151,7 @@ export function EntrypointBindingsStep({ controller }: StepProps) {
         <input id={`${id}-health`} name="health-path" className="app-input" value={healthPath} disabled={disabled} required
           autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => setHealthPath(event.target.value)} />
       </label>
-      <label><input type="checkbox" checked={healthAuth} disabled={disabled} onChange={event => setHealthAuth(event.target.checked)} /> {copy.healthAuth}</label>
+      <label className="entrypoint-checkbox"><input type="checkbox" checked={healthAuth} disabled={disabled} onChange={event => setHealthAuth(event.target.checked)} /> <span>{copy.healthAuth}</span></label>
       <fieldset>
         <legend>{copy.formats}</legend>
         {FORMATS.map(format => (

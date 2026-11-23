@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import StableLabel from "../../shared/ui/StableLabel";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import { isNativeRuntimeAvailable } from "../../shared/api/index";
 import { PERSONALIZATION_CHANGED_EVENT, isAgentsFileConflict, readAgentsFile, saveAgentsFile, type AgentInstructionsFile, type PersonalizationSource } from "../../shared/api/personalization";
@@ -165,8 +166,8 @@ export default function PersonalizationSettings({ editor, query, instructionSour
           onChange={(event) => edit(source, event.target.value)}
         />
         <div className="settings-personalization-actions">
-          <button type="submit" className="app-button app-button--primary" data-icon="save" disabled={busy || !dirty}>{entry.phase === "saving" ? copy.saving : copy.save}</button>
-          <button type="button" className="app-button app-button--secondary" data-icon="refresh" disabled={busy} onClick={reload}>{copy.reload}</button>
+          <button type="submit" className="app-button app-button--primary" data-icon="save" disabled={busy || !dirty}><StableLabel value={entry.phase === "saving" ? copy.saving : copy.save} labels={[copy.saving, copy.save]} /></button>
+          <button type="button" className="app-button app-button--secondary" data-icon="refresh" disabled={busy} onClick={reload}><StableLabel value={entry.phase === "loading" ? copy.loading : copy.reload} labels={[copy.loading, copy.reload]} /></button>
         </div>
       </form>
     </div>

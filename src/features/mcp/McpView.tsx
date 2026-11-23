@@ -40,6 +40,13 @@ export default function McpView({ controller }: { controller: McpController }) {
     <div className="app-page-scroll mcp-page">
       <header className="app-page-header"><div><h1 className="app-page-title">{t("section.mcp")}</h1><p className="app-page-description">{t("ui.mcpIntro")}</p></div></header>
       <FeedbackBanner tone="warning" className="mcp-security-note">{t("ui.mcpWarning")}</FeedbackBanner>
+      <div className="app-card mcp-policy">
+        <div className="min-w-0">
+          <label htmlFor="mcp-approval-policy" className="mcp-policy__label">{t("ui.approvalPolicy")}</label>
+          <p className="mcp-hint">{t("ui.approvalPolicyHint")}</p>
+        </div>
+        <CustomSelect id="mcp-approval-policy" value={approvalPolicy} options={[{ value: "always-ask", label: t("ui.policyAlwaysAsk") }, { value: "once", label: t("ui.policyOnce") }, { value: "session", label: t("ui.policySession") }, { value: "server-tool", label: t("ui.policyServerTool") }, { value: "deny", label: t("ui.policyDeny") }]} onChange={(val) => changeApprovalPolicy(val)} />
+      </div>
       <PanelFeedback>
         {error && <FeedbackBanner tone="error" title={t("panel.mcpActionFailed")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice && <FeedbackBanner tone="success" title={t("panel.done")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
@@ -62,7 +69,7 @@ export default function McpView({ controller }: { controller: McpController }) {
                   <span className="mcp-server-row__name">{normalizeDisplayText(server.name)}</span>
                   <StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} />
                 </button>
-                <button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} onClick={() => { if (shouldConfirmDestructive()) openDeleteDialog(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" /></svg></button>
+                <button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} aria-busy={removingIds.has(server.id) || undefined} onClick={() => { if (shouldConfirmDestructive()) openDeleteDialog(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" /></svg></button>
               </li>)}
             </ul>}
         </aside>
@@ -75,7 +82,7 @@ export default function McpView({ controller }: { controller: McpController }) {
             </div>
             <div className="grid gap-3 app-form-grid">
               <label className="mcp-field">{t("ui.fieldName")}<input value={normalizeDisplayText(name)} onChange={(event) => setName(event.target.value)} placeholder={t("ui.fieldNamePlaceholder")} className="app-input" /></label>
-              <label className="mcp-field">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={commandEdited ? command : normalizeDisplayPath(command)} onChange={(event) => { setCommandEdited(true); setCommand(event.target.value); }} placeholder="npx or C:\\Tools\\server.exe" className="app-input font-mono" /></label>
+              <label className="mcp-field">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={commandEdited ? command : normalizeDisplayPath(command)} onChange={(event) => { setCommandEdited(true); setCommand(event.target.value); }} placeholder={t("ui.fieldCommandPlaceholder")} className="app-input font-mono" /></label>
             </div>
             <label className="mcp-field">{t("ui.fieldArgs")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPathLines(argsText)} onChange={(event) => setArgsText(event.target.value)} rows={4} placeholder={"-y\n@modelcontextprotocol/server-filesystem\nC:\\Documents"} className="app-textarea app-mono" /></label>
             <div className="mcp-actions">
@@ -84,15 +91,10 @@ export default function McpView({ controller }: { controller: McpController }) {
             </div>
           </section>
 
-          <div className="app-card mcp-policy">
-            <label htmlFor="mcp-approval-policy">{t("ui.approvalPolicy")}</label>
-            <CustomSelect id="mcp-approval-policy" value={approvalPolicy} options={[{ value: "always-ask", label: t("ui.policyAlwaysAsk") }, { value: "once", label: t("ui.policyOnce") }, { value: "session", label: t("ui.policySession") }, { value: "server-tool", label: t("ui.policyServerTool") }, { value: "deny", label: t("ui.policyDeny") }]} onChange={(val) => changeApprovalPolicy(val)} />
-          </div>
-
           {selectedServer && <section className="app-card mcp-section" aria-labelledby="mcp-tools-title">
             <div className="mcp-section__header">
               <div><h2 id="mcp-tools-title" className="app-section-title">{t("ui.toolsTitle")}{tools.length > 0 && <Badge>{tools.length}</Badge>}</h2><p className="app-section-hint">{t("ui.toolsHint")}</p></div>
-              <button type="button" data-icon="probe" onClick={() => void discoverTools()} disabled={saving || toolLoading || !selectedServer.enabled} className="app-button app-button--secondary"><StableLabel value={toolLoading ? t("ui.discovering") : t("ui.discoverTools")} labels={[t("ui.discovering"), t("ui.discoverTools")]} /></button>
+              <button type="button" data-icon="probe" onClick={() => void discoverTools()} disabled={saving || toolLoading || !selectedServer.enabled} title={!selectedServer.enabled ? t("ui.mcpEnableServerFirst") : undefined} className="app-button app-button--secondary"><StableLabel value={toolLoading ? t("ui.discovering") : t("ui.discoverTools")} labels={[t("ui.discovering"), t("ui.discoverTools")]} /></button>
             </div>
             {tools.length === 0
               ? <p className="mcp-hint">{t("ui.discoverToolsHint")}</p>
@@ -124,7 +126,7 @@ export default function McpView({ controller }: { controller: McpController }) {
           </section>}
 
           {result !== null && <section className={resultFailed ? "app-card mcp-section" : "app-card app-card--success mcp-section"}>
-            <h2 id="mcp-result-title" className={`app-section-title ${resultFailed ? "text-error" : "text-success"}`}>{t("ui.toolResult")}</h2>
+            <h2 id="mcp-result-title" className={`app-section-title ${resultFailed ? "mcp-result-title--error" : "mcp-result-title--success"}`}>{t("ui.toolResult")}</h2>
             <pre role="region" tabIndex={0} aria-label={t("ui.toolResult")} className="mcp-code mcp-code--tall">{normalizeDisplayText(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre>
           </section>}
         </div>

@@ -7,6 +7,7 @@ import { formatBytes } from "../../shared/lib/units";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import ProgressBar from "../../shared/ui/ProgressBar";
+import StableLabel from "../../shared/ui/StableLabel";
 import { appUpdater, openAppUpdateRelease, useAppUpdate } from "./appUpdater";
 import { isUpdateBusy, type UpdateState } from "./updateStore";
 import { updateText } from "./updateText";
@@ -44,7 +45,7 @@ export default function AppUpdateSettings({ query = "", updater = appUpdater, op
   return <div className="settings-row app-update" id="settings-app-update" data-setting="" role="group" aria-labelledby="settings-app-update-title">
     <div className="settings-copy"><h3 id="settings-app-update-title">{copy.title}</h3><p>{copy.description}</p></div>
     <div className="settings-control settings-actions">
-      <button id="settings-check-update" type="button" className="app-button app-button--secondary" disabled={!native || busy} data-icon="refresh" onClick={() => void updater.check()}>{state.phase === "checking" ? copy.checking : copy.check}</button>
+      <button id="settings-check-update" type="button" className="app-button app-button--secondary" disabled={!native || busy} data-icon="refresh" onClick={() => void updater.check()}><StableLabel value={state.phase === "checking" ? copy.checking : copy.check} labels={[copy.checking, copy.check]} /></button>
       {info?.available && <button type="button" className="app-button app-button--primary" data-icon="download" disabled={!native || busy || !info.can_install} onClick={() => setConfirm(true)}>{copy.install}</button>}
       {info?.available && <button type="button" className="app-button app-button--secondary" data-icon="open" disabled={!native} onClick={() => {
         setReleaseError(null);

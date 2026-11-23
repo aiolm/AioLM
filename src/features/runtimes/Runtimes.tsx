@@ -201,7 +201,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
           {(rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy || wizardBusy) && <FeedbackBanner tone="info">
             {rt.serverRunning && <>
               <p>{autoCopy.sessionsLocked}</p>
-              {(isServerBusy(store.status.state) || rt.sessionsInUse.length > 0) && <ul>
+              {(isServerBusy(store.status.state) || rt.sessionsInUse.length > 0) && <ul className="mt-1 list-disc pl-5">
                 {isServerBusy(store.status.state) && <li>{autoCopy.defaultSession} · {executionText[locale][sessionStatusLabel(store.status.state)]}</li>}
                 {rt.sessionsInUse.filter(session => session.id !== 'default' || !isServerBusy(store.status.state)).map(session => <li key={session.id}>
                   <span>{normalizeDisplayText(session.id === 'default' ? autoCopy.defaultSession : store.cfg?.sessions?.find(item => item.id === session.id)?.name || session.name || session.id)}</span>
@@ -247,7 +247,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, on
             ? <FeedbackBanner tone="warning">{copy.missing}</FeedbackBanner>
             : <>
           <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
-          {!llama && <ProviderEnvironments active={active} provider={selected} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} onRemoved={() => { void store.loadConfig(); }} />}
+          {!llama && <ProviderEnvironments active={active} provider={selected} initialCatalog={inventory.catalog} initialRuntimes={inventory.runtimes} revision={providerRevision} cfg={store.cfg} resourcesInUse={rt.serverRunning} operationBusy={rt.runtimeBusy || adapterBusy} onBusyChange={setProviderBusy} onRemoved={() => { void store.loadConfig(); }} />}
           {llama && <>
           <PanelFeedback>
             {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}

@@ -65,8 +65,11 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
     }
   }, [canQueryModels, baseUrl, apiKey]);
 
+  const modelsFetchedRef = useRef(false);
+  modelsFetchedRef.current = modelsFetched;
+
   useEffect(() => {
-    if (canQueryModels && panelActive) void refreshModels();
+    if (canQueryModels && panelActive) void refreshModels(modelsFetchedRef.current);
     else if (!canQueryModels) { modelsRequest.current += 1; setModels([]); setModelsFetched(false); setLoadingModels(false); }
     // Default model changes and returning to the page refresh its public model IDs.
   }, [canQueryModels, baseUrl, apiKey, panelActive, store.status.state, store.status.model, refreshModels]);
@@ -125,7 +128,7 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
 
   return <div className="app-page-scroll developer-panel api-server-page">
     <div className="api-server-content">
-      <header className="api-page-heading"><h1>{t('section.api')}</h1><p>{copy.intro}</p></header>
+      <header className="app-page-header api-page-heading"><div><h1 className="app-page-title">{t('section.api')}</h1><p className="app-page-description">{copy.intro}</p></div></header>
       <section className="api-server-control">
         <div className="developer-api-status" role="status" aria-live="polite">
           <StatusBadge tone={lifecyclePending ? 'warning' : apiRunning ? 'success' : 'neutral'} label={apiStatusLabel} />
@@ -146,7 +149,7 @@ export default function DeveloperPanel({ store, onNavigate }: Props) {
         <div className="api-section-heading">
           <h2 id="api-models-title">{copy.models}{apiRunning && modelsFetched && <Badge className="api-model-count">{models.length}</Badge>}</h2>
           <div className="api-inline-actions">
-            {canQueryModels && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={loadingModels} data-icon="refresh" onClick={() => void refreshModels()}>{loadingModels ? t('ui.checking') : copy.refresh}</button>}
+            {canQueryModels && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={loadingModels} data-icon="refresh" onClick={() => void refreshModels()}><StableLabel value={loadingModels ? t('ui.checking') : copy.refresh} labels={[t('ui.checking'), copy.refresh]} /></button>}
             {onNavigate && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => onNavigate('models')}>{copy.openModels}</button>}
           </div>
         </div>

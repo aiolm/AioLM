@@ -87,6 +87,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
           installed: installedByBackend.get(row.backend) ?? [],
           latest: latestFor(row.backend),
           latestErr: latestErrorFor(row.backend),
+          latestLoaded: true,
         }));
       });
       const cached = force ? null : readLatestCache();
@@ -122,7 +123,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
       if (generation !== refreshGeneration.current) return;
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
-      setRows((previous) => previous.map((row) => ({ ...row, latestErr: row.latestErr ?? message })));
+      setRows((previous) => previous.map((row) => ({ ...row, latestErr: row.latestErr ?? message, latestLoaded: true })));
     }
   }, []);
 

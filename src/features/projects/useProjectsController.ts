@@ -8,6 +8,7 @@ import {
   importProject,
   MAX_PROJECT_DOCUMENTS,
   MAX_PROJECT_TOOLS,
+  PROJECT_APPLIED_EVENT,
   projectConfigPatch,
   projectFromConfig,
   PROJECTS_CHANGED_EVENT,
@@ -57,6 +58,7 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
   const guard = useDraftGuard();
 
   const [projects, setProjects] = useState<ProjectPreset[]>(readProjects);
+  const [activeId, setActiveId] = useState<string | null>(() => activeProjectId());
   const [selectedId, setSelectedId] = useState<string | null>(() => activeProjectId());
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -72,6 +74,7 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
   const [importing, setImporting] = useState(false);
   const [savedDraft, setSavedDraft] = useState('');
   const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null);
+  const [pendingApply, setPendingApply] = useState<ProjectPreset | null>(null);
   const latestDraft = useRef({ selectedId, name, description, configSnapshot, systemPrompt, selectedTools, documents });
   latestDraft.current = { selectedId, name, description, configSnapshot, systemPrompt, selectedTools, documents };
 
@@ -147,16 +150,22 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
   useEffect(() => {
     const refresh = () => {
       const next = readProjects();
+      const nextActive = activeProjectId();
       setProjects(next);
+      setActiveId(nextActive);
       setSelectedId((previous) => {
         if (previous && next.some((project) => project.id === previous)) return previous;
         if (previous === null) return null;
-        const active = activeProjectId();
-        return active && next.some((project) => project.id === active) ? active : next[0]?.id ?? null;
+        return nextActive && next.some((project) => project.id === nextActive) ? nextActive : next[0]?.id ?? null;
       });
     };
+    const syncActive = () => setActiveId(activeProjectId());
     window.addEventListener(PROJECTS_CHANGED_EVENT, refresh);
-    return () => window.removeEventListener(PROJECTS_CHANGED_EVENT, refresh);
+    window.addEventListener(PROJECT_APPLIED_EVENT, syncActive);
+    return () => {
+      window.removeEventListener(PROJECTS_CHANGED_EVENT, refresh);
+      window.removeEventListener(PROJECT_APPLIED_EVENT, syncActive);
+    };
   }, []);
 
   const buildConfig = (): AppConfig => {
@@ -187,7 +196,7 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
     else onOpenTuning?.();
   };
 
-  const save = () => {
+  const save = (): ProjectPreset | null => {
     try {
       const bindings = documents.slice(0, MAX_PROJECT_DOCUMENTS).map((document) => ({
         path: document.path,
@@ -203,6 +212,7 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
       const saved = existing ? { ...project, id: existing.id, createdAt: existing.createdAt } : project;
       const next = upsertProject(saved, projects);
       writeProjects(next);
+      if (existing && activeProjectId() === saved.id) setActiveProjectId(saved.id);
       setProjects(next);
       setSelectedId(saved.id);
       setConfigSnapshot(structuredClone(savedConfig)); setSystemPrompt(savedPrompt);
@@ -210,13 +220,15 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
       setSavedDraft(projectDraftSignature(name, description, savedPrompt, savedConfig, resolved?.application ?? incomingApplication, selectedTools, documents));
       setNotice(t(incomingApplication?.profile_id && !project.profileApplication ? "ui.projectProfileUnlinked" : "ui.savedProjectNamed", { name: saved.name }));
       setError(null);
+      return saved;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setNotice(null);
+      return null;
     }
   };
 
-  const apply = async (project: ProjectPreset) => {
+  const performApply = async (project: ProjectPreset) => {
     if (serverRunning) {
       setError(t("ui.stopBeforeApplyProject"));
       return;
@@ -270,6 +282,39 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
       if (!projectStateWritten) setActiveProjectId(project.id);
       setNotice(t("ui.appliedProjectNamed", { name: project.name }));
       setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setNotice(null);
+    }
+  };
+
+  const apply = (project: ProjectPreset) => {
+    if (serverRunning) {
+      setError(t("ui.stopBeforeApplyProject"));
+      return;
+    }
+    if (draftDirtyRef.current && selectedId === project.id) {
+      setPendingApply(project);
+      return;
+    }
+    void performApply(project);
+  };
+
+  const confirmSaveAndApply = async () => {
+    const target = pendingApply;
+    setPendingApply(null);
+    if (!target) return;
+    const saved = save();
+    if (saved) await performApply(saved);
+  };
+
+  const deactivate = () => {
+    try {
+      const current = selected ?? projects.find(item => item.id === activeId);
+      setActiveProjectId(null);
+      setActiveId(null);
+      setError(null);
+      setNotice(current ? t("ui.deactivatedProjectNamed", { name: current.name }) : t("ui.deactivatedProject"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setNotice(null);
@@ -366,14 +411,15 @@ export function useProjectsController({ store, onOpenTuning }: ProjectsPanelProp
 
   const toolCount = selectedTools.length;
   const docCount = documents.length;
-  const isActiveSelection = selected ? activeProjectId() === selected.id : false;
+  const isActiveSelection = selected ? activeId === selected.id : false;
   const resources = useProjectResources({ selectedTools, setSelectedTools, setDocuments, setError });
 
   return {
-    ...resources, t, locale, cfg, projects, selectedId, selected, name, setName, description, setDescription,
-    documents, error, setError, notice, setNotice, pendingSwitch, pendingDelete, importing, exporting,
+    ...resources, t, locale, cfg, projects, activeId, selectedId, selected, name, setName, description, setDescription,
+    documents, error, setError, notice, setNotice, pendingSwitch, pendingApply, pendingDelete, importing, exporting,
     displayedProfileName, displayedProfileRevision, displayConfig, displayedPrompt, toolCount, docCount,
-    isActiveSelection, serverRunning, busy: store.busy, save, apply, remove, exportSelected, importSelected,
+    isActiveSelection, serverRunning, busy: store.busy, save, apply, deactivate, remove, exportSelected, importSelected,
+    confirmSaveAndApply, cancelApply: () => setPendingApply(null),
     openProjectEditor, canOpenProjectEditor: modelSettings ? Boolean(cfg) : Boolean(onOpenTuning),
     newProject: () => switchEditor(() => loadProject(null)),
     selectProject: (project: ProjectPreset) => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); },

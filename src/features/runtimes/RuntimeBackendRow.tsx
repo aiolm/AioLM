@@ -36,6 +36,7 @@ export default function RuntimeBackendRow({
 }: RuntimeBackendRowProps) {
   const state = stateOf(locale, row);
   const info = row.latest;
+  const latestPending = !info && !row.latestErr && row.latestLoaded === false;
   const latestInstalled = info ? row.installed.find((item) => item.build === info.build) : undefined;
   const newestInstalled = !!latestInstalled;
   // Only the same build's install record may name the latest release's version.
@@ -62,10 +63,12 @@ export default function RuntimeBackendRow({
           </div>
           <p className="runtime-group__note">{t(`ui.${row.note}`)}{reason ? ` · ${normalizeDisplayText(reason)}` : ""}</p>
         </div>
-        <div className={`runtime-group__latest runtime-latest-slot ${info ? "" : "is-error"}`}>
+        <div className={`runtime-group__latest runtime-latest-slot ${info || latestPending ? "" : "is-error"}`}>
           {info
             ? <span className="app-text-wrap">{t("ui.latestBuild")} <span className="runtime-number">{latestVersion}</span><span className="runtime-group__digest"> · {info.digest ? t("ui.digestPublished") : t("ui.digestUnavailable")}</span></span>
-            : <span className="app-text-wrap">{t("ui.latestUnavailable")}{row.latestErr ? `: ${normalizeDisplayText(row.latestErr)}` : ` ${t("ui.latestUnavailableRetry")}`}</span>}
+            : latestPending
+              ? <span className="app-text-wrap" role="status">{t("ui.checking")}</span>
+              : <span className="app-text-wrap">{t("ui.latestUnavailable")}{row.latestErr ? `: ${normalizeDisplayText(row.latestErr)}` : ` ${t("ui.latestUnavailableRetry")}`}</span>}
         </div>
         <div className="runtime-group__action">
           {rowAction === "cancel" ? (

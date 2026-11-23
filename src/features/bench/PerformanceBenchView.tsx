@@ -9,6 +9,7 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import StableLabel from '../../shared/ui/StableLabel';
 import { providerOf } from '../../shared/api/providers';
+import { runSetupGapMessage } from '../../shared/runtime/runReadiness';
 import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { benchmarkHistoryModelLabel } from './performanceRecords';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
@@ -48,7 +49,7 @@ function argumentLines(args: readonly string[]): string[] {
 
 export function PerformanceBenchView({ controller }: { controller: ReturnType<typeof usePerformanceBench> }) {
   const {
-    store, active, setupFormId, copy, explorerCopy, profileImport,
+    store, active, setupFormId, locale, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions, promptBytes,
     setPromptBytes, concurrencies, setConcurrencies, corpus, setCorpus, phase,
     progress, rows, record, history, historyOffset,
@@ -76,20 +77,20 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
       <div className="performance-run-status">
         {busy
           ? <section className="performance-progress" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><ProgressBar label={copy.totalTests} value={(progress?.completed ?? 0) / Math.max(1, progress?.total ?? total) * 100} /></section>
-          : <p className="performance-run-summary">{copy.totalTests}: <strong>{total}</strong></p>}
+          : <p className="performance-run-summary">{copy.totalTests}: <strong>{total}</strong>{!setupGaps.length && !admission && <span role="status" className="performance-run-pending"> · {copy.admissionPending}</span>}</p>}
         <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.servingValidation}</p>
       </div>
-      {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</LocalTaskCancelButton> : <button type="submit" form={setupFormId} className="app-button app-button--primary" disabled={!canRun}>{copy.run}</button>}
+      {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}><StableLabel value={phase === "cancelling" ? copy.cancelling : copy.cancel} labels={[copy.cancelling, copy.cancel]} /></LocalTaskCancelButton> : <button type="submit" form={setupFormId} className="app-button app-button--primary" disabled={!canRun} title={setupGaps.length > 0 ? setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ') : undefined}>{copy.run}</button>}
     </div>
     {profileImport.importDialog}
-    <ActivePanelContext.Provider value={true}><PanelFeedback>
+    <ActivePanelContext.Provider value={active}><PanelFeedback>
       {profileImport.notice && <FeedbackBanner tone={profileImport.notice.error ? 'error' : 'success'} onDismiss={profileImport.dismissNotice}>{profileImport.notice.text}</FeedbackBanner>}
     </PanelFeedback></ActivePanelContext.Provider>
-    {!setupGaps.length && !busy && admission?.status !== 'supported' && <FeedbackBanner tone={admission ? 'warning' : 'info'} className="performance-notice"
+    {!setupGaps.length && !busy && admission && admission.status !== 'supported' && <FeedbackBanner tone="warning" className="performance-notice"
       action={modelSettings ? { label: copy.admissionConfigure, onClick: () => editModel('runtime') }
-        : admission?.status === 'unknown' ? { label: modelCopy.retry, onClick: () => setAdmissionRevision(value => value + 1) } : undefined}>
-      <span role="status">{!admission ? copy.admissionPending : admission.status === 'unknown' ? copy.admissionUnknown : copy.admissionRequest}</span>
-      {admission?.detail && <details><summary>{copy.details}</summary>{normalizeDisplayText(admission.detail)}</details>}
+        : admission.status === 'unknown' ? { label: modelCopy.retry, onClick: () => setAdmissionRevision(value => value + 1) } : undefined}>
+      <span role="status">{admission.status === 'unknown' ? copy.admissionUnknown : copy.admissionRequest}</span>
+      {admission.detail && <details><summary>{copy.details}</summary>{normalizeDisplayText(admission.detail)}</details>}
     </FeedbackBanner>}
     {serverRunning && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: copy.stopServer, disabled: store.busy, onClick: () => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught))) }}>{copy.stopHint}</FeedbackBanner>}
     {blockingSessions.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice" action={{ label: modelCopy.stopSessions, disabled: stoppingSessions, onClick: () => void stopSessions() }}>{`${modelCopy.sessionsHint} ${blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}`}</FeedbackBanner>}
@@ -153,8 +154,8 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
                     {(exportAllDiffers || historyOffset !== null) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} data-icon="download" onClick={() => void exportResults(true)}>{copy.exportAllCsv}</button>}
                   </div>
                   {selectedRecord && <div className="performance-action-row">
-                    <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting || localImportUnavailable} aria-describedby={localImportUnavailable ? 'benchmark-import-unavailable' : undefined} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
-                    <button type="button" className="app-button app-button--danger app-button--sm" disabled={busy || otherBenchmark || exporting || historyLoading || deleting || sharingBusy} data-icon="delete" onClick={() => { setDeleteError(false); setHistoryNotice(null); setPendingDelete(selectedRecord); }}>{deleting ? copy.deleting : copy.deleteHistory}</button>
+                    <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting || localImportUnavailable} aria-describedby={localImportUnavailable ? 'benchmark-import-unavailable' : undefined} onClick={() => void profileImport.importLocal(selectedRecord)}><StableLabel value={profileImport.importing ? explorerCopy.importing : explorerCopy.import} labels={[explorerCopy.importing, explorerCopy.import]} /></button>
+                    <button type="button" className="app-button app-button--danger app-button--sm" disabled={busy || otherBenchmark || exporting || historyLoading || deleting || sharingBusy} data-icon="delete" onClick={() => { setDeleteError(false); setHistoryNotice(null); setPendingDelete(selectedRecord); }}><StableLabel value={deleting ? copy.deleting : copy.deleteHistory} labels={[copy.deleting, copy.deleteHistory]} /></button>
                   </div>}
                   {localImportUnavailable && <p id="benchmark-import-unavailable" className="performance-hint">{explorerCopy.unavailableSettings}</p>}
                   {(history.length > 0 || record) && <p className="performance-hint">{copy.localHistoryHint}</p>}
@@ -162,7 +163,8 @@ export function PerformanceBenchView({ controller }: { controller: ReturnType<ty
               </details>}
             </div>}
           </div>
-          {historyLoading && <p role="status" className="performance-hint">{copy.historyLoading}</p>}
+          {historyLoading && history.length === 0 && !record && <p role="status" className="performance-hint">{copy.historyLoading}</p>}
+          {historyLoading && (history.length > 0 || !!record) && <span role="status" className="sr-only">{copy.historyLoading}</span>}
           {selectedRecord && <div className="performance-result-context">
             <strong className="performance-result-model"><ModelIcon model={selectedRecord.model} />{benchmarkHistoryModelLabel(selectedRecord) || copy.unavailable}</strong>
             <div className="performance-result-facts">

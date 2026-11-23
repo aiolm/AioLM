@@ -265,7 +265,7 @@ export default function AutomaticRuntimeConnection({ locked, onConnected, onBusy
       <p>{copy.saved}</p>
       <p>{result.mode === 'attached' ? copy.attached : copy.managed}</p>
       <p>{copy.limits}</p>
-      {result.checks.length > 0 && <details><summary>{copy.details}</summary><ul>{result.checks.map((check, index) => <li key={index}>{normalizeDisplayText(check)}</li>)}</ul></details>}
+      {result.checks.length > 0 && <details><summary>{copy.details}</summary><ul className="mt-1 list-disc pl-5">{result.checks.map((check, index) => <li key={index}>{normalizeDisplayText(check)}</li>)}</ul></details>}
     </FeedbackBanner>}
   </section>;
 }

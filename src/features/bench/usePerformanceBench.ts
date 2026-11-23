@@ -353,7 +353,7 @@ export function usePerformanceBench({ store, active = true }: { store: AppStore;
     finally { deleteInFlight.current = false; setDeleting(false); }
   };
   return {
-    store, active, setupFormId, copy, explorerCopy, profileImport,
+    store, active, setupFormId, locale, copy, explorerCopy, profileImport,
     modelCopy, modelSettings, installedRuntimes, sessionsError, stoppingSessions,
     promptBytes, setPromptBytes, concurrencies, setConcurrencies,
     corpus, setCorpus,

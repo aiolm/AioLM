@@ -23,12 +23,12 @@ import { isIpcErrorKind } from '../../shared/api/ipcError';
 
 const TASK_ID = 'provider-environment-operation';
 
-export default function ProviderEnvironments({ active, provider: selectedProvider, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange, onRemoved }: { active: boolean; provider?: api.ProviderId; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void; onRemoved?: () => Promise<void> | void }) {
+export default function ProviderEnvironments({ active, provider: selectedProvider, initialCatalog, initialRuntimes, revision: refreshRevision = 0, cfg, resourcesInUse = false, operationBusy = false, onBusyChange, onRemoved }: { active: boolean; provider?: api.ProviderId; initialCatalog?: api.ProviderDescription[]; initialRuntimes?: api.RuntimeInstance[]; revision?: number; cfg?: api.AppConfig | null; resourcesInUse?: boolean; operationBusy?: boolean; onBusyChange?: (busy: boolean) => void; onRemoved?: () => Promise<void> | void }) {
   const { locale, t } = useI18n(); const copy = providerCopy[locale];
   const translate = useRef(t);
   translate.current = t;
-  const [catalog, setCatalog] = useState<api.ProviderDescription[]>([]);
-  const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
+  const [catalog, setCatalog] = useState<api.ProviderDescription[]>(() => initialCatalog ?? []);
+  const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>(() => initialRuntimes ?? []);
   const [python, setPython] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [pendingRemoval, setPendingRemoval] = useState<api.RuntimeInstance | null>(null);
@@ -137,8 +137,8 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
           {external && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
         </div>
         {!external && <div className="app-page-actions">
-          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install}{provider.availability.supported && provider.managed_version ? ` ${provider.managed_version}` : ''}</button>
-          <button type="button" className="app-button app-button--secondary" disabled={busy || blocked || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
+          <button type="button" className="app-button app-button--primary" disabled={busy || blocked || !provider.availability.supported} title={lockReason ?? (!provider.availability.supported ? `${copy.unsupported} ${provider.availability.detail}`.trim() : undefined)} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install}{provider.availability.supported && provider.managed_version ? ` ${provider.managed_version}` : ''}</button>
+          <button type="button" className="app-button app-button--secondary" disabled={busy || blocked || !python.trim() || !provider.availability.supported} title={lockReason ?? (!provider.availability.supported ? `${copy.unsupported} ${provider.availability.detail}`.trim() : !python.trim() ? copy.python : undefined)} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button>
         </div>}
       </div>
       <div className="provider-runtime-list" role="group" aria-label={`${providerDisplayName(provider.id)} · ${copy.runtime}`}>

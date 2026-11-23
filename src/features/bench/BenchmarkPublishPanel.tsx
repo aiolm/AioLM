@@ -10,6 +10,7 @@ import {
 } from '../../shared/api/benchmarkSharing.ts';
 import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
+import StableLabel from '../../shared/ui/StableLabel.tsx';
 import { benchmarkManagementError } from './benchmarkSharingActionError';
 import { createNativeSelectedTransport } from '../../shared/sharing/nativeTransport.ts';
 import { createPublicationController, type PublicationOutbox } from '../../shared/sharing/publicationController.ts';
@@ -266,12 +267,12 @@ export function BenchmarkPublishPanel({ snapshot, description, descriptionInvali
       {restoreFailed && <FeedbackBanner tone="error" action={{ label: copy.publishRetry, disabled: busy, onClick: () => setRestoreRevision(value => value + 1) }}>{copy.publishRestoreError}</FeedbackBanner>}
       {published ? <>
         <FeedbackBanner tone="success">{copy.publishAccepted}</FeedbackBanner>
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={working} data-icon="open" onClick={() => void openManagement()}>{phase === 'working' ? copy.managementOpening : copy.openManagement}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={working} data-icon="open" onClick={() => void openManagement()}><StableLabel value={phase === 'working' ? copy.managementOpening : copy.openManagement} labels={[copy.managementOpening, copy.openManagement]} /></button>
       </> : <>
         {serviceUrl === null && <FeedbackBanner tone="info">{copy.publishNeedsService}</FeedbackBanner>}
         {serviceHost && <p className="performance-hint">{copy.publishServiceLabel}: {serviceHost}</p>}
         <div className="performance-actions">
-          <button type="button" className="app-button app-button--primary app-button--sm" disabled={working || unavailable || restoreFailed || descriptionInvalid || errorCode === 'submission_deleted'} onClick={() => void publish()}>{phase === 'working' ? (status ?? copy.publishSubmitting) : error ? copy.publishRetry : copy.publishSelected}</button>
+          <button type="button" className="app-button app-button--primary app-button--sm" disabled={working || unavailable || restoreFailed || descriptionInvalid || errorCode === 'submission_deleted'} onClick={() => void publish()}><StableLabel value={phase === 'working' ? (status ?? copy.publishSubmitting) : error ? copy.publishRetry : copy.publishSelected} labels={[copy.publishSelected, copy.publishRetry, copy.publishPreparing, copy.publishSubmitting, copy.publishVerifying]} /></button>
           {phase !== 'idle' && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void cancel()}>{copy.cancelPublish}</button>}
         </div>
         {status && phase === 'working' && <p role="status">{status}</p>}
