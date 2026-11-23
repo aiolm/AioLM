@@ -31,6 +31,22 @@ interface PendingDrop { id: string; remaining: number; generation: number }
 type ImportOutcome = 'queued' | 'complete' | 'cancelled' | 'failed' | 'stale';
 
 const mediaKey = (item: ImageAttachment) => item.ref ?? item.dataUrl;
+const MAX_PASTED_IMAGE_BYTES = 20 * 1024 * 1024;
+const PASTED_IMAGE_MIMES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
 
 export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false, locale = "en" }: UseChatAttachmentsOptions) {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
@@ -197,8 +213,80 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
     setAttachmentStatus("idle");
   };
 
+  const addPastedImages = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (!(modalities?.image ?? visionReady)) {
+      setAttachmentStatus('failed');
+      setError(translate(locale, 'chat.attachmentError', { error: translate(locale, 'chat.attachmentImageUnsupported') }));
+      return;
+    }
+    if (pendingImport.current !== null || pendingDrop.current) {
+      setError(translate(locale, 'chat.attachmentError', { error: translate(locale, 'chat.attachmentWaitForImport') }));
+      return;
+    }
+    const ownGeneration = generation.current;
+    let remainingSlots = Math.max(0, 4 - attachments.length);
+    if (remainingSlots === 0) {
+      setAttachmentStatus('failed');
+      setError(translate(locale, 'chat.attachmentError', { error: translate(locale, 'chat.attachmentMediaLimit') }));
+      return;
+    }
+    pendingImport.current = ownGeneration;
+    setAttachmentStatus('reading');
+    let lastError: string | null = null;
+    try {
+      for (const file of files) {
+        if (generation.current !== ownGeneration) return;
+        const mime = file.type.toLowerCase();
+        const ext = PASTED_IMAGE_MIMES[mime];
+        if (!ext) {
+          lastError = translate(locale, 'chat.attachmentPasteUnsupported');
+          continue;
+        }
+        if (file.size <= 0 || file.size > MAX_PASTED_IMAGE_BYTES) {
+          lastError = translate(locale, 'chat.attachmentPasteTooLarge');
+          continue;
+        }
+        if (remainingSlots <= 0) {
+          lastError = translate(locale, 'chat.attachmentMediaLimit');
+          break;
+        }
+        const buffer = await file.arrayBuffer();
+        if (generation.current !== ownGeneration) return;
+        const bytes = new Uint8Array(buffer);
+        const base64 = bytesToBase64(bytes);
+        const normalizedMime = mime === 'image/jpg' ? 'image/jpeg' : mime;
+        const name = file.name?.trim() || `pasted-image.${ext}`;
+        const value: ImageAttachment = api.isNativeRuntimeAvailable() && typeof api.importPastedImage === 'function'
+          ? await api.importPastedImage(base64, normalizedMime, name)
+          : { name, kind: 'image', mime: normalizedMime, sizeBytes: bytes.byteLength, dataUrl: `data:${normalizedMime};base64,${base64}` };
+        if (generation.current !== ownGeneration) return;
+        const key = mediaKey(value);
+        setAttachments((items) => {
+          if (generation.current !== ownGeneration || items.length >= 4 || items.some((item) => mediaKey(item) === key)) return items;
+          return [...items, value];
+        });
+        remainingSlots -= 1;
+      }
+      if (generation.current !== ownGeneration) return;
+      if (lastError) {
+        setAttachmentStatus('failed');
+        setError(translate(locale, 'chat.attachmentError', { error: lastError }));
+      } else {
+        setAttachmentStatus('ready');
+        setError(null);
+      }
+    } catch (caught) {
+      if (generation.current !== ownGeneration) return;
+      setAttachmentStatus('failed');
+      setError(translate(locale, 'chat.attachmentError', { error: caught instanceof Error ? caught.message : String(caught) }));
+    } finally {
+      if (pendingImport.current === ownGeneration) pendingImport.current = null;
+    }
+  };
+
   return {
     attachments, documents, attachmentStatus, setAttachments, setDocuments,
-    addAttachment, addDroppedAttachments, removeAttachment, removeDocument, clearComposerAttachments,
+    addAttachment, addDroppedAttachments, addPastedImages, removeAttachment, removeDocument, clearComposerAttachments,
   };
 }

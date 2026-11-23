@@ -324,4 +324,12 @@ describe("active project chat binding", () => {
     await waitFor(() => expect(legacy.result.current.documentsLoading).toBe(false));
     expect(defined(legacy.result.current.workspace.threads[0]).systemPrompt).toBe('Conversation instructions after applying');
   });
+
+  it('avoids setting documentsLoading when the active project has zero document bindings', () => {
+    const selected = project('no-docs', 0);
+    writeProjects([selected]); setActiveProjectId(selected.id);
+    const { result } = setup();
+    expect(result.current.documentsLoading).toBe(false);
+    expect(readDocumentBinding).not.toHaveBeenCalled();
+  });
 });

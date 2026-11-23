@@ -6,7 +6,7 @@ import type { ChatHistoryMessage, ChatThread, ChatWorkspace, ChatWorkspaceClearD
 import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { trackInitialRead } from "../../shared/ui/initialLayout";
-import { displayChatTitle } from './chatThreadTitle';
+import { displayChatTitle, isGeneratedChatTitle } from './chatThreadTitle';
 import type { ChatPhase } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
@@ -77,7 +77,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
           const messages = snapshot.buffer?.messages ?? owner.messages;
           const firstUser = messages.find(message => message.role === 'user');
           const bufferedOwner = { ...owner, messages,
-            title: owner.title === 'New conversation' && firstUser ? titleFromMessage(firstUser.content) : owner.title,
+            title: isGeneratedChatTitle(owner.title) && firstUser ? titleFromMessage(firstUser.content) : owner.title,
             updatedAt: owner.messages === messages ? owner.updatedAt : Date.now() };
           // Disk hydration must not move a reply into the reader's conversation,
           // or discard an initial conversation still preparing its first request.
@@ -141,7 +141,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
       if (!thread || thread.messages === buffer.messages) return current;
       const msgs = buffer.messages;
       const firstUser = msgs.find((message) => message.role === "user");
-      const nextTitle = thread.title === "New conversation" && firstUser ? titleFromMessage(firstUser.content) : thread.title;
+      const nextTitle = isGeneratedChatTitle(thread.title) && firstUser ? titleFromMessage(firstUser.content) : thread.title;
       return {
         ...current,
         threads: current.threads.map((item) => item.id === thread.id
@@ -206,12 +206,16 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   };
 
   const deleteThread = (thread: ChatThread) => {
-    if (!requireIdle()) return;
+    if (thread.id === msgsThreadId && !requireIdle()) return;
     if (shouldConfirmDestructive()) setPendingDelete(thread);
     else performDeleteThread(thread);
   };
 
   const performDeleteThread = (thread: ChatThread) => {
+    if (thread.id === msgsThreadId && turnInProgress()) {
+      requireIdle();
+      return;
+    }
     setPendingDelete(null);
     const remaining = workspace.threads.filter((item) => item.id !== thread.id);
     // The embedding cache is shared between conversations, so only drop vectors
@@ -224,13 +228,14 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
     }
     const replacement = remaining[0] ?? createChatThread(Date.now(), `thread-${Date.now()}`);
     setWorkspace({ activeThreadId: replacement.id, threads: remaining.length ? remaining : [replacement] });
+    if (turnInProgress()) return;
     setMsgsThreadId(replacement.id);
     setBuffer(null);
     onSwitchThread();
   };
 
   const updateActiveThread = (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt" | "mediaBeforeText">>) => {
-    if (!activeThread || !requireIdle()) return;
+    if (!activeThread || (activeThread.id === msgsThreadId && !requireIdle())) return;
     setWorkspace((current) => ({
       ...current,
       threads: current.threads.map((thread) => thread.id === current.activeThreadId
@@ -245,7 +250,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const viewMessages = viewingLiveThread ? msgs : activeThread?.messages ?? [];
 
   return {
-    workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
+    workspace, setWorkspace, activeThread, liveThread, msgsThreadId, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
     saveFailed, retrySave: () => setSaveAttempt(attempt => attempt + 1),
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,

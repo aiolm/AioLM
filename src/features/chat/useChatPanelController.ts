@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorMessage } from '../../shared/api/errors';
 import type { AppStore } from '../../shared/state/store';
 import type { AppPreferences } from '../../shared/config/preferences';
@@ -20,7 +20,7 @@ import { canPrepareAttachment } from './mediaPreprocessing';
 import { chatTemplateCopy } from './chatTemplateCopy';
 import { chatTaskCopy } from './chatTaskCopy';
 import { useProjectChatBinding } from './useProjectChatBinding';
-import { displayChatTitle } from './chatThreadTitle';
+import { displayChatTitle, isGeneratedChatTitle } from './chatThreadTitle';
 import { useChatSession } from './useChatSession';
 import { useChatSessionLoad } from './useChatSessionLoad';
 import { useChatScroll } from './useChatScroll';
@@ -51,12 +51,13 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     mediaOptions, serverOn, modalities, visionReady, baseUrl, apiKey, model, effectiveConfig,
   } = session;
   const composerDropRef = useRef<HTMLDivElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const atBottomRef = useRef(true);
   const viewingLiveThreadRef = useRef(true);
 
   const attachmentState = useChatAttachments({ visionReady, modalities, locale,
     audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: session.videoFrames && visionReady,
-    setError: (message) => setError(message) });
+    setError: setUiError });
   const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addDroppedAttachments, clearComposerAttachments } = attachmentState;
   const mcp = useChatMcpTools();
   const { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, refreshMcpTools, mcpEntryByFunctionName, mcpDefinitions } = mcp;
@@ -81,7 +82,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
 
   const threads = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer, defaultThreadTitle: ct('newConversation') });
   const {
-    workspace, setWorkspace, activeThread, liveThread, msgs, setMsgs, viewMessages,
+    workspace, setWorkspace, activeThread, liveThread, msgsThreadId, msgs, setMsgs, viewMessages,
     viewingLiveThread, clearingWorkspace, setThreadPanelOpen, updateActiveThread,
   } = threads;
   viewingLiveThreadRef.current = viewingLiveThread;
@@ -96,7 +97,7 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
     selectedSkillIds: skills.selectedSkillIds, onSkillsAccepted: skills.clearSelectedSkills, locale,
   });
-  const { setError, error, aborting, pendingToolCall, toolCallInProgress, retryToolsMissing, send, resetChatState } = turn;
+  const { setError, error, aborting, pendingToolCall, toolCallInProgress, retryToolsMissing, send, regenerate, continueResponse, stop, resetChatState } = turn;
 
   const visiblePhase = viewingLiveThread ? phase : 'idle';
   const visibleError = viewingLiveThread ? error : null;
@@ -121,15 +122,51 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   // A session that serves only other tasks (embeddings, transcription) is explained by those tasks, not as a missing chat template.
   const chatUnavailable = !serverOn ? null : !generates ? chatTaskCopy(locale, selectedStatus.engine?.tasks ?? []) : !chatSupported ? chatTemplateCopy[locale] : null;
   const canSend = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const canEditMessages = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting;
+  const canRegenerate = viewingLiveThread && serverOn && chatSupported && !startingSession && !clearingWorkspace && generates && !!apiKey && !!model && !projectDocumentsLoading && !projectDocumentsError && phase === 'idle' && !pendingToolCall && !toolCallInProgress && !aborting && !store.busy;
   const disabled = !serverOn || !model || !apiKey;
   const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
-  useNativeAttachmentDrop({ targetRef: composerDropRef, active,
+  const { isDragOver } = useNativeAttachmentDrop({ targetRef: composerDropRef, active,
     enabled: viewingLiveThread && !disabled && phase === 'idle' && pendingToolCall === null && attachmentStatus !== 'reading'
       && !(documents.length >= 4 && attachments.length >= 4),
-    onDrop: addDroppedAttachments, setError });
+    onDrop: addDroppedAttachments, setError: setUiError, locale });
 
-  const scroll = useChatScroll(viewMessages, visiblePhase, atBottomRef);
+  const scroll = useChatScroll(viewMessages, visiblePhase, atBottomRef, activeThread?.id ?? '');
   const closeThreadPanel = useCallback(() => setThreadPanelOpen(false), [setThreadPanelOpen]);
+
+  const startNewThreadRef = useRef<() => void>(() => undefined);
+  startNewThreadRef.current = () => {
+    threads.newThread();
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  };
+  const startNewThread = useCallback(() => startNewThreadRef.current(), []);
+
+  useEffect(() => {
+    if (!active) return;
+    const onGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('dialog[open], details[open], [role="listbox"]')) return;
+      if (!viewingLiveThreadRef.current || phase === 'idle' || aborting) return;
+      event.preventDefault();
+      stop();
+    };
+    const onShortcutNewThread = () => startNewThreadRef.current();
+    window.addEventListener('keydown', onGlobalKeyDown);
+    window.addEventListener('aiolm:chat-new-thread', onShortcutNewThread);
+    return () => {
+      window.removeEventListener('keydown', onGlobalKeyDown);
+      window.removeEventListener('aiolm:chat-new-thread', onShortcutNewThread);
+    };
+  }, [active, phase, aborting, stop]);
+
+  const bubbleActionRef = useRef({
+    canEditMessages, canRegenerate, msgs, setMsgs, setInput, setAttachments, setDocuments,
+    resetChatState, setUiError, regenerate, continueResponse, updateActiveThread,
+  });
+  bubbleActionRef.current = {
+    canEditMessages, canRegenerate, msgs, setMsgs, setInput, setAttachments, setDocuments,
+    resetChatState, setUiError, regenerate, continueResponse, updateActiveThread,
+  };
 
   // Stable identity (not the inline `ct` closure) so MessageBubble's memo bailout
   // survives streaming re-renders of ChatPanel; see MessageBubble.tsx's doc comment.
@@ -144,12 +181,40 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
     })();
   }, [t, showCopied]);
 
+  const editUserMessage = useCallback((index: number) => {
+    const state = bubbleActionRef.current;
+    if (!state.canEditMessages) return;
+    const target = state.msgs[index];
+    if (!target || target.role !== 'user') return;
+    state.resetChatState();
+    state.setUiError(null);
+    state.setMsgs((current) => current.slice(0, index));
+    state.setInput(target.content);
+    state.setAttachments(target.images ?? []);
+    state.setDocuments(target.documents ?? []);
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  }, []);
+
+  const regenerateLast = useCallback(() => {
+    const state = bubbleActionRef.current;
+    if (!state.canRegenerate) return;
+    state.setUiError(null);
+    void state.regenerate();
+  }, []);
+
+  const continueLast = useCallback(() => {
+    const state = bubbleActionRef.current;
+    if (!state.canRegenerate) return;
+    state.setUiError(null);
+    void state.continueResponse();
+  }, []);
+
   const sendMessage = () => {
     if (!canSend) return;
     setUiError(null);
     // Resolve the full automatic title with the user's action, before retrieval
     // or generation can finish and resize the conversation heading later.
-    if (activeThread?.title === 'New conversation' && input.trim()) {
+    if (isGeneratedChatTitle(activeThread?.title) && input.trim()) {
       updateActiveThread({ title: titleFromMessage(input) });
     }
     void send(false, undefined, canSend);
@@ -159,7 +224,12 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition (including the keyCode 229 some engines report) must never send.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === 'Enter' && !event.shiftKey && enterToSend) {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      sendMessage();
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && enterToSend) {
       event.preventDefault();
       sendMessage();
     }
@@ -179,10 +249,11 @@ export function useChatPanelController({ store, preferences, onOpenModels, activ
   });
 
   return {
-    t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef,
-    session, sessionLoad, attachmentState, mcp, skills, threads, turn, project, scroll, retry,
+    t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef, composerTextareaRef, isDragOver,
+    session, sessionLoad, attachmentState, mcp, skills, threads, msgsThreadId, turn, project, scroll, retry,
     visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
-    chatUnavailable, canSend, disabled, loadingModel, closeThreadPanel, copyMessage, sendMessage,
+    chatUnavailable, canSend, canEditMessages, canRegenerate, disabled, loadingModel, closeThreadPanel, startNewThread,
+    copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
   };
 }

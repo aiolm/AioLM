@@ -30,7 +30,15 @@ interface ChatMessageLogProps {
   compactMessages: boolean;
   locale: Locale;
   onCopy: (index: number, text: string) => void;
+  onEditMessage?: (index: number) => void;
+  editDisabled?: boolean;
+  onRegenerate?: () => void;
+  onContinue?: () => void;
+  regenerateDisabled?: boolean;
   error: string | null;
+  onDismissError?: () => void;
+  showScrollToBottom?: boolean;
+  onScrollToBottom?: () => void;
   canRetry: boolean;
   /** The last reply is unfinished and nothing is in flight or awaiting approval. */
   recoverable: boolean;
@@ -59,7 +67,8 @@ const StreamingMessageBubble = memo(function StreamingMessageBubble({
 
 function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraftStore, onDraftRendered, phase,
-  copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
+  copiedIndex, compactMessages, locale, onCopy, onEditMessage, editDisabled = false, onRegenerate, onContinue, regenerateDisabled = false,
+  error, onDismissError, showScrollToBottom = false, onScrollToBottom, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
   onOpenModels, onDiscoverModels, modelSettingsLabel, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
@@ -71,6 +80,7 @@ function ChatMessageLog({
   const initialGuidance = showsEmptyState && !model && status.state === "stopped" && !starting && !!onDiscoverModels;
   const actions = modelActions(locale);
   return (
+    <div className="chat-log-container">
     <div
       ref={scrollRef}
       role="log"
@@ -106,7 +116,7 @@ function ChatMessageLog({
       )}
 
       {!disabled && msgs.length === 0 && (
-        <div className="mt-12">
+        <div className="chat-empty-conversation">
           <EmptyState
             icon={<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 5.5a1.6 1.6 0 0 1 1.6-1.6h7.8a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H8.3L5.8 14V12.5A1.6 1.6 0 0 1 4.5 11V5.5Z" /><path d="M7 7.2h6M7 9.7h3.5" strokeWidth="1.2" /></svg>}
             title={ct("newConversationTitle")}
@@ -123,6 +133,10 @@ function ChatMessageLog({
           message, index, isLast,
           phase: isLast && phase !== 'preparing' ? phase : 'idle' as const,
           copied: copiedIndex === index, compact: compactMessages, locale, onCopy,
+          onEditMessage, editDisabled,
+          onRegenerate: isLast ? onRegenerate : undefined,
+          onContinue: isLast ? onContinue : undefined,
+          regenerateDisabled,
         };
         return isLast && message.role === "assistant" && streamingDraftStore
           ? <StreamingMessageBubble key={`${message.role}-${index}`} {...bubbleProps} store={streamingDraftStore} onDraftRendered={onDraftRendered} />
@@ -133,7 +147,7 @@ function ChatMessageLog({
         <RuntimeFailureDetails error={status.error} log={status.log_tail} />
       </FeedbackBanner>}
 
-      {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
+      {error && <FeedbackBanner tone="error" title={ct("requestFailed")} onDismiss={onDismissError}>
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
         {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
@@ -142,12 +156,27 @@ function ChatMessageLog({
       )}
       {!error && recoverable && !canRetry && retryNotice && <p role="status" className="mt-2.5 text-xs ui-color-muted">{retryNotice}</p>}
       {recoverable && retryToolsAction && (
-        <div role="status" className="mt-2.5 text-xs ui-color-muted">
+        <div role="status" className="app-card app-card--muted app-card--tight mt-3 text-xs ui-color-muted">
           <p>{retryToolsAction.notice}</p>
           <button type="button" data-icon="refresh" onClick={retryToolsAction.onClick} disabled={retryToolsAction.disabled} className="app-button app-button--secondary app-button--sm mt-1.5">{retryToolsAction.label}</button>
         </div>
       )}
       </div>
+    </div>
+    {showScrollToBottom && msgs.length > 0 && onScrollToBottom && (
+      <button
+        type="button"
+        onClick={onScrollToBottom}
+        className="chat-scroll-bottom app-button app-button--secondary app-button--sm"
+        aria-label={ct("scrollToBottom")}
+        title={ct("scrollToBottom")}
+      >
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10 4v11M5.5 11.5 10 16l4.5-4.5" />
+        </svg>
+        <span>{ct("scrollToBottom")}</span>
+      </button>
+    )}
     </div>
   );
 }

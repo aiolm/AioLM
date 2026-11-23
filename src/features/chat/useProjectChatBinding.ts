@@ -125,8 +125,21 @@ export function useProjectChatBinding(options: Options) {
         current.setSelectedTools(project.toolIds.slice());
         toolContext.current = context;
       }
-      setState({ projectName, loading: true, error: null });
       const bindings = project.documentBindings.slice(0, MAX_AUTOMATIC_DOCUMENTS);
+      if (bindings.length === 0) {
+        const before = latest.current.documents;
+        const previousOwned = owned.current;
+        if (previousOwned.length > 0) {
+          const nextDocs = before.filter(document => !previousOwned.includes(document));
+          owned.current = [];
+          latest.current.setDocuments(previous => isCurrent() && previous === before && nextDocs.length !== before.length ? nextDocs : previous);
+        }
+        setState(currentState => currentState.projectName === projectName && !currentState.loading && currentState.error === null && !currentState.application
+          ? currentState
+          : { projectName, loading: false, error: null });
+        return;
+      }
+      setState({ projectName, loading: true, error: null });
       void Promise.all(bindings.map(async binding => {
         try {
           const text = await readDocumentBinding(binding.path);

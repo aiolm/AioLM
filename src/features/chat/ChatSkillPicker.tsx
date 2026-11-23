@@ -30,13 +30,18 @@ export default function ChatSkillPicker({ native, catalog, warnings, loadError, 
   const visible = filterSkills(catalog, query);
   const sourceLabel = (skill: ChatSkill) => skill.source === "agents" ? pt("sourceAgents") : pt("sourceAiolm");
   return (
-    <details className="chat-mcp-tools chat-skill-picker" onToggle={(event) => { if (event.currentTarget.open && !loaded && !loading && native) onRefresh(); }}>
+    <details className="chat-mcp-tools chat-skill-picker" onToggle={(event) => {
+      if (event.currentTarget.open && !loaded && !loading && native) onRefresh();
+      if (!event.currentTarget.open) setQuery("");
+    }}>
       <summary className="app-button app-button--secondary app-button--sm cursor-pointer" aria-disabled={locked}
         onClick={event => { if (locked) event.preventDefault(); }}>{pt("skills")}{selectedSkillIds.length > 0 ? ` · ${selectedSkillIds.length}` : ""}</summary>
       <div className="chat-mcp-expanded border-t p-3 ui-border-color-border">
-        <button type="button" data-icon="close" className="chat-mcp-close app-button app-button--secondary app-button--sm absolute right-2 top-2" onClick={(event) => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{closeLabel}</button>
-        <div className="flex flex-wrap items-center gap-2 pr-16">
-          <button type="button" data-icon="refresh" onClick={onRefresh} disabled={!native || loading} className="app-button app-button--secondary app-button--sm"><StableLabel value={loading ? pt("loadingSkills") : pt("refreshSkills")} labels={[pt("loadingSkills"), pt("refreshSkills")]} /></button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <button type="button" data-icon="refresh" onClick={onRefresh} disabled={!native || loading} className="app-button app-button--secondary app-button--sm"><StableLabel value={loading ? pt("loadingSkills") : pt("refreshSkills")} labels={[pt("loadingSkills"), pt("refreshSkills")]} /></button>
+          </div>
+          <button type="button" data-icon="close" className="chat-mcp-close app-button app-button--secondary app-button--sm shrink-0" onClick={(event) => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{closeLabel}</button>
         </div>
         <p id={hintId} className="mt-2 text-xs ui-color-faint">{pt("skillsHint")}</p>
         {!native && <FeedbackBanner tone="warning" className="mt-2">{pt("nativeOnly")}</FeedbackBanner>}
@@ -45,7 +50,9 @@ export default function ChatSkillPicker({ native, catalog, warnings, loadError, 
         {native && loaded && (
           <>
             <label htmlFor={searchId} className="mt-2 block text-xs ui-color-muted">{pt("searchSkills")}</label>
-            <input id={searchId} type="search" className="app-input mt-1" value={query} onChange={(event) => setQuery(event.target.value)} aria-describedby={hintId} />
+            <input id={searchId} type="search" className="app-input mt-1" value={query} onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Escape" && query.length > 0) { event.preventDefault(); event.stopPropagation(); event.nativeEvent.stopPropagation(); setQuery(""); } }}
+              aria-describedby={hintId} />
             {catalog.length === 0
               ? <p className="mt-2 text-xs ui-color-faint" role="status">{pt("noSkills")}</p>
               : visible.length === 0

@@ -1,21 +1,24 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { discardAttachmentDrop, onAttachmentDrop, type AttachmentDropNotice } from '../../shared/api/commands';
+import { discardAttachmentDrop, onAttachmentDrag, onAttachmentDrop, type AttachmentDragNotice, type AttachmentDropNotice } from '../../shared/api/commands';
 import { attachmentDropPoint, useNativeAttachmentDrop } from './useNativeAttachmentDrop';
 
-vi.mock('../../shared/api/commands', () => ({ onAttachmentDrop: vi.fn(), discardAttachmentDrop: vi.fn(async () => undefined) }));
+vi.mock('../../shared/api/commands', () => ({ onAttachmentDrop: vi.fn(), onAttachmentDrag: vi.fn(), discardAttachmentDrop: vi.fn(async () => undefined) }));
 
 let notify: (notice: AttachmentDropNotice) => void;
+let dragNotify: (notice: AttachmentDragNotice) => void;
 let target: HTMLDivElement;
 let textarea: HTMLTextAreaElement;
 let hit: Element | null;
 const unlisten = vi.fn();
+const dragUnlisten = vi.fn();
 const originalHitTest = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
 const hitTest = vi.fn(() => hit);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(onAttachmentDrop).mockImplementation(async callback => { notify = callback; return unlisten; });
+  vi.mocked(onAttachmentDrag).mockImplementation(async callback => { dragNotify = callback; return dragUnlisten; });
   target = document.createElement('div');
   textarea = document.createElement('textarea');
   textarea.value = 'Preserved draft';
@@ -33,13 +36,14 @@ afterEach(() => {
   else Reflect.deleteProperty(document, 'elementFromPoint');
 });
 
-function setup() {
+function setup(locale: 'en' | 'ko' = 'en') {
   const onDrop = vi.fn();
   const setError = vi.fn();
   const targetRef = { current: target };
-  return { onDrop, setError, ...renderHook(({ active, enabled }) => useNativeAttachmentDrop({
-    targetRef, active, enabled, onDrop, setError,
-  }), { initialProps: { active: true, enabled: true } }) };
+  const initialProps: { active: boolean; enabled: boolean; locale?: 'en' | 'ko' } = { active: true, enabled: true, locale };
+  return { onDrop, setError, ...renderHook(({ active, enabled, locale: currentLocale }) => useNativeAttachmentDrop({
+    targetRef, active, enabled, locale: currentLocale, onDrop, setError,
+  }), { initialProps }) };
 }
 const notice = (overrides: Partial<AttachmentDropNotice> = {}): AttachmentDropNotice => ({
   id: 'native-token', count: 2, position: { x: 100, y: 100 }, ...overrides,
@@ -103,5 +107,32 @@ describe('native composer file drops', () => {
     await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
     act(() => notify(notice()));
     expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it('tracks drag hover over the active composer target and cleans up drag listener on unmount', async () => {
+    const { result, unmount, rerender } = setup();
+    expect(result.current.isDragOver).toBe(false);
+    act(() => dragNotify({ state: 'enter', position: { x: 100, y: 100 } }));
+    expect(result.current.isDragOver).toBe(true);
+    act(() => dragNotify({ state: 'over', position: { x: 620, y: 100 } }));
+    expect(result.current.isDragOver).toBe(false);
+    act(() => dragNotify({ state: 'over', position: { x: 100, y: 100 } }));
+    expect(result.current.isDragOver).toBe(true);
+    act(() => dragNotify({ state: 'leave' }));
+    expect(result.current.isDragOver).toBe(false);
+    act(() => dragNotify({ state: 'enter', position: { x: 100, y: 100 } }));
+    expect(result.current.isDragOver).toBe(true);
+    rerender({ active: true, enabled: false, locale: 'en' });
+    expect(result.current.isDragOver).toBe(false);
+    unmount();
+    await waitFor(() => expect(dragUnlisten).toHaveBeenCalledOnce());
+  });
+
+  it('localizes the busy attachment drop error using the provided locale', () => {
+    const { onDrop, setError, rerender } = setup('ko');
+    rerender({ active: true, enabled: false, locale: 'ko' });
+    act(() => notify(notice()));
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(setError).toHaveBeenCalledWith('파일 첨부 실패: 파일을 놓기 전에 현재 응답 또는 첨부를 마치고 채팅 모델이 실행 중인지 확인하세요.');
   });
 });

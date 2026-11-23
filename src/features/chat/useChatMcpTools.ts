@@ -95,6 +95,13 @@ export function useChatMcpTools() {
   const toggleMcpTool = (key: string) => {
     setSelectedMcpTools((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   };
+  const dismissMcpError = useCallback(() => setMcpError(null), []);
+  const selectAllMcpTools = useCallback(() => {
+    setSelectedMcpTools(mcpCatalog.map((entry) => `${entry.serverId}:${entry.tool.name}`));
+  }, [mcpCatalog, setSelectedMcpTools]);
+  const clearMcpTools = useCallback(() => {
+    setSelectedMcpTools([]);
+  }, [setSelectedMcpTools]);
 
   const { mcpEntryByFunctionName, mcpDefinitions } = useMemo(() => {
     const selectedKeys = new Set(selectedMcpTools);
@@ -111,7 +118,7 @@ export function useChatMcpTools() {
   }, [mcpCatalog, selectedMcpTools]);
 
   return {
-    mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError,
-    refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions,
+    mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError, dismissMcpError,
+    refreshMcpTools, toggleMcpTool, selectAllMcpTools, clearMcpTools, mcpEntryByFunctionName, mcpDefinitions,
   };
 }

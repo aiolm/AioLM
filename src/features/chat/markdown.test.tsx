@@ -1,5 +1,5 @@
-import { render, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import ChatMarkdown from "./ChatMarkdown";
 import { createStreamingMarkdown, parseInline, parseMarkdown } from "./markdown";
 
@@ -142,5 +142,31 @@ describe("assistant markdown", () => {
     live.rerender(<ChatMarkdown source={final} />);
     full.rerender(<ChatMarkdown source={final} />);
     expect(live.container.innerHTML).toBe(full.container.innerHTML);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders code block language label, keyboard scroll region, fallback label, and copies code", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const root = mount("```ts\nconst x = 1;\n```\n\n```\nplain\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |");
+    expect(root.querySelectorAll(".chat-markdown-codeblock-lang").item(0).textContent).toBe("ts");
+    expect(root.querySelectorAll(".chat-markdown-codeblock-lang").item(1).textContent).toBe("Code");
+    const pres = root.querySelectorAll("pre");
+    expect(pres[0]).toHaveAttribute("role", "region");
+    expect(pres[0]).toHaveAttribute("tabindex", "0");
+    const tableWrapper = root.querySelector(".chat-markdown-table")!;
+    expect(tableWrapper).toHaveAttribute("role", "region");
+    expect(tableWrapper).toHaveAttribute("aria-label", "Table");
+    expect(tableWrapper).toHaveAttribute("tabindex", "0");
+
+    const copyBtn = within(root as HTMLElement).getByRole("button", { name: "Copy code (ts)" });
+    await act(async () => {
+      fireEvent.click(copyBtn);
+    });
+    expect(writeText).toHaveBeenCalledWith("const x = 1;");
+    expect(screen.getByRole("button", { name: "Code copied" })).toHaveTextContent("Copied");
   });
 });

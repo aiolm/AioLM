@@ -23,7 +23,7 @@ import { useChatPanelController, type ChatPanelProps } from './useChatPanelContr
 
 export default function ChatPanel({ store, preferences, onOpenModels, onDiscoverModels, active = true }: ChatPanelProps) {
   const {
-    t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef,
+    t, locale, ct, pt, modelSettings, phase, input, setInput, copied, composerDropRef, composerTextareaRef, isDragOver,
     session: {
       selectedSessionId, setSelectedSessionId, selectedStatus, sessionOptions,
       embeddingSelection, setEmbeddingSelection, availableEmbeddingSessions,
@@ -31,26 +31,28 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
       serverOn, visionReady, configuredModel, model, effectiveConfig,
     },
     sessionLoad: { startingSession, sessionLoadNotice, openModelSettings, startSelectedSession, cancelSelectedSessionLoad },
-    attachmentState: { attachments, documents, attachmentStatus, addAttachment, removeAttachment, removeDocument },
-    mcp: { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpDefinitions },
+    attachmentState: { attachments, documents, attachmentStatus, addAttachment, addPastedImages, removeAttachment, removeDocument },
+    mcp: { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, loadingMcpTools, mcpError, dismissMcpError, refreshMcpTools, toggleMcpTool, selectAllMcpTools, clearMcpTools, mcpDefinitions },
     skills,
     threads: {
-      workspace, activeThread, liveThread, viewMessages, viewingLiveThread, saveFailed, retrySave,
+      workspace, activeThread, liveThread, msgs, viewMessages, viewingLiveThread, saveFailed, retrySave,
       threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen, pendingDelete, setPendingDelete,
-      visibleThreads, selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
+      visibleThreads, selectThread, deleteThread, performDeleteThread, updateActiveThread,
     },
+    msgsThreadId,
     turn: {
       contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraftStore,
-      canRetry, retryUnavailable, send, approvePendingTool, rejectPendingTool, stop,
+      canRetry, retryUnavailable, setError, send, approvePendingTool, rejectPendingTool, stop,
     },
     project: {
       projectName: activeProjectName, documentsLoading: projectDocumentsLoading,
       documentsError: projectDocumentsError, retryDocuments: retryProjectDocuments,
     },
-    scroll: { scrollRef, onDraftRendered, onScrollAtBottomChange },
+    scroll: { scrollRef, onDraftRendered, onScrollAtBottomChange, showScrollToBottom, scrollToBottom },
     retry: { retryTools, restoreRetryTools },
     visiblePhase, visibleError, uiError, setUiError, ownerTitle, requireIdle, incompatibleMedia, chatSupported, generates,
-    chatUnavailable, canSend, disabled, loadingModel, closeThreadPanel, copyMessage, sendMessage,
+    chatUnavailable, canSend, canEditMessages, canRegenerate, disabled, loadingModel, closeThreadPanel, startNewThread,
+    copyMessage, editUserMessage, regenerateLast, continueLast, sendMessage,
     enterToSend, onKeyDown, lastMessage, responseState, recoverable,
   } = useChatPanelController({ store, preferences, onOpenModels, active });
   const embeddingCopy = embeddingTargetCopy[locale];
@@ -62,18 +64,23 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
     <div className="app-page-scroll chat-page">
 
       <div className="chat-layout">
+        {threadPanelOpen && <div className="chat-thread-backdrop" aria-hidden="true" onClick={closeThreadPanel} />}
         <ChatThreadSidebar
           open={threadPanelOpen}
           active={active}
           onClose={closeThreadPanel}
           activeThreadId={workspace.activeThreadId}
+          liveThreadId={msgsThreadId}
+          liveActive={phase !== 'idle' || pendingToolCall !== null}
+          liveApproval={pendingToolCall !== null}
+          liveMessageCount={msgs.length}
           threadCount={workspace.threads.length}
           threadQuery={threadQuery}
           setThreadQuery={setThreadQuery}
           visibleThreads={visibleThreads}
           onSelect={selectThread}
           onDelete={deleteThread}
-          onNewThread={newThread}
+          onNewThread={startNewThread}
           ct={ct}
         />
 
@@ -85,6 +92,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             activeProjectName={activeProjectName}
             phase={phase}
             targetBusy={pendingToolCall !== null || startingSession}
+            threadFieldsLocked={viewingLiveThread && (phase !== 'idle' || pendingToolCall !== null)}
             onUpdateThread={updateActiveThread}
             sessionLabel={t("ui.sessionsTitle")}
             sessionOptions={sessionOptions}
@@ -131,11 +139,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
               </fieldset>
             }
           />
-          {startingSession && <div className="flex items-center gap-2" role="status">
+          {startingSession && <div className="chat-session-status flex items-center gap-2 text-xs ui-color-muted" role="status">
             <span>{t('ui.sessionStarting')}</span>
             <LocalTaskCancelButton taskId={`session-load-${selectedSessionId}`} onClick={() => void cancelSelectedSessionLoad()}>{t('common.cancel')}</LocalTaskCancelButton>
           </div>}
-          {sessionLoadNotice && <p role="status">{t('ui.taskCancelled')}</p>}
+          {sessionLoadNotice && <p className="chat-session-status text-xs ui-color-muted" role="status">{t('ui.taskCancelled')}</p>}
           <ChatMessageLog
             scrollRef={scrollRef}
             onScrollAtBottomChange={onScrollAtBottomChange}
@@ -152,7 +160,15 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             compactMessages={preferences?.chat.compactMessages ?? false}
             locale={locale}
             onCopy={copyMessage}
+            onEditMessage={viewingLiveThread ? editUserMessage : undefined}
+            editDisabled={!canEditMessages}
+            onRegenerate={viewingLiveThread ? regenerateLast : undefined}
+            onContinue={viewingLiveThread ? continueLast : undefined}
+            regenerateDisabled={!canRegenerate}
             error={visibleError}
+            onDismissError={viewingLiveThread ? () => setError(null) : undefined}
+            showScrollToBottom={showScrollToBottom}
+            onScrollToBottom={scrollToBottom}
             canRetry={viewingLiveThread && canRetry}
             recoverable={recoverable}
             retryNotice={viewingLiveThread && retryUnavailable ? chatRetryCopy[locale][retryUnavailable] : null}
@@ -172,11 +188,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
           <PanelFeedback>
             {saveFailed && <FeedbackBanner tone="error" action={{ label: chatPersistenceCopy[locale].retry, onClick: retrySave }}>{chatPersistenceCopy[locale].failed}</FeedbackBanner>}
             {uiError && <FeedbackBanner tone="error" onDismiss={() => setUiError(null)}>{uiError}</FeedbackBanner>}
-            {mcpError && <FeedbackBanner tone="error">{mcpError}</FeedbackBanner>}
+            {mcpError && <FeedbackBanner tone="error" onDismiss={dismissMcpError}>{mcpError}</FeedbackBanner>}
             {viewingLiveThread && projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
             {viewingLiveThread && projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
           </PanelFeedback>
-          {!viewingLiveThread && liveThread && <FeedbackBanner tone={pendingToolCall ? 'warning' : 'info'}
+          {!viewingLiveThread && liveThread && <FeedbackBanner className="chat-owner-banner" tone={pendingToolCall ? 'warning' : 'info'}
             action={{ label: ownerCopy.returnTo.replace('{title}', () => ownerTitle), onClick: () => selectThread(liveThread) }}>
             {(pendingToolCall ? ownerCopy.approval : ownerCopy.working).replace('{title}', () => ownerTitle)}
           </FeedbackBanner>}
@@ -184,6 +200,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
               not the conversation being browsed. Keep that buffer intact on return. */}
           {viewingLiveThread && <ChatComposer
             dropTargetRef={composerDropRef}
+            isDragOver={isDragOver}
+            textareaRef={composerTextareaRef}
+            onPasteImages={(files) => void addPastedImages(files)}
             locale={locale}
             contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, chatUnavailable].filter(Boolean).join(' ') || null}
             contextSources={contextSources}
@@ -191,6 +210,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onDiscover
             mcpCatalogLoaded={mcpCatalogLoaded}
             selectedMcpTools={selectedMcpTools}
             toggleMcpTool={toggleMcpTool}
+            onSelectAllMcpTools={selectAllMcpTools}
+            onClearMcpTools={clearMcpTools}
             loadingMcpTools={loadingMcpTools}
             refreshMcpTools={() => void refreshMcpTools()}
             mcpDefinitions={mcpDefinitions}

@@ -141,7 +141,19 @@ export function useChatSend({
     return () => window.removeEventListener(CHAT_WORKSPACE_CLEAR_EVENT, onClear);
   }, [failedRef, metricsRef, renderFrameRef, setPendingToolCall, setPhase, setStreamingDraft, setToolCallInProgress, streamRef, supersededRef]);
 
-  const send = async (retry = false, historyOverride?: api.ChatMessage[], canSend = true) => {
+  const executeSend = async ({
+    retry = false,
+    historyOverride,
+    canSend = true,
+    regenerate = false,
+    textOverride,
+  }: {
+    retry?: boolean;
+    historyOverride?: api.ChatMessage[];
+    canSend?: boolean;
+    regenerate?: boolean;
+    textOverride?: string;
+  }) => {
     if (isChatWorkspaceClearing() || ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) return;
     const generation = turnGeneration.current;
     const isCurrent = () => generation === turnGeneration.current;
@@ -149,16 +161,38 @@ export function useChatSend({
     const retryToolsReady = retry && !toolFollowup ? retryToolMatch : null;
     // Nothing is consumed: the unfinished reply and its snapshot stay for when the tools are back.
     if (retryToolsReady?.kind === "missing") return;
+    const regeneratingUser = regenerate && msgs.length >= 2 && msgs[msgs.length - 1]?.role === "assistant" && msgs[msgs.length - 2]?.role === "user"
+      ? msgs[msgs.length - 2]!
+      : null;
+    if (regenerate && !regeneratingUser) return;
     const restored = retry && !failedRef.current && saved?.kind === "ready" ? saved.snapshot : null;
     const failed: FailedRequest | null = failedRef.current ?? (restored && structuredClone({
       text: restored.text, images: restored.images, documents: restored.documents, history: restored.history, personalization: null, tools: restored.tools,
     }));
-    const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
-    let images = toolFollowup ? [] : (retry ? failed?.images ?? [] : attachments);
+    const text = toolFollowup
+      ? ""
+      : textOverride !== undefined
+        ? textOverride.trim()
+        : regenerate && regeneratingUser
+          ? regeneratingUser.content.trim()
+          : (retry ? failed?.text ?? "" : input).trim();
+    let images = toolFollowup
+      ? []
+      : textOverride !== undefined
+        ? []
+        : regenerate && regeneratingUser
+          ? (regeneratingUser.images ?? [])
+          : (retry ? failed?.images ?? [] : attachments);
     if (!toolFollowup && engine && images.some(image => !canPrepareAttachment(image, engine.modalities, mediaPreprocessing ?? { videoFrames: false }))) {
       setError(translate(locale, "chat.unsupportedAttachment")); return;
     }
-    const pendingDocuments = toolFollowup ? [] : (retry ? failed?.documents ?? [] : documents);
+    const pendingDocuments = toolFollowup
+      ? []
+      : textOverride !== undefined
+        ? []
+        : regenerate && regeneratingUser
+          ? (regeneratingUser.documents ?? [])
+          : (retry ? failed?.documents ?? [] : documents);
     if (!toolFollowup && !text && images.length === 0 && pendingDocuments.length === 0) return;
     if (!toolFollowup && !canSend && !retry) return;
     if (!toolFollowup) {
@@ -203,7 +237,7 @@ export function useChatSend({
     let assistantAppended = false;
     let replacedReply: Msg | undefined;
     let skillFollowup: api.ChatMessage[] | null = null;
-    const skillIds = selectedSkillIds.slice();
+    const skillIds = textOverride !== undefined || regenerate ? [] : selectedSkillIds.slice();
     try {
       if (!activityRef.current) {
         const activity = { sessionId: turn.sessionId, started: false };
@@ -224,10 +258,11 @@ export function useChatSend({
       controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);
+      const historySourceMsgs = regenerate ? msgs.slice(0, -2) : msgs;
       const { bounded, runtimeContext, maxContextTokens, warnings, sampling } = buildTurnRequest({
         turn, text, images, documentContext,
         suppliedHistory: historyOverride ?? (retry && failed ? failed.history : undefined),
-        msgs, cache: historyConversionCacheRef.current!, toolFollowup,
+        msgs: historySourceMsgs, cache: historyConversionCacheRef.current!, toolFollowup,
         documentChunksTruncated: documentTruncationRef.current, locale,
       });
       setContextWarning(warnings.length > 0 ? warnings.join(" ") : null);
@@ -237,21 +272,23 @@ export function useChatSend({
         : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization, tools: retryTools(turn.tools, turn.toolEntries) };
       // Saved with the reply so Retry survives a restart or thread switch.
       const retrySnapshot = chatRetrySnapshot(failedRef.current, hasPersonalization(turn.personalization));
-      if (!retry && !toolFollowup) setInput("");
-      if (!retry && !toolFollowup) onSkillsAccepted?.();
-      if (!retry && !toolFollowup) setAttachments([]);
-      if (!retry && !toolFollowup) setDocuments([]);
+      if (!retry && !toolFollowup && !regenerate && textOverride === undefined) {
+        setInput("");
+        onSkillsAccepted?.();
+        setAttachments([]);
+        setDocuments([]);
+      }
       atBottomRef.current = true;
       setMsgs((current) => {
         if (!isCurrent()) return current;
         const last = current[current.length - 1];
-        const replaceAssistant = (retry || toolFollowup) && last?.role === "assistant";
+        const replaceAssistant = (retry || toolFollowup || regenerate) && last?.role === "assistant";
         const withoutDanglingAssistant = replaceAssistant ? current.slice(0, -1) : current;
         if (replaceAssistant && retry) replacedReply = last;
         if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "", model: turn.model, retry: retrySnapshot }];
         const previous = withoutDanglingAssistant[withoutDanglingAssistant.length - 1];
         // A saved snapshot always follows its own user bubble, whose stored copy may be shortened.
-        const hasUserBubble = previous?.role === "user" && (!!restored
+        const hasUserBubble = previous?.role === "user" && (!!restored || !!regenerate
           || (previous.content === text && sameImages(previous.images, images) && sameDocuments(previous.documents, pendingDocuments)));
         return [...withoutDanglingAssistant, ...(hasUserBubble ? [] : [{ role: "user" as const, content: text, images, documents: pendingDocuments }]), { role: "assistant" as const, content: "", reasoning: "", model: turn.model, retry: retrySnapshot }];
       });
@@ -327,6 +364,7 @@ export function useChatSend({
         return next;
       });
       setStreamingDraft(null);
+      setError(null);
       failedRef.current = null;
       toolRoundsRef.current = 0;
       skillReadsRef.current = 0;
@@ -382,6 +420,14 @@ export function useChatSend({
     }
   };
 
+  const send = (retry = false, historyOverride?: api.ChatMessage[], canSend = true) =>
+    executeSend({ retry, historyOverride, canSend });
+  const regenerate = () => executeSend({ regenerate: true });
+  const continueResponse = () => {
+    const last = msgs.at(-1);
+    if (last?.role !== "assistant" || last.finishReason !== "length") return Promise.resolve();
+    return executeSend({ textOverride: translate(locale, "chat.continuePrompt") });
+  };
 
   const stop = () => {
     setAborting(true);
@@ -391,6 +437,6 @@ export function useChatSend({
   return {
     error, setError, contextWarning, contextSources,
     aborting, pendingToolCall, toolCallInProgress, streamingDraftStore, failedRef, canRetry, retryUnavailable, retryToolsMissing,
-    send, approvePendingTool, rejectPendingTool, stop, resetChatState,
+    send, regenerate, continueResponse, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

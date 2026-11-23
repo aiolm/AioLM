@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ChatHistoryMessage } from '../../shared/api/conversationTypes';
 import type { ChatPhase } from './chatSendTypes';
 
-export function useChatScroll(viewMessages: ChatHistoryMessage[], visiblePhase: ChatPhase, atBottomRef: RefObject<boolean>) {
+export function useChatScroll(viewMessages: ChatHistoryMessage[], visiblePhase: ChatPhase, atBottomRef: RefObject<boolean>, activeThreadId = '') {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollViewportRef = useRef<{ width: number; height: number } | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   // An empty idle conversation shows its guidance from the top; like the
   // message effect below, resizing does not pin it to the bottom.
   const followLatestRef = useRef(false);
   followLatestRef.current = viewMessages.length > 0 || visiblePhase !== 'idle';
+  useLayoutEffect(() => {
+    atBottomRef.current = true;
+    setShowScrollToBottom(false);
+    const element = scrollRef.current;
+    if (element && followLatestRef.current && typeof element.scrollTo === 'function') {
+      element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+    }
+  }, [activeThreadId, atBottomRef]);
+
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -41,8 +51,20 @@ export function useChatScroll(viewMessages: ChatHistoryMessage[], visiblePhase: 
     const element = scrollRef.current;
     const viewport = scrollViewportRef.current;
     // Resizing can emit scroll before ResizeObserver restores the bottom.
-    if (!element || !viewport || (element.clientWidth === viewport.width && element.clientHeight === viewport.height)) atBottomRef.current = atBottom;
+    if (!element || !viewport || (element.clientWidth === viewport.width && element.clientHeight === viewport.height)) {
+      atBottomRef.current = atBottom;
+      setShowScrollToBottom(!atBottom);
+    }
+  }, [atBottomRef]);
+  const scrollToBottom = useCallback(() => {
+    const element = scrollRef.current;
+    atBottomRef.current = true;
+    setShowScrollToBottom(false);
+    if (!element) return;
+    const reduce = document.documentElement.classList.contains('app-reduce-motion')
+      || (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : 'smooth' });
   }, [atBottomRef]);
 
-  return { scrollRef, onDraftRendered, onScrollAtBottomChange };
+  return { scrollRef, onDraftRendered, onScrollAtBottomChange, showScrollToBottom, scrollToBottom };
 }

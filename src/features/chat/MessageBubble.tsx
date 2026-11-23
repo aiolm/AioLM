@@ -5,9 +5,10 @@ import type { ChatHistoryMessage } from "../../shared/api/conversationTypes";
 import type { ChatPhase } from "./chatSendTypes";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
-import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import Badge from "../../shared/ui/Badge";
+import StableLabel from "../../shared/ui/StableLabel";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import ChatMarkdown from "./ChatMarkdown";
 import ResponseMetrics from "./ResponseMetrics";
@@ -24,6 +25,11 @@ interface MessageBubbleProps {
   compact: boolean;
   locale: Locale;
   onCopy: (index: number, text: string) => void;
+  onEditMessage?: (index: number) => void;
+  editDisabled?: boolean;
+  onRegenerate?: () => void;
+  onContinue?: () => void;
+  regenerateDisabled?: boolean;
 }
 
 /**
@@ -36,13 +42,18 @@ interface MessageBubbleProps {
 // Named export (in addition to the memoized default) exists solely so tests can
 // verify the memoization contract itself, by re-wrapping this in `memo()` and
 // spying on calls — see MessageBubble.perf.test.tsx.
-export function MessageBubble({ message, index, isLast, stream, phase, copied, compact, locale, onCopy }: MessageBubbleProps) {
+export function MessageBubble({
+  message, index, isLast, stream, phase, copied, compact, locale, onCopy,
+  onEditMessage, editDisabled = false, onRegenerate, onContinue, regenerateDisabled = false,
+}: MessageBubbleProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
   const isUser = message.role === "user";
   const replyState = chatReplyStateCopy[locale];
   const withoutOutput = !message.content && !message.reasoning;
   const activeReply = !isUser && isLast && phase !== 'idle'
     && !message.interrupted && !message.failed && !message.finishReason && !message.toolRound;
+  const showLastActions = !isUser && isLast && !stream && phase === 'idle'
+    && !message.interrupted && !message.failed && !message.toolRound && message.finishReason !== 'tool_calls';
   return (
     <div className={`chat-message-row ${!stream && !activeReply ? "chat-message-completed " : ""}flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`chat-message ${compact ? "chat-message-compact " : ""}${isUser ? "chat-message-user" : "chat-message-assistant"}`}>
@@ -55,7 +66,7 @@ export function MessageBubble({ message, index, isLast, stream, phase, copied, c
                 still works: a click that ends a selection is not a toggle. */}
             <button
               type="button"
-              className="chat-reasoning-body mt-1.5 block w-full select-text whitespace-pre-wrap break-words text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]"
+              className="chat-reasoning-body mt-1.5 block select-text whitespace-pre-wrap break-words text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]"
               onClick={(event) => {
                 if (!window.getSelection()?.isCollapsed) return;
                 const details = event.currentTarget.closest("details");
@@ -69,13 +80,54 @@ export function MessageBubble({ message, index, isLast, stream, phase, copied, c
         {/* Only the assistant's side is markdown. What the user typed is shown
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser
-          ? <ChatMarkdown source={message.content} stream={stream} />
+          ? <ChatMarkdown source={message.content} stream={stream} locale={locale} />
           : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (activeReply ? <span className="animate-pulse ui-color-faint" role="status">{text(phase)}</span> : "")}</div>}
+        {!isUser && message.citations?.length ? (
+          <details className="chat-citations mt-2 text-xs ui-color-muted">
+            <summary className="cursor-pointer select-none font-medium ui-color-faint">{text("sources")} ({message.citations.length})</summary>
+            <ul className="chat-citations-list mt-1.5 space-y-1">
+              {message.citations.map((citation, at) => (
+                <li key={`${citation.path}-${citation.offset}-${at}`} className="chat-citations-item" title={normalizeDisplayPath(citation.path)}>
+                  <span className="font-medium ui-color-ink">{normalizeDisplayText(citation.name)}</span>
+                  <span className="ui-color-faint"> · #{citation.offset + 1}{typeof citation.score === "number" ? ` · ${Math.round(citation.score * 100)}%` : ""}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{withoutOutput ? replyState.stoppedEmpty : text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{withoutOutput ? replyState.failedEmpty : text("partialFailed")}</div>}
         {!isUser && message.toolRound && <div className="mt-2 text-xs ui-color-warning" role="status">{message.toolRound === 'failed' ? replyState.toolFailed : replyState.toolCancelled}</div>}
         {!isUser && message.finishReason === 'length' && !message.interrupted && !message.failed && <div className="mt-2 text-xs ui-color-warning" role="status">{text("outputLimitReached")}</div>}
         </div>
+        {isUser && (message.content || onEditMessage) && (
+          <div className="chat-message-user-actions">
+            {message.content && (
+              <button
+                type="button"
+                onClick={() => onCopy(index, message.content)}
+                className="app-button app-button--ghost app-button--sm"
+                data-icon="copy"
+                aria-label={copied ? text("copied") : text("copyMessage")}
+                title={copied ? text("copied") : text("copyMessage")}
+              >
+                <StableLabel value={copied ? text("copied") : text("copy")} labels={[text("copy"), text("copied")]} />
+              </button>
+            )}
+            {onEditMessage && (
+              <button
+                type="button"
+                onClick={() => onEditMessage(index)}
+                disabled={editDisabled}
+                className="app-button app-button--ghost app-button--sm"
+                data-icon="edit"
+                aria-label={text("editMessage")}
+              >
+                {text("editMessage")}
+              </button>
+            )}
+          </div>
+        )}
         {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
           {message.model && <ModelIcon model={message.model} />}
           <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -83,13 +135,23 @@ export function MessageBubble({ message, index, isLast, stream, phase, copied, c
             {message.model ? <ModelName model={message.model} /> : translate(locale, "ui.responseModelUnknown")}
           </span>
         </div>}
-        {/* One closing row for the answer: measurements along the left, the copy
-            action at the right edge. The button is shown outright rather than
-            revealed on hover, because hidden it still reserved a row of its own
-            and every finished answer ended in a band of blank space. */}
-        {message.role === "assistant" && (message.metrics || message.content) && <div className="chat-message-footer">
+        {/* One closing row for the answer: measurements along the left, actions
+            at the right edge. */}
+        {message.role === "assistant" && (message.metrics || message.content || (showLastActions && (onRegenerate || (message.finishReason === 'length' && onContinue)))) && <div className="chat-message-footer">
           {message.metrics && <ResponseMetrics metrics={message.metrics} locale={locale} />}
-          {message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="chat-message-copy app-button app-button--secondary app-button--sm" data-icon="copy" aria-label={copied ? text("copied") : text("copy")}>{copied ? text("copied") : text("copy")}</button>}
+          <div className="chat-message-actions">
+            {showLastActions && message.finishReason === 'length' && onContinue && (
+              <button type="button" onClick={onContinue} disabled={regenerateDisabled} className="app-button app-button--secondary app-button--sm">
+                {text("continueGenerating")}
+              </button>
+            )}
+            {showLastActions && onRegenerate && (
+              <button type="button" onClick={onRegenerate} disabled={regenerateDisabled} className="app-button app-button--secondary app-button--sm" data-icon="refresh">
+                {text("regenerate")}
+              </button>
+            )}
+            {message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="chat-message-copy app-button app-button--secondary app-button--sm" data-icon="copy" aria-label={copied ? text("copied") : text("copy")}>{copied ? text("copied") : text("copy")}</button>}
+          </div>
         </div>}
       </div>
     </div>

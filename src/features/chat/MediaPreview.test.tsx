@@ -36,4 +36,26 @@ describe('owned media preview independently of inference encoding', () => {
     expect(await screen.findByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,AA==');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('shows loading state while resolving media and opens/closes an image lightbox dialog', async () => {
+    let finishVideo!: (value: { type: 'video_url'; video_url: { url: string } }) => void;
+    vi.mocked(resolveMedia).mockImplementationOnce(() => new Promise(resolve => { finishVideo = resolve; }));
+    render(<MediaPreview locale="en" attachment={{ name: 'clip.mp4', kind: 'video', ref: `${'d'.repeat(64)}.mp4`, dataUrl: '' }} />);
+    const loadButton = screen.getByRole('button', { name: /clip\.mp4/ });
+    fireEvent.click(loadButton);
+    expect(loadButton).toBeDisabled();
+    expect(loadButton).toHaveAttribute('aria-busy', 'true');
+    expect(loadButton).toHaveTextContent('Loading…');
+    finishVideo({ type: 'video_url', video_url: { url: 'data:video/mp4;base64,AA==' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Loading/ })).not.toBeInTheDocument());
+
+    render(<MediaPreview locale="en" attachment={{ name: 'shot.png', dataUrl: 'data:image/png;base64,AA==' }} />);
+    const previewButton = screen.getByRole('button', { name: 'Preview image: shot.png' });
+    fireEvent.click(previewButton);
+    const dialog = screen.getByRole('dialog', { name: 'shot.png' });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
+    expect(screen.queryByRole('dialog', { name: 'shot.png' })).not.toBeInTheDocument();
+  });
 });

@@ -17,6 +17,7 @@ interface ChatConversationHeaderProps {
   activeProjectName: string | null;
   phase: ChatPhase;
   targetBusy?: boolean;
+  threadFieldsLocked?: boolean;
   onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt" | "mediaBeforeText">>) => void;
   sessionLabel: string;
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
@@ -31,8 +32,9 @@ interface ChatConversationHeaderProps {
 
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, activeProjectName, phase, onUpdateThread,
-  sessionLabel, sessionOptions, selectedSessionId, model, runtimeConfig, onSelectSession, ct, embedding, mediaControls, targetBusy = false,
+  sessionLabel, sessionOptions, selectedSessionId, model, runtimeConfig, onSelectSession, ct, embedding, mediaControls, targetBusy = false, threadFieldsLocked,
 }: ChatConversationHeaderProps) {
+  const threadLocked = threadFieldsLocked ?? (phase !== "idle" || targetBusy);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -143,7 +145,7 @@ export default function ChatConversationHeader({
           }}>
           {embedding && <div>
             <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-embedding-target">{embedding.label}</label>
-            <CustomSelect id="chat-embedding-target" value={embedding.value} options={embedding.options} disabled={phase !== 'idle' || targetBusy} onChange={embedding.onChange} ariaDescribedBy="chat-embedding-hint" />
+            <CustomSelect id="chat-embedding-target" className="mt-1.5 block w-full" value={embedding.value} options={embedding.options} disabled={phase !== 'idle' || targetBusy} onChange={embedding.onChange} ariaDescribedBy="chat-embedding-hint" />
             <p id="chat-embedding-hint" className="mt-1.5 text-xs ui-color-muted">{embedding.hint}</p>
           </div>}
           {mediaControls}
@@ -155,7 +157,7 @@ export default function ChatConversationHeader({
               value={isGeneratedChatTitle(activeThread?.title) ? '' : activeThread?.title ?? ''}
               placeholder={ct('newConversation')}
               onChange={(event) => onUpdateThread({ title: event.target.value })}
-              disabled={phase !== "idle" || targetBusy}
+              disabled={threadLocked}
               className="app-input mt-1.5"
             />
           </div>
@@ -165,8 +167,8 @@ export default function ChatConversationHeader({
               id="chat-system-prompt"
               value={activeThread?.systemPrompt ?? ""}
               onChange={(event) => onUpdateThread({ systemPrompt: event.target.value })}
-              disabled={phase !== "idle" || targetBusy}
-              rows={4}
+              disabled={threadLocked}
+              rows={2}
               className="app-textarea mt-1.5"
               placeholder={ct("systemPromptPlaceholder")}
             />
@@ -179,7 +181,7 @@ export default function ChatConversationHeader({
               <input id="chat-default-system-prompt" type="checkbox"
                 checked={activeThread?.useDefaultSystemPrompt !== false}
                 onChange={(event) => onUpdateThread({ useDefaultSystemPrompt: event.target.checked })}
-                disabled={phase !== "idle" || targetBusy}
+                disabled={threadLocked}
                 aria-describedby="chat-default-system-prompt-hint" />
               {ct("useDefaultSystemPrompt")}
             </label>
@@ -190,7 +192,7 @@ export default function ChatConversationHeader({
               <input id="chat-media-before-text" type="checkbox"
                 checked={activeThread?.mediaBeforeText === true}
                 onChange={(event) => onUpdateThread({ mediaBeforeText: event.target.checked })}
-                disabled={phase !== "idle" || targetBusy}
+                disabled={threadLocked}
                 aria-describedby="chat-media-before-text-hint" />
               {ct("mediaBeforeText")}
             </label>
