@@ -27,6 +27,9 @@
 .models-panel .models-model-actions { grid-area: actions; width: auto; max-width: none; padding: 0; overflow: visible; }
 .models-model-size { grid-area: size; color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; text-align: end; white-space: nowrap; }
 .models-model-path { grid-area: path; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; padding-inline: 8px; color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+/* The update result replaces a same-sized placeholder: one truncated line that
+   claims a fixed share of the path row, so a longer result never wraps the row. */
+.models-model-update-text { flex: 1 1 0; min-width: 12ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .models-file-actions { grid-area: files; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 4px; }
 .models-model-actions .app-status-badge { gap: 6px; padding: 0; border: 0; background: transparent; font-size: var(--ui-text-support); font-weight: 500; }
 .models-model-actions .app-badge--success .app-status-badge__dot { background: var(--ui-status-success-dot); }
@@ -34,4 +37,7 @@
 @container workspace (max-width: 679px) {
   .models-panel .models-model-row { row-gap: 8px; }
   .models-file-actions { justify-content: flex-start; }
+  /* Start-aligned actions: a late update button goes after the existing ones
+     instead of pushing them aside. */
+  .models-file-actions > [data-icon="refresh"] { order: 1; }
 }

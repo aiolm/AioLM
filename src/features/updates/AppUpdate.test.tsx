@@ -34,10 +34,10 @@ describe("application update surfaces", () => {
     </PanelFeedbackProvider></I18nProvider></StrictMode>);
     const summary = screen.getByText("Activity");
     const drawer = summary.closest("details")!;
-    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer).toHaveAttribute("data-empty");
     await waitFor(() => expect(within(drawer).getByText("A new AioLM version is available")).toBeVisible());
     expect(screen.getByTestId("startup-notice")).toBeEmptyDOMElement();
-    expect(drawer).not.toHaveAttribute("hidden");
+    expect(drawer).not.toHaveAttribute("data-empty");
     expect(drawer).toHaveProperty("open", true);
     expect(summary).toHaveTextContent("1 notices");
     expect(within(drawer).getByText("1.0.0 → 1.1.0")).toBeVisible();
@@ -52,7 +52,7 @@ describe("application update surfaces", () => {
     expect(open).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("A new AioLM version is available")).not.toBeInTheDocument();
-    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer).toHaveAttribute("data-empty");
     expect(summary).not.toHaveTextContent("1 notices");
     await act(() => updater.check());
     expect(screen.queryByText("A new AioLM version is available")).not.toBeInTheDocument();

@@ -17,9 +17,9 @@ describe("panel notices", () => {
     }
     render(<Fixture />);
     const drawer = screen.getByText('Activity').closest('details')!;
-    expect(drawer).toHaveAttribute('hidden');
+    expect(drawer).toHaveAttribute('data-empty');
     fireEvent.click(screen.getByText('Notify'));
-    expect(drawer).not.toHaveAttribute('hidden');
+    expect(drawer).not.toHaveAttribute('data-empty');
     expect(drawer).toHaveProperty('open', true);
     expect(screen.getByRole('alert')).toBeVisible();
     fireEvent.click(screen.getByText('Activity'));
@@ -27,7 +27,19 @@ describe("panel notices", () => {
     fireEvent.click(screen.getByText('Activity'));
     expect(drawer).toHaveProperty('open', true);
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(drawer).toHaveAttribute('hidden');
+    expect(drawer).toHaveAttribute('data-empty');
+    expect(drawer).toHaveProperty('open', false);
+  });
+  it("keeps an empty activity bar in place without letting it expand", () => {
+    render(<PanelFeedbackProvider>
+      <PanelFeedbackActivity hasActivity={false}><summary>Activity</summary><PanelFeedbackOutlet /></PanelFeedbackActivity>
+    </PanelFeedbackProvider>);
+    const drawer = screen.getByText('Activity').closest('details')!;
+    expect(drawer).not.toHaveAttribute('hidden');
+    expect(drawer).toHaveAttribute('data-empty');
+    drawer.open = true;
+    fireEvent(drawer, new Event('toggle'));
+    expect(drawer).toHaveProperty('open', false);
   });
   it("keeps notices actionable in the shared drawer and only includes the active page", () => {
     const retry = vi.fn();

@@ -26,6 +26,11 @@ import { useModelsController,type ModelsPanelProps } from "./useModelsController
 /** `sessions` comes from a parent that already holds the detailed session
  * subscription; without it the panel subscribes itself. `children` render the
  * parent's loaded-model controls between the page heading and the library. */
+/** One truncated status line; the full text stays available on hover. */
+function UpdateLine({ text }: { text: string }) {
+  return <p className="models-model-update-text m-0 text-xs ui-color-muted" title={text}>{text}</p>;
+}
+
 export default function ModelsPanel(props: ModelsPanelProps) {
   const { store, onSelectModel, onDiscoverModels, compact = false, active = true, children } = props;
   const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelSort, setModelSort, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
@@ -216,8 +221,11 @@ export default function ModelsPanel(props: ModelsPanelProps) {
               <div className="models-model-path">
                 <code>{normalizeDisplayPath(model.path)}</code>
                 {updateStatus?.supported && updateStatus.error ? <FeedbackBanner tone="error" className="relative z-[2]" title={updatesCopy.lookupFailed} action={{ label: t('panel.retry'), onClick: modelUpdates.refresh }}>{normalizeDisplayText(updateStatus.error)}</FeedbackBanner>
-                  : updateStatus?.supported ? <p className="models-model-update-text m-0 text-xs ui-color-muted">{updateStatus.update_available ? `${updatesCopy.available} · ${updatesCopy.download}: ${formatBytes(updateStatus.download_bytes)} · ${updatesCopy.reuse}: ${formatBytes(updateStatus.reused_bytes)}` : updatesCopy.current}</p>
-                    : updateStatus ? <p className="models-model-update-text m-0 text-xs ui-color-muted">{updatesCopy.unsupported}{updateStatus.error ? `: ${normalizeDisplayText(updateStatus.error)}` : ''}</p> : null}
+                  : updateStatus?.supported ? <UpdateLine text={updateStatus.update_available ? `${updatesCopy.available} · ${updatesCopy.download}: ${formatBytes(updateStatus.download_bytes)} · ${updatesCopy.reuse}: ${formatBytes(updateStatus.reused_bytes)}` : updatesCopy.current} />
+                    : updateStatus ? <UpdateLine text={`${updatesCopy.unsupported}${updateStatus.error ? `: ${normalizeDisplayText(updateStatus.error)}` : ''}`} />
+                      // Every checked path receives a status line; hold its place
+                      // during the network lookup so rows do not grow afterwards.
+                      : modelUpdates.checking && updateCatalog?.paths.includes(model.path) ? <UpdateLine text={updatesCopy.checking} /> : null}
               </div>
               <div className="models-file-actions">
                 {canUpdate && <button type="button" data-icon="refresh" onClick={() => void modelUpdates.update(model.path)} disabled={updateBlocked || modelUpdates.busy || incomplete || scanning} title={!sessionsReady ? updatesCopy.sessionsPending : updateBlocked ? updatesCopy.stopFirst : updatesCopy.incremental} aria-label={`${updatesCopy.update}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0">{updatesCopy.update}</button>}

@@ -116,6 +116,23 @@ describe("ModelsPanel layout", () => {
     expect(container.textContent).not.toContain("127.0.0.1");
     expect(container.textContent).not.toContain("private-key");
   });
+
+  it("holds each row's update line while the update lookup runs so rows keep their height", async () => {
+    const path = "C:/synthetic/models/example.gguf";
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{ name: "example.gguf", path, size_mb: 100, is_vision: false }], truncated: false });
+    let answer!: (statuses: Awaited<ReturnType<typeof ModelApi.hfCheckModelUpdates>>) => void;
+    const { hfCheckModelUpdates } = await import("../../shared/api/models");
+    vi.mocked(hfCheckModelUpdates).mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+    const { container } = render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store: { ...store, cfg: { ...cfg, models_dir: "C:/synthetic/models" } } }),
+    }));
+    const row = await waitFor(() => defined(container.querySelector<HTMLElement>(".models-model-row")));
+    await waitFor(() => expect(row.querySelector(".models-model-update-text")).toHaveTextContent("Checking for updates…"));
+    await act(async () => answer([{ path, supported: true, update_available: false, changed_files: 0, removed_files: 0, download_bytes: 0, reused_bytes: 0 }]));
+    expect(row.querySelectorAll(".models-model-update-text")).toHaveLength(1);
+    expect(row.querySelector(".models-model-update-text")).toHaveTextContent("Up to date");
+  });
 });
 
 describe("model library loaded path identity", () => {

@@ -140,6 +140,11 @@ export default function TitleBar() {
       .catch(error => { console.error("Native window appearance could not be synchronized", errorMessage(error)); });
     return () => { live = false; };
   }, [frame, theme]);
+  // Windows, Linux and macOS all draw a 32px strip once the frame is known, so
+  // the strip is reserved while the answer is pending. Otherwise the bar would
+  // appear after the first paint and push the whole window body down. Only a
+  // window that kept its native frame gives the space back.
+  if (frame === undefined && isNativeRuntimeAvailable()) return <div className="app-titlebar-slot" data-pending=""><div className="app-titlebar" data-tauri-drag-region /></div>;
   if (!frame || !win || frame.chrome === "native") return null;
   const maximizeLabel = maximized ? text.restore : text.maximize;
   // Only the bar itself carries the drag attribute: the brand ignores the

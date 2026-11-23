@@ -91,7 +91,15 @@ export function PanelFeedbackActivity({ hasActivity, attentionKeys = [], childre
     seen.current = { count, attention };
     seenAttentionKeys.current = new Set(combinedAttentionKeys);
   }, [count, attention, combinedAttentionKeys]);
-  return <details ref={drawerRef} className="app-activity" hidden={!hasActivity && !count}>{children}</details>;
+  // The bar stays mounted with a fixed height even when there is nothing to
+  // report, so work or a notice arriving after the page appears never resizes
+  // the page. An empty bar cannot be expanded.
+  const empty = !hasActivity && !count;
+  useEffect(() => {
+    if (empty && drawerRef.current?.open) drawerRef.current.open = false;
+  }, [empty]);
+  return <details ref={drawerRef} className="app-activity" data-empty={empty ? "" : undefined}
+    onToggle={event => { if (empty && event.currentTarget.open) event.currentTarget.open = false; }}>{children}</details>;
 }
 
 export function PanelFeedbackIndicator({ message, globalError }: { message: string; globalError: boolean }) {

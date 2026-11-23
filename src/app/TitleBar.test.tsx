@@ -98,6 +98,18 @@ describe("TitleBar", () => {
     }
   });
 
+  it("reserves the strip while the frame is detected so the window body does not move down", async () => {
+    let answer!: (chrome: "frameless" | "native") => void;
+    frameMode.mockReturnValue(new Promise(resolve => { answer = resolve; }));
+    const { container } = await renderTitleBar();
+    expect(container.querySelector(".app-titlebar-slot[data-pending]")).not.toBeNull();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    await act(async () => { answer("frameless"); });
+    expect(await screen.findByRole("group", { name: "Window controls" })).toBeInTheDocument();
+    expect(container.querySelectorAll(".app-titlebar-slot")).toHaveLength(1);
+    expect(container.querySelector("[data-pending]")).toBeNull();
+  });
+
   it("shows nothing in the browser preview", async () => {
     native = false;
     const { container } = await renderTitleBar();

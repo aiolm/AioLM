@@ -114,11 +114,13 @@
 .aiolm-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding-right: 16px; color: var(--ui-rail-ink); }
 .aiolm-drawer-heading .app-icon-button, .aiolm-sidebar-toggle { color: var(--ui-rail-muted); }
 .aiolm-drawer-heading .app-icon-button:hover:not(:disabled), .aiolm-sidebar-toggle:hover:not(:disabled) { background: var(--ui-nav-hover); color: var(--ui-rail-ink); }
-/* Expanded activity takes space from the page so new notices cannot cover its
-   final actions. Keep the summary at the bottom and scroll long notices within
-   a bounded area, including in short windows. */
+/* The activity bar always keeps its height, even when empty, so work and
+   notices that arrive after a page appears never resize or move the page.
+   Expanded activity floats above the bar instead of taking space from the
+   page, and long notices scroll within a bounded area in short windows. */
 .app-activity { --activity-max-height: min(40vh, 320px); position: relative; order: 2; flex: 0 0 auto; height: 28px; border-top: 1px solid var(--ui-border); background: var(--ui-bg); color: var(--ui-muted); }
-.app-activity[open] { height: auto; padding-block-end: 28px; }
+.app-activity[data-empty] > summary { cursor: default; }
+.app-activity[data-empty] > summary::after, .app-activity[data-empty] > .app-activity-content { display: none; }
 .app-activity > summary { position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 8px; height: 28px; padding: 2px var(--ui-canvas-padding); font-size: var(--ui-text-support); white-space: nowrap; overflow: hidden; cursor: pointer; list-style: none; }
 .app-activity > summary > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .app-activity > summary::after { float: none; flex-shrink: 0; margin-inline-start: auto; transform: rotate(180deg); }
@@ -127,11 +129,10 @@
 .app-activity-count { width: 3ch; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .app-activity-error { color: var(--ui-danger); }
 .app-activity-notice { color: var(--ui-muted); }
-.app-activity-content { max-height: calc(var(--activity-max-height) - 29px); overflow-y: auto; padding-bottom: 12px; background: var(--ui-surface); border-bottom: 1px solid var(--ui-border); }
+.app-activity-content { position: absolute; inset-inline: 0; bottom: 100%; z-index: 20; max-height: calc(var(--activity-max-height) - 29px); overflow-y: auto; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); box-shadow: var(--ui-elev-2); }
 .app-activity-content :is(.app-task-strip, .app-feedback-layer) { max-height: none; overflow: visible; }
 @media (pointer: coarse) {
  .app-activity { height: 44px; }
- .app-activity[open] { padding-block-end: 44px; }
  .app-activity > summary { height: 44px; }
  .app-activity-content { max-height: calc(var(--activity-max-height) - 45px); }
 }

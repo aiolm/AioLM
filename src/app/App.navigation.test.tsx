@@ -167,7 +167,7 @@ describe("Workspace navigation", () => {
     const view = mount();
     const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
     await waitFor(() => expect(drawer.open).toBe(true));
-    expect(drawer).not.toHaveAttribute("hidden");
+    expect(drawer).not.toHaveAttribute("data-empty");
     const error = screen.getByRole("alert");
     expect(error).toHaveTextContent("The model could not be started.");
     expect(drawer.querySelector("summary")).toBeVisible();
@@ -352,7 +352,7 @@ describe("Workspace navigation", () => {
     expect(drawer.open).toBe(true);
     expect(screen.getByText("A different background operation failed")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss: Replacement task" }));
-    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer).toHaveAttribute("data-empty");
     expect(summary.querySelector(".app-activity-error")).toBeNull();
   });
 
@@ -368,7 +368,7 @@ describe("Workspace navigation", () => {
     fireEvent.click(summary);
     expect(screen.getByText(state === "completed" ? "Completed" : "Cancelled")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss: Expected finish" }));
-    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer).toHaveAttribute("data-empty");
   });
 
   it("keeps failed model launches in their separate strip without opening ordinary activity", async () => {
@@ -377,7 +377,7 @@ describe("Workspace navigation", () => {
     act(() => { registerTask({ id: "separate-launch", kind: "model-launch", label: "Work model", interruptible: true }); });
     act(() => { finishTask("separate-launch", "failed", "Model engine could not start"); });
     const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
-    expect(drawer).toHaveAttribute("hidden");
+    expect(drawer).toHaveAttribute("data-empty");
     expect(drawer.open).toBe(false);
     const launch = screen.getByTestId("launch-task-strip");
     expect(within(launch).getByRole("alert")).toHaveTextContent("Model engine could not start");
