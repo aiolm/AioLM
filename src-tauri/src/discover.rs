@@ -29,6 +29,7 @@ pub use updates::{check_model_updates, update_model, ModelUpdateResult, ModelUpd
 use uuid::Uuid;
 
 const HF_API: &str = "https://huggingface.co/api";
+const HF_TOKEN_FILE: &str = "hf-token";
 const MAX_QUERY_LENGTH: usize = 200;
 const MAX_API_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 50_000;
@@ -292,12 +293,192 @@ async fn bounded_response_bytes(
     Ok(bytes)
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct HfTokenStatus {
+    pub configured: bool,
+}
+
+fn check_private_token_target(path: &Path) -> Result<bool, AppError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if crate::branding::is_link(&metadata) || !metadata.is_file() {
+                return Err(AppError::validation(
+                    "Hugging Face token path must be a regular private file, not a link or directory",
+                ));
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::io(
+            "failed to inspect Hugging Face token file",
+            &error,
+        )),
+    }
+}
+
+fn validate_hf_token(raw: &str) -> Result<String, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::validation("enter a Hugging Face access token"));
+    }
+    if trimmed.len() < 8
+        || trimmed.len() > 512
+        || !trimmed.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(AppError::validation(
+            "Hugging Face access token format is invalid",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn hf_token_path() -> Result<PathBuf, AppError> {
+    Ok(crate::home::resolve_aiolm_home()
+        .map_err(AppError::unavailable)?
+        .join(HF_TOKEN_FILE))
+}
+
+fn load_hf_token_from(path: &Path) -> Result<Option<String>, AppError> {
+    if !check_private_token_target(path)? {
+        return Ok(None);
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| AppError::io("failed to inspect Hugging Face token file", &error))?;
+    if metadata.len() > 2048 {
+        return Err(AppError::validation(
+            "Hugging Face token file exceeds the safety limit",
+        ));
+    }
+    let raw = fs::read_to_string(path)
+        .map_err(|error| AppError::io("failed to read Hugging Face token file", &error))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(validate_hf_token(trimmed)?))
+}
+
+fn write_hf_token_to(path: &Path, token: &str) -> Result<(), AppError> {
+    use std::io::Write;
+    let validated = validate_hf_token(token)?;
+    check_private_token_target(path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::validation("Hugging Face token path has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(|error| AppError::from_io(&error))?;
+    let temp = parent.join(format!(".{HF_TOKEN_FILE}.tmp-{}", Uuid::new_v4().simple()));
+    let write_result = (|| -> Result<(), AppError> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temp)
+            .map_err(|error| AppError::from_io(&error))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|error| AppError::from_io(&error))?;
+        }
+        file.write_all(validated.as_bytes())
+            .map_err(|error| AppError::from_io(&error))?;
+        file.sync_all().map_err(|error| AppError::from_io(&error))?;
+        drop(file);
+        crate::config::replace_atomically(&temp, path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|error| AppError::from_io(&error))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    write_result
+}
+
+fn clear_hf_token_at(path: &Path) -> Result<(), AppError> {
+    if !check_private_token_target(path)? {
+        return Ok(());
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::io("failed to clear Hugging Face token", &error)),
+    }
+}
+
+pub fn token_status() -> Result<HfTokenStatus, AppError> {
+    let path = hf_token_path()?;
+    Ok(HfTokenStatus {
+        configured: load_hf_token_from(&path)?.is_some(),
+    })
+}
+
+pub fn set_token(token: &str) -> Result<HfTokenStatus, AppError> {
+    let path = hf_token_path()?;
+    write_hf_token_to(&path, token)?;
+    Ok(HfTokenStatus { configured: true })
+}
+
+pub fn clear_token() -> Result<HfTokenStatus, AppError> {
+    let path = hf_token_path()?;
+    clear_hf_token_at(&path)?;
+    Ok(HfTokenStatus { configured: false })
+}
+
+pub(super) fn current_hf_token() -> Option<String> {
+    let path = hf_token_path().ok()?;
+    load_hf_token_from(&path).ok().flatten()
+}
+
+pub(super) fn should_send_hf_auth(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && matches!(url.host_str(), Some("huggingface.co" | "hf.co"))
+}
+
+pub(super) fn apply_hf_auth(
+    request: reqwest::RequestBuilder,
+    url: &reqwest::Url,
+) -> reqwest::RequestBuilder {
+    if should_send_hf_auth(url) {
+        if let Some(token) = current_hf_token() {
+            return request.bearer_auth(token);
+        }
+    }
+    request
+}
+
+pub(super) fn auth_failure_message(status: reqwest::StatusCode, has_token: bool) -> String {
+    if has_token {
+        format!(
+            "Hugging Face rejected access (HTTP {status}). Accept the model license on huggingface.co or check your Hugging Face access token."
+        )
+    } else {
+        format!(
+            "This repository requires authentication (HTTP {status}). Accept its terms on huggingface.co and add a Hugging Face access token in Discover."
+        )
+    }
+}
+
 async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, AppError> {
     let status = response.status();
     let bytes = bounded_response_bytes(response, MAX_API_RESPONSE_BYTES).await?;
     let body = String::from_utf8(bytes).map_err(|error| {
         AppError::validation(format!("Hugging Face response was not UTF-8: {error}"))
     })?;
+    if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return Err(http_error(
+            status,
+            auth_failure_message(status, current_hf_token().is_some()),
+        ));
+    }
     if !status.is_success() {
         let detail = body.lines().next().unwrap_or("request failed");
         return Err(http_error(
@@ -602,9 +783,10 @@ pub async fn search_format(
     format: &str,
 ) -> Result<Vec<HfModel>, AppError> {
     let url = search_url(query, limit, sort, format)?;
-    let response = client()?.get(url).send().await.map_err(|error| {
-        network_error(&error, format!("Hugging Face model search failed: {error}"))
-    })?;
+    let response = apply_hf_auth(client()?.get(url.clone()), &url)
+        .send()
+        .await
+        .map_err(|error| network_error(&error, format!("Hugging Face model search failed: {error}")))?;
     validate_response_url(&response)?;
     let items: Vec<ApiModel> = decode_json(response).await?;
     Ok(items
@@ -668,9 +850,11 @@ fn has_root_safetensors(entries: &[ApiTreeEntry]) -> bool {
 }
 
 async fn immutable_revision(repo: &str, cancel: &AtomicBool) -> Result<String, AppError> {
+    let url = reqwest::Url::parse(&format!("{HF_API}/models/{repo}/revision/main"))
+        .map_err(|error| AppError::validation(error.to_string()))?;
     let response = tokio::select! {
         _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
-        response = client()?.get(format!("{HF_API}/models/{repo}/revision/main")).send() => response.map_err(|error| network_error(&error, error.to_string()))?
+        response = apply_hf_auth(client()?.get(url.clone()), &url).send() => response.map_err(|error| network_error(&error, error.to_string()))?
     };
     validate_response_url(&response)?;
     let metadata: serde_json::Value = tokio::select! {
@@ -744,9 +928,11 @@ async fn repository_tree(
                 "repository pagination exceeded its limit",
             ));
         }
+        let parsed = reqwest::Url::parse(&url)
+            .map_err(|error| AppError::validation(error.to_string()))?;
         let response = tokio::select! {
             _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
-            response = client()?.get(&url).send() => response.map_err(|error| network_error(&error, error.to_string()))?
+            response = apply_hf_auth(client()?.get(parsed.clone()), &parsed).send() => response.map_err(|error| network_error(&error, error.to_string()))?
         };
         validate_response_url(&response)?;
         next = tree_next_page(response.headers(), repo, revision)?;
@@ -2412,5 +2598,55 @@ mod tests {
         assert_eq!(fs::read(&part).expect("read size-checked download"), body);
         server.await.expect("download server finished");
         fs::remove_dir_all(root).expect("remove download fixture");
+    }
+
+    #[test]
+    fn hf_token_persistence_validates_bounds_and_auth_host_scope() {
+        let dir = std::env::temp_dir().join(format!("aiolm-hf-token-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let token_path = dir.join(HF_TOKEN_FILE);
+        assert!(load_hf_token_from(&token_path).unwrap().is_none());
+
+        assert!(write_hf_token_to(&token_path, "   ").is_err());
+        assert!(write_hf_token_to(&token_path, "short").is_err());
+        assert!(write_hf_token_to(&token_path, "hf_bad\ntoken_123456").is_err());
+
+        write_hf_token_to(&token_path, "  hf_synthetic_token_123456  ").unwrap();
+        assert_eq!(
+            load_hf_token_from(&token_path).unwrap().as_deref(),
+            Some("hf_synthetic_token_123456")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&token_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        clear_hf_token_at(&token_path).unwrap();
+        assert!(load_hf_token_from(&token_path).unwrap().is_none());
+
+        assert!(should_send_hf_auth(
+            &reqwest::Url::parse("https://huggingface.co/api/models").unwrap()
+        ));
+        assert!(should_send_hf_auth(
+            &reqwest::Url::parse("https://hf.co/org/model/resolve/main/file.gguf").unwrap()
+        ));
+        for url in [
+            "http://huggingface.co/api/models",
+            "https://cdn-lfs.huggingface.co/blob",
+            "https://cas-bridge.xethub.hf.co/blob",
+            "https://example.com/file.gguf",
+        ] {
+            assert!(!should_send_hf_auth(&reqwest::Url::parse(url).unwrap()), "{url}");
+        }
+        assert!(auth_failure_message(reqwest::StatusCode::UNAUTHORIZED, false)
+            .contains("add a Hugging Face access token"));
+        assert!(auth_failure_message(reqwest::StatusCode::FORBIDDEN, true)
+            .contains("Accept the model license"));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

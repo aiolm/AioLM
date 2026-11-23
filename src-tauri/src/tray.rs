@@ -7,18 +7,152 @@
 //! through the app handle, so turning the setting on and off does not need a
 //! handle parked in shared state.
 
-use tauri::menu::{Menu, MenuEvent, MenuItem};
+use std::sync::{Mutex, OnceLock};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 const TRAY_ID: &str = "aiolm-tray";
+const STATUS_ITEM: &str = "aiolm-tray-status";
 const SHOW_ITEM: &str = "aiolm-tray-show";
+const STOP_ITEM: &str = "aiolm-tray-stop";
 const QUIT_ITEM: &str = "aiolm-tray-quit";
-/// The tray menu is drawn by the operating system before any window exists to
-/// report the chosen language, so its two entries are written in the same
-/// language as the application's other native dialogs.
-const SHOW_LABEL: &str = "Show AioLM";
-const QUIT_LABEL: &str = "Quit AioLM";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TrayPresentation {
+    locale: String,
+    model_state: String,
+    model_name: Option<String>,
+}
+
+impl Default for TrayPresentation {
+    fn default() -> Self {
+        Self {
+            locale: "en".to_owned(),
+            model_state: "stopped".to_owned(),
+            model_name: None,
+        }
+    }
+}
+
+static TRAY_STATE: OnceLock<Mutex<TrayPresentation>> = OnceLock::new();
+
+fn tray_state() -> &'static Mutex<TrayPresentation> {
+    TRAY_STATE.get_or_init(|| Mutex::new(TrayPresentation::default()))
+}
+
+struct TrayStrings {
+    show: &'static str,
+    quit: &'static str,
+    stop_model: &'static str,
+    status_idle: &'static str,
+    status_starting: &'static str,
+    status_stopping: &'static str,
+    status_running_prefix: &'static str,
+}
+
+fn tray_strings(locale: &str) -> TrayStrings {
+    match locale {
+        "ko" => TrayStrings {
+            show: "AioLM 열기",
+            quit: "AioLM 종료",
+            stop_model: "모델 중지",
+            status_idle: "실행 중인 모델 없음",
+            status_starting: "모델 시작 중…",
+            status_stopping: "모델 중지 중…",
+            status_running_prefix: "실행 중",
+        },
+        "ja" => TrayStrings {
+            show: "AioLM を表示",
+            quit: "AioLM を終了",
+            stop_model: "モデルを停止",
+            status_idle: "実行中のモデルなし",
+            status_starting: "モデルを起動中…",
+            status_stopping: "モデルを停止中…",
+            status_running_prefix: "実行中",
+        },
+        "zh" => TrayStrings {
+            show: "显示 AioLM",
+            quit: "退出 AioLM",
+            stop_model: "停止模型",
+            status_idle: "无运行中的模型",
+            status_starting: "正在启动模型…",
+            status_stopping: "正在停止模型…",
+            status_running_prefix: "运行中",
+        },
+        _ => TrayStrings {
+            show: "Show AioLM",
+            quit: "Quit AioLM",
+            stop_model: "Stop model",
+            status_idle: "No model running",
+            status_starting: "Starting model…",
+            status_stopping: "Stopping model…",
+            status_running_prefix: "Running",
+        },
+    }
+}
+
+fn compact_model_label(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.chars().count() <= 48 {
+        trimmed.to_owned()
+    } else {
+        let prefix: String = trimmed.chars().take(47).collect();
+        format!("{prefix}…")
+    }
+}
+
+fn format_status_line(state: &TrayPresentation) -> (String, String, bool) {
+    let strings = tray_strings(&state.locale);
+    match state.model_state.as_str() {
+        "running" => {
+            let status = match state.model_name.as_deref().map(compact_model_label) {
+                Some(name) if !name.is_empty() => format!("{}: {name}", strings.status_running_prefix),
+                _ => strings.status_running_prefix.to_owned(),
+            };
+            let tooltip = format!("AioLM — {status}");
+            (status, tooltip, true)
+        }
+        "starting" => (
+            strings.status_starting.to_owned(),
+            format!("AioLM — {}", strings.status_starting),
+            true,
+        ),
+        "stopping" => (
+            strings.status_stopping.to_owned(),
+            format!("AioLM — {}", strings.status_stopping),
+            false,
+        ),
+        _ => (strings.status_idle.to_owned(), "AioLM".to_owned(), false),
+    }
+}
+
+fn build_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &TrayPresentation,
+) -> Result<(Menu<R>, String), String> {
+    let strings = tray_strings(&state.locale);
+    let (status_label, tooltip, can_stop) = format_status_line(state);
+    let status = MenuItem::with_id(app, STATUS_ITEM, status_label, false, None::<&str>)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let sep1 = PredefinedMenuItem::separator(app)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let show = MenuItem::with_id(app, SHOW_ITEM, strings.show, true, None::<&str>)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let stop = MenuItem::with_id(app, STOP_ITEM, strings.stop_model, can_stop, None::<&str>)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let sep2 = PredefinedMenuItem::separator(app)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let quit = MenuItem::with_id(app, QUIT_ITEM, strings.quit, true, None::<&str>)
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let menu = Menu::with_items(app, &[&status, &sep1, &show, &stop, &sep2, &quit])
+        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    Ok((menu, tooltip))
+}
 
 /// Bring the window back from the tray, or when the application is opened
 /// again while it is already running. Restoring covers all three states a
@@ -55,6 +189,14 @@ pub(crate) fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
 pub(crate) fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id.as_ref() {
         SHOW_ITEM => restore_main_window(app),
+        STOP_ITEM => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(state) = handle.try_state::<crate::state::AppState>() {
+                    let _ = crate::commands::server::stop_default_session(&state).await;
+                }
+            });
+        }
         // The only way out of the application once its window lives in the
         // tray. It goes through the normal exit, so `RunEvent::Exit` still
         // stops every managed llama-server, the gateway and the background
@@ -136,14 +278,13 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
     if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
     }
-    let show = MenuItem::with_id(app, SHOW_ITEM, SHOW_LABEL, true, None::<&str>)
-        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
-    let quit = MenuItem::with_id(app, QUIT_ITEM, QUIT_LABEL, true, None::<&str>)
-        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
-    let menu = Menu::with_items(app, &[&show, &quit])
-        .map_err(|error| format!("failed to build the tray menu: {error}"))?;
+    let snapshot = tray_state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    let (menu, tooltip) = build_menu(app, &snapshot)?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("AioLM")
+        .tooltip(tooltip)
         .menu(&menu)
         // Windows convention: the left button brings the window back and the
         // right button opens the menu. Without this the left button would open
@@ -168,6 +309,80 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
         .build(app)
         .map(|_| ())
         .map_err(|error| format!("failed to create the tray icon: {error}"))
+}
+
+pub(crate) fn update_presentation<R: Runtime>(
+    app: &AppHandle<R>,
+    locale: &str,
+    model_state: &str,
+    model_name: Option<&str>,
+) -> Result<(), String> {
+    let next = TrayPresentation {
+        locale: match locale {
+            "ko" | "ja" | "zh" => locale.to_owned(),
+            _ => "en".to_owned(),
+        },
+        model_state: model_state.to_owned(),
+        model_name: model_name
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
+    };
+    {
+        let mut guard = tray_state()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *guard == next {
+            return Ok(());
+        }
+        *guard = next.clone();
+    }
+    if app.tray_by_id(TRAY_ID).is_none() {
+        return Ok(());
+    }
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            if let Ok((menu, tooltip)) = build_menu(&handle, &next) {
+                let _ = tray.set_menu(Some(menu));
+                let _ = tray.set_tooltip(Some(tooltip));
+            }
+        }
+    })
+    .map_err(|error| format!("failed to update the tray icon: {error}"))
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn tray_strings_cover_four_locales_with_english_fallback() {
+        assert_eq!(tray_strings("en").show, "Show AioLM");
+        assert_eq!(tray_strings("ko").show, "AioLM 열기");
+        assert_eq!(tray_strings("ja").show, "AioLM を表示");
+        assert_eq!(tray_strings("zh").show, "显示 AioLM");
+        assert_eq!(tray_strings("fr").quit, "Quit AioLM");
+    }
+
+    #[test]
+    fn tray_status_line_formats_states_and_bounds_long_names() {
+        let idle = TrayPresentation::default();
+        assert_eq!(
+            format_status_line(&idle),
+            ("No model running".to_owned(), "AioLM".to_owned(), false)
+        );
+        let long_name = "x".repeat(80);
+        let running = TrayPresentation {
+            locale: "ko".to_owned(),
+            model_state: "running".to_owned(),
+            model_name: Some(long_name),
+        };
+        let (status, tooltip, can_stop) = format_status_line(&running);
+        assert!(status.starts_with("실행 중: "));
+        assert!(status.ends_with('…'));
+        assert!(tooltip.starts_with("AioLM — 실행 중: "));
+        assert!(can_stop);
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

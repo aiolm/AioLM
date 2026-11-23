@@ -11,6 +11,7 @@ use std::{
 };
 
 pub const MAX_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_PASTED_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "wav", "mp3", "flac", "mp4", "webm",
 ];
@@ -152,6 +153,86 @@ pub struct Attachment {
 }
 pub fn import_selected(path: &Path, mut file: fs::File) -> Result<Attachment, AppError> {
     import_to(&root()?, path, &mut file)
+}
+
+fn detect_image_format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("png", "image/png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("jpg", "image/jpeg"))
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(("webp", "image/webp"))
+    } else {
+        None
+    }
+}
+
+fn sanitize_pasted_name(name: &str, extension: &str) -> String {
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(120)
+        .collect::<String>();
+    if base.is_empty() {
+        format!("pasted-image.{extension}")
+    } else {
+        base
+    }
+}
+
+pub fn import_image_bytes(
+    bytes: &[u8],
+    declared_mime: &str,
+    name: &str,
+) -> Result<Attachment, AppError> {
+    import_image_bytes_to(&root()?, bytes, declared_mime, name)
+}
+
+fn import_image_bytes_to(
+    root: &Path,
+    bytes: &[u8],
+    declared_mime: &str,
+    name: &str,
+) -> Result<Attachment, AppError> {
+    if bytes.is_empty() || bytes.len() > MAX_PASTED_IMAGE_BYTES {
+        return Err(AppError::validation(
+            "pasted image must be nonempty and at most 20 MiB",
+        ));
+    }
+    let (extension, mime) = detect_image_format(bytes).ok_or_else(|| {
+        AppError::validation("unsupported pasted image format; paste PNG, JPEG, or WebP")
+    })?;
+    let declared = declared_mime.trim().to_ascii_lowercase();
+    if !declared.is_empty() {
+        let normalized = match declared.as_str() {
+            "image/jpg" => "image/jpeg",
+            other => other,
+        };
+        if normalized != mime {
+            return Err(AppError::validation(
+                "pasted image content does not match declared MIME type",
+            ));
+        }
+    }
+    let size = bytes.len() as u64;
+    let reference = format!("{:x}.{extension}", Sha256::digest(bytes));
+    fs::create_dir_all(root).map_err(|error| AppError::unavailable(error.to_string()))?;
+    let target = reference_path(root, &reference)?;
+    if !target.exists() {
+        crate::config::atomic_write(&target, bytes)?;
+    }
+    Ok(Attachment {
+        name: sanitize_pasted_name(name, extension),
+        reference,
+        kind: "image",
+        mime,
+        data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
+        size_bytes: size,
+    })
 }
 
 /// Store a sampled frame without constructing an unused attachment preview.
@@ -542,6 +623,54 @@ mod tests {
             owned_file_size_in(&store, &owned.to_string_lossy()),
             None,
             "empty files are not media"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pasted_image_bytes_validate_magic_bytes_dedupe_and_sanitize_names() {
+        let root = std::env::temp_dir().join(format!("aiolm-paste-{}", uuid::Uuid::new_v4()));
+        let owned = root.join("media");
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
+        let imported = import_image_bytes_to(&owned, png, "image/png", "../../shot\n.png").unwrap();
+        assert_eq!(imported.name, "shot.png");
+        assert_eq!(imported.mime, "image/png");
+        assert_eq!(imported.kind, "image");
+        assert_eq!(imported.size_bytes, png.len() as u64);
+        assert_eq!(fs::read(owned.join(&imported.reference)).unwrap(), png);
+
+        let fallback = import_image_bytes_to(&owned, png, "", "").unwrap();
+        assert_eq!(fallback.name, "pasted-image.png");
+        assert_eq!(fallback.reference, imported.reference);
+
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0];
+        let jpg_item = import_image_bytes_to(&owned, &jpeg, "image/jpg", "photo.jpg").unwrap();
+        assert_eq!(jpg_item.mime, "image/jpeg");
+
+        let webp = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+        let webp_item = import_image_bytes_to(&owned, webp, "image/webp", "clip.webp").unwrap();
+        assert_eq!(webp_item.mime, "image/webp");
+
+        assert_eq!(
+            import_image_bytes_to(&owned, b"", "image/png", "empty.png")
+                .err()
+                .unwrap()
+                .kind,
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            import_image_bytes_to(&owned, b"<svg/>", "image/png", "fake.png")
+                .err()
+                .unwrap()
+                .kind,
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            import_image_bytes_to(&owned, png, "image/jpeg", "mismatch.jpg")
+                .err()
+                .unwrap()
+                .kind,
+            ErrorKind::Validation
         );
         fs::remove_dir_all(root).unwrap();
     }

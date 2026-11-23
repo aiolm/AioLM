@@ -187,6 +187,27 @@ pub(crate) async fn hf_model_files(
 }
 
 #[tauri::command]
+pub(crate) async fn hf_token_status() -> Result<discover::HfTokenStatus, AppError> {
+    tokio::task::spawn_blocking(discover::token_status)
+        .await
+        .map_err(AppError::from)?
+}
+
+#[tauri::command]
+pub(crate) async fn hf_set_token(token: String) -> Result<discover::HfTokenStatus, AppError> {
+    tokio::task::spawn_blocking(move || discover::set_token(&token))
+        .await
+        .map_err(AppError::from)?
+}
+
+#[tauri::command]
+pub(crate) async fn hf_clear_token() -> Result<discover::HfTokenStatus, AppError> {
+    tokio::task::spawn_blocking(discover::clear_token)
+        .await
+        .map_err(AppError::from)?
+}
+
+#[tauri::command]
 pub(crate) async fn hf_download_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,

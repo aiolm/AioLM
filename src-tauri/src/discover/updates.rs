@@ -1179,16 +1179,27 @@ async fn apply_plan<F: FnMut(&str, u64, u64)>(
     let mut completed = 0u64;
     for &index in &plan.changed {
         let file = &plan.files[index];
+        let url = source.url(&plan.installed.repository, &file.remote, &plan.revision);
+        let mut request = download_client()?.get(&url);
+        if let Ok(parsed) = reqwest::Url::parse(&url) {
+            request = super::apply_hf_auth(request, &parsed);
+        }
         let response = tokio::select! {
             _ = crate::cancellation::wait_cancelled(cancel) => return Err(AppError::cancelled(DOWNLOAD_CANCELLED)),
-            response = download_client()?.get(source.url(&plan.installed.repository, &file.remote, &plan.revision)).send() => response.map_err(|error| network_error(&error, format!("model update download failed: {error}")))?
+            response = request.send() => response.map_err(|error| network_error(&error, format!("model update download failed: {error}")))?
         };
         source.validate(&response)?;
         if !response.status().is_success() {
-            return Err(http_error(
-                response.status(),
-                format!("model update HTTP status: {}", response.status()),
-            ));
+            let status = response.status();
+            let message = if matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            ) {
+                super::auth_failure_message(status, super::current_hf_token().is_some())
+            } else {
+                format!("model update HTTP status: {status}")
+            };
+            return Err(http_error(status, message));
         }
         if response
             .content_length()

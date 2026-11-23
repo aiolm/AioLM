@@ -269,6 +269,9 @@ where
         let mut request = download_client()?
             .get(url)
             .header(header::ACCEPT_ENCODING, "identity");
+        if let Ok(parsed) = reqwest::Url::parse(url) {
+            request = super::apply_hf_auth(request, &parsed);
+        }
         if offset > 0 {
             request = request.header(header::RANGE, format!("bytes={offset}-"));
         }
@@ -305,10 +308,13 @@ where
                 )));
             }
             _ => {
-                return Err(http_error(
-                    status,
-                    format!("model download HTTP status: {status}"),
-                ))
+                let message = if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                {
+                    super::auth_failure_message(status, super::current_hf_token().is_some())
+                } else {
+                    format!("model download HTTP status: {status}")
+                };
+                return Err(http_error(status, message));
             }
         };
         let expected = total - start;

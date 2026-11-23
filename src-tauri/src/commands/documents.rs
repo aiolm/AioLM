@@ -608,6 +608,27 @@ pub(crate) async fn import_media(
 }
 
 #[tauri::command]
+pub(crate) async fn import_pasted_image(
+    base64_data: String,
+    mime: String,
+    name: String,
+) -> Result<crate::media::Attachment, AppError> {
+    if base64_data.len() > 28 * 1024 * 1024 {
+        return Err(AppError::validation(
+            "pasted image exceeds the 20 MiB limit",
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        let bytes = BASE64
+            .decode(base64_data.trim())
+            .map_err(|_| AppError::validation("invalid pasted image encoding"))?;
+        crate::media::import_image_bytes(&bytes, &mime, &name)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub(crate) async fn resolve_media(
     reference: String,
     provider_id: String,

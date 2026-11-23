@@ -8,6 +8,7 @@ use tauri::{DragDropEvent, Emitter, EventTarget, Manager, Webview, Window, Windo
 use uuid::Uuid;
 
 const EVENT: &str = "aiolm://attachments-dropped";
+const DRAG_EVENT: &str = "aiolm://attachments-drag";
 // Selection metadata only: at most eight batches of 64 paths, valid for two
 // minutes. Byte bounds also cap unusual OS path allocations; no file is read.
 const MAX_PENDING_BATCHES: usize = 8;
@@ -193,6 +194,13 @@ struct DropPosition {
 }
 
 #[derive(Clone, serde::Serialize)]
+struct AttachmentDragState {
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<DropPosition>,
+}
+
+#[derive(Clone, serde::Serialize)]
 struct DroppedAttachments {
     id: Option<String>,
     count: usize,
@@ -208,7 +216,7 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
     }
     // Tauri routes a window-content webview's native drop through WindowEvent;
     // child-webview events are separate and must not capture a second batch.
-    let WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }) = event else {
+    let WindowEvent::DragDrop(drag_drop) = event else {
         return;
     };
     let Some(main) = window.get_webview_window("main") else {
@@ -218,31 +226,80 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
     if ensure_main_webview(webview.label(), webview.window().label()).is_err() {
         return;
     }
-    let state = webview.state::<AppState>();
-    // Never wait for a command or touch the filesystem on the GUI thread.
-    let result = match state.attachment_drops.try_lock() {
-        Ok(mut drops) => drops.capture(webview.window().label(), paths, Instant::now()),
-        Err(_) => Err(AppError::busy(
-            "attachment drop selection is busy; drop the files again",
-        )),
-    };
-    let (id, error) = match result {
-        Ok(id) => (Some(id), None),
-        Err(error) => (None, Some(error.message)),
-    };
-    let _ = webview.emit_to(
-        EventTarget::webview(webview.label()),
-        EVENT,
-        DroppedAttachments {
-            id,
-            count: paths.len(),
-            position: DropPosition {
-                x: position.x,
-                y: position.y,
-            },
-            error,
-        },
-    );
+    match drag_drop {
+        DragDropEvent::Enter { position, .. } => {
+            let _ = webview.emit_to(
+                EventTarget::webview(webview.label()),
+                DRAG_EVENT,
+                AttachmentDragState {
+                    state: "enter",
+                    position: Some(DropPosition {
+                        x: position.x,
+                        y: position.y,
+                    }),
+                },
+            );
+        }
+        DragDropEvent::Over { position } => {
+            let _ = webview.emit_to(
+                EventTarget::webview(webview.label()),
+                DRAG_EVENT,
+                AttachmentDragState {
+                    state: "over",
+                    position: Some(DropPosition {
+                        x: position.x,
+                        y: position.y,
+                    }),
+                },
+            );
+        }
+        DragDropEvent::Leave => {
+            let _ = webview.emit_to(
+                EventTarget::webview(webview.label()),
+                DRAG_EVENT,
+                AttachmentDragState {
+                    state: "leave",
+                    position: None,
+                },
+            );
+        }
+        DragDropEvent::Drop { paths, position } => {
+            let _ = webview.emit_to(
+                EventTarget::webview(webview.label()),
+                DRAG_EVENT,
+                AttachmentDragState {
+                    state: "leave",
+                    position: None,
+                },
+            );
+            let state = webview.state::<AppState>();
+            // Never wait for a command or touch the filesystem on the GUI thread.
+            let result = match state.attachment_drops.try_lock() {
+                Ok(mut drops) => drops.capture(webview.window().label(), paths, Instant::now()),
+                Err(_) => Err(AppError::busy(
+                    "attachment drop selection is busy; drop the files again",
+                )),
+            };
+            let (id, error) = match result {
+                Ok(id) => (Some(id), None),
+                Err(error) => (None, Some(error.message)),
+            };
+            let _ = webview.emit_to(
+                EventTarget::webview(webview.label()),
+                EVENT,
+                DroppedAttachments {
+                    id,
+                    count: paths.len(),
+                    position: DropPosition {
+                        x: position.x,
+                        y: position.y,
+                    },
+                    error,
+                },
+            );
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -357,5 +414,23 @@ mod tests {
         assert!(drops
             .capture("main", &selected, now + BATCH_LIFETIME)
             .is_ok());
+    }
+
+    #[test]
+    fn drag_hover_payload_never_carries_paths() {
+        let enter = serde_json::to_value(AttachmentDragState {
+            state: "enter",
+            position: Some(DropPosition { x: 12.5, y: 34.0 }),
+        })
+        .unwrap();
+        assert_eq!(enter["state"], "enter");
+        assert!(enter.get("paths").is_none());
+        let leave = serde_json::to_value(AttachmentDragState {
+            state: "leave",
+            position: None,
+        })
+        .unwrap();
+        assert_eq!(leave["state"], "leave");
+        assert!(leave.get("position").is_none());
     }
 }

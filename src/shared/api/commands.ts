@@ -18,6 +18,8 @@ export const getLaunchAtLogin = () => invoke<boolean>("launch_at_login");
 /** Registers or removes AioLM's startup entry and returns the state that took effect. */
 export const setLaunchAtLogin = (enabled: boolean) => invoke<boolean>("set_launch_at_login", { enabled });
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
+export const syncTrayState = (locale: string, modelState: string, modelName?: string | null) =>
+  invoke<void>("sync_tray_state", { locale, modelState, modelName: modelName ?? null });
 export const projectExportJson = (contents: string, fileName?: string) =>
   invoke<boolean>("project_export_json", { contents, fileName });
 export const projectImportJson = () => invoke<string | null>("project_import_json");
@@ -34,6 +36,10 @@ export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: str
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
 /** Reads GGUF and Safetensors choices, plus whole-snapshot availability, from one tree. */
 export const hfModelFiles = (repoId: string) => invoke<HfRepositoryInspection>("hf_model_files", { repoId });
+export interface HfTokenStatus { configured: boolean }
+export const hfTokenStatus = () => invoke<HfTokenStatus>("hf_token_status");
+export const hfSetToken = (token: string) => invoke<HfTokenStatus>("hf_set_token", { token });
+export const hfClearToken = () => invoke<HfTokenStatus>("hf_clear_token");
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 /** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean, revision?: string) =>
@@ -56,13 +62,23 @@ export interface AttachmentDropNotice {
 /** Claims only paths captured by a genuine native drop; callers cannot supply paths. */
 export const claimAttachmentDrop = (id: string) => invoke<string | null>('claim_attachment_drop', { id });
 export const discardAttachmentDrop = (id: string) => invoke<void>('discard_attachment_drop', { id });
+export interface AttachmentDragNotice {
+  state: 'enter' | 'over' | 'leave';
+  position?: { x: number; y: number };
+}
 export async function onAttachmentDrop(callback: (notice: AttachmentDropNotice) => void): Promise<UnlistenFn> {
   if (!isNativeRuntimeAvailable()) return () => undefined;
   return listen<AttachmentDropNotice>('aiolm://attachments-dropped', event => callback(event.payload));
 }
+export async function onAttachmentDrag(callback: (notice: AttachmentDragNotice) => void): Promise<UnlistenFn> {
+  if (!isNativeRuntimeAvailable()) return () => undefined;
+  return listen<AttachmentDragNotice>('aiolm://attachments-drag', event => callback(event.payload));
+}
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
 export const importMedia = (path: string) => invoke<ImageAttachment>('import_media', { path });
+export const importPastedImage = (base64Data: string, mime: string, name: string) =>
+  invoke<ImageAttachment>('import_pasted_image', { base64Data, mime, name });
 export const resolveMedia = (reference: string, providerId: import('./providers').ProviderId) => invoke<import('./types').ChatContentPart>('resolve_media', { reference, providerId });
 export interface MediaTranscription { text: string; sessionId: string; model: string }
 async function mediaOperation<T>(command: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {

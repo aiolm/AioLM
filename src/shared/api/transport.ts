@@ -4,9 +4,12 @@ import { trackInitialRead } from "../ui/initialLayout.ts";
 import { toIpcError } from "./ipcError.ts";
 
 const layoutReads = new Set([
-  "get_config", "server_status", "session_list", "list_models", "list_model_artifacts", "device_profile",
-  "rt_list", "rt_latest", "rt_probe", "mcp_list_servers", "mcp_list_tools",
-  "api_server_status", "anthropic_gateway_status", "hf_search_models", "hf_model_files", "read_document_binding",
+  "window_chrome", "get_config", "server_status", "session_list", "list_models", "list_model_artifacts", "device_profile",
+  "rt_list", "rt_latest", "rt_probe", "provider_catalog", "provider_runtimes", "provider_runtime_options", "provider_option_schema",
+  "snapshot_model_name", "mcp_list_servers", "mcp_list_tools", "api_server_status", "anthropic_gateway_status",
+  "hf_search_models", "hf_model_files", "hf_token_status", "hf_pending_downloads", "hf_installed_files", "hf_installed_snapshots",
+  "read_document_binding", "performance_bench_admission", "benchmark_history_list", "benchmark_sharing_owned_list",
+  "launch_at_login", "personalization_read_agents",
 ]);
 
 export const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.";

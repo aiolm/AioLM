@@ -582,12 +582,16 @@ fn ensure_can_unload(server: &server::ServerState) -> Result<(), AppError> {
     Ok(())
 }
 
-#[tauri::command]
-pub(crate) async fn stop_server(state: State<'_, AppState>) -> Result<(), AppError> {
+pub(crate) async fn stop_default_session(state: &AppState) -> Result<(), AppError> {
     state
         .sessions
         .cancel_pending_start(session::DEFAULT_SESSION_ID);
-    stop_session_by_id(&state, session::DEFAULT_SESSION_ID).await
+    stop_session_by_id(state, session::DEFAULT_SESSION_ID).await
+}
+
+#[tauri::command]
+pub(crate) async fn stop_server(state: State<'_, AppState>) -> Result<(), AppError> {
+    stop_default_session(&state).await
 }
 
 #[tauri::command]

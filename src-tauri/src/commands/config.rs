@@ -86,3 +86,14 @@ pub(crate) fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Resul
         AppError::unavailable(format!("failed to read the startup registration: {error}"))
     })
 }
+
+#[tauri::command]
+pub(crate) fn sync_tray_state(
+    app: tauri::AppHandle,
+    locale: String,
+    model_state: String,
+    model_name: Option<String>,
+) -> Result<(), AppError> {
+    crate::tray::update_presentation(&app, &locale, &model_state, model_name.as_deref())
+        .map_err(AppError::unavailable)
+}

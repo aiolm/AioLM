@@ -15,7 +15,8 @@ export function useSessionPolling({ active, onData, onError, intervalMs, details
   onErrorRef.current = onError;
   useEffect(() => {
     if (!active) return;
-    // A new detail consumer awaits its own first result, even during a shared refresh.
+    // Detailed consumers await their first result before reveal; summary-only
+    // consumers update quietly without blocking initial panel visibility.
     let completeInitial = () => {};
     if (details) {
       const initial = new Promise<void>(resolve => { completeInitial = resolve; });
