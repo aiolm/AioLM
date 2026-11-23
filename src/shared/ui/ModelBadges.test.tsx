@@ -128,4 +128,11 @@ describe('model metadata badges', () => {
     </I18nProvider>);
     expect(screen.getByText('hf-owner')).toBeVisible();
   });
+
+  it('omits .model-information when an artifact has neither badges nor publisher attribution', () => {
+    const { container } = render(<I18nProvider initialLocale="en">
+      <ModelBadges model="models/custom.gguf" />
+    </I18nProvider>);
+    expect(container.querySelector('.model-information')).toBeNull();
+  });
 });

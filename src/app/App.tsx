@@ -3,7 +3,7 @@ import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
 import StatusBadge from "../shared/ui/StatusBadge";
 import { version } from '../../package.json';
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "../shared/config/theme";
 import "../styles/app.css";
 
@@ -24,7 +24,7 @@ import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
 import type { SetupChoices } from "../features/onboarding/Onboarding";
-import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
+import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity, usePanelFeedbackSummary } from "../shared/ui/PanelFeedback";
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
@@ -56,7 +56,7 @@ const navigationEntries = navigationGroups.flatMap(group => group.items);
 
 function PanelLoading({ title }: { title: string }) {
   const { t } = useI18n();
-  return <div className="app-page-scroll panel-loading" role="status" aria-label={t("extra.loading")}><h1 className="sr-only">{title}</h1><span className="panel-spinner" aria-hidden="true" /></div>;
+  return <div className="surface-loading panel-loading" role="status" aria-label={t("extra.loading")}><h1 className="sr-only">{title}</h1><span className="panel-spinner" aria-hidden="true" /></div>;
 }
 
 function LazyPanel({ children, title }: { children: React.ReactNode; title: string }) {
@@ -71,13 +71,19 @@ export function findTaskBlockingTabLeave(tasks: AppTask[]): AppTask | undefined 
 
 /** The only shell part that follows the task registry, so a download's progress
  * events re-render this summary instead of the shell and every mounted panel. */
-function TaskActivity({ hasActivity, title, attentionMessage, globalError, children }: { hasActivity: boolean; title: string; attentionMessage: string; globalError: boolean; children: React.ReactNode }) {
+function TaskActivity({ hasActivity, title, attentionMessage, globalError, globalAttentionKeys = [], children }: { hasActivity: boolean; title: string; attentionMessage: string; globalError: boolean; globalAttentionKeys?: readonly string[]; children: React.ReactNode }) {
   const tasks = useTasks().filter(task => task.kind !== "model-launch");
   const failures = tasks.filter(task => task.state === "failed" || task.state === "crashed");
-  const attentionKeys = failures.map(task => JSON.stringify([task.id, task.startedAt]));
+  const attentionKeys = useMemo(
+    () => [...failures.map(task => JSON.stringify([task.id, task.startedAt])), ...globalAttentionKeys],
+    [failures, globalAttentionKeys],
+  );
   const activeCount = tasks.filter(task => task.state === "running" || task.state === "cancelling").length;
+  const { count: noticeCount, attention: noticeAttention } = usePanelFeedbackSummary();
+  const hasProblems = globalError || failures.length > 0 || noticeAttention > 0;
+  const badgeCount = activeCount + failures.length + noticeCount + (globalError && noticeCount === 0 ? 1 : 0);
   return <PanelFeedbackActivity hasActivity={tasks.length > 0 || hasActivity} attentionKeys={attentionKeys}>
-    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{activeCount + failures.length}</span><PanelFeedbackIndicator message={attentionMessage} globalError={globalError || failures.length > 0} /></summary>
+    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{badgeCount}</span>{hasProblems && badgeCount > 0 ? <PanelFeedbackIndicator message={attentionMessage} globalError={globalError || failures.length > 0} /> : <PanelFeedbackIndicator message={attentionMessage} globalError={false} />}</summary>
     <div className="app-activity-content">{children}</div>
   </PanelFeedbackActivity>;
 }
@@ -163,7 +169,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [menuOpen, setMenuOpen] = useState(false);
   // Desktop-only rail state; the mobile drawer always shows full labels.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("aiolm.sidebarCollapsed") === "true"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem("aiolm.sidebarCollapsed", String(sidebarCollapsed)); } catch { /* ignore storage limits */ }
+  }, [sidebarCollapsed]);
   const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
   const [pendingNavigation, setPendingNavigation] = useState<{ next: ViewId; task: string; afterConfirm?: () => void } | null>(null);
   const confirmedRuntimeEvents = useRef(new WeakSet<Event>());
@@ -282,6 +293,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     return true;
   };
   const navigateRef = useRef(navigate); navigateRef.current = navigate;
+  const viewRef = useRef(view); viewRef.current = view;
   useEffect(() => {
     const manage = (event: Event) => {
       if (!confirmedRuntimeEvents.current.has(event) && !navigateRef.current('runtimes', () => {
@@ -293,6 +305,31 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
     return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);
+  }, []);
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      if (document.querySelector("dialog[open]")) return;
+      const key = event.key.toLowerCase();
+      if (event.key === ",") {
+        event.preventDefault();
+        navigateRef.current("settings");
+        return;
+      }
+      if (key === "b") {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+        event.preventDefault();
+        setSidebarCollapsed((current) => !current);
+        return;
+      }
+      if (key === "n" && viewRef.current === "chat") {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent("aiolm:chat-new-thread"));
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
   }, []);
   const openModels = () => { modelSettings.open({ target: { kind: 'default' }, section: 'model' }); };
   const openTuning = () => { navigate("tuning"); };
@@ -306,9 +343,17 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   };
 
   const labelFor = (id: ViewId) => id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
+  const serverStatusLabels = useMemo(
+    () => (["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => t(modelStatusKey(state))),
+    [t],
+  );
   const title = labelFor(view);
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
   const liveModelName = useModelName(liveModel);
+  useEffect(() => {
+    if (!api.isNativeRuntimeAvailable() || typeof api.syncTrayState !== 'function') return;
+    void api.syncTrayState(locale, serverState, liveModelName || null).catch(() => undefined);
+  }, [locale, serverState, liveModelName]);
   const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
   const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
 
@@ -335,7 +380,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <aside id="aiolm-sidebar" className="aiolm-sidebar">
       <div className="aiolm-sidebar-heading">{brand}<button type="button" className="app-icon-button aiolm-sidebar-toggle" aria-label={sidebarToggleLabel} title={sidebarToggleLabel} aria-expanded={!sidebarCollapsed} aria-controls="aiolm-sidebar" onClick={() => setSidebarCollapsed(current => !current)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={sidebarCollapsed ? "M4 4h16v16H4V4Z M9 4v16M13 9l3 3-3 3" : "M4 4h16v16H4V4Z M9 4v16M16 9l-3 3 3 3"} /></svg></button></div>
       {navigation(sidebarCollapsed)}
-      <div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div>
+      <div className="aiolm-sidebar-footer"><span className="aiolm-sidebar-footer__label">{copy.local}</span><span>v{version}</span></div>
     </aside>
     <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }}>
       <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>{navigation(false)}</div>
@@ -345,15 +390,15 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span className="aiolm-location">{title}</span></div>
         <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}>
           <span className="aiolm-context-scope">{modelCopy.defaultScope}</span>
-          <button type="button" className="app-button app-button--ghost aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span></button>
+          <button type="button" className="app-button app-button--ghost aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span><svg aria-hidden="true" className="aiolm-context-chevron" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="m6 8 4 4 4-4" /></svg></button>
           <button type="button" className="app-button app-button--ghost aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button>
         </div>
-        <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
+        <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} labels={serverStatusLabels} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { const requestUpdate = () => setSettingsUpdateRequest(current => current + 1); if (navigate("settings", requestUpdate)) requestUpdate(); }} />
         <TaskStrip launchesOnly />
-        <TaskActivity hasActivity={hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={hasError}>
+        <TaskActivity hasActivity={hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} attentionMessage={t("error.attention")} globalError={hasError} globalAttentionKeys={errorText ? [errorText] : undefined}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
@@ -365,7 +410,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
           {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><h1 className="sr-only">{labelFor("chat")}</h1><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onDiscoverModels={() => { navigate('discover'); }} />)}
-          {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading title={labelFor("projects")} />)}
+          {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><h1 className="sr-only">{labelFor("projects")}</h1><EmptyState title={t("native.unavailable")} description={t("native.message")} /></div> : <PanelLoading title={labelFor("projects")} />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} onOpenLibrary={() => navigate('models')} />)}

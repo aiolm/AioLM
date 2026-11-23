@@ -52,7 +52,7 @@ export function useCustomSelectPosition({
     const spaceAbove = Math.max(0, rect.top - (edge + chromeInset) - gap);
     const opensAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
     const availableSpace = opensAbove ? spaceAbove : spaceBelow;
-    const maxHeight = Math.max(64, Math.min(240, availableSpace || 64));
+    const maxHeight = availableSpace > 0 ? Math.min(240, availableSpace) : 64;
     const viewportWidth = Math.max(0, window.innerWidth - edge * 2);
     const minWidth = Math.min(rect.width, viewportWidth);
 

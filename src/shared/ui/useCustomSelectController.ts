@@ -243,7 +243,7 @@ export function useCustomSelectController<T extends string | number>({
   const toggle = () => {
     if (controlDisabled()) return;
     setQuery('');
-    setIsOpen(previous => !previous);
+    setIsOpen(!open);
     triggerRef.current?.focus();
   };
 

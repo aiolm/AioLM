@@ -80,17 +80,23 @@ export default function TaskStrip({ launchesOnly = false }: { launchesOnly?: boo
           const label = normalizeDisplayText(task.label);
           const status = normalizeDisplayText(statusLabel(task, t));
           const detail = task.detail ? normalizeDisplayText(task.detail) : "";
+          const detailNode = task.detail ? (isLongDiagnostic(task.detail)
+            ? <DiagnosticDetails summary={summarizeDiagnostic(task.detail)} detail={task.detail} id={`task-${task.id}`} />
+            : <span className="app-task-strip__detail" title={detail}>{detail}</span>) : null;
+          const transferNode = activeTask && transfer
+            ? <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`} title={transfer}>{transfer}</span>
+            : null;
           return (
             <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id} role={launchesOnly && !activeTask ? (task.state === "failed" || task.state === "crashed" ? "alert" : "status") : undefined}>
               <span className="app-task-strip__label" title={label}>{label}</span>
               <span className="app-task-strip__status" title={status}>{status}</span>
               {progress !== undefined || (activeTask && task.kind === "model-launch") ? <ProgressBar className="app-task-strip__progress" label={task.kind === "model-launch" ? `${label}: ${status}` : label} value={progress} /> : <span className="app-task-strip__progress" aria-hidden="true" />}
-              <span className="app-task-strip__info">
-                {task.detail ? (isLongDiagnostic(task.detail)
-                  ? <DiagnosticDetails summary={summarizeDiagnostic(task.detail)} detail={task.detail} id={`task-${task.id}`} />
-                  : <span className="app-task-strip__detail" title={detail}>{detail}</span>) : null}
-                {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`} title={transfer}>{transfer}</span>}
-              </span>
+              {detailNode || transferNode ? (
+                <span className="app-task-strip__info">
+                  {detailNode}
+                  {transferNode}
+                </span>
+              ) : <span className="app-task-strip__info app-task-strip__info--empty" aria-hidden="true" />}
               <span className="app-task-strip__action">
                 {!activeTask && task.state !== "completed" && task.action && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={task.action.onClick}>{task.action.label}</button>}
                 {activeTask && task.cancel && !localTaskIds.has(task.id) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : stopLabel} labels={[t("ui.taskCancelling"), stopLabel]} /></button>}

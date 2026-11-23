@@ -10,6 +10,7 @@ const moduleLoaded = vi.fn<(name: string) => void>();
 const appRendered = vi.fn();
 const loadPreferences = vi.fn();
 const applyTheme = vi.fn();
+const applyTypography = vi.fn();
 const loadFont = vi.fn();
 const titleBarMounted = vi.fn<() => void>();
 
@@ -26,11 +27,13 @@ let originalHtmlAttributes: Array<[string, string | null]>;
 beforeEach(() => {
   // Fresh mock factories make eager imports observable on every bootstrap attempt.
   vi.resetModules();
-  for (const mock of [migrate, migrationPaths, moduleLoaded, appRendered, loadPreferences, applyTheme, loadFont, titleBarMounted]) mock.mockReset();
+  for (const mock of [migrate, migrationPaths, moduleLoaded, appRendered, loadPreferences, applyTheme, applyTypography, loadFont, titleBarMounted]) mock.mockReset();
   migrationPaths.mockResolvedValue(migratedPaths);
   loadFont.mockResolvedValue([]);
   loadPreferences.mockReturnValue({
-    locale: "ko", theme: "dark", appearance: { density: "compact", reduceMotion: true },
+    locale: "ko", theme: "dark",
+    chat: { lineSpacing: "normal" },
+    appearance: { density: "compact", reduceMotion: true, fontFamily: "default", codeFontFamily: "default" },
   });
   vi.stubGlobal("__TAURI_INTERNALS__", {});
   vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
@@ -52,13 +55,14 @@ beforeEach(() => {
   }));
   vi.doMock("../shared/i18n/i18n", () => {
     moduleLoaded("i18n");
-    return { loadLocale: vi.fn(async () => undefined), I18nProvider: ({ children, initialLocale }: { children: ReactNode; initialLocale: string }) => <div lang={initialLocale}>{children}</div> };
+    return { detectLocale: () => "en", loadLocale: vi.fn(async () => undefined), I18nProvider: ({ children, initialLocale }: { children: ReactNode; initialLocale: string }) => <div lang={initialLocale}>{children}</div> };
   });
   vi.doMock("../shared/config/preferences", () => {
     moduleLoaded("preferences");
     return { loadPreferences };
   });
   vi.doMock("../shared/config/theme", () => ({ applyTheme }));
+  vi.doMock("../shared/config/typography", () => ({ applyTypography }));
   vi.doMock("./TitleBar", () => ({ default: function TitleBar() { useEffect(() => titleBarMounted(), []); return <div data-testid="title-bar" />; } }));
 });
 
@@ -104,6 +108,12 @@ describe("Bootstrap migration boundary", () => {
     expect(loadPreferences).toHaveBeenCalledTimes(1);
     expect(loadFont).toHaveBeenCalledWith('14px "Pretendard Variable"');
     expect(applyTheme).toHaveBeenCalledWith("dark");
+    expect(applyTypography).toHaveBeenCalledWith(document.documentElement, {
+      locale: "ko",
+      theme: "dark",
+      chat: { lineSpacing: "normal" },
+      appearance: { density: "compact", reduceMotion: true, fontFamily: "default", codeFontFamily: "default" },
+    });
     expect(document.documentElement).toHaveAttribute("lang", "ko");
     expect(document.documentElement).toHaveAttribute("data-density", "compact");
     expect(document.documentElement).toHaveClass("app-reduce-motion");

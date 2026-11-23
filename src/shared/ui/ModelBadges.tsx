@@ -157,7 +157,9 @@ export default function ModelBadges({ model, metadata, artifact, localPath, tags
     for (const value of values) if (value && !badges.some(badge => badge.value.toLowerCase() === value.toLowerCase())) badges.push({ kind: 'tag', value, source: 'metadata' });
   }
   const people = modelPublishers(details, repository ?? artifact?.repository);
-  if (!badges.length && !localPath && !people.length) return null;
+  if (!badges.length && !people.length) {
+    return localPath ? <span ref={visible.ref} className="sr-only" aria-hidden="true" /> : null;
+  }
   const summary = <><ModelPublisher metadata={details} repository={repository ?? artifact?.repository} compact />
     <CompactModelBadges badges={summaryModelBadges(badges, people)} total={badges.length + Math.max(0, people.length - 1)} /></>;
   if (mode === 'compact') return <span ref={visible.ref} className="model-information model-information--compact">{summary}</span>;

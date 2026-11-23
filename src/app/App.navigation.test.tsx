@@ -5,6 +5,7 @@ import { I18nProvider } from "../shared/i18n/i18n";
 import { createTestStore } from "../testing/appStore";
 import type { AppStore } from "../shared/state/store";
 import App from "./App";
+import * as api from "../shared/api/index";
 import { finishTask, getTaskSnapshot, registerTask, removeTask, updateTask } from "../shared/state/taskRegistry";
 import { LocalTaskCancelButton } from "../shared/ui/TaskCancellation";
 import { setSessionActivity } from "../shared/state/sessionActivity";
@@ -568,6 +569,43 @@ describe("Workspace navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(mainTab("Benchmark"));
     expect(screen.getByLabelText("Benchmark result")).toHaveValue("completed 24 t/s");
+  });
+
+  it("supports global keyboard shortcuts (Ctrl+,, Ctrl+B, Ctrl+N) and syncs native tray presentation", async () => {
+    vi.spyOn(api, "isNativeRuntimeAvailable").mockReturnValue(true);
+    const syncSpy = vi.spyOn(api, "syncTrayState").mockResolvedValue(undefined);
+    const newThreadListener = vi.fn();
+    window.addEventListener("aiolm:chat-new-thread", newThreadListener);
+    try {
+      const { container } = mount();
+      await screen.findByLabelText("Conversation draft");
+      await waitFor(() => expect(syncSpy).toHaveBeenCalledWith("en", "stopped", null));
+
+      fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+      expect(container.querySelector(".app-shell")).toHaveClass("app-shell--rail");
+
+      fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+      expect(newThreadListener).toHaveBeenCalledTimes(1);
+
+      const input = screen.getByLabelText("Conversation draft");
+      fireEvent.keyDown(input, { key: "b", ctrlKey: true });
+      expect(container.querySelector(".app-shell")).toHaveClass("app-shell--rail");
+      fireEvent.keyDown(input, { key: "n", ctrlKey: true });
+      expect(newThreadListener).toHaveBeenCalledTimes(2);
+
+      fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+      expect(container.querySelector(".app-shell")).not.toHaveClass("app-shell--rail");
+
+      fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+      expect(mainTab("Settings")).toHaveAttribute("aria-current", "page");
+
+      fireEvent.click(mainTab("Projects"));
+      await screen.findByLabelText("Project draft");
+      fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+      expect(newThreadListener).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener("aiolm:chat-new-thread", newThreadListener);
+    }
   });
 
   it('keeps first-run settings untouched when the setup module fails and retries by reloading', async () => {

@@ -146,10 +146,10 @@ export function CustomSelect<T extends string | number = string>({
                 aria-selected={isSelected}
                 aria-disabled={opt.disabled}
                 onMouseDown={event => event.preventDefault()}
-                onMouseEnter={() => setHighlightedIndex(index)}
+                onMouseEnter={() => { if (!opt.disabled) setHighlightedIndex(index); }}
                 onKeyDown={handleOptionKeyDown}
                 onClick={() => selectOption(opt)}
-                className={`app-custom-dropdown-item ${isSelected ? "is-selected" : ""} ${isHighlighted ? "is-highlighted" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                className={`app-custom-dropdown-item ${isSelected ? "is-selected" : ""} ${isHighlighted ? "is-highlighted" : ""} ${opt.disabled ? "is-disabled" : ""}`}
               >
                 <span className="app-custom-select-label flex items-center gap-2">
                   {opt.icon}

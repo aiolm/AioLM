@@ -8,7 +8,7 @@ export function useVisibleModelMetadata(path?: string) {
   const [result, setResult] = useState<{ path: string; metadata: ModelMetadata }>();
   const [revision, setRevision] = useState(0);
   useEffect(() => {
-    const refresh = () => { setResult(undefined); setRevision(value => value + 1); };
+    const refresh = () => { setRevision(value => value + 1); };
     window.addEventListener(MODEL_METADATA_CHANGED, refresh);
     return () => window.removeEventListener(MODEL_METADATA_CHANGED, refresh);
   }, []);

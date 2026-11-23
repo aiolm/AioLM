@@ -27,7 +27,7 @@ export default function EmptyState({
       <div className="app-empty-icon" aria-hidden="true">{icon ?? defaultIcon}</div>
       <Heading>{title}</Heading>
       <p>{description}</p>
-      {action && <button type="button" className="app-button app-button--primary" onClick={action.onClick}>{action.label}</button>}
+      {action && <div className="app-empty-actions"><button type="button" className="app-button app-button--primary" onClick={action.onClick}>{action.label}</button></div>}
       {children}
     </div>
   );

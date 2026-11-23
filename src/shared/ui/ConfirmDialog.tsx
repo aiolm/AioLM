@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 import { normalizeDisplayText } from "../lib/displayPaths";
+import StableLabel from "./StableLabel";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -99,8 +100,8 @@ export default function ConfirmDialog({
             would otherwise nest block elements inside a paragraph. */}
         <div id={descriptionId} className="app-confirm-dialog__description" role={scrollableDescription ? "region" : undefined} aria-labelledby={scrollableDescription ? titleId : undefined} tabIndex={scrollableDescription ? 0 : undefined}>{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
         <div className="app-confirm-dialog__actions">
-          <button type="button" ref={cancelRef} className="app-button app-button--secondary" data-icon="close" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
-          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} data-icon={confirmIcon ?? "open"} disabled={busy || confirmDisabled} onClick={onConfirm}>{busy ? t("common.wait") : confirmLabel}</button>
+          <button type="button" ref={cancelRef} className="app-button app-button--secondary" data-icon="close" disabled={busy} onClick={onCancel}><StableLabel value={busy ? t("common.wait") : cancelLabel} labels={[cancelLabel, t("common.wait")]} /></button>
+          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} data-icon={confirmIcon ?? "open"} disabled={busy || confirmDisabled} onClick={onConfirm}><StableLabel value={busy ? t("common.wait") : confirmLabel} labels={[confirmLabel, t("common.wait")]} /></button>
         </div>
       </div>
     </dialog>,

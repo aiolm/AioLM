@@ -30,7 +30,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const open = (hovered && !dismissed) || focused || pinned;
+  const open = ((hovered || focused) && !dismissed) || pinned;
   const [position, setPosition] = useState<CSSProperties>({ left: 16, top: 16 });
 
   const updatePosition = useCallback(() => {
@@ -99,7 +99,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
         aria-describedby={tooltipId}
         aria-expanded={open}
         onFocus={() => { setFocused(true); setDismissed(false); }}
-        onBlur={() => { setFocused(false); setPinned(false); }}
+        onBlur={() => { setFocused(false); setPinned(false); setDismissed(false); }}
         onClick={() => {
           if (pinned) { setPinned(false); setDismissed(true); }
           else if (open) { setPinned(true); }
