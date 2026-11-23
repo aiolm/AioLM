@@ -46,8 +46,6 @@ mod tray;
 pub mod tuning_defaults;
 pub mod verify;
 pub mod window_appearance;
-#[cfg(windows)]
-mod window_placement;
 
 pub use commands::models::{deletable_model_path, delete_owned_snapshot};
 pub use commands::providers::inspect_catalog as scan_model_catalog;
@@ -396,9 +394,13 @@ pub fn run() {
                 if let Err(error) = window.set_decorations(false) {
                     eprintln!("could not remove the native title bar: {error}");
                 }
-                #[cfg(windows)]
-                if let Err(error) = window_placement::fit_initial_window(&window) {
-                    eprintln!("could not fit the initial window to its work area: {error}");
+                // Open maximized: the workspaces are laid out to use the whole
+                // display, and the configured 1280x800 size remains the restored
+                // size. Maximizing while still hidden, after the frame is removed,
+                // makes the first visible frame fill the work area instead of the
+                // window growing after it appears.
+                if let Err(error) = window.maximize() {
+                    eprintln!("could not maximize the initial window: {error}");
                 }
                 let _ = window.show();
                 let _ = window.set_focus();
