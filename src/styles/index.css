@@ -48,7 +48,7 @@
 }
 [hidden] { display: none !important; }
 .app-text-wrap { min-width: 0; white-space: normal; overflow-wrap: break-word; }
-.stable-label { display: grid; min-width: 0; position: relative; }
+.stable-label { display: grid; align-items: center; min-width: 0; position: relative; }
 .stable-label > span { grid-area: 1 / 1; }
 .stable-label-size { visibility: hidden; pointer-events: none; user-select: none; }
 .stable-label-size.is-current { visibility: visible; }

@@ -23,22 +23,22 @@
   --ui-radius-menu: 10px;
   --ui-radius-panel: 12px;
   --ui-radius-dialog: 16px;
-  --ui-control: 36px;
-  --ui-menu-row: 36px;
-  --ui-nav-row: 38px;
-  --ui-page-padding: 16px;
-  --ui-canvas-padding: 24px;
-  --ui-row-space: 12px;
-  --ui-control-pad-block: 6px;
-  --ui-control-pad-inline: 12px;
+  --ui-control: 34px;
+  --ui-menu-row: 32px;
+  --ui-nav-row: 34px;
+  --ui-page-padding: 14px;
+  --ui-canvas-padding: 18px;
+  --ui-row-space: 10px;
+  --ui-control-pad-block: 5px;
+  --ui-control-pad-inline: 10px;
   --ui-text: 14px;
-  --ui-text-leading: 1.5;
+  --ui-text-leading: 1.45;
   --ui-text-support: 12px;
-  --ui-text-support-leading: 1.5;
+  --ui-text-support-leading: 1.4;
   --ui-text-caption: 11px;
-  --ui-text-title: 24px;
-  --ui-text-section: 18px;
-  --ui-text-group: 14px;
+  --ui-text-title: 19px;
+  --ui-text-section: 15px;
+  --ui-text-group: 13.5px;
   --ui-success: var(--tone-success-ink);
   --ui-warning: var(--tone-warning-ink);
   --ui-danger: var(--tone-error-ink);
@@ -52,13 +52,16 @@
   --ui-secondary-hover: var(--ui-input-hover);
 }
 :root[data-density="compact"] {
-  --ui-control: 32px;
-  --ui-menu-row: 32px;
-  --ui-nav-row: 34px;
-  --ui-row-space: 8px;
-  --ui-control-pad-block: 4px;
+  --ui-control: 30px;
+  --ui-menu-row: 28px;
+  --ui-nav-row: 30px;
+  --ui-page-padding: 10px;
+  --ui-canvas-padding: 14px;
+  --ui-row-space: 6px;
+  --ui-control-pad-block: 3px;
+  --ui-control-pad-inline: 8px;
 }
-@media (max-width: 639px) { :root { --ui-canvas-padding: 16px; } }
+@media (max-width: 639px) { :root { --ui-canvas-padding: 12px; --ui-page-padding: 12px; } }
 /* Actual controls retain touch targets in both density preferences. */
 @media (pointer: coarse) {
   :root, :root[data-density="compact"] { --ui-control: 44px; --ui-menu-row: 44px; --ui-nav-row: 44px; }

@@ -1,9 +1,9 @@
 /* Direct access to work and model operations; each page owns its heading. */
-.app-shell { --aiolm-sidebar-width: 208px; display: grid; grid-template-columns: var(--aiolm-sidebar-width) minmax(0,1fr); height: 100%; overflow: hidden; background: var(--ui-bg); }
+.app-shell { --aiolm-sidebar-width: 192px; display: grid; grid-template-columns: var(--aiolm-sidebar-width) minmax(0,1fr); height: 100%; overflow: hidden; background: var(--ui-bg); }
 /* The original sky-to-periwinkle rail follows the selected workspace theme. */
-.aiolm-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--ui-border); background: var(--ui-sidebar); background-image: var(--ui-rail-gradient); color: var(--ui-rail-ink); }
-.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 56px; padding: 0 16px; }
-.aiolm-sidebar-heading { display: flex; align-items: center; flex-shrink: 0; min-width: 0; min-height: 56px; padding-inline-end: 8px; }
+.aiolm-sidebar { position: relative; z-index: 30; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--ui-border); background: var(--ui-sidebar); background-image: var(--ui-rail-gradient); color: var(--ui-rail-ink); }
+.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 46px; padding: 0 14px; }
+.aiolm-sidebar-heading { display: flex; align-items: center; flex-shrink: 0; min-width: 0; min-height: 46px; padding-inline-end: 8px; }
 .aiolm-sidebar-heading .aiolm-brand { flex: 1; min-width: 0; }
 .aiolm-mark { display: block; width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
 .aiolm-brand strong { display: block; font-size: 14px; font-weight: 650; letter-spacing: -.01em; line-height: 20px; color: var(--ui-rail-ink); }
@@ -25,37 +25,48 @@
    stay readable to assistive technology and the toggle stays at the top; the
    mobile drawer is a separate surface and keeps its full labels. Instant
    layout change, so reduced motion needs no extra rule. */
-.app-shell--rail { --aiolm-sidebar-width: 64px; }
-.app-shell--rail .aiolm-sidebar-heading { justify-content: center; padding-inline: 0; }
-.app-shell--rail .aiolm-sidebar :is(.aiolm-brand, .aiolm-sidebar-footer) { display: none; }
+.app-shell--rail { --aiolm-sidebar-width: 58px; }
+.app-shell--rail .aiolm-sidebar-heading { flex-direction: column; justify-content: center; gap: 6px; padding: 8px 0; }
+.app-shell--rail .aiolm-sidebar .aiolm-brand { flex: 0 0 auto; height: auto; padding: 0; }
+.app-shell--rail .aiolm-sidebar :is(.aiolm-brand strong, .aiolm-sidebar-footer__label) { display: none; }
+.app-shell--rail .aiolm-sidebar .aiolm-sidebar-footer { justify-content: center; padding-inline: 6px; }
+.app-shell--rail .aiolm-sidebar .aiolm-sidebar-footer > span:last-child { margin-left: 0; }
 .app-shell--rail .aiolm-sidebar .aiolm-navigation { padding-inline: 8px; scrollbar-gutter: auto; scrollbar-width: none; }
 .app-shell--rail .aiolm-sidebar .aiolm-nav-link { justify-content: center; padding-inline: 0; }
+.app-shell--rail .aiolm-sidebar .aiolm-nav-link[title]:focus-visible::after { content: attr(title); position: absolute; inset-inline-start: calc(100% + 8px); top: 50%; transform: translateY(-50%); z-index: 40; padding: 5px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-menu-bg); color: var(--ui-ink); box-shadow: var(--ui-elev-menu); font-size: var(--ui-text-support); font-weight: 500; white-space: nowrap; pointer-events: none; }
+@media (min-height: 620px) {
+ .app-shell--rail .aiolm-sidebar .aiolm-navigation { overflow: visible; }
+}
+@media (pointer: coarse) and (max-height: 679px) {
+ .app-shell--rail .aiolm-sidebar .aiolm-navigation { overflow-y: auto; }
+}
 .app-shell--rail .aiolm-sidebar :is(.aiolm-nav-group h2, .aiolm-nav-link span) { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .aiolm-sidebar .app-input, .aiolm-sidebar .app-textarea, .aiolm-drawer .app-input, .aiolm-drawer .app-textarea { color: var(--ui-ink); }
-.aiolm-navigation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; padding: 8px 12px 16px; }
-.aiolm-nav-group { display: grid; flex-shrink: 0; gap: 2px; margin: 0 0 24px; }
-.aiolm-nav-group[data-navigation-group="tools"] { margin-top: auto; margin-bottom: 0; padding-top: 16px; }
+.aiolm-navigation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; padding: 6px 8px 12px; }
+.aiolm-nav-group { display: grid; flex-shrink: 0; gap: 2px; margin: 0 0 14px; }
+.aiolm-nav-group[data-navigation-group="tools"] { margin-top: auto; margin-bottom: 0; padding-top: 10px; }
 .aiolm-nav-group h2 { padding: 0 10px; margin-bottom: 2px; color: var(--ui-rail-muted); font-size: var(--ui-text-support); font-weight: 500; line-height: 22px; letter-spacing: 0; }
 .aiolm-nav-link span { min-width: 0; overflow-wrap: break-word; }
 .aiolm-sidebar .aiolm-nav-link svg, .aiolm-drawer .aiolm-nav-link svg { width: 16px; height: 16px; flex-shrink: 0; color: currentColor; opacity: .75; }
-.aiolm-sidebar-footer { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: auto; padding: 12px 16px; color: var(--ui-rail-muted); font-size: var(--ui-text-caption); line-height: 16px; }
-.aiolm-sidebar-footer span { margin-left: auto; font-variant-numeric: tabular-nums; }
+.aiolm-sidebar-footer { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-top: auto; padding: 4px 16px; border-top: 1px solid var(--ui-border); color: var(--ui-rail-muted); font-size: var(--ui-text-caption); line-height: 16px; white-space: nowrap; }
+.aiolm-sidebar-footer > span:last-child { margin-left: auto; font-variant-numeric: tabular-nums; }
 .app-main-column, .app-main-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .app-main-area { flex: 1; position: relative; background: var(--ui-bg); }
-.aiolm-header { display: flex; align-items: center; gap: 12px; min-height: 56px; padding-inline: var(--ui-canvas-padding); min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.aiolm-header { display: flex; align-items: center; gap: 12px; min-height: 46px; padding-inline: var(--ui-canvas-padding); min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
 .aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
 .aiolm-location { min-width: 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; line-height: 1.5; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Scope is visible so this default context cannot be mistaken for a chat's
    named answering session. Names truncate, their full values remain accessible. */
-.aiolm-runtime-context { display: grid; grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr); align-items: center; min-width: 0; flex: 0 1 clamp(480px, 38vw, 760px); max-width: 760px; min-height: var(--ui-control); gap: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
-.aiolm-context-scope { padding-inline: 8px; color: var(--ui-muted); font-size: var(--ui-text-caption); line-height: 1.4; }
-.aiolm-runtime-context:focus-within { outline: 2px solid var(--ui-focus); outline-offset: 0; }
-.aiolm-runtime-context button { min-width: 0; min-height: var(--ui-control); padding: var(--ui-control-pad-block) 8px; text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
-.aiolm-context-model { justify-content: flex-start; gap: 6px; overflow: hidden; }
+.aiolm-runtime-context { display: grid; grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr); align-items: stretch; min-width: 0; flex: 0 1 clamp(360px, 38vw, 680px); max-width: 680px; min-height: var(--ui-control); gap: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-field-fill); overflow: hidden; }
+.aiolm-context-scope { align-self: center; padding: 2px 8px; margin-inline-start: 4px; border-radius: calc(var(--ui-radius-control) - 3px); background: var(--ui-surface-muted); color: var(--ui-muted); font-size: var(--ui-text-caption); font-weight: 500; line-height: 1.4; white-space: nowrap; }
+.aiolm-runtime-context button { min-width: 0; min-height: calc(var(--ui-control) - 2px); padding: var(--ui-control-pad-block) 8px; border-block: 0; text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
+.aiolm-runtime-context button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; position: relative; z-index: 1; }
+.aiolm-context-model { justify-content: flex-start; gap: 6px; overflow: hidden; border-radius: 0; }
 .aiolm-context-model .model-family-icon { margin-inline-end: 0; }
+.aiolm-context-chevron { flex-shrink: 0; margin-inline-start: auto; color: var(--ui-muted); }
 .aiolm-context-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .aiolm-context-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-border-strongest); }
-.aiolm-context-runtime { gap: 6px; justify-content: space-between; overflow: hidden; border-inline-start: 1px solid var(--ui-border); border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
+.aiolm-runtime-context .aiolm-context-runtime { gap: 6px; justify-content: space-between; overflow: hidden; border-inline-start: 1px solid var(--ui-border); border-radius: 0; color: var(--ui-muted); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
 .aiolm-context-runtime svg { flex-shrink: 0; }
 .aiolm-server { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; min-width: 0; }
 .aiolm-server > button { min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); }
@@ -66,13 +77,13 @@
 .app-main { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .app-panel-host { height: 100%; min-width: 0; min-height: 0; position: relative; }
 .app-panel-host > .app-page-scroll { height: 100%; }
-.app-feedback-layer { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 12px var(--ui-canvas-padding) 0; flex-shrink: 0; }
+.app-feedback-layer { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 8px var(--ui-canvas-padding) 0; flex-shrink: 0; }
 .app-feedback-layer:empty { display: none; }
-.app-task-strip { display: flex; align-items: start; gap: 16px; margin: 12px var(--ui-canvas-padding) 0; padding: 10px 14px; background: var(--ui-panel-raised); border: 1px solid transparent; border-radius: var(--ui-radius-panel); max-height: min(200px, 28dvh); overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
-.app-task-strip__heading { display: flex; gap: 8px; align-items: center; min-height: 28px; }
+.app-task-strip { display: flex; flex-wrap: wrap; align-items: start; gap: 8px 12px; margin: 8px var(--ui-canvas-padding) 0; padding: 8px 12px; background: var(--ui-panel-raised); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); max-height: min(200px, 28dvh); overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
+.app-task-strip__heading { display: flex; gap: 8px; align-items: center; flex-shrink: 0; min-height: 28px; }
 /* One task per row. Rows share their columns (name, state, progress,
    transfer or detail, action) through subgrid, so several tasks line up. */
-.app-task-strip__list { flex: 1 1 auto; display: grid; grid-template-columns: minmax(8rem, 1.2fr) fit-content(14rem) minmax(5rem, 140px) minmax(0, 1.6fr) max-content; column-gap: 12px; min-width: 0; }
+.app-task-strip__list { flex: 1 1 auto; display: grid; grid-template-columns: minmax(8rem, 1.2fr) fit-content(14rem) minmax(5rem, 140px) minmax(0, 1.6fr) minmax(0, auto); column-gap: 12px; min-width: 0; }
 .app-task-strip__item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; min-height: 28px; padding-block: 3px; }
 .app-task-strip__item + .app-task-strip__item { border-top: 1px solid var(--ui-border); }
 /* Names, states and transfer figures stay on their row; the full text is in
@@ -85,10 +96,12 @@
 .app-task-strip__label { font-weight: 600; color: var(--ui-ink); }
 .app-task-strip__status, .app-task-strip__transfer, .app-task-strip__detail { color: var(--ui-muted); }
 .app-task-strip__item--failed .app-task-strip__status, .app-task-strip__item--crashed .app-task-strip__status { color: var(--ui-danger); }
-.app-task-strip__info { display: flex; gap: 8px; min-width: 0; }
+.app-task-strip__info { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.app-task-strip__info--empty { display: none; }
 .app-task-strip__transfer { font-variant-numeric: tabular-nums; }
 .app-task-strip__progress { width: 100%; }
 .app-task-strip__action { display: flex; flex-wrap: wrap; gap: 6px; justify-content: end; }
+.app-task-strip > .app-feedback { flex: 1 1 100%; width: 100%; }
 .app-task-strip--launches { border-color: var(--ui-border); }
 .app-task-strip--launches .app-task-strip__label,
 .app-task-strip--launches .app-task-strip__status { white-space: normal; overflow-wrap: anywhere; }
@@ -104,13 +117,24 @@
 /* Expanded activity takes space from the page so new notices cannot cover its
    final actions. Keep the summary at the bottom and scroll long notices within
    a bounded area, including in short windows. */
-.app-activity { --activity-max-height: min(40vh, 320px); position: relative; order: 2; flex: 0 0 auto; height: 32px; border-top: 1px solid var(--ui-border); background: var(--ui-bg); color: var(--ui-muted); }
-.app-activity[open] { height: auto; padding-block-end: 32px; }
-.app-activity > summary { position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 4px var(--ui-canvas-padding); font-size: var(--ui-text-support); overflow-y: auto; }
+.app-activity { --activity-max-height: min(40vh, 320px); position: relative; order: 2; flex: 0 0 auto; height: 28px; border-top: 1px solid var(--ui-border); background: var(--ui-bg); color: var(--ui-muted); }
+.app-activity[open] { height: auto; padding-block-end: 28px; }
+.app-activity > summary { position: absolute; bottom: 0; inset-inline: 0; display: flex; align-items: center; gap: 8px; height: 28px; padding: 2px var(--ui-canvas-padding); font-size: var(--ui-text-support); white-space: nowrap; overflow: hidden; cursor: pointer; list-style: none; }
+.app-activity > summary > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.app-activity > summary::after { float: none; flex-shrink: 0; margin-inline-start: auto; transform: rotate(180deg); }
+.app-activity[open] > summary::after { transform: rotate(0deg); }
+.app-activity > summary:focus-visible { outline-offset: -2px; }
 .app-activity-count { width: 3ch; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .app-activity-error { color: var(--ui-danger); }
 .app-activity-notice { color: var(--ui-muted); }
-.app-activity-content { max-height: calc(var(--activity-max-height) - 33px); overflow-y: auto; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); }
+.app-activity-content { max-height: calc(var(--activity-max-height) - 29px); overflow-y: auto; padding-bottom: 12px; background: var(--ui-surface); border-bottom: 1px solid var(--ui-border); }
+.app-activity-content :is(.app-task-strip, .app-feedback-layer) { max-height: none; overflow: visible; }
+@media (pointer: coarse) {
+ .app-activity { height: 44px; }
+ .app-activity[open] { padding-block-end: 44px; }
+ .app-activity > summary { height: 44px; }
+ .app-activity-content { max-height: calc(var(--activity-max-height) - 45px); }
+}
 
 /* One quiet frame above every surface. macOS keeps native traffic lights over
    the reserved leading space; frameless captions keep their OS-sized targets. */

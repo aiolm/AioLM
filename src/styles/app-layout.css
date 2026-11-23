@@ -2,10 +2,11 @@
 .app-page-scroll { width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; container: workspace / inline-size; }
 .app-page-scroll > :not(.chat-layout):not(.discover-columns) { flex-shrink: 0; }
 /* Keep the same content edge when a page or an inner list starts scrolling. */
-.chat-message-log, .aiolm-navigation { scrollbar-gutter: stable; }
+.chat-message-log, .aiolm-navigation, .discover-results, .discover-detail, .projects-list-items, .projects-selection-list, .mcp-server-list, .app-activity-content, .api-model-list, .model-settings-body, .model-settings-nav { scrollbar-gutter: stable; }
 /* Form columns use their own available width, including inside detail panes. */
 .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .app-master-detail, .discover-columns { grid-template-columns: minmax(0,1fr); }
+.discover-columns { min-height: 240px; }
 .app-master-detail > *, .app-form-grid > * { min-width: 0; }
 .chat-mcp-tools { min-height: auto; }
 .chat-mcp-catalog-slot { min-height: 20px; overflow: auto; }
@@ -15,11 +16,12 @@
 .models-panel { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .models-model-list { flex: 0 0 auto; overflow: visible; }
 .models-status-line { overflow-wrap: break-word; white-space: normal; }
-.models-runtime-details { position: relative; font-size: var(--ui-text-support); color: var(--ui-muted); }
-.models-runtime-details > summary { cursor: pointer; }
-.models-runtime-details-content { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: max-content; max-width: 100%; max-height: 160px; overflow-y: auto; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-menu); background: var(--ui-panel); box-shadow: var(--ui-elev-menu); }
+.models-runtime-details { font-size: var(--ui-text-support); color: var(--ui-muted); }
+.models-runtime-details > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.models-runtime-details > summary::after { float: none; margin: 0; }
+.models-runtime-details-content { margin-top: 8px; max-height: 160px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-surface-muted); }
 .models-header-actions { min-height: var(--ui-control); }
-.models-model-row { display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name size" "path path" "actions files"; min-height: 56px; }
+.models-model-row { display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name size" "path path" "actions files"; min-height: 44px; }
 .models-folder-actions { display: flex; flex-wrap: wrap; }
 .models-folder-actions > label { flex: 0 0 auto; }
 .models-folder-actions > input { flex: 1 1 16rem; width: auto; }
@@ -27,4 +29,5 @@
 .models-folder-buttons > button { max-width: 100%; }
 .models-model-actions { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 6px; }
 .tuning-custom-input-slot { display: flex; min-height: 34px; align-items: stretch; }
+.tuning-custom-input-slot:empty { display: none; }
 .tuning-custom-input-slot > input { min-width: 0; }

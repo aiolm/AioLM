@@ -1,15 +1,15 @@
 /* Restore the original Orchid Periwinkle palette without changing workspace
    geometry. Brand gradients belong to primary actions and navigation only. */
 :root, :root[data-theme="light"] {
-  --ui-bg: #FDFEFF;
-  --ui-surface: #FDFDFF;
-  --ui-panel: #FDFDFF;
+  --ui-bg: #F5F7FC;
+  --ui-surface: #FFFFFF;
+  --ui-panel: #FFFFFF;
   --ui-sidebar: #DFF3FE;
-  --ui-panel-raised: #FDFDFF;
-  --ui-menu-bg: #FDFDFF;
-  --ui-input: #F5F8FF;
-  --ui-field-fill: #F5F8FE;
-  --ui-surface-muted: #F2FAFF;
+  --ui-panel-raised: #FFFFFF;
+  --ui-menu-bg: #FFFFFF;
+  --ui-input: #F2F5FC;
+  --ui-field-fill: #F4F7FD;
+  --ui-surface-muted: #ECF2FB;
   --ui-input-hover: #DDE6FF;
   --ui-field-fill-hover: #F0F5FE;
   --ui-nav-hover: #DDE6FF;
@@ -63,15 +63,15 @@
   --ui-danger-solid-hover: #8C322A;
 }
 :root[data-theme="dark"] {
-  --ui-bg: #34394B;
-  --ui-surface: #3A4155;
-  --ui-panel: #3A4155;
+  --ui-bg: #262B3A;
+  --ui-surface: #2E3547;
+  --ui-panel: #2E3547;
   --ui-sidebar: #394768;
-  --ui-panel-raised: #3A4155;
-  --ui-menu-bg: #3A4155;
-  --ui-input: #404965;
-  --ui-field-fill: #49516A;
-  --ui-surface-muted: #3F496D;
+  --ui-panel-raised: #333B50;
+  --ui-menu-bg: #333B50;
+  --ui-input: #363F56;
+  --ui-field-fill: #39425A;
+  --ui-surface-muted: #323B52;
   --ui-input-hover: #434F77;
   --ui-field-fill-hover: #4D566E;
   --ui-nav-hover: #434F77;
