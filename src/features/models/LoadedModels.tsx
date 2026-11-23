@@ -12,7 +12,9 @@ import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import ModelName from '../../shared/ui/ModelName';
+import PanelFeedback from "../../shared/ui/PanelFeedback";
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import StableLabel from "../../shared/ui/StableLabel";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import Switch from "../../shared/ui/Switch";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
@@ -61,8 +63,8 @@ export default function LoadedModels(props: LoadedModelsProps) {
     (loadingId === definition.id || state === "starting") && state !== "stopping"
       ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
       : state === "running"
-        ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
-        : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || state === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{state === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>;
+        ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}><StableLabel value={t("ui.sessionStop")} labels={[t("ui.sessionStart"), t("status.working")]} /></button>
+        : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || state === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}><StableLabel value={state === "stopping" ? t("status.working") : t("ui.sessionStart")} labels={[t("ui.sessionStop"), t("ui.sessionStart"), t("status.working")]} /></button>;
   const rowSummary = (name: string, model: string) =>
     <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} /><ModelName model={model} empty={t("ui.sessionNoModel")} /></span></span>;
   const rowName = (definition: api.SessionDefinition) => normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
@@ -75,7 +77,7 @@ export default function LoadedModels(props: LoadedModelsProps) {
 
   return (
     <section className="loaded-models" aria-label={copy.saved} data-testid="loaded-models">
-      {(notice || failure) && <FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner>}
+      {(notice || failure) && <PanelFeedback><FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner></PanelFeedback>}
       <details className="loaded-models-saved">
         <summary><span>{copy.saved}</span> <span className="models-list-count">{definitions.length}</span></summary>
         <div className="loaded-models-saved-content">
@@ -95,7 +97,7 @@ export default function LoadedModels(props: LoadedModelsProps) {
                   <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={name}>
                     <div className="session-entry-main">
                       <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={copy.sessionDetails}>
-                        <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
+                        <svg aria-hidden="true" className="session-entry-chevron" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)" }}><path d="m6 8 4 4 4-4" /></svg>
                         {rowSummary(name, model)}
                       </button>
                       <StatusBadge tone={statusTone(state)} label={statusCopy(state, t)} labels={SESSION_STATES.map(item => statusCopy(item, t))} />
@@ -115,7 +117,7 @@ export default function LoadedModels(props: LoadedModelsProps) {
                       </div>}
                       {!failed && state !== "stopped" && <pre tabIndex={0} role="region" aria-label={t("ui.diagnosticsTitle")} className="session-entry-log">{normalizeDisplayText(status?.log_tail || t("ui.noDiagnostics"))}</pre>}
                       <div className="grid gap-3 app-form-grid">
-                        <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
+                        <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" disabled={controlsDisabled} value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>

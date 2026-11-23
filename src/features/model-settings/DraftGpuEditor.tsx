@@ -9,6 +9,7 @@ import { formatMebibytes } from '../../shared/lib/units';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
+import { executionText } from '../../shared/i18n/executionI18n';
 import { TuningOptionLabel } from '../tuning/TuningOptionMetadata';
 
 export default function DraftGpuEditor({ placement, device, disabled, onChange, onInvalid, draftDevice = '', onDraftDeviceChange }: {
@@ -25,6 +26,7 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
   const gpu = resolvedGpuPlacement(savedGpu);
   const devices = (device?.profile.gpus ?? []).filter((item): item is typeof item & { stable_id: string } => !!item.stable_id);
   const [weights, setWeights] = useState<string | null>(null);
+  const [weightsInvalid, setWeightsInvalid] = useState(false);
   // Keep an empty manual draft editable; merely opening the editor never rewrites saved placement.
   const [manualDraft, setManualDraft] = useState(!!draftDevice.trim());
   const manual = !!onDraftDeviceChange && (manualDraft || !!draftDevice.trim());
@@ -40,7 +42,7 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
         checkboxes, so a saved assignment needs an explicit recovery action. */}
     <div className="model-settings-section-heading"><h3><TuningOptionLabel fieldKey="device" label={copy.gpu} /></h3>
       {canClear && <button type="button" className="app-button app-button--secondary" disabled={disabled}
-        onClick={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(emptyGpuPlacement()); }}>{copy.clearGpu}</button>}
+        onClick={() => { setWeights(null); setWeightsInvalid(false); onInvalid('gpu_tensor_split', false); onChange(emptyGpuPlacement()); }}>{copy.clearGpu}</button>}
     </div>
     {/* An empty list means the runtime has not reported its devices yet, not
         that the saved ones are gone. Warning then fired on every backend switch. */}
@@ -48,7 +50,7 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
     {devices.length === 0 && <p className="app-section-hint">{t('ui.gpuNoDetected')}</p>}
     <p id={`${id}-devices-hint`} className="app-section-hint">{help.gpuDevices}</p>
     <div className="model-settings-gpus">{devices.map((item, index) => <label key={item.stable_id} className={`model-settings-gpu app-list-row${gpu.gpu_ids.includes(item.stable_id) ? ' is-selected' : ''}`}>
-      <input type="checkbox" aria-describedby={`${id}-devices-hint`} checked={gpu.gpu_ids.includes(item.stable_id)} disabled={disabled} onChange={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(resolvedGpuPlacement(toggleGpuSelection(gpu, item.stable_id, devices))); }} />
+      <input type="checkbox" aria-describedby={`${id}-devices-hint`} checked={gpu.gpu_ids.includes(item.stable_id)} disabled={disabled} onChange={() => { setWeights(null); setWeightsInvalid(false); onInvalid('gpu_tensor_split', false); onChange(resolvedGpuPlacement(toggleGpuSelection(gpu, item.stable_id, devices))); }} />
       <span>{normalizeDisplayText(gpuDeviceLabel(item, index))}{item.vram_mb ? <small>{formatMebibytes(item.vram_mb)}</small> : null}</span>
     </label>)}</div>
     <div className="model-settings-grid">
@@ -62,12 +64,12 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
         <p id={`${id}-draft-hint`} className="app-section-hint">{manual ? choice.draftDeviceHint : help.gpuDraft}</p>
         {manual && !draftDevice.trim() && <p className="app-section-hint">{t('ui.gpuDraft')}: {options.find(option => option.value === gpu.draft_gpu_id)?.label ?? gpu.draft_gpu_id ?? copy.automatic}</p>}</div>
       <div><label><TuningOptionLabel id={`${id}-split-label`} fieldKey="split_mode" label={t('ui.gpuSplitMode')} /><CustomSelect ariaLabelledBy={`${id}-split-label`} ariaDescribedBy={`${id}-split-hint`} value={gpu.split_mode} options={['single', 'layer', 'row', 'tensor'].map(value => ({ value, label: value }))} onChange={value => patch({ split_mode: value as SplitMode })} disabled={disabled} /></label><p id={`${id}-split-hint`} className="app-section-hint">{help.gpuSplitMode}</p></div>
-      <div><label><TuningOptionLabel fieldKey="tensor_split" label={copy.tensorSplit} /><input className="app-input" aria-describedby={`${id}-weights-hint`} value={weights ?? gpu.tensor_split.join(', ')} disabled={disabled || gpu.gpu_ids.length < 2} onChange={event => {
+      <div><label><TuningOptionLabel fieldKey="tensor_split" label={copy.tensorSplit} /><input className="app-input" aria-invalid={weightsInvalid || undefined} aria-describedby={`${id}-weights-hint${weightsInvalid ? ` ${id}-weights-error` : ''}`} value={weights ?? gpu.tensor_split.join(', ')} disabled={disabled || gpu.gpu_ids.length < 2} onChange={event => {
         const raw = event.target.value; setWeights(raw);
         const values = raw.trim() ? raw.split(',').map(value => value.trim() ? Number(value.trim()) : NaN) : [];
         const valid = !values.length || (values.length === gpu.gpu_ids.length && values.every(value => Number.isFinite(value) && value >= 0) && values.some(value => value > 0));
-        onInvalid('gpu_tensor_split', !valid); if (valid) patch({ tensor_split: values });
-      }} /></label><p id={`${id}-weights-hint`} className="app-section-hint">{help.gpuTensorSplit}</p></div>
+        setWeightsInvalid(!valid); onInvalid('gpu_tensor_split', !valid); if (valid) patch({ tensor_split: values });
+      }} /></label><p id={`${id}-weights-hint`} className="app-section-hint">{help.gpuTensorSplit}</p>{weightsInvalid && <span id={`${id}-weights-error`} className="text-error" role="alert">{executionText[locale].invalidNumber}</span>}</div>
     </div>
   </section>;
 }

@@ -15,6 +15,7 @@ import ModelIcon from '../../shared/ui/ModelIcon';
 import ModelName from '../../shared/ui/ModelName';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import StableLabel from '../../shared/ui/StableLabel';
 import TabNav from '../../shared/ui/TabNav';
 import './model-settings.css';
 import { modelSettingsCopy } from './modelSettingsCopy';
@@ -92,7 +93,7 @@ export function ModelSettingsDialog(props: ModelSettingsDialogProps) {
               onApply={selectProfile}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
-              saveAction={step !== 'runtime' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
+              saveAction={step !== 'runtime' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}><StableLabel value={applying ? copy.pending : copy.save} labels={[copy.pending, copy.save]} /></button></>}>
             <div hidden={step !== 'options'}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
             {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
@@ -135,7 +136,7 @@ export function ModelSettingsDialog(props: ModelSettingsDialogProps) {
             {step !== 'runtime' && <button type="button" className="app-button app-button--secondary" disabled={disabled || profileDirty} onClick={() => navigateStep(step === 'profile' ? 'runtime' : 'profile')}>{step === 'profile' ? flowCopy.backRuntime : flowCopy.backProfile}</button>}
             {step !== 'options' && <button type="button" className="app-button app-button--primary" disabled={disabled || profileDirty || !runtimeSelection || step === 'profile' && !!profilePreview && profilePreview !== displayId} onClick={continueStep}>{step === 'runtime' ? flowCopy.nextProfile : flowCopy.nextOptions}</button>}
             {step === 'options' && !benchmark && mode !== 'project' && (live
-              ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
+              ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}><StableLabel value={liveState === 'stopping' ? t('status.working') : t('action.stop')} labels={[t('action.stop'), t('status.working')]} /></button>
               : <button type="button" ref={startButton} className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || !runtimeKnown || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
             {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" disabled={preflightState === 'cancelling'} onClick={event => { cancelFocus.current = document.activeElement === event.currentTarget; onCancelStart(); }}>{copy.cancel}</button>}
           </div>

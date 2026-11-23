@@ -1,4 +1,4 @@
-.settings-profile-control { min-width: 0; margin: 0 0 24px; color: var(--ui-ink); container: profile / inline-size; }
+.settings-profile-control { min-width: 0; margin: 0 0 14px; color: var(--ui-ink); container: profile / inline-size; }
 /* Profile toolbar: state, name and the profile's own actions on one row. */
 .settings-profile-banner { display: flex; align-items: center; gap: 12px; }
 .settings-profile-state-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: var(--ui-radius-pill); background: var(--ui-muted); }
@@ -15,7 +15,7 @@
 .settings-profile-picker .app-custom-select-trigger { width: 100%; }
 
 /* Profile step: library chips, then the selected or previewed values. */
-.settings-profile-groups { display: grid; gap: 16px; margin: 16px 0; }
+.settings-profile-groups { display: grid; gap: 10px; margin: 10px 0; }
 .settings-profile-group { min-width: 0; }
 .settings-profile-group-heading { margin: 0 0 8px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
@@ -31,7 +31,7 @@
 .settings-profile-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .settings-profile-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-detail > .settings-profile-hint { margin: 12px 0 0; }
-.settings-profile-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); align-items: start; gap: 16px 32px; margin-top: 16px; }
+.settings-profile-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); align-items: start; gap: 12px 20px; margin-top: 10px; }
 .settings-profile-values > p { grid-column: 1 / -1; margin: 0; }
 .settings-profile-recovery { grid-column: 1 / -1; min-width: 0; }
 .settings-profile-recovery .runtime-help-actions { margin-top: 0; align-items: center; }
@@ -45,8 +45,8 @@
 .settings-profile-value-group h4 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--ui-border); color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-value-group dl { display: grid; gap: 2px; margin: 0; }
 .settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 2px 8px; border-inline-start: 2px solid transparent; border-radius: var(--ui-radius-sm); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
-.settings-profile-value dt { color: var(--ui-muted); }
-.settings-profile-value dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-profile-value dt { min-width: 0; color: var(--ui-muted); overflow-wrap: anywhere; }
+.settings-profile-value dd { min-width: 0; margin: 0; text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-profile-value dd .default-value { justify-content: flex-end; }
 .settings-profile-value--custom { border-inline-start-color: var(--ui-accent); background: var(--ui-accent-soft); }
 .settings-profile-value--custom dt { color: var(--ui-ink); font-weight: 600; }
@@ -68,8 +68,9 @@
 .settings-profile-prompt { grid-column: 1 / -1; }
 .settings-profile-prompt p { max-height: 180px; margin: 0; overflow: auto; color: var(--ui-muted); font-size: var(--ui-text-support); white-space: pre-wrap; overflow-wrap: break-word; }
 .settings-profile-defaults { margin-top: 16px; }
-.settings-profile-defaults > summary { color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; cursor: pointer; }
-.settings-profile-defaults > summary .app-badge { margin-inline-start: 8px; }
+.settings-profile-defaults > summary { display: flex; align-items: center; gap: 8px; min-height: var(--ui-control); color: var(--ui-ink); font-size: var(--ui-text-support); font-weight: 600; cursor: pointer; }
+.settings-profile-defaults > summary::after { float: none; margin-inline-start: auto; flex-shrink: 0; }
+.settings-profile-defaults > summary .app-badge { margin-inline-start: 0; }
 .settings-profile-defaults > .settings-profile-hint { margin: 12px 0 0; }
 
 /* Save as / rename: one inline form under the toolbar. */
@@ -96,7 +97,7 @@
 .settings-profile-changes { display: grid; margin: 8px 0; font-size: var(--ui-text-support); }
 .settings-profile-changes > div { display: grid; grid-template-columns: minmax(8rem, 40%) minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
 .settings-profile-changes > div:last-child { border-bottom: 0; }
-.settings-profile-changes dt { font-weight: 600; }
+.settings-profile-changes dt { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .settings-profile-changes dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .settings-profile-change-arrow { flex: none; color: var(--ui-muted); }
 .settings-profile-change-before { color: var(--ui-muted); text-decoration: line-through; }

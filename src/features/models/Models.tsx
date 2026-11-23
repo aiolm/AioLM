@@ -20,6 +20,7 @@ import { projectorChangeAllowed } from "../chat/visionState";
 import { formatBytes } from '../discover/discoverUtils';
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { matchingSupportingFilesCopy } from './modelLibraryCopy';
+import { modelSortCopy } from './modelSortCopy';
 import { useModelsController,type ModelsPanelProps } from "./useModelsController";
 
 /** `sessions` comes from a parent that already holds the detailed session
@@ -27,7 +28,8 @@ import { useModelsController,type ModelsPanelProps } from "./useModelsController
  * parent's loaded-model controls between the page heading and the library. */
 export default function ModelsPanel(props: ModelsPanelProps) {
   const { store, onSelectModel, onDiscoverModels, compact = false, active = true, children } = props;
-  const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
+  const { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelSort, setModelSort, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings } = useModelsController(props);
+  const sortCopy = modelSortCopy[locale];
   return (
     <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
       <header className="app-page-header"><div><h1 className="app-page-title">{t("section.library")}</h1>{compact && <p className="app-page-description">{copy.hint}</p>}</div></header>
@@ -62,7 +64,7 @@ export default function ModelsPanel(props: ModelsPanelProps) {
           placeholder="models"
         />
         <div className="models-folder-buttons">
-        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={modelUpdates.busy || scanning || folderAction !== 'idle'} className="app-button app-button--secondary shrink-0">{folderAction === 'saving' ? copy.saving : folderAction === 'choosing' ? t('status.working') : t("panel.browse")}</button>
+        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={modelUpdates.busy || scanning || folderAction !== 'idle'} className="app-button app-button--secondary shrink-0"><StableLabel value={folderAction === 'saving' ? copy.saving : folderAction === 'choosing' ? t('status.working') : t("panel.browse")} labels={[copy.saving, t('status.working'), t("panel.browse")]} /></button>
         </div>
       </div>
       </div>
@@ -100,11 +102,50 @@ export default function ModelsPanel(props: ModelsPanelProps) {
 
       <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
-        <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <div className="app-search-field models-list-filter">
+          <input
+            ref={modelFilterInput}
+            value={modelQuery}
+            onChange={(event) => setModelQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && modelQuery.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setModelQuery('');
+              }
+            }}
+            placeholder={t("panel.modelFilterPlaceholder")}
+            aria-label={t("panel.searchModels")}
+            className="app-input"
+          />
+          {modelQuery && (
+            <button
+              type="button"
+              onClick={() => { setModelQuery(''); modelFilterInput.current?.focus(); }}
+              className="app-search-clear app-icon-button app-icon-button--sm"
+              aria-label={sortCopy.clearSearch}
+              title={sortCopy.clearSearch}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg>
+            </button>
+          )}
+        </div>
         <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value)} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
+        <CustomSelect
+          ariaLabel={sortCopy.label}
+          value={modelSort}
+          onChange={setModelSort}
+          options={[
+            { value: 'default', label: sortCopy.default },
+            { value: 'loaded', label: sortCopy.loaded },
+            { value: 'name', label: sortCopy.name },
+            { value: 'size-desc', label: sortCopy.sizeDesc },
+            { value: 'size-asc', label: sortCopy.sizeAsc },
+          ]}
+        />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
-        <button type="button" data-icon="refresh" onClick={modelUpdates.refresh} disabled={!active || !updateCatalog || scanning || modelUpdates.checking || modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm">{modelUpdates.checking ? updatesCopy.checking : updatesCopy.check}</button>
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm"><StableLabel value={t("panel.cancelScan")} labels={[t("panel.retry"), t("panel.rescan")]} /></button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} disabled={modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm"><StableLabel value={scanError ? t("panel.retry") : t("panel.rescan")} labels={[t("panel.retry"), t("panel.rescan"), t("panel.cancelScan")]} /></button>}
+        <button type="button" data-icon="refresh" onClick={modelUpdates.refresh} disabled={!active || !updateCatalog || scanning || modelUpdates.checking || modelUpdates.busy || folderAction !== 'idle'} className="app-button app-button--secondary app-button--sm"><StableLabel value={modelUpdates.checking ? updatesCopy.checking : updatesCopy.check} labels={[updatesCopy.checking, updatesCopy.check]} /></button>
       </div>
       <p className="mb-2 text-xs ui-color-muted">{updatesCopy.incremental}</p>
 
@@ -119,7 +160,8 @@ export default function ModelsPanel(props: ModelsPanelProps) {
       />
 
       <div className="models-model-list min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
-        {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
+        {scanning && (models === null || models.length === 0) && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
+        {scanning && models !== null && models.length > 0 && <span role="status" className="sr-only">{t("panel.scanning")}</span>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
           models.length === 0 ? <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
@@ -174,8 +216,8 @@ export default function ModelsPanel(props: ModelsPanelProps) {
               <div className="models-model-path">
                 <code>{normalizeDisplayPath(model.path)}</code>
                 {updateStatus?.supported && updateStatus.error ? <FeedbackBanner tone="error" className="relative z-[2]" title={updatesCopy.lookupFailed} action={{ label: t('panel.retry'), onClick: modelUpdates.refresh }}>{normalizeDisplayText(updateStatus.error)}</FeedbackBanner>
-                  : updateStatus?.supported ? <p className="text-xs ui-color-muted">{updateStatus.update_available ? `${updatesCopy.available} · ${updatesCopy.download}: ${formatBytes(updateStatus.download_bytes)} · ${updatesCopy.reuse}: ${formatBytes(updateStatus.reused_bytes)}` : updatesCopy.current}</p>
-                    : updateStatus ? <p className="text-xs ui-color-muted">{updatesCopy.unsupported}{updateStatus.error ? `: ${normalizeDisplayText(updateStatus.error)}` : ''}</p> : null}
+                  : updateStatus?.supported ? <p className="models-model-update-text m-0 text-xs ui-color-muted">{updateStatus.update_available ? `${updatesCopy.available} · ${updatesCopy.download}: ${formatBytes(updateStatus.download_bytes)} · ${updatesCopy.reuse}: ${formatBytes(updateStatus.reused_bytes)}` : updatesCopy.current}</p>
+                    : updateStatus ? <p className="models-model-update-text m-0 text-xs ui-color-muted">{updatesCopy.unsupported}{updateStatus.error ? `: ${normalizeDisplayText(updateStatus.error)}` : ''}</p> : null}
               </div>
               <div className="models-file-actions">
                 {canUpdate && <button type="button" data-icon="refresh" onClick={() => void modelUpdates.update(model.path)} disabled={updateBlocked || modelUpdates.busy || incomplete || scanning} title={!sessionsReady ? updatesCopy.sessionsPending : updateBlocked ? updatesCopy.stopFirst : updatesCopy.incremental} aria-label={`${updatesCopy.update}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0">{updatesCopy.update}</button>}

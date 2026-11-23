@@ -38,6 +38,7 @@
   }
 
   .tuning-sampler-chip[draggable="true"] { cursor: grab; }
+  .tuning-sampler-chip[draggable="true"]:active { cursor: grabbing; }
   .tuning-sampler-chip.is-dragging { opacity: 0.5; }
   .tuning-sampler-chip__grip, .tuning-sampler-chip__number { color: var(--ui-muted); user-select: none; }
   .tuning-sampler-chip__grip { letter-spacing: -3px; }

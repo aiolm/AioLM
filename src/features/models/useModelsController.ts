@@ -20,6 +20,7 @@ import { projectorChangeAllowed } from "../chat/visionState";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { invalidateModelCatalog, MODEL_CATALOG_CHANGED } from '../model-settings/useModelCatalog';
 import { forgetExecution } from './modelExecutionState';
+import type { ModelSortOrder } from './modelSortCopy';
 import { modelUpdatesCopy } from './modelUpdatesCopy';
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
 import { useModelUpdates, type ModelUpdateCatalog } from './useModelUpdates';
@@ -40,6 +41,7 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanTruncated, setScanTruncated] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
+  const [modelSort, setModelSort] = useState<ModelSortOrder>('default');
   const modelFilterInput = useRef<HTMLInputElement>(null);
   const [providerFilter, setProviderFilter] = useState<api.ProviderId | 'all'>('all');
   const [dirDraft, setDirDraft] = useState<string | null>(null);
@@ -117,7 +119,10 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   const cancelScan = useCallback(() => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
     setUpdateCatalog(null);
-    if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
+    if (scanTimer.current !== null) {
+      window.clearTimeout(scanTimer.current);
+      scanTimer.current = null;
+    }
     pendingScan.current?.cancel();
     pendingScan.current = null;
     setScanning(false);
@@ -125,8 +130,18 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   }, []);
 
   useEffect(() => {
-    if (!active) cancelScan();
+    if (!active && (pendingScan.current !== null || scanTimer.current !== null)) {
+      performedScanRef.current = null;
+      cancelScan();
+    }
     return () => {
+      if (pendingScan.current !== null || scanTimer.current !== null) {
+        performedScanRef.current = null;
+      }
+      if (scanTimer.current !== null) {
+        window.clearTimeout(scanTimer.current);
+        scanTimer.current = null;
+      }
       scanGeneration.current = nextScanGeneration(scanGeneration.current);
       pendingScan.current?.cancel();
       pendingScan.current = null;
@@ -148,18 +163,16 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
   }, [cfg?.models_dir, folderAction]);
 
   useEffect(() => {
-    if (!active) { performedScanRef.current = null; return; }
+    if (!active) return;
     if (scanRequest <= 0 || folderAction !== 'idle') return;
     // Releasing a picker/save guard resumes pending scans, not a completed scan.
     if (performedScanRef.current?.request === scanRequest && performedScanRef.current.scan === scan) return;
-    if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
-    scanTimer.current = window.setTimeout(() => {
-      performedScanRef.current = { request: scanRequest, scan };
-      void scan();
-    }, 0);
-    return () => {
-      if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
-    };
+    if (scanTimer.current !== null) {
+      window.clearTimeout(scanTimer.current);
+      scanTimer.current = null;
+    }
+    performedScanRef.current = { request: scanRequest, scan };
+    void scan();
   }, [active, scanRequest, scan, folderAction]);
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
@@ -168,8 +181,8 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
-  const visible = showVision ? matchingModels : matchingModels.filter(model => !model.is_vision);
-  const onlyHiddenVision = visible.length === 0 && !showVision && matchingModels.length > 0;
+  const filteredVisible = showVision ? matchingModels : matchingModels.filter(model => !model.is_vision);
+  const onlyHiddenVision = filteredVisible.length === 0 && !showVision && matchingModels.length > 0;
   const hasModelFilters = normalizedQuery.length > 0 || providerFilter !== 'all';
   const clearModelFilters = () => {
     setModelQuery('');
@@ -212,6 +225,24 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
     }
     return usage;
   };
+  const visible = modelSort === 'default' ? filteredVisible : [...filteredVisible].sort((left, right) => {
+    if (modelSort === 'loaded') {
+      const rank = (model: api.GgufModel) => {
+        const usage = modelUsage(model);
+        return usage === 'running' ? 2 : usage === 'transitioning' ? 1 : 0;
+      };
+      const diff = rank(right) - rank(left);
+      if (diff !== 0) return diff;
+      return normalizeDisplayText(left.name).localeCompare(normalizeDisplayText(right.name));
+    }
+    if (modelSort === 'name') {
+      return normalizeDisplayText(left.name).localeCompare(normalizeDisplayText(right.name));
+    }
+    if (modelSort === 'size-desc') {
+      return (right.size_mb ?? 0) - (left.size_mb ?? 0);
+    }
+    return (left.size_mb ?? 0) - (right.size_mb ?? 0);
+  });
 
   const selectModel = async (model: api.GgufModel) => {
     if (modelUpdates.busy || model.shards?.missing.length) return;
@@ -337,5 +368,5 @@ export function useModelsController({ store, onSelectModel, onModels, active = t
       onConfirm: () => void remove(),
     });
   };
-  return { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings };
+  return { t, locale, copy, cfg, models, updateCatalog, scanning, scanError, scanTruncated, modelQuery, setModelQuery, modelSort, setModelSort, modelFilterInput, providerFilter, setProviderFilter, dir, folderSaved, setFolderSaved, folderAction, folderError, setFolderError, setScanRequest, showVision, setShowVision, flash, notify, dismissFlash, pendingConfirm, setPendingConfirm, updatesCopy, sessionsReady, updateBlocked, modelUpdates, cancelScan, visible, onlyHiddenVision, hasModelFilters, clearModelFilters, liveModel, serverRunning, memoryLine, lifecycle, lifecycleLine, runtimeGap, modelUsage, selectModel, setProjector, browse, selectAndStart, copyPath, removeModel, modelSettings };
 }

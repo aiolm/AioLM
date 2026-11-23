@@ -63,7 +63,7 @@ export default function TuningServerSection({
   return (
     <section className="tuning-section tuning-section--server">
       {fields.length > 0 && <div className="tuning-field-list"><NumericFieldGrid fields={fields} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} /></div>}
-      {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full max-w-lg">
+      {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full">
         <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
           <div className="tuning-field-title">
             <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink"><TuningOptionLabel fieldKey="flash_attn" label={t("ui.flashAttention")} /></label>

@@ -21,6 +21,7 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   const context = useContext(TuningDefaultsContext);
   const { t } = useI18n();
   const resetLabel = t("ui.runtimeDefaultResetField", { label });
+  const inherited = !context ? false : request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
   const resetAction = context && <button type="button" className="app-icon-button app-icon-button--sm" disabled={context.disabled}
     aria-label={resetLabel} title={resetLabel} onClick={() => context.reset(fieldKey)}>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -31,7 +32,6 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
     ? children(resetAction)
     : <><div className="tuning-field-title"><TuningOptionLabel fieldKey={fieldKey} label={label} />{resetAction}</div>{children}</>;
   if (!context) return <>{content}<TuningOptionMetadata fieldKey={fieldKey} showIdentifier={false} /></>;
-  const inherited = request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
   const value = request
     ? (context.cfg.chat_options as Record<string, unknown> | undefined)?.[fieldKey]
     : (context.cfg as unknown as Record<string, unknown>)[fieldKey];

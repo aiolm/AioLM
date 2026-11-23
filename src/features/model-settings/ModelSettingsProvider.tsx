@@ -200,8 +200,8 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     [open, suspended, resume, getRequestConfig, getRequestProfile]);
   return <Context.Provider value={contextValue}>
     {children}
-    {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
-    {editor && <Suspense fallback={<div role="status">{copy.loading}</div>}><ModelSettingsDialog key={editor.key} open={!suspended} initialConfig={editor.initial} targetLabel={targetLabel} mode={editor.request.target.kind}
+    {error && <div className="fixed inset-x-4 bottom-4 z-[60] mx-auto max-w-xl"><FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner></div>}
+    {editor && <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--ui-overlay)]" role="status"><div className="app-card">{copy.loading}</div></div>}><ModelSettingsDialog key={editor.key} open={!suspended} initialConfig={editor.initial} targetLabel={targetLabel} mode={editor.request.target.kind}
       requireModelSelection={editor.request.target.kind === 'default' && !editor.request.config && !editor.initial.active_model.trim() && !['running', 'starting', 'stopping'].includes(store.status.state)}
       initialSection={editor.request.section} busy={busy} startPending={busy && startInFlight.current} liveState={liveState} liveConfig={store.cfg && liveStatus?.execution ? executionConfig(store.cfg, liveStatus.execution) : undefined} onApply={apply} onClose={() => {
         if (lock.current) return;

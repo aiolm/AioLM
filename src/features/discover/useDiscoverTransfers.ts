@@ -152,7 +152,7 @@ export function useDiscoverTransfers({ store, latestStore, catalog, includeCompa
         const entries = await api.hfInstalledFiles(repoId, [firstShard(file.path)], destination);
         const first = entries.find(entry => entry.path === firstShard(file.path));
         if (!first || first.missing_shards.length > 0) {
-          if (ownsCurrentRepository(origin)) setNotice({ message: t('ui.downloadedModel', { file: displayPath }), repo: repoId, destination });
+          if (ownsCurrentRepository(origin)) setNotice({ message: t('ui.downloadedModelReady', { file: displayPath }), repo: repoId, destination });
           return;
         }
         modelPath = first.local_path;
@@ -161,7 +161,7 @@ export function useDiscoverTransfers({ store, latestStore, catalog, includeCompa
         const projector = file.is_mmproj || isMmprojPath(file.path);
         if (ownsCurrentRepository(origin)) {
           setDownloadedChoice({ path: modelPath, projector, repo: repoId, destination });
-          setNotice({ message: t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: displayPath }), repo: repoId, destination });
+          setNotice({ message: t(projector ? 'ui.downloadedProjectorReady' : 'ui.downloadedModelReady', { file: displayPath }), repo: repoId, destination });
         }
         return;
       }
@@ -264,7 +264,7 @@ export function useDiscoverTransfers({ store, latestStore, catalog, includeCompa
       if (ownsCurrentRepository(origin) && matchesSelection && !artifact.incomplete && artifact.missing.length === 0) {
         setDownloadedChoice({ path: artifact.path, projector: false, repo, destination,
           selected_file: artifact.selected_file, selected_weight_files: artifact.selected_weight_files });
-        setNotice({ message: t('ui.downloadedModel', { file: group?.displayPath ?? repo }), repo, destination });
+        setNotice({ message: t('ui.downloadedModelReady', { file: group?.displayPath ?? repo }), repo, destination });
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);

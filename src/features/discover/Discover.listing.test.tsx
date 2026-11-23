@@ -18,6 +18,9 @@ vi.mock("../../shared/api/index", async (importOriginal) => ({
   isNativeRuntimeAvailable: vi.fn(() => true), hfOpenModelCard: vi.fn(async () => undefined),
   onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(), hfInstalledFiles: vi.fn(),
   hfDownloadSnapshot: vi.fn(), hfInstalledSnapshots: vi.fn(), hfCancelDownload: vi.fn(async () => undefined),
+  hfTokenStatus: vi.fn(async () => ({ configured: false })),
+  hfSetToken: vi.fn(async () => ({ configured: true })),
+  hfClearToken: vi.fn(async () => ({ configured: false })),
 }));
 
 const repository = { id: "owner/model", author: "owner", downloads: 12, likes: 3, last_modified: "", tags: [], gated: false };
@@ -735,5 +738,52 @@ describe("Discover listing and installed files", () => {
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
     expect(await screen.findByText("Could not check which files are already downloaded.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Download: model.gguf" })).toBeEnabled();
+  });
+
+  it("clears catalog search, filters in-repo files with type=search, manages HF token, and links gated warning", async () => {
+    vi.mocked(api.hfSearchModels).mockResolvedValue([
+      { ...repository, id: "owner/gated-repo", gated: true },
+    ]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue(ggufOnly([
+      { path: "model-Q4_K_M.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" },
+      { path: "model-F16.gguf", size_bytes: 2000, is_mmproj: false, download_url: "" },
+    ]));
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
+
+    const catalogSearch = screen.getByRole("textbox");
+    fireEvent.change(catalogSearch, { target: { value: "qwen" } });
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(catalogSearch).toHaveValue("");
+    expect(catalogSearch).toHaveFocus();
+
+    fireEvent.click(await screen.findByRole("button", { name: /owner\/gated-repo/ }));
+    expect(await screen.findByText("Gated repository")).toBeVisible();
+
+    const fileFilter = screen.getByLabelText("Filter repository files");
+    expect(fileFilter).toHaveAttribute("type", "search");
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    fireEvent.change(fileFilter, { target: { value: "Q4_K_M" } });
+    expect(screen.getByRole("button", { name: "Download: model-Q4_K_M.gguf" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Download: model-F16.gguf" })).not.toBeInTheDocument();
+
+    fireEvent.change(fileFilter, { target: { value: "nomatch" } });
+    expect(screen.getByText("No repository files match the filter.")).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filter" })[0]!);
+    expect(screen.getByRole("button", { name: "Download: model-F16.gguf" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure token" }));
+    const tokenInput = screen.getByLabelText("Access token");
+    expect(tokenInput).toHaveAttribute("type", "password");
+    await waitFor(() => expect(tokenInput).toHaveFocus());
+    fireEvent.change(tokenInput, { target: { value: "hf_synthetic_test_token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+    await waitFor(() => expect(api.hfSetToken).toHaveBeenCalledWith("hf_synthetic_test_token"));
+    expect(await screen.findByText("Hugging Face access token saved.")).toBeVisible();
+    expect(screen.getByText("Token saved")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear token" }));
+    await waitFor(() => expect(api.hfClearToken).toHaveBeenCalledOnce());
+    expect(await screen.findByText("Hugging Face access token removed.")).toBeVisible();
+    expect(screen.getByText("Not set")).toBeVisible();
   });
 });

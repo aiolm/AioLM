@@ -33,6 +33,7 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
   const [failure, setFailure] = useState<{ catalog: ModelUpdateCatalog; message: string } | null>(null);
   const generation = useRef(0);
   const origin = useRef<{ disposed: boolean } | null>(null);
+  const settledLookupRef = useRef<{ catalog: ModelUpdateCatalog; directory: string; request: number } | null>(null);
   const context = useRef({ active, directory, catalog, blocked });
   context.current = { active, directory, catalog, blocked };
   const busy = updating !== null || task?.state === 'running' || task?.state === 'cancelling';
@@ -44,14 +45,24 @@ export function useModelUpdates({ active, directory, catalog, blocked }: {
 
   useEffect(() => {
     const ownGeneration = ++generation.current;
-    if (!eligible || !catalog || busy) return;
+    if (busy) {
+      settledLookupRef.current = null;
+      return;
+    }
+    if (!eligible || !catalog) return;
+    if (settledLookupRef.current?.catalog === catalog
+      && settledLookupRef.current.directory === directory
+      && settledLookupRef.current.request === request) return;
+    settledLookupRef.current = null;
     setLookup({ catalog, request, statuses: {}, checking: true });
     if (catalog.paths.length === 0) {
+      settledLookupRef.current = { catalog, directory, request };
       setLookup({ catalog, request, statuses: {}, checking: false });
       return;
     }
     void hfCheckModelUpdates(catalog.paths, directory).then(statuses => {
       if (generation.current !== ownGeneration) return;
+      settledLookupRef.current = { catalog, directory, request };
       setLookup({ catalog, request, statuses: Object.fromEntries(statuses.map(status => [status.path, status])), checking: false });
     }).catch(error => {
       if (generation.current !== ownGeneration) return;

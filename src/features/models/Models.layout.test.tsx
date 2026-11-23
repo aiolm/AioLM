@@ -480,4 +480,85 @@ describe('model folder persistence', () => {
     expect(api.listModels).not.toHaveBeenCalled();
     expect(browse).toBeEnabled();
   });
+
+  it("sorts models (loaded, name, size-desc, size-asc) and clears search via Escape and clear button", async () => {
+    vi.mocked(api.listModels).mockResolvedValue({
+      models: [
+        { name: "zeta.gguf", path: "C:/Models/zeta.gguf", size_mb: 100, is_vision: false },
+        { name: "alpha.gguf", path: "C:/Models/alpha.gguf", size_mb: 500, is_vision: false },
+        { name: "beta.gguf", path: "C:/Models/beta.gguf", size_mb: 250, is_vision: false },
+      ],
+      truncated: false,
+    });
+    const base = createTestStore({ active_model: "", models_dir: "C:/Models" });
+    base.status = { state: "running", model: "beta", execution: { active_model: "C:/Models/beta.gguf" } };
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact onSelectModel={vi.fn()} /></I18nProvider>);
+
+    const list = await screen.findByTestId("models-list");
+    const rowOrder = () => within(list).getAllByRole("listitem").map((item) => within(item).getByRole("button", { name: /^Configure & run:/ }).textContent);
+
+    await waitFor(() => expect(rowOrder()).toEqual(["zeta.gguf", "alpha.gguf", "beta.gguf"]));
+
+    const sort = screen.getByRole("combobox", { name: "Sort models" });
+    fireEvent.click(sort);
+    fireEvent.click(screen.getByRole("option", { name: "Order: Loaded first" }));
+    expect(rowOrder()).toEqual(["beta.gguf", "alpha.gguf", "zeta.gguf"]);
+
+    fireEvent.click(sort);
+    fireEvent.click(screen.getByRole("option", { name: "Order: Name" }));
+    expect(rowOrder()).toEqual(["alpha.gguf", "beta.gguf", "zeta.gguf"]);
+
+    fireEvent.click(sort);
+    fireEvent.click(screen.getByRole("option", { name: "Order: Largest first" }));
+    expect(rowOrder()).toEqual(["alpha.gguf", "beta.gguf", "zeta.gguf"]);
+
+    fireEvent.click(sort);
+    fireEvent.click(screen.getByRole("option", { name: "Order: Smallest first" }));
+    expect(rowOrder()).toEqual(["zeta.gguf", "beta.gguf", "alpha.gguf"]);
+
+    const search = screen.getByRole("textbox", { name: panelText.en.searchModels });
+    fireEvent.change(search, { target: { value: "alpha" } });
+    expect(rowOrder()).toEqual(["alpha.gguf"]);
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search).toHaveValue("");
+    expect(rowOrder()).toHaveLength(3);
+
+    fireEvent.change(search, { target: { value: "beta" } });
+    expect(rowOrder()).toEqual(["beta.gguf"]);
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(search).toHaveValue("");
+    expect(search).toHaveFocus();
+    expect(rowOrder()).toHaveLength(3);
+  });
+
+  it("keeps loaded rows visible during rescan and preserves scan state across tab deactivation", async () => {
+    const initial = {
+      models: [{ name: "alpha.gguf", path: "C:/Models/alpha.gguf", size_mb: 500, is_vision: false }],
+      truncated: false,
+    };
+    vi.mocked(api.listModels).mockResolvedValueOnce(initial);
+    const base = createTestStore({ active_model: "", models_dir: "C:/Models" });
+    const view = render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact active onSelectModel={vi.fn()} /></I18nProvider>);
+
+    const list = await screen.findByTestId("models-list");
+    expect(within(list).getByRole("button", { name: /^Configure & run: alpha\.gguf/ })).toBeVisible();
+    expect(api.listModels).toHaveBeenCalledTimes(1);
+
+    // Deactivating and reactivating an idle completed scan preserves loaded rows without re-scanning.
+    view.rerender(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact active={false} onSelectModel={vi.fn()} /></I18nProvider>);
+    view.rerender(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact active onSelectModel={vi.fn()} /></I18nProvider>);
+    expect(within(list).getByRole("button", { name: /^Configure & run: alpha\.gguf/ })).toBeVisible();
+    expect(api.listModels).toHaveBeenCalledTimes(1);
+
+    // Rescanning a populated list keeps existing rows mounted instead of inserting a Scanning placeholder div.
+    let finishRescan!: (value: typeof initial) => void;
+    vi.mocked(api.listModels).mockImplementationOnce(() => new Promise((resolve) => { finishRescan = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel scan" })).toBeVisible());
+    expect(within(list).getByRole("button", { name: /^Configure & run: alpha\.gguf/ })).toBeVisible();
+    expect(list.querySelector("div[role='status']")).toBeNull();
+
+    await act(async () => finishRescan(initial));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rescan" })).toBeVisible());
+  });
 });

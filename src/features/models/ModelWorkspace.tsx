@@ -7,6 +7,7 @@ import type { GgufModel } from '../../shared/api/types';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import PanelFeedback from '../../shared/ui/PanelFeedback';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { previewExecution } from './modelExecutionState';
 import ModelsPanel from './Models';
@@ -46,7 +47,7 @@ export default function ModelWorkspace({ store, onSelectModel, onNavigate, activ
     } catch (cause) { setError(String(cause)); }
   };
   return <div className="model-workspace">
-    {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
+    {error && <PanelFeedback><FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner></PanelFeedback>}
     <div className="model-workspace-library"><ModelsPanel store={store} onSelectModel={select} onDiscoverModels={() => onNavigate('discover')} compact active={active} sessions={poll.sessions} sessionsReady={sessionsReady}>
       <LoadedModels store={store} poll={poll} refresh={refreshSessions} />
     </ModelsPanel></div>
